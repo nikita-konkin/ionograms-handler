@@ -1,11 +1,108 @@
 import psycopg2
-from config import config
+from local_config import config
 
 # host     = '10.10.65.82'
 # database = 'recount_db_test'
 # user     = 'postgres'
 # password = '12345'
 # port     = '1333'
+
+class DbRequests:
+
+    def __init__(self, filename, section = None,  reqwest= None, tuples= None) -> None:
+        self.section = section
+        self.filename = filename
+        self.reqwest = reqwest
+        self.tuples = tuples
+
+        self.month_search = '%month%'
+
+    def insert_many(self):
+
+        conn = None
+
+        try:
+            params = config(filename=self.filename, section=self.section)
+            conn = psycopg2.connect(**params) 
+            insert_data_reqest = conn.cursor() 
+
+            insert_data_reqest.executemany(self.reqwest, self.tuples)
+            insert_data_reqest.close()
+            conn.commit()
+            print('inserted')
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(error)
+            
+    def fetch_all(self, reqwest, section):
+
+        conn = None
+        
+        try:
+            # print('Connecting to the PostgreSQL database...')
+            params = config(filename=self.filename, section=section)
+            conn = psycopg2.connect(**params)
+            select_reqest = conn.cursor()
+
+            select_reqest.execute(reqwest)
+            select_reqest_rows = select_reqest.fetchall()
+            select_reqest.close()
+            conn.commit()
+                    
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(error)
+        
+        return select_reqest_rows
+        
+    def execute_one_or_many(self, *reqwests):
+        
+        conn = None
+        
+        try:
+            for reqwest in reqwests:
+
+                params = config(filename=self.filename, section=self.section)
+                conn = psycopg2.connect(**params)
+                select_reqest = conn.cursor()
+
+                select_reqest.execute(reqwest)
+                select_reqest.close()
+                conn.commit()
+            
+        except (Exception, psycopg2.DatabaseError) as error:
+            print(error)
+
+    def get_muf_schemas(self, year):
+
+        conn = None
+        section = 'muf_db_'+str(year)
+        reqwest = f'SELECT nspname \
+                    FROM pg_catalog.pg_namespace \
+                    WHERE nspname LIKE \'{self.month_search}\''
+
+        return self.fetch_all(reqwest, section)
+
+    def get_muf_interp_tables_names(self, schema, year, station = 'cyprus1'):
+
+        section = 'muf_db_'+str(year)
+        reqwest = 'SELECT tablename as table FROM pg_catalog.pg_tables \
+            WHERE schemaname = \'{0}\' and tablename ILIKE \'{1}_interp%\' '.format(str(schema), station)
+        return self.fetch_all(reqwest, section)
+    
+    def get_muf_table_names(self, schema, year, station = 'cyprus1'):
+
+        section = 'muf_db_'+str(year)
+        reqwest = 'SELECT tablename as table FROM pg_catalog.pg_tables \
+            WHERE schemaname = \'{0}\' and tablename NOT LIKE \'{1}\' ORDER BY tablename'.format(str(schema), '%interp%')
+        return self.fetch_all(reqwest, section)
+
+    def get_muf_table_content(self, table_name, schema, year):
+
+        section = 'muf_db_'+str(year)
+        reqwest = 'SELECT time, muf FROM "%s"."%s"' % (str(schema), str(table_name))
+
+        return self.fetch_all(reqwest, section)
+
 
 
 def Load_muf_data_to_muf_db(year, month, day, time, muf, vrange,
