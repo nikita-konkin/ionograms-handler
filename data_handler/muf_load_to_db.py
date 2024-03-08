@@ -17,16 +17,16 @@ class DbRequests:
 
         self.month_search = '%month%'
 
-    def insert_many(self):
+    def insert_many(self, reqwest, tuples, section):
 
         conn = None
 
         try:
-            params = config(filename=self.filename, section=self.section)
+            params = config(filename=self.filename, section=section)
             conn = psycopg2.connect(**params) 
             insert_data_reqest = conn.cursor() 
 
-            insert_data_reqest.executemany(self.reqwest, self.tuples)
+            insert_data_reqest.executemany(reqwest, tuples)
             insert_data_reqest.close()
             conn.commit()
             print('inserted')
@@ -54,14 +54,14 @@ class DbRequests:
         
         return select_reqest_rows
         
-    def execute_one_or_many(self, *reqwests):
+    def execute_one_or_many(self, section, *reqwests):
         
         conn = None
         
         try:
             for reqwest in reqwests:
-
-                params = config(filename=self.filename, section=self.section)
+                print(reqwest)
+                params = config(filename=self.filename, section=section)
                 conn = psycopg2.connect(**params)
                 select_reqest = conn.cursor()
 
@@ -102,7 +102,29 @@ class DbRequests:
         reqwest = 'SELECT time, muf FROM "%s"."%s"' % (str(schema), str(table_name))
 
         return self.fetch_all(reqwest, section)
+    
+    def write_interpolated_muf_to_db(self, table_name, schema, df, year, transmit_station = 'cyprus1'):
 
+        df = df.to_frame()
+        df = df.reset_index().rename(columns={"index":"datetime"})	
+
+        section = 'muf_db_'+str(year)
+
+        print('loading interpolated muf data to database...')
+
+        reqwest = 'CREATE TABLE IF NOT EXISTS "%s"."%s_interp_muf_day_%s" (datetime TIMESTAMP PRIMARY KEY, muf numeric NULL DEFAULT NULL)' % (schema, transmit_station, table_name)
+        
+        self.execute_one_or_many(section, reqwest)
+
+        tuples = [tuple(x) for x in df.to_numpy()]
+        cols = ','.join(list(df.columns))
+        reqwest = 'INSERT INTO "%s"."%s_interp_muf_day_%s"(%s) VALUES (%%s, %%s)' % (schema, transmit_station, table_name, cols)
+        print(reqwest)
+
+        self.insert_many(reqwest, tuples, section)
+
+        print('done loading interpolated muf data to database.')
+        print('-----------------------------------------------')
 
 
 def Load_muf_data_to_muf_db(year, month, day, time, muf, vrange,
