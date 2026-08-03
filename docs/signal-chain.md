@@ -346,14 +346,40 @@ The docstring gives `C_KM_S × (sr/window) / rate`, but the code returns
 `div_coef = 2` (oblique) and differ by 2× when `div_coef = 4` (vertical). The
 code is right; the docstring should carry the divisor.
 
-### 7.3 Time source disabled in the console
+### 7.3 Time source disabled in the console — measured, and not a problem
 
 "Источник точного времени" and the NTP server field are greyed out in the
-screenshot. The console log shows `Lag: -0.2 Sec: 1571378709.77771 Usrp sec
-1571378710.00000` — a 0.2 s discrepancy between system and USRP time. At
-100 kHz/s a 0.2 s timing error is a **20 kHz frequency offset**, or one
-frequency bin. Worth confirming what disciplines the clock, since range
-calibration depends on sweep timing.
+screenshot, and the console log shows `Lag: -0.2 Sec: 1571378709.77771 Usrp sec
+1571378710.00000` — a 0.2 s discrepancy between system and USRP time.
+
+Timing matters here more than it looks. Because this is stretch processing, a
+timing error maps straight to apparent range:
+
+```
+range offset = c × δt          1 ms  =  300 km
+```
+
+so 0.2 s would be a 60,000 km offset — the entire half-axis — and roughly 9 ms
+is enough to walk the echo out of the 2670 km gate entirely. The symptom would
+be indistinguishable from "no signal".
+
+**Measured, it is fine.** `tools/diagnose_reception.py` over 2026-02-04 →
+2026-02-09 (72 soundings, every 24th):
+
+| | |
+|---|---|
+| in-gate soundings | 70 of 72 |
+| median peak echo range | 2710.0 km |
+| standard deviation | 34.8 km (2.4 range bins) |
+| peak-to-peak spread | 175.7 km |
+| **implied timing stability** | **0.59 ms peak-to-peak** |
+
+A 35 km standard deviation is around two range bins, which is the ionosphere's
+own diurnal change in reflection height rather than clock error. Acquisition
+timing over that period was stable to well under a millisecond.
+
+Note also that the console screenshot's timestamp, 1571378709, is **October
+2019**. It documents the interface, not the current system's clock behaviour.
 
 ### 7.4 `header_size` reads 498, parser assumes 512
 
