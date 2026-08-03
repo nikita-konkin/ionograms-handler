@@ -262,6 +262,41 @@ def spectrogram(x,window=1024,wf=hanning,shift_window=800,plot_shift=0,zero_peri
     return(res)
 
 
+def spectrogram_kaiser(x, window=32768, beta=4, zero_periods=0):
+    """Build a power spectrogram using Kaiser windowing for stock ionogram images."""
+    wfv = numpy.kaiser(int(window), beta)
+    Nwindow = int(math.floor(len(x) / window))
+
+    zero_count = int(zero_periods) * int(window)
+    window_len = int(window) + zero_count
+    res = numpy.zeros([Nwindow, window_len], dtype=numpy.float64)
+
+    for i in range(Nwindow):
+        segment = wfv * x[i * window + numpy.arange(window)]
+        if zero_count > 0:
+            segment = numpy.hstack((segment, numpy.zeros([zero_count], dtype=segment.dtype)))
+        res[i, :] = numpy.abs(numpy.fft.fftshift(numpy.fft.fft(segment))) ** 2
+
+    return res
+
+
+def median_equalize_rows(S, noise_coef=1.0):
+    """Normalize each frequency row by its median multiplied by noise_coef."""
+    S_M = numpy.zeros_like(S, dtype=S.dtype)
+    for i in range(S.shape[0]):
+        med = noise_coef * numpy.median(S[i, :])
+        if med > 0:
+            S_M[i, :] = S[i, :] / med
+        else:
+            S_M[i, :] = S[i, :]
+    return S_M
+
+
+def power_to_db_floor(S, floor=1e-20):
+    """Convert linear power to dB with a floor to avoid -inf values."""
+    return 10.0 * numpy.log10(numpy.maximum(S, floor))
+
+
 def filter_func(x, k=20, l = 80):
     # print(x)
 
