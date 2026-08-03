@@ -1,0 +1,35 @@
+# Core pipeline (muf/ package). Versions are those verified working on the
+# development machine: Python 3.12.10 on Windows.
+numpy==1.26.4
+scipy==1.13.0
+pandas==2.2.2
+scikit-learn==1.7.2
+opencv-python==4.12.0.88
+matplotlib==3.8.4
+
+# Parquet output (`--format parquet`)
+pyarrow==16.0.0
+
+# Progress reporting
+tqdm==4.67.1
+
+# --- Tests ---
+pytest==8.3.4
+
+# --- Optional: CNN extractor (`--methods cnn`) -------------------------------
+# Not required by the rest of the pipeline; muf/extractors/cnn.py degrades to a
+# clear error if TensorFlow is absent.
+#   pip install tensorflow==2.20.0
+#
+# NOTE: the bundled autoencoder_model_filtered_v2.h5 was written by Keras 2.x in
+# 2022. Keras 3 (shipped with TF 2.20) will not load that format. Either install
+# tf-keras and set TF_USE_LEGACY_KERAS=1, or retrain via `python -m muf train-cnn`.
+
+# --- Optional: legacy PostgreSQL scripts -------------------------------------
+# Only needed by the pre-existing data_handler/ code and the old top-level
+# scripts. The muf/ pipeline writes files and never imports psycopg2.
+#   pip install psycopg2-binary
+#
+# --- Optional: legacy forecasting scripts ------------------------------------
+# data_handler/muf_data_handler.py additionally wants:
+#   pip install statsmodels xgboost

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SAORecordList>
+  <SAORecord FormatVersion="5.0" StartTimeUTC="2026-02-04T12:10:10.000Z" URSICode="" StationName="yoshkar-ola" GeoLatitude="56.3800" GeoLongitude="47.5300" Source="Ionosonde" SourceType="Chirp oblique sounder" ScalerType="Auto" PathType="oblique">
+    <SystemInfo>
+      <AutoScaler>muf 0.1.0 (algo)</AutoScaler>
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000" TransmitterLongitude="34.0000" ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800" ReceiverLongitude="47.5300" GreatCircleDistance="2588.4" Units="km" />
+      <Sweep StartFrequency="7.5000" StopFrequency="32.4856" NominalStopFrequency="32.5000" FrequencyStep="0.020480" FrequencyUnits="MHz" RangeGateLow="2329.6" RangeGateHigh="5000.0" RangeStep="14.6484" RangeResolution="14.6484" RangeUnits="km" Complete="true" Fraction="0.9994" />
+      <Comments>Oblique-incidence chirp sounding over a fixed transmitter-receiver path. Ranges are group range along the path, not virtual height. Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on this geometry and are absent rather than blank. No polarimetry, so traces carry no Polarization attribute.</Comments>
+    </SystemInfo>
+    <CharacteristicList>
+      <Custom Name="LOF@43dB" Units="MHz" Val="28.420" SigFig="5" ThresholdDb="43.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." />
+    </CharacteristicList>
+  </SAORecord>
+  <SAORecord FormatVersion="5.0" StartTimeUTC="2026-02-04T12:10:10.000Z" URSICode="" StationName="yoshkar-ola" GeoLatitude="56.3800" GeoLongitude="47.5300" Source="Ionosonde" SourceType="Chirp oblique sounder" ScalerType="Auto" PathType="oblique">
+    <SystemInfo>
+      <AutoScaler>muf 0.1.0 (kmeans)</AutoScaler>
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000" TransmitterLongitude="34.0000" ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800" ReceiverLongitude="47.5300" GreatCircleDistance="2588.4" Units="km" />
+      <Sweep StartFrequency="7.5000" StopFrequency="32.4856" NominalStopFrequency="32.5000" FrequencyStep="0.020480" FrequencyUnits="MHz" RangeGateLow="2329.6" RangeGateHigh="5000.0" RangeStep="14.6484" RangeResolution="14.6484" RangeUnits="km" Complete="true" Fraction="0.9994" />
+      <Comments>Oblique-incidence chirp sounding over a fixed transmitter-receiver path. Ranges are group range along the path, not virtual height. Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on this geometry and are absent rather than blank. No polarimetry, so traces carry no Polarization attribute.</Comments>
+    </SystemInfo>
+    <CharacteristicList>
+      <Custom Name="LOF@43dB" Units="MHz" Val="28.420" SigFig="5" ThresholdDb="43.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." />
+    </CharacteristicList>
+  </SAORecord>
+  <SAORecord FormatVersion="5.0" StartTimeUTC="2026-02-04T12:10:10.000Z" URSICode="" StationName="yoshkar-ola" GeoLatitude="56.3800" GeoLongitude="47.5300" Source="Ionosonde" SourceType="Chirp oblique sounder" ScalerType="Auto" PathType="oblique">
+    <SystemInfo>
+      <AutoScaler>muf 0.1.0 (contour)</AutoScaler>
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000" TransmitterLongitude="34.0000" ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800" ReceiverLongitude="47.5300" GreatCircleDistance="2588.4" Units="km" />
+      <Sweep StartFrequency="7.5000" StopFrequency="32.4856" NominalStopFrequency="32.5000" FrequencyStep="0.020480" FrequencyUnits="MHz" RangeGateLow="2329.6" RangeGateHigh="5000.0" RangeStep="14.6484" RangeResolution="14.6484" RangeUnits="km" Complete="true" Fraction="0.9994" />
+      <Comments>Oblique-incidence chirp sounding over a fixed transmitter-receiver path. Ranges are group range along the path, not virtual height. Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on this geometry and are absent rather than blank. No polarimetry, so traces carry no Polarization attribute.</Comments>
+    </SystemInfo>
+    <CharacteristicList>
+      <Custom Name="MUF" Units="MHz" Val="29.649" SigFig="5" Description="Operational MUF measured for the cyprus1-yoshkar-ola path, D=2588 km. Not URSI MUF(3000): that is a transmission-curve conversion from a vertical critical frequency (UAG-23A 1.50)." />
+      <Custom Name="MUFGroupRange" Units="km" Val="2741.0" SigFig="5" Description="Group range of the echo at the MUF" />
+      <Custom Name="MUFSignalToNoise" Units="dB" Val="45.0" SigFig="3" Description="Peak power at the picked bin over the noise floor" />
+      <Modeled Name="foF2" Units="MHz" Val="9.426" ModelName="secant-law" ModelOptions="hmF2=300km,D=2588km" />
+      <Custom Name="LOF" Units="MHz" Val="28.420" SigFig="5" Description="Lowest observed frequency: the bottom of this estimator's own trace. Not the ITU-R P.533 LUF, which needs a required signal-to-noise and a monthly median (P.533-13 section 9)." />
+      <Custom Name="LOFSignalToNoise" Units="dB" Val="47.4" SigFig="3" Description="Peak power at the LOF bin over the noise floor" />
+      <Custom Name="LOF@43dB" Units="MHz" Val="28.420" SigFig="5" ThresholdDb="43.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." />
+    </CharacteristicList>
+    <TraceList Num="1">
+      <Trace Type="non-standard" Layer="F2" Num="39" NoseGroup="0">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+28.420 28.441 28.461 28.482 28.502 28.584 28.605 28.625 28.666 28.973 28.994 29.014 29.035 29.055 29.199
+29.219 29.240 29.260 29.280 29.362 29.403 29.424 29.444 29.465 29.526 29.547 29.567 29.588 29.608 29.629
+29.649 29.711 29.731 29.752 29.772 30.591 30.612 30.632 30.673
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2731.8 2739.3 2731.7 2732.0 2739.3 2739.3 2746.3 2739.3 2739.3 2739.1 2739.3 2732.0 2739.3 2746.3 2739.3
+2739.3 2746.6 2746.6 2746.5 2746.6 2761.2 2746.6 2746.4 2746.6 2746.4 2746.7 2761.0 2753.9 2746.7 2746.4
+2739.3 2746.6 2746.6 2746.6 2739.3 2739.3 2746.4 2739.3 2739.3
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+47 44 46 46 48 44 47 46 44 49 44 48 51 49 43
+46 49 50 45 48 44 47 46 46 46 47 47 46 46 48
+45 45 48 47 43 43 45 44 43
+</TraceValueList>
+      </Trace>
+    </TraceList>
+  </SAORecord>
+</SAORecordList>

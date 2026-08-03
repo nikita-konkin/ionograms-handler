@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SAORecordList>
+  <SAORecord FormatVersion="5.0" StartTimeUTC="2026-02-04T17:30:10.000Z" URSICode="" StationName="yoshkar-ola" GeoLatitude="56.3800" GeoLongitude="47.5300" Source="Ionosonde" SourceType="Chirp oblique sounder" ScalerType="Auto" PathType="oblique">
+    <SystemInfo>
+      <AutoScaler>muf 0.1.0 (algo)</AutoScaler>
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000" TransmitterLongitude="34.0000" ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800" ReceiverLongitude="47.5300" GreatCircleDistance="2588.4" Units="km" />
+      <Sweep StartFrequency="7.5000" StopFrequency="32.4856" NominalStopFrequency="32.5000" FrequencyStep="0.020480" FrequencyUnits="MHz" RangeGateLow="2329.6" RangeGateHigh="5000.0" RangeStep="14.6484" RangeResolution="14.6484" RangeUnits="km" Complete="true" Fraction="0.9994" />
+      <Comments>Oblique-incidence chirp sounding over a fixed transmitter-receiver path. Ranges are group range along the path, not virtual height. Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on this geometry and are absent rather than blank. No polarimetry, so traces carry no Polarization attribute.</Comments>
+    </SystemInfo>
+    <CharacteristicList>
+      <Custom Name="MUF" Units="MHz" Val="12.630" SigFig="5" Description="Operational MUF measured for the cyprus1-yoshkar-ola path, D=2588 km. Not URSI MUF(3000): that is a transmission-curve conversion from a vertical critical frequency (UAG-23A 1.50)." />
+      <Custom Name="MUFGroupRange" Units="km" Val="2772.4" SigFig="5" Description="Group range of the echo at the MUF" />
+      <Custom Name="MUFSignalToNoise" Units="dB" Val="56.2" SigFig="3" Description="Peak power at the picked bin over the noise floor" />
+      <Modeled Name="foF2" Units="MHz" Val="4.015" ModelName="secant-law" ModelOptions="hmF2=300km,D=2588km" />
+      <Custom Name="MUFNoseFit" Units="MHz" Val="12.492" SigFig="5" Bound="0.192" BoundaryType="1sigma" Description="MUF from the vertex of a parabola fitted to both branches of the nose; bound is the RMS residual of that fit" />
+      <Custom Name="LOF" Units="MHz" Val="11.954" SigFig="5" Description="Lowest observed frequency: the bottom of this estimator's own trace. Not the ITU-R P.533 LUF, which needs a required signal-to-noise and a monthly median (P.533-13 section 9)." />
+      <Custom Name="LOFSignalToNoise" Units="dB" Val="47.9" SigFig="3" Description="Peak power at the LOF bin over the noise floor" />
+      <Custom Name="LOF@43dB" Units="MHz" Val="8.022" SigFig="5" ThresholdDb="43.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." QL="E" />
+      <Custom Name="LOF@50dB" Units="MHz" Val="11.975" SigFig="5" ThresholdDb="50.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." />
+    </CharacteristicList>
+    <TraceList Num="2">
+      <Trace Type="non-standard" Layer="F2" Num="35" Branch="low" NoseGroup="0">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+8.104 9.312 9.333 9.353 9.456 9.476 9.579 9.599 11.729 11.811 11.872 11.893 11.975 12.016 12.036
+12.057 12.077 12.098 12.118 12.139 12.200 12.241 12.262 12.282 12.303 12.323 12.384 12.487 12.507 12.528
+12.548 12.569 12.589 12.610 12.630
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2695.3 2710.0 2710.0 2710.0 2710.0 2710.0 2710.0 2710.0 2739.3 2739.3 2739.3 2739.3 2739.3 2753.9 2746.9
+2766.9 2761.5 2769.7 2762.6 2739.3 2739.3 2739.3 2739.3 2739.3 2739.3 2739.3 2739.3 2753.9 2753.9 2753.9
+2760.7 2775.1 2776.0 2768.8 2775.7
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+50 47 48 49 47 49 51 49 47 48 50 50 50 51 54
+56 57 65 55 43 47 46 48 50 49 48 50 48 53 52
+54 55 54 58 56
+</TraceValueList>
+      </Trace>
+      <Trace Type="non-standard" Layer="F2" Num="12" Branch="high" NoseGroup="0">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+11.586 11.954 11.995 12.016 12.036 12.139 12.446 12.466 12.487 12.507 12.528 12.548
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2841.8 2812.5 2812.5 2805.3 2797.9 2783.2 2827.1 2827.1 2827.1 2812.5 2812.5 2797.9
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+45 48 51 56 58 50 48 49 49 50 59 54
+</TraceValueList>
+      </Trace>
+    </TraceList>
+  </SAORecord>
+  <SAORecord FormatVersion="5.0" StartTimeUTC="2026-02-04T17:30:10.000Z" URSICode="" StationName="yoshkar-ola" GeoLatitude="56.3800" GeoLongitude="47.5300" Source="Ionosonde" SourceType="Chirp oblique sounder" ScalerType="Auto" PathType="oblique">
+    <SystemInfo>
+      <AutoScaler>muf 0.1.0 (kmeans)</AutoScaler>
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000" TransmitterLongitude="34.0000" ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800" ReceiverLongitude="47.5300" GreatCircleDistance="2588.4" Units="km" />
+      <Sweep StartFrequency="7.5000" StopFrequency="32.4856" NominalStopFrequency="32.5000" FrequencyStep="0.020480" FrequencyUnits="MHz" RangeGateLow="2329.6" RangeGateHigh="5000.0" RangeStep="14.6484" RangeResolution="14.6484" RangeUnits="km" Complete="true" Fraction="0.9994" />
+      <Comments>Oblique-incidence chirp sounding over a fixed transmitter-receiver path. Ranges are group range along the path, not virtual height. Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on this geometry and are absent rather than blank. No polarimetry, so traces carry no Polarization attribute.</Comments>
+    </SystemInfo>
+    <CharacteristicList>
+      <Custom Name="MUF" Units="MHz" Val="12.651" SigFig="5" Description="Operational MUF measured for the cyprus1-yoshkar-ola path, D=2588 km. Not URSI MUF(3000): that is a transmission-curve conversion from a vertical critical frequency (UAG-23A 1.50)." />
+      <Custom Name="MUFGroupRange" Units="km" Val="2769.3" SigFig="5" Description="Group range of the echo at the MUF" />
+      <Custom Name="MUFSignalToNoise" Units="dB" Val="53.4" SigFig="3" Description="Peak power at the picked bin over the noise floor" />
+      <Modeled Name="foF2" Units="MHz" Val="4.022" ModelName="secant-law" ModelOptions="hmF2=300km,D=2588km" />
+      <Custom Name="MUFNoseFit" Units="MHz" Val="12.371" SigFig="5" Bound="0.190" BoundaryType="1sigma" Description="MUF from the vertex of a parabola fitted to both branches of the nose; bound is the RMS residual of that fit" />
+      <Custom Name="LOF" Units="MHz" Val="8.022" SigFig="5" Description="Lowest observed frequency: the bottom of this estimator's own trace. Not the ITU-R P.533 LUF, which needs a required signal-to-noise and a monthly median (P.533-13 section 9)." QL="E" />
+      <Custom Name="LOFSignalToNoise" Units="dB" Val="44.6" SigFig="3" Description="Peak power at the LOF bin over the noise floor" />
+      <Custom Name="LOF@43dB" Units="MHz" Val="8.022" SigFig="5" ThresholdDb="43.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." QL="E" />
+      <Custom Name="LOF@50dB" Units="MHz" Val="11.975" SigFig="5" ThresholdDb="50.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." />
+    </CharacteristicList>
+    <TraceList Num="3">
+      <Trace Type="non-standard" Layer="F2" Multiple="1" Num="148" Branch="low" NoseGroup="0" ReflectionHeight="400">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+8.022 8.043 8.063 8.084 8.104 8.125 8.145 8.166 8.186 8.207 8.227 8.248 8.268 8.350 8.370
+8.391 8.411 8.432 8.452 8.473 8.493 8.862 8.882 8.903 8.923 8.944 8.964 9.210 9.231 9.251
+9.292 9.312 9.333 9.353 9.374 9.394 9.435 9.456 9.476 9.497 9.517 9.538 9.558 9.579 9.599
+9.620 9.702 9.722 9.743 9.784 9.804 9.865 9.886 9.906 9.968 9.988 10.009 10.029 10.070 10.091
+10.111 10.132 10.152 10.173 10.193 10.214 10.255 10.275 10.296 10.316 10.336 10.377 10.398 10.418 10.439
+10.459 10.480 10.500 10.521 10.541 10.562 10.582 10.603 10.623 10.644 10.664 10.889 10.930 10.951 10.971
+11.012 11.053 11.074 11.094 11.115 11.135 11.156 11.176 11.197 11.401 11.422 11.442 11.463 11.483 11.504
+11.524 11.545 11.565 11.586 11.606 11.627 11.647 11.668 11.688 11.709 11.729 11.750 11.770 11.791 11.811
+11.832 11.852 11.872 11.893 11.913 11.934 11.954 11.975 11.995 12.159 12.180 12.200 12.221 12.241 12.262
+12.282 12.303 12.323 12.344 12.364 12.384 12.405 12.425 12.446 12.466 12.487 12.507 12.528
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2702.6 2702.5 2702.6 2702.6 2696.2 2702.6 2702.6 2702.6 2702.6 2702.6 2702.5 2702.6 2702.7 2702.6 2702.6
+2702.7 2702.7 2702.7 2702.6 2702.6 2702.7 2710.0 2702.8 2702.8 2702.8 2702.7 2702.7 2710.0 2702.9 2717.0
+2702.9 2710.0 2709.9 2709.8 2716.7 2710.0 2710.0 2710.0 2709.9 2703.1 2710.0 2717.1 2710.3 2710.2 2709.9
+2716.9 2717.1 2717.1 2710.0 2710.0 2710.0 2716.9 2717.1 2717.0 2717.0 2717.1 2717.1 2710.0 2717.2 2717.2
+2717.2 2717.3 2717.4 2717.1 2717.1 2717.3 2717.4 2717.3 2717.4 2717.2 2724.6 2717.2 2717.3 2717.3 2717.4
+2717.5 2724.6 2717.4 2717.4 2717.3 2717.5 2717.4 2724.6 2717.5 2717.4 2717.5 2724.6 2724.6 2724.6 2724.6
+2717.6 2724.6 2717.6 2724.6 2717.6 2724.8 2724.6 2724.6 2724.6 2724.6 2724.6 2725.1 2731.9 2731.9 2725.6
+2732.1 2725.5 2732.2 2725.5 2725.5 2725.7 2731.9 2731.9 2731.9 2738.3 2739.0 2732.0 2739.3 2738.6 2738.9
+2746.2 2746.4 2739.5 2739.4 2740.1 2746.5 2746.5 2740.2 2746.8 2732.3 2732.4 2739.1 2753.3 2746.6 2739.4
+2739.2 2739.0 2739.1 2746.2 2746.4 2740.0 2746.4 2746.5 2746.4 2746.5 2753.2 2753.3 2753.7
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+45 46 47 50 50 50 49 49 48 46 47 46 41 43 47
+46 47 47 46 44 44 41 43 44 45 44 43 42 43 43
+45 47 48 49 46 40 44 47 49 45 41 42 48 51 49
+46 44 41 42 41 42 44 46 45 43 45 46 41 44 46
+44 41 42 45 47 43 40 40 42 42 40 44 41 40 43
+43 41 45 45 45 46 41 42 46 44 42 40 39 42 40
+43 41 43 40 43 45 39 43 44 40 39 47 42 48 50
+44 52 44 52 48 51 48 45 45 50 47 50 46 48 48
+44 46 50 50 50 48 46 50 48 46 45 47 45 46 48
+50 49 48 47 49 50 48 50 48 49 48 53 52
+</TraceValueList>
+      </Trace>
+      <Trace Type="non-standard" Layer="F2" Num="42" Branch="high" NoseGroup="0">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+11.442 11.463 11.483 11.504 11.524 11.545 11.565 11.586 11.606 11.627 11.647 11.668 11.688 11.709 11.729
+11.750 11.770 11.791 11.811 11.832 11.852 11.872 11.893 11.913 11.934 11.954 11.975 11.995 12.016 12.036
+12.057 12.077 12.098 12.118 12.139 12.159 12.548 12.569 12.589 12.610 12.630 12.651
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2856.4 2849.3 2849.3 2849.2 2849.1 2849.0 2848.8 2841.9 2841.7 2841.8 2841.8 2834.6 2834.8 2834.7 2834.6
+2834.4 2834.4 2834.3 2827.1 2827.0 2827.1 2820.2 2827.1 2819.9 2813.4 2813.2 2819.6 2812.5 2784.3 2777.1
+2767.3 2768.1 2769.2 2762.9 2762.1 2776.0 2782.0 2775.2 2776.2 2776.3 2775.1 2768.7
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+39 42 42 42 42 45 44 45 45 42 41 44 45 43 42
+41 40 42 43 45 43 45 41 41 49 48 47 51 56 58
+56 57 65 55 52 44 54 55 54 58 56 53
+</TraceValueList>
+      </Trace>
+      <Trace Type="non-standard" Layer="F2" Multiple="2" Num="26" NoseGroup="1" ReflectionHeight="300">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+11.954 12.016 12.036 12.057 12.077 12.098 12.118 12.139 12.159 12.200 12.221 12.241 12.262 12.282 12.303
+12.323 12.344 12.364 12.384 12.405 12.425 12.446 12.466 12.487 12.507 12.528
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2856.4 2856.4 2856.4 2849.5 2856.4 2856.4 2849.3 2849.1 2849.2 2841.8 2841.8 2834.7 2841.8 2834.7 2841.8
+2834.5 2834.5 2834.3 2827.1 2834.2 2827.7 2827.1 2827.3 2826.6 2813.2 2812.4
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+40 40 43 43 43 41 42 43 40 40 40 42 43 41 40
+41 41 42 39 43 48 48 49 49 50 59
+</TraceValueList>
+      </Trace>
+    </TraceList>
+  </SAORecord>
+  <SAORecord FormatVersion="5.0" StartTimeUTC="2026-02-04T17:30:10.000Z" URSICode="" StationName="yoshkar-ola" GeoLatitude="56.3800" GeoLongitude="47.5300" Source="Ionosonde" SourceType="Chirp oblique sounder" ScalerType="Auto" PathType="oblique">
+    <SystemInfo>
+      <AutoScaler>muf 0.1.0 (contour)</AutoScaler>
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000" TransmitterLongitude="34.0000" ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800" ReceiverLongitude="47.5300" GreatCircleDistance="2588.4" Units="km" />
+      <Sweep StartFrequency="7.5000" StopFrequency="32.4856" NominalStopFrequency="32.5000" FrequencyStep="0.020480" FrequencyUnits="MHz" RangeGateLow="2329.6" RangeGateHigh="5000.0" RangeStep="14.6484" RangeResolution="14.6484" RangeUnits="km" Complete="true" Fraction="0.9994" />
+      <Comments>Oblique-incidence chirp sounding over a fixed transmitter-receiver path. Ranges are group range along the path, not virtual height. Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on this geometry and are absent rather than blank. No polarimetry, so traces carry no Polarization attribute.</Comments>
+    </SystemInfo>
+    <CharacteristicList>
+      <Custom Name="MUF" Units="MHz" Val="12.651" SigFig="5" Description="Operational MUF measured for the cyprus1-yoshkar-ola path, D=2588 km. Not URSI MUF(3000): that is a transmission-curve conversion from a vertical critical frequency (UAG-23A 1.50)." />
+      <Custom Name="MUFGroupRange" Units="km" Val="2769.3" SigFig="5" Description="Group range of the echo at the MUF" />
+      <Custom Name="MUFSignalToNoise" Units="dB" Val="53.4" SigFig="3" Description="Peak power at the picked bin over the noise floor" />
+      <Modeled Name="foF2" Units="MHz" Val="4.022" ModelName="secant-law" ModelOptions="hmF2=300km,D=2588km" />
+      <Custom Name="MUFNoseFit" Units="MHz" Val="12.312" SigFig="5" Bound="0.167" BoundaryType="1sigma" Description="MUF from the vertex of a parabola fitted to both branches of the nose; bound is the RMS residual of that fit" />
+      <Custom Name="LOF" Units="MHz" Val="8.022" SigFig="5" Description="Lowest observed frequency: the bottom of this estimator's own trace. Not the ITU-R P.533 LUF, which needs a required signal-to-noise and a monthly median (P.533-13 section 9)." QL="E" />
+      <Custom Name="LOFSignalToNoise" Units="dB" Val="44.6" SigFig="3" Description="Peak power at the LOF bin over the noise floor" />
+      <Custom Name="LOF@43dB" Units="MHz" Val="8.022" SigFig="5" ThresholdDb="43.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." QL="E" />
+      <Custom Name="LOF@50dB" Units="MHz" Val="11.975" SigFig="5" ThresholdDb="50.0" Description="Lowest frequency carrying a continuous run of echoes above this level, measured from the ionogram rather than from any estimator's trace. The spread across the ladder is how steeply the signal rolls off into D-region absorption." />
+    </CharacteristicList>
+    <TraceList Num="3">
+      <Trace Type="non-standard" Layer="F2" Multiple="1" Num="89" Branch="low" NoseGroup="0" ReflectionHeight="400">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+8.022 8.043 8.063 8.084 8.104 8.125 8.145 8.166 8.186 8.207 8.227 8.248 8.370 8.391 8.411
+8.432 8.452 8.473 8.493 8.882 8.903 8.923 8.944 9.251 9.292 9.312 9.333 9.353 9.374 9.435
+9.456 9.476 9.497 9.558 9.579 9.599 9.620 9.865 9.886 9.906 10.070 10.091 10.111 10.459 10.500
+10.521 10.541 10.562 11.442 11.483 11.504 11.524 11.545 11.565 11.586 11.606 11.627 11.647 11.668 11.688
+11.709 11.729 11.750 11.770 11.791 11.811 11.832 11.852 11.872 11.893 11.913 11.934 11.954 11.975 11.995
+12.016 12.036 12.057 12.077 12.098 12.118 12.139 12.159 12.548 12.569 12.589 12.610 12.630 12.651
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2702.6 2702.5 2702.6 2702.6 2702.5 2702.6 2702.6 2702.6 2702.6 2702.6 2702.5 2702.6 2702.6 2702.7 2702.7
+2702.7 2702.6 2702.6 2702.7 2710.0 2710.0 2702.8 2710.0 2710.0 2710.0 2710.0 2710.0 2703.1 2710.0 2710.0
+2717.0 2710.0 2710.0 2716.9 2710.2 2709.9 2710.0 2710.0 2717.1 2710.0 2710.0 2717.2 2710.0 2724.6 2717.4
+2717.4 2717.3 2717.5 2731.7 2731.9 2731.8 2739.3 2731.8 2739.3 2731.8 2732.0 2731.9 2731.9 2731.9 2731.9
+2732.0 2739.3 2732.0 2739.3 2732.1 2732.2 2739.3 2746.4 2739.5 2739.4 2746.4 2746.5 2746.5 2746.5 2746.8
+2746.9 2777.1 2766.9 2762.5 2769.7 2769.4 2768.7 2783.2 2776.0 2775.2 2782.2 2781.9 2769.2 2768.7
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+45 46 47 50 50 50 49 49 48 46 47 46 47 46 47
+47 46 44 44 43 44 45 44 43 45 47 48 49 46 44
+47 49 45 48 51 49 46 44 46 45 44 46 44 43 45
+45 45 46 47 48 50 44 52 44 52 48 51 48 45 45
+50 47 50 46 48 48 44 46 50 50 50 48 46 50 48
+51 58 56 57 65 55 52 44 54 55 54 58 56 53
+</TraceValueList>
+      </Trace>
+      <Trace Type="non-standard" Layer="F2" Num="24" Branch="high" NoseGroup="0">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+11.545 11.565 11.586 11.606 11.668 11.688 11.709 11.811 11.832 11.852 11.872 11.934 11.954 11.975 11.995
+12.016 12.057 12.405 12.425 12.446 12.466 12.487 12.507 12.528
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2849.0 2841.8 2841.8 2841.8 2841.8 2841.8 2841.8 2827.1 2827.1 2827.1 2827.1 2819.8 2819.8 2819.6 2812.5
+2811.9 2856.4 2827.1 2834.1 2827.1 2834.0 2820.1 2819.8 2812.4
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+45 44 45 45 44 45 43 43 45 43 45 49 48 47 51
+56 43 43 48 48 49 49 50 59
+</TraceValueList>
+      </Trace>
+      <Trace Type="non-standard" Layer="F2" Num="19" NoseGroup="1">
+        <FrequencyList Type="float" SigFig="5" Units="MHz" Description="Nominal Frequency">
+12.159 12.180 12.200 12.221 12.241 12.262 12.282 12.303 12.323 12.344 12.364 12.384 12.405 12.425 12.446
+12.466 12.487 12.507 12.528
+</FrequencyList>
+        <RangeList Type="float" SigFig="6" Units="km" Description="Group Range along the oblique path">
+2739.3 2739.3 2739.3 2746.5 2739.3 2739.3 2739.2 2732.4 2732.3 2739.3 2746.4 2746.5 2746.4 2746.5 2746.4
+2746.5 2746.7 2753.3 2753.7
+</RangeList>
+        <TraceValueList Name="Amplitude" Type="integer" SigFig="3" Units="dB" NoValue="0" Description="Relative Amplitude over the equalized noise floor">
+46 45 47 45 46 48 50 49 48 47 49 50 48 50 48
+49 48 53 52
+</TraceValueList>
+      </Trace>
+    </TraceList>
+  </SAORecord>
+</SAORecordList>
