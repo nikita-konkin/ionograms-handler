@@ -1019,35 +1019,345 @@ different interpretations of one ionogram, not something to merge.
 | `muf plot-sao TARGET` | draw exported SAO.XML records, over their ionograms |
 | `muf lof TARGET` | measure the band floor and summarise LOF |
 | `muf info TARGET` | header and derived geometry, no processing |
+| `muf detect TARGET` | census a chirpsounder2 detection tree: which transmitters, on what schedule |
+| `muf stations` | print the station coordinate registry |
 
-`run` · `--methods algo,kmeans,contour` (or `all`) · `--gate LO,HI` · `--window` ·
-`--zero-periods` · `--min-run` · `--threshold-db` · `-k` · `--jobs 0` ·
-`--cache-dir` · `--format parquet` · `--legacy-algo` · `--daily` · `--combined`
-· `--plot`
+### Which commands read which format
 
-`track` · `--process-noise` (MHz/hour the MUF may change) · `--gate-sigma`
-(reject picks beyond this many sigma)
+`run`, `plot`, `export`, `lof`, `plot-sao` and `info` read **both** `.lfs`
+recordings and chirpsounder2 `lfm_ionogram-*.h5` products, selected by file
+extension (`architecture.md` §3.2, `muf.loader`). A tree holding both — which
+is what the parallel run of §2.4 looks like — works without saying anything:
 
-`compare` · `--ref FILE` (a historical CSV) · `--ref-model iri,giro,chapman`
-(or `all`) · `--exclude START..STOP`
+```bash
+muf run /media/.../ionozond_data2/2026-08-05 --out out --jobs 4
+```
 
-`export` · `--methods` (one record per method) · `--ursi-code` · `--station` ·
-`--iri` (add IRI's MUF/foF2/hmF2 as `<Modeled>`) · `--offline` (cached solar
-indices only)
+```
+wrote out/2026-08-05.csv  (318 soundings)
+  algo      149/318 picked   9.80-24.45 MHz
+  kmeans    198/318 picked   12.05-24.50 MHz
+  contour   185/318 picked   6.90-24.50 MHz
+```
 
-`plot-sao` · `--ionogram TARGET` (draw each record over its own sounding,
-matched by file name) · `--method` (one estimator's record) · `--trace` /
-`--no-trace` (overlay the scaled points, or never) · `--full-band` · `--dpi` ·
-the `run` gate and window flags, so the raster matches what was exported
+`--input-format {lfs,chirp2}` overrides the extension, for a recording that was
+renamed. It is separate from `run`'s `--format {csv,parquet}`, which is the
+*output* table format.
 
-`lof` · `--level` (detection level for the floor measurement, raw ionogram dB)
-· `--out FILE` (per-sounding ladder as CSV)
+`muf detect` is the exception: it reads chirpsounder2 **detection** files
+(`par-*.h5`, `chirp-*.h5`, `cdetections-*.h5`) and nothing else. `daily`,
+`track` and `compare` read result tables, not soundings.
 
-`--band-floor MHZ` is shared by `run`, `plot`, `export` and `lof`: the lowest
-frequency the transmitter actually radiates, which is not the sweep start.
+Two flags change meaning across formats:
 
-`--cache-dir` stores the gated array per sounding, so re-running with different
-estimator settings skips the FFTs entirely — the useful mode when tuning.
+- **`--window` and `--zero-periods` are ignored for `.h5`, with a warning.** v2
+  fixed the FFT window when it wrote the product and the raw IQ is not in the
+  file, so the sounding cannot be re-derived at another one (§3.4). They warn
+  rather than silently no-op, because a run whose `--window` was quietly
+  dropped produces a table indistinguishable from one where it was applied.
+- **`--cache-dir` does nothing for `.h5`.** The cache exists to skip FFTs and
+  there are none: reading a v2 product is 26 ms against seconds for `.lfs`, so
+  an entry would cost 8 MB on disk to save 26 ms. Cache keys still carry a
+  format tag so a `sounding.lfs` and a `sounding.h5` cannot overwrite each
+  other.
+
+### Shared processing flags
+
+These four appear on `run`, `plot`, `export` and `lof`, and describe how the
+ionogram is formed rather than how it is read. They are meaningless for `.h5`
+products, where v2 fixed the window at archive time.
+
+| Flag | Meaning |
+|---|---|
+| `--window N` | FFT window length, default 8192. Sets range resolution and, with `--zero-periods`, the range bin count. |
+| `--zero-periods N` | Zero-padding periods. Subdivides range bins **without improving resolution** — it interpolates, it does not resolve. |
+| `--gate LO,HI` | Virtual-range gate in km. Default comes from the file header's geometry. Narrowing it is the main lever on runtime. |
+| `--cache-dir DIR` | Cache the gated array per sounding, so re-running with different estimator settings skips the FFTs entirely. The useful mode when tuning. |
+
+`--stations FILE` is shared the same way. v2 products carry `txname` and
+`station_name` as bare strings and **no coordinates**, so without a registry
+`geometry.path_of` has nothing to work with. The built-in table is used by
+default — 16 sites transcribed from chirpsounder2's own
+`examples/marieluise/server.ini`, plus `yoshkar-ola` and `cyprus1`, which only
+this pipeline knows. A file given here is merged *over* it and wins every
+collision: a station is more authoritative about its own coordinates than a
+table copied from someone else's example config. JSON, or point it straight at
+a live `server.ini`.
+
+`--band-floor MHZ` is likewise shared by `run`, `plot`, `export` and `lof`: the
+lowest frequency the transmitter actually radiates, which is **not** the sweep
+start, and without which a LOF that ran off the bottom of the band is
+indistinguishable from a real one.
+
+### Per-command flags
+
+**`run`** — extract MUF and LOF; writes `out/<date>.csv`
+
+| Flag | Meaning |
+|---|---|
+| `--out DIR` | Output directory, default `out`. |
+| `--methods LIST` | `algo,kmeans,contour`, or `all`. Comma-separated. |
+| `--min-run N` | Consecutive frequency bins required before a pick is believed. The single most effective guard against calling a carrier a trace — an echo spans frequencies, RFI spans ranges. |
+| `--percentile P` | Percentile used by the percentile-based estimators. |
+| `--threshold-db DB` | Detection threshold for `contour`, in the shared 43 dB convention. |
+| `-k N` | Cluster count for `kmeans`. |
+| `--legacy-algo` | Reproduce the pre-fix `algo` decision rule, for comparison against old results only. |
+| `--jobs N` | Parallel workers; `0` uses all but one core. |
+| `--format {csv,parquet}` | Output table format. |
+| `--plot` | Also render each ionogram. |
+| `--daily` | Also write the interpolated daily curve. |
+| `--combined` | Additionally write one table spanning every day, on top of the per-day files. |
+| `--quiet` | Suppress the progress bar. |
+
+**`plot`** — render ionograms
+
+| Flag | Meaning |
+|---|---|
+| `--out DIR` | Output directory. |
+| `--methods LIST` | Which estimators' picks to mark. |
+| `--no-axes` | Bare raster, no axes or annotation. |
+| `--no-muf` | Do not run the estimators or mark their picks. |
+| `--trace [METHOD]` | Overlay the detected trace, split by propagation mode. Takes an optional estimator name. |
+| `--dpi N` | Output resolution. |
+
+**`daily`** — interpolate onto a 5-minute grid and smooth
+
+| Flag | Meaning |
+|---|---|
+| `--method NAME` | Default: every method present in the table. |
+| `--out DIR` | Output directory. |
+| `--no-smooth` | Interpolate but do not smooth. |
+| `--plot` | Also draw the curve. |
+
+**`track`** — Kalman-track through time: fill gaps, reject outliers
+
+| Flag | Meaning |
+|---|---|
+| `--method NAME` | Default: every method present. |
+| `--out DIR` | Output directory. |
+| `--process-noise MHZ_PER_HOUR` | How fast the MUF is allowed to change. Too small and the filter lags a sunrise; too large and it follows outliers. |
+| `--gate-sigma N` | Reject picks further than this many sigma from the prediction. |
+| `--plot` | Also draw the tracked series. |
+
+**`compare`** — agreement between methods, and against references
+
+| Flag | Meaning |
+|---|---|
+| `--ref FILE` | A historical CSV, e.g. `MUF_cyprus1_20220320.csv`. |
+| `--ref-model NAMES` | External models to evaluate: `iri`, `giro`, `chapman`, or `all`. |
+| `--exclude START..STOP` | Exclude a time span, for a known outage. |
+| `--out DIR` | Output directory. |
+
+**`export`** — write soundings as SAO.XML 5.0 (URSI/INAG interchange)
+
+| Flag | Meaning |
+|---|---|
+| `--out DIR` | Output directory. |
+| `--methods LIST` | One `<SAORecord>` per method, per the spec's separate-storage rule (1.3.4). |
+| `--ursi-code CODE` | URSI station code, if one has been issued for this path. |
+| `--station NAME` | `StationName` attribute; default is the receiver name. |
+| `--iri` | Add IRI's MUF, foF2 and hmF2 as `<Modeled>` beside the measured values. |
+| `--offline` | With `--iri`, use cached solar indices only — no network. |
+
+**`plot-sao`** — draw exported SAO.XML records
+
+| Flag | Meaning |
+|---|---|
+| `--out DIR` | Output directory. |
+| `--ionogram TARGET...` | Draw each record over its own sounding, matched by file name. |
+| `--method NAME` | Draw only the record from this estimator. |
+| `--full-band` | Show the whole sweep instead of framing the trace. |
+| `--trace` / `--no-trace` | Overlay the scaled trace points, or never. |
+| `--dpi N` | Output resolution. |
+
+Takes the shared gate and window flags too, so the raster matches what was
+exported rather than a differently-gated version of the same sounding.
+
+**`lof`** — measure the band floor and summarise LOF
+
+| Flag | Meaning |
+|---|---|
+| `--level DB` | Detection level for the floor measurement, in raw ionogram dB. |
+| `--out FILE` | Write the per-sounding ladder to this CSV. |
+
+**`info`** — header and derived geometry, no processing
+
+| Flag | Meaning |
+|---|---|
+| `--limit N` | How many soundings to describe, default 3. |
+| `--window N`, `--zero-periods N` | Only affect the derived axes that are printed; nothing is processed. |
+
+**`stations`** — print the station coordinate registry
+
+| Flag | Meaning |
+|---|---|
+| `--stations FILE` | Merge a JSON registry or a chirpsounder2 `server.ini` over the built-in table. |
+
+```
+$ muf stations
+17 stations
+          code   latitude   longitude  name [source]
+...
+NIC              35.18557    33.38228  Nicosia, Cyprus [chirpsounder2 server.ini]
+               note: also the .lfs archive's 'cyprus1'; its header says 35.0/34.0, 59.9 km away, superseded by these five decimals
+yoshkar-ola      56.38000    47.53000  Yoshkar-Ola [.lfs header]
+               note: the .lfs receiver; absent from v2's table
+```
+
+Every entry carries its provenance, because a wrong coordinate does not raise —
+it yields a plausible path length and a wrong virtual height. Nothing in the
+table is inferred from measurements: a range measured through the ionosphere
+carries a virtual-height excess of a few percent and, on an uncalibrated
+receiver, an epoch error of any size at all.
+
+**`cyprus1` is an alias of `NIC`**, resolving to v2's five-decimal position.
+That is one site under two names — the `.lfs` archive's and v2's — and it is
+the only entry whose position was *chosen* rather than copied. The data could
+not decide it: after removing the DOB receiver's 0.9557 s epoch error the four
+cyprus1 slots gave 3398, 3420, 3422 and 3504 km of virtual range, a 106 km
+spread against the 40 km separating the candidates. The round `35.0/34.0` from
+the `.lfs` header was rejected in favour of `35.18557/33.38228` on the shape of
+the numbers, and kept in the module as `stations.CYPRUS1_LFS_COORDINATES`
+rather than deleted, because it is still embedded in every `.lfs` file.
+
+What that choice moves:
+
+```
+cyprus1 -> yoshkar-ola   2588.4 -> 2587.8 km    (-0.6 km)
+cyprus1 -> DOB           3476.3 -> 3435.9 km   (-40.3 km, 20 range bins)
+```
+
+**`.lfs` soundings are unaffected either way.** `io_lfs` reads coordinates from
+each file's own 512-byte header and never consults this registry, so the
+2588.4 km path `signal-chain.md` records as measured is untouched. The table
+governs v2 products, which carry a name and nothing else.
+
+v2's marker for an unidentified transmitter — `unkown`, upstream's spelling —
+never resolves. Every unidentified emitter in an archive shares that string, so
+a match would give a whole night of distinct transmitters one position.
+
+**`detect`** — census a chirpsounder2 detection tree
+
+Reads `par-*.h5` timing solutions (or `chirp-*.h5` with `--raw`) and groups
+them into transmitters by chirp rate and arrival phase.
+
+| Flag | Meaning |
+|---|---|
+| `--cycle SECONDS` | Schedule cycle, default 300. Matches the Twente chirp list's `300:235` notation — period 300 s, starts at second 235. |
+| `--min-count N` | How many sightings make an emitter rather than a false alarm, default 3. A search-mode tree is mostly noise, and a one-off detection carries no schedule. `--min-count 1` shows them anyway. |
+| `--raw` | Census `chirp-*.h5` detections instead of `par-*.h5`. Noisier, and the only option before `find_timings` has run. |
+| `--reference-km KM` | Great-circle distance to a transmitter you can identify independently. **Supplying it is what enables transmit seconds and ranges to be printed at all.** |
+| `--reference-slots LIST` | Its published transmit seconds, comma separated. Default `235,240,245` — cyprus1 per the Twente list. |
+| `--reference-rate HZ_PER_S` | Its chirp rate, default `100e3`. |
+| `--reference-name NAME` | Label for the report. |
+| `--reference-window SECONDS` | How far from a published slot a sighting may land and still count, default 1.5. Widen past 1 s only when the epoch error is known to exceed it. |
+
+Without the `--reference-*` flags, `detect` prints only what the files say —
+seconds **as received** and arrival phase — and says so. That reticence is the
+point, and it is explained under [Why `detect` will not print a range](#why-detect-will-not-print-a-range).
+
+### Why `detect` will not print a range
+
+Every range in the chirp world comes from one identity: transmitters start
+their sweep on a whole second, so whatever is left over in `chirp_time` is the
+travel time. That holds only if the *receiver* agrees about where the second
+begins.
+
+At Dombås on 2026-08-05 it did not. The recorder's epoch was **0.956 s slow**,
+and cyprus1 — 3436 km away — reported at 16,700 km. Nothing in the files showed
+it: `chirp_time` was stable to 0.5 ms across eleven hours, the schedule was
+self-consistent, the ionograms plotted. It took an external schedule (the
+[Twente chirp list](http://websdr.ewi.utwente.nl:8901/chirps/), which publishes
+cyprus1's transmit seconds) to see it at all.
+
+So the default output names nothing it cannot justify:
+
+```bash
+muf detect /media/.../ionozond_data2/2026-08-05
+```
+
+```
+  280 timing solution(s), 3 repeating emitter(s) on a 300 s cycle
+       rate                received at     n  phase ms   sd ms      snr  span h
+       100k   53,234,239,244,290,29...   254     56.05    0.60     25.6    10.3
+       100k                        119    20     77.54    0.22     26.4     6.4
+       125k                     74,194     6     92.28    0.18     19.7     6.6
+```
+
+Give it a transmitter whose distance and published schedule you know, and it
+solves the receiver's clock first:
+
+```bash
+muf detect /media/.../ionozond_data2/2026-08-05 \
+  --reference-km 3436 --reference-slots 235,240,245,300 \
+  --reference-rate 100e3 --reference-name cyprus1 --reference-window 2.0
+```
+
+```
+  epoch offset -0.95546 s from cyprus1 (4 slots, 249 samples, +/-0.08 ms = 25 km)
+  NOTE: past half a second, so every received second above is a whole second early or late.
+       rate             transmitted at     n   range km
+       100k   0,54,235,240,245,291,292   254       3450
+       100k                        120    20       9894
+       125k                     75,195     6      14312
+```
+
+Note what changed: the received seconds `234,239,244,299` became the
+transmitted seconds `235,240,245,0`, matching the Twente listing exactly, and
+cyprus1 moved from 16,700 km to 3450 km against a true 3436. **An epoch error
+past half a second shifts the whole schedule by a whole second while leaving it
+perfectly self-consistent**, which is why the correction cannot be derived from
+inside the archive and why `--reference-window` must be widened to admit it.
+
+`--reference-window 2.0` is needed only because this receiver was that far out.
+On a healthy one, leave it at the default.
+
+### Plotting v2 products
+
+Same command as for `.lfs`:
+
+```bash
+muf plot /media/.../ionozond_data2/2026-08-05 --out png
+```
+
+Everything downstream of `Ionogram` was already format-blind — the extractors,
+`pick`, `render` and `export` all take the gated array and its axes — so
+`muf.loader` picking the right reader is the whole of the change. `io_chirp`
+puts the dB scale on the same 25.571 dB noise floor as the `.lfs` path, so the
+shared 43 dB threshold keeps its meaning without recalibration, and the
+frequency axis, range axis and gate come from the file's own datasets rather
+than from header arithmetic.
+
+From Python, if you want the array rather than a PNG:
+
+```python
+from muf import loader, extractors, render
+ion = loader.load("lfm_ionogram-unkown-DOB-ch0-000-1785905639.06.h5")
+render.plot(ion, "out.png", extractors.run(ion))
+```
+
+**Search-mode products keep a relative range axis.** Loading one warns and
+`ChirpHeader.range_is_relative` is True, for the reason in the previous
+section: the zero is unknown, the differences are not. MUF is a frequency and
+is unaffected — the DOB archive gives 149–198 picks out of 318 depending on
+estimator, spanning 6.9–24.5 MHz. Virtual height is not recoverable until the
+receiver's epoch is calibrated, and `muf info` says so per file:
+
+```
+$ muf info lfm_ionogram-unkown-DOB-ch0-000-1785905639.06.h5
+  unkown->DOB (oblique) 2026-08-05 04:53:59Z
+  RANGE IS RELATIVE -- transmitter is v2's 'unkown' marker, so the 17003 km
+                       implied by t0 rests on a timing solution nothing has cross-checked
+  sweep      0.52-24.83 MHz, 486 bins @ 50.00 kHz
+  range axis +/-59958 km, 2.00 km/bin, resolution 2.00 km
+  gate       -3998-3998 km -> bins 27980..31978 (3999 of 59958, 15x reduction)
+```
+
+That `3999 of 59958` is v2's own gating, not `muf`'s: at this rate and sample
+rate the full stretch-processed axis spans ±59958 km, and v2 stored the
+±4000 km window around the expected echo. A `--gate` narrower than what v2 kept
+is applied on top; a wider one warns and is ignored, because the rest was
+discarded at acquisition and cannot be recovered.
 
 ### Output
 

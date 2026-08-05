@@ -17,6 +17,11 @@ dependencies = [
     "opencv-python>=4.8",
     "matplotlib>=3.7",
     "tqdm>=4.65",
+    # chirpsounder2 `lfm_ionogram-*.h5` products. A core dependency, not an
+    # extra: dual-format input is a permanent requirement, not a migration
+    # step (docs/architecture.md sec. 3). `muf.io_chirp` still imports it
+    # lazily, so an .lfs-only install that predates this keeps working.
+    "h5py>=3.8",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +41,7 @@ muf = "muf.cli:main"
 [tool.setuptools]
 # Only the pipeline package. The original top-level scripts (MUF.py, stuffr.py,
 # data_handler/, ...) stay in the repository for reference but are not shipped.
-packages = ["muf", "muf.extractors", "muf.reference"]
+packages = ["muf", "muf.extractors", "muf.reference", "services", "services.agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

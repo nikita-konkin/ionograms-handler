@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
 
 import pandas as pd
 
-from . import __version__, compare, extractors, pipeline, render, spectro, track
+from . import (__version__, compare, extractors, io_detect, pipeline, render,
+               spectro, track)
 from .export import saoxml
 from .extractors import ALL_METHODS, DEFAULT_METHODS
 from .reference import ALL_REFERENCES
-from .io_lfs import find_lfs, read_header
+from . import loader, stations as _stations
+from .loader import find_soundings, read_header
 from .pipeline import Options
 
 
@@ -57,11 +60,43 @@ def _common(parser: argparse.ArgumentParser) -> None:
                         help="virtual-range gate in km (default: from the file header)")
     parser.add_argument("--cache-dir", type=Path, default=None,
                         help="cache gated spectrograms here to make re-runs fast")
+    parser.add_argument("--stations", type=Path, default=None, metavar="FILE",
+                        help="station coordinate registry, JSON or a "
+                             "chirpsounder2 server.ini. Merged over the "
+                             "built-in table, which it always wins. v2 "
+                             "products carry station names but no lat/lon, so "
+                             "without one the path geometry is unavailable.")
+    parser.add_argument("--input-format", choices=loader.FORMATS, default=None,
+                        help="override extension-based format selection "
+                             "(default: .lfs -> lfs, .h5 -> chirp2). Only "
+                             "needed for a recording that was renamed.")
     parser.add_argument("--band-floor", type=float, default=None, metavar="MHZ",
                         help="lowest frequency the transmitter actually "
                              "radiates, for flagging LOF that ran off the "
                              "bottom of the band (default: the sweep start, "
                              "which `muf lof` will tell you is often wrong)")
+
+
+def _load_registry(path):
+    """Built-in table, with a file merged over it when one is given.
+
+    The file wins every collision: a station is more authoritative about its
+    own coordinates than a table transcribed from someone else's example
+    config.
+    """
+    registry = _stations.default_registry()
+    if path is None:
+        return registry
+    path = Path(path)
+    other = (_stations.from_server_ini(path) if path.suffix.lower() == ".ini"
+             else _stations.from_json(path))
+    return registry.merged_with(other)
+
+
+def cmd_stations(args) -> int:
+    """Print the station coordinate registry."""
+    print(_stations.describe(_load_registry(args.stations)))
+    return 0
 
 
 def _options(args) -> Options:
@@ -83,6 +118,8 @@ def _options(args) -> Options:
         cache_dir=args.cache_dir,
         method_options=method_options or None,
         band_floor_mhz=getattr(args, "band_floor", None),
+        format=getattr(args, "input_format", None),
+        stations=_load_registry(getattr(args, "stations", None)),
     )
 
 
@@ -90,7 +127,7 @@ def _options(args) -> Options:
 
 def cmd_run(args) -> int:
     options = _options(args)
-    paths = find_lfs(args.target)
+    paths = find_soundings(args.target, format=args.input_format)
     print(f"{len(paths)} sounding(s) from {len(args.target)} target(s); "
           f"methods: {', '.join(options.methods)}", file=sys.stderr)
 
@@ -144,9 +181,9 @@ def _summarise(frame, indent: str = "  ") -> None:
 def _plot_each(paths, options: Options, out_dir: Path) -> None:
     print(f"rendering {len(paths)} ionogram(s) to {out_dir}", file=sys.stderr)
     for path in paths:
-        ion = spectro.compute_cached(
+        ion = loader.load(
             path, options.window, options.zero_periods,
-            options.gate_km, options.cache_dir,
+            options.gate_km, options.cache_dir, format=options.format,
         )
         results = extractors.run(ion, methods=options.methods,
                                  **options.per_method())
@@ -169,14 +206,14 @@ def _write_daily(frame, out_dir: Path, day, fmt: str, plot: bool) -> None:
 
 def cmd_plot(args) -> int:
     options = _options(args)
-    paths = find_lfs(args.target)
+    paths = find_soundings(args.target, format=args.input_format)
     args.out.mkdir(parents=True, exist_ok=True)
     print(f"rendering {len(paths)} ionogram(s)", file=sys.stderr)
 
     for path in paths:
-        ion = spectro.compute_cached(
+        ion = loader.load(
             path, options.window, options.zero_periods,
-            options.gate_km, options.cache_dir,
+            options.gate_km, options.cache_dir, format=options.format,
         )
         results = None
         if not args.no_axes and not args.no_muf:
@@ -319,7 +356,7 @@ def cmd_compare(args) -> int:
 def cmd_export(args) -> int:
     """Write each sounding as a SAO.XML 5.0 record list."""
     options = _options(args)
-    paths = find_lfs(args.target)
+    paths = find_soundings(args.target, format=args.input_format)
     print(f"exporting {len(paths)} sounding(s) to {args.out}", file=sys.stderr)
 
     models = _iri_values(paths, args) if args.iri else {}
@@ -430,9 +467,10 @@ def cmd_plot_sao(args) -> int:
             if source is None:
                 missing += 1
             else:
-                ion = spectro.compute_cached(
+                ion = loader.load(
                     source, options.window, options.zero_periods,
                     options.gate_km, options.cache_dir,
+                    format=options.format,
                 )
 
         wanted = [r for r in records
@@ -471,7 +509,7 @@ def _recordings_by_stem(targets) -> dict[str, Path]:
     """
     if not targets:
         return {}
-    return {path.stem: path for path in find_lfs(targets)}
+    return {path.stem: path for path in find_soundings(targets)}
 
 
 def _find_xml(targets) -> list[Path]:
@@ -491,15 +529,15 @@ def cmd_lof(args) -> int:
     from . import lof as lof_module
 
     options = _options(args)
-    paths = find_lfs(args.target)
+    paths = find_soundings(args.target, format=args.input_format)
     print(f"{len(paths)} sounding(s)", file=sys.stderr)
 
     ions = []
     for path in paths:
         try:
-            ions.append(spectro.compute_cached(
+            ions.append(loader.load(
                 path, options.window, options.zero_periods,
-                options.gate_km, options.cache_dir,
+                options.gate_km, options.cache_dir, format=options.format,
             ))
         except Exception as exc:
             print(f"  {path.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -554,16 +592,25 @@ def cmd_info(args) -> int:
     """Print header and derived geometry for a sounding -- no processing."""
     from . import calibrate
 
-    for path in find_lfs(args.target)[: args.limit]:
-        header = read_header(path)
-        cal = calibrate.build(
-            header,
-            n_freq=max(1, (path.stat().st_size - 512) // 8 // args.window),
-            window=args.window, zero_periods=args.zero_periods,
-        )
+    for path in find_soundings(args.target, format=args.input_format)[: args.limit]:
+        header = read_header(path, format=args.input_format)
+        if loader.format_of(path, args.input_format) == loader.CHIRP2:
+            # v2 stores its own axes, so they are read rather than derived.
+            # `calibrate.build` would apply .lfs arithmetic -- a 512-byte
+            # header and 8 bytes per sample -- to a file with neither, and
+            # print a confident +/-60000 km axis for a +/-4000 km product.
+            cal = loader.load(path, format=args.input_format).cal
+        else:
+            cal = calibrate.build(
+                header,
+                n_freq=max(1, (path.stat().st_size - 512) // 8 // args.window),
+                window=args.window, zero_periods=args.zero_periods,
+            )
         ground = calibrate.ground_range_km(header)
         print(f"{path.name}")
         print(f"  {header}")
+        if getattr(header, "range_is_relative", False):
+            print(f"  RANGE IS RELATIVE -- {header.range_relative_reason}")
         print(f"  tx {header.tx_latitude:.3f},{header.tx_longitude:.3f}  "
               f"rx {header.rx_latitude:.3f},{header.rx_longitude:.3f}"
               + (f"  ground path {ground:.0f} km" if ground else ""))
@@ -575,6 +622,82 @@ def cmd_info(args) -> int:
               f"-> bins {cal.gate_idx[0]}..{cal.gate_idx[1]} "
               f"({cal.n_range} of {cal.n_range_full}, "
               f"{cal.n_range_full/cal.n_range:.0f}x reduction)")
+        print()
+    return 0
+
+
+def cmd_detect(args) -> int:
+    """Census a chirpsounder2 detection tree: which transmitters, what schedule.
+
+    Two modes. Without ``--reference-*`` it prints what the files say, in the
+    receiver's own time. With them it measures the receiver's epoch against a
+    transmitter whose position and published transmit seconds you supply, and
+    only then prints transmit seconds and ranges -- because until that is
+    measured neither quantity means what its name says. See ``io_detect``.
+    """
+    from . import io_detect
+
+    for target in args.target:
+        records = [] if args.raw else io_detect.load_timings(target)
+        kind = "timing solution"
+        if not records:
+            records = io_detect.load_detections(target)
+            kind = "detection"
+        emitters = io_detect.census(records, cycle_s=args.cycle,
+                                    min_count=args.min_count)
+
+        print(f"{target}")
+        print(f"  {len(records)} {kind}(s), {len(emitters)} repeating emitter(s)"
+              f" on a {args.cycle:.0f} s cycle")
+        if not emitters:
+            print("  nothing repeats -- a search-mode tree of pure noise looks "
+                  "exactly like this\n")
+            continue
+
+        print(f"  {'rate':>9} {'received at':>26} {'n':>5} {'phase ms':>9} "
+              f"{'sd ms':>7} {'snr':>8} {'span h':>7}")
+        for e in emitters:
+            slots = ",".join(str(s) for s in e.observed_seconds)
+            if len(slots) > 24:
+                slots = slots[:21] + "..."
+            print(f"  {e.rate/1e3:8.0f}k {slots:>26} {e.count:5d} "
+                  f"{e.fraction_s*1e3:9.2f} {e.fraction_sd_s*1e3:7.2f} "
+                  f"{e.snr_median:8.1f} {e.span_hours:7.1f}")
+
+        if args.reference_km is None:
+            print()
+            print("  Seconds are AS RECEIVED and phase is seconds past the whole")
+            print("  second. Neither is a transmit time or a range until this")
+            print("  receiver's epoch offset is known -- pass --reference-km,")
+            print("  --reference-slots and --reference-rate for a transmitter you")
+            print("  can identify independently, and they will be printed.\n")
+            continue
+
+        slots = tuple(int(s) for s in args.reference_slots.split(","))
+        try:
+            offset = io_detect.solve_epoch_offset(
+                records, rate=args.reference_rate, transmit_seconds=slots,
+                distance_km=args.reference_km, cycle_s=args.cycle,
+                reference=args.reference_name, window_s=args.reference_window)
+        except ValueError as exc:
+            print(f"  epoch offset not solved: {exc}\n")
+            continue
+
+        print()
+        print(f"  {offset}")
+        if abs(offset.seconds) > 0.5:
+            print(f"  NOTE: past half a second, so every received second above "
+                  f"is a whole second early or late.")
+        print(f"  {'rate':>9} {'transmitted at':>26} {'n':>5} {'range km':>10}")
+        for e in emitters:
+            tx = ",".join(str(s) for s in e.transmit_seconds(offset.seconds))
+            if len(tx) > 24:
+                tx = tx[:21] + "..."
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                km = e.range_km(offset.seconds)
+            flag = "  (impossible)" if caught else ""
+            print(f"  {e.rate/1e3:8.0f}k {tx:>26} {e.count:5d} {km:10.0f}{flag}")
         print()
     return 0
 
@@ -816,10 +939,59 @@ def build_parser() -> argparse.ArgumentParser:
     info = sub.add_parser("info", help="show header and derived geometry")
     info.add_argument("target", type=Path, nargs="+")
     info.add_argument("--limit", type=int, default=3)
+    info.add_argument("--input-format", choices=loader.FORMATS, default=None)
     info.add_argument("--window", type=int, default=spectro.DEFAULT_WINDOW)
     info.add_argument("--zero-periods", type=int,
                       default=spectro.DEFAULT_ZERO_PERIODS)
     info.set_defaults(func=cmd_info)
+
+    det = sub.add_parser(
+        "detect",
+        help="census a chirpsounder2 detection tree: which transmitters, "
+             "on what schedule",
+        description="Reads par-*.h5 (or chirp-*.h5 with --raw) and groups "
+                    "them into transmitters by chirp rate and arrival phase. "
+                    "Transmit seconds and ranges are printed only when a "
+                    "reference transmitter is given, because a receiver whose "
+                    "epoch is wrong produces a schedule that is internally "
+                    "perfect and uniformly misplaced.")
+    det.add_argument("target", type=Path, nargs="+")
+    det.add_argument("--cycle", type=float, default=io_detect.DEFAULT_CYCLE_S,
+                     help="schedule cycle in seconds (default: %(default)s)")
+    det.add_argument("--min-count", type=int, default=3,
+                     help="how many sightings make an emitter, rather than a "
+                          "false alarm (default: %(default)s)")
+    det.add_argument("--raw", action="store_true",
+                     help="census chirp-*.h5 detections instead of par-*.h5 "
+                          "timing solutions; noisier, and the only option "
+                          "before find_timings has run")
+    det.add_argument("--reference-km", type=float, default=None,
+                     help="great-circle distance to a transmitter you can "
+                          "identify, in km; enables the epoch solve")
+    det.add_argument("--reference-slots", default="235,240,245",
+                     help="its published transmit seconds, comma separated "
+                          "(default: %(default)s, cyprus1 per the Twente list)")
+    det.add_argument("--reference-rate", type=float, default=100e3,
+                     help="its chirp rate in Hz/s (default: %(default)s)")
+    det.add_argument("--reference-name", default="reference transmitter")
+    det.add_argument("--reference-window", type=float, default=1.5,
+                     help="how far from a published slot a sighting may land "
+                          "and still be counted, in seconds (default: "
+                          "%(default)s). Widen past 1 s only when the epoch "
+                          "error is known to exceed it.")
+    det.set_defaults(func=cmd_detect)
+
+    sta = sub.add_parser(
+        "stations", help="print the station coordinate registry",
+        description="v2 products carry txname/station_name as bare strings "
+                    "and no coordinates; this is the table that turns them "
+                    "into a path. Sources are shown per entry because a wrong "
+                    "coordinate does not raise -- it yields a plausible path "
+                    "length and a wrong virtual height.")
+    sta.add_argument("--stations", type=Path, default=None, metavar="FILE",
+                     help="merge a JSON registry or a chirpsounder2 "
+                          "server.ini over the built-in table")
+    sta.set_defaults(func=cmd_stations)
 
     return parser
 

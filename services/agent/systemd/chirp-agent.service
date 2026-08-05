@@ -1,0 +1,18 @@
+# The agent itself. Deliberately NOT PartOf=chirp.target: it must survive a
+# stop of acquisition, or "stop sounding" would be the last command the server
+# could ever issue.
+[Unit]
+Description=ionograms-handler station agent
+After=network-online.target
+
+[Service]
+Type=simple
+User=ionouser
+WorkingDirectory=/home/ionouser/ionograms-handler
+Environment=AGENT_CONFIG=/home/ionouser/ionograms-handler/agent.json
+ExecStart=/usr/bin/python3 -m services.agent run
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

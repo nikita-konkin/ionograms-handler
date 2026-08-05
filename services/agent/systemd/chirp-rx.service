@@ -1,0 +1,41 @@
+# The recorder. Every setting below was paid for by an incident.
+[Unit]
+Description=chirpsounder2 recorder (USRP -> Digital RF)
+PartOf=chirp.target
+Before=chirp-detect.service chirp-ionograms.service
+
+[Service]
+Type=simple
+User=ionouser
+WorkingDirectory=/home/ionouser/chirpsounder2
+
+# The NIC RX ring resets to 256 on every boot. At 25 MS/s over 1 GbE that is
+# ~68,000 packets/second into a ring sized for a tenth of it, and the recorder
+# drops data continuously. Jumbo frames are NOT an option: the N2x0 probes at
+# 1472 bytes whatever the host MTU.
+ExecStartPre=+/sbin/ethtool -G enp0s25 rx 4096
+ExecStartPre=+/sbin/sysctl -w net.core.rmem_max=500000000
+
+# Real-time priority for the receive thread, granted by systemd rather than by
+# limits.conf (which does nothing without pam_limits.so in common-session --
+# it was absent here) or by setcap (which any rebuild of the binary clears).
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+
+ExecStart=/home/ionouser/chirpsounder2/rx_uhd_ext_gps \
+    --outdir=/dev/shm/hf25 \
+    --usrp_args=addr0=192.168.10.2,recv_buff_size=500000000
+
+# THE important line. A USRP killed mid-stream keeps transmitting UDP to a host
+# that is gone: it stops answering ARP and discovery, and nothing on the host
+# recovers it -- only removing power, which is a site visit. UHD's handler
+# sends the stop-streaming command on SIGINT and on nothing else.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=chirp.target

@@ -77,22 +77,46 @@ Storage settles it. From `signal-chain.md` §6:
 Multi-station is unaffordable on `.lfs` and comfortable on v2. This also
 resolves the archive-format question previously left open (§5.1).
 
-### 2.2 Fork by subtraction **[settled: principle]**
+### 2.2 Clone, do not fork **[settled: principle]**
 
-**Only delete from the fork; never add.** Upstream does not conflict with
-deletions, so `git pull` stays clean indefinitely. Adding a custom writer is
-precisely what stranded v1.
+**Change nothing upstream maintains. Do not deploy what you do not want.**
+
+Taken to its conclusion, this means **there is no fork**. chirpsounder2 takes
+its config as a file path, so the config lives in `ionograms-handler` and
+chirpsounder2 stays a plain clone pinned to a commit — with nothing of ours in
+it, `git pull` has nothing to conflict with. Fork only if something must be
+patched; if that happens the patch will be small, and since the project is MIT
+with an active maintainer, offer it upstream rather than carrying it.
+
+What changes for v2 is therefore **one `.ini` file and a set of systemd units**
+(§2.5). All the code is on our side: `io_chirp.py`, the detection-file reader,
+the coordinate registry, the agent.
+
+An earlier draft of this section said "delete the PHP." That is backwards.
+Git merges per file, so:
+
+- **Deleting** a file upstream still maintains produces a delete/modify
+  conflict on every pull that touches it. `web/` is *actively* worked on —
+  "Fix W2NAF web uploads", "Publish W2NAF near-range ionograms" (Jun 2026) —
+  so deleting it means fighting upstream indefinitely.
+- **Adding** a new path essentially never conflicts, because upstream is not
+  writing there.
+
+So the PHP stays in the tree and is simply never deployed: `web/deploy_web.sh`
+is not run, and `ionowebsync.py` only posts when a URL is configured, so
+leaving both in place costs nothing and risks nothing. Tier 2's `api` is the
+single web surface regardless.
 
 | Action | Files |
 |---|---|
-| **Keep** | `detect_chirps.py`, `find_timings.py`, `calc_ionograms.py`, `detections2metadata.py`, Digital RF, `chirp_config.py` |
-| **Delete** | `web/` (all PHP), `ionowebsync.py`, `sync_iono_data.py` |
-| **Keep, wrap** | `station_monitor.py` — already emits atomic JSON status; the station agent extends it rather than starting from zero |
-| **Add** | Nothing. `io_chirp.py` lives in the `muf` package, not in the fork |
+| **Use** | `detect_chirps.py`, `find_timings.py`, `calc_ionograms.py`, `detections2metadata.py`, Digital RF, `chirp_config.py` |
+| **Leave in place, never deploy** | `web/` (all PHP), `ionowebsync.py`, `sync_iono_data.py` |
+| **Read, do not modify** | `station_monitor.py` — the station agent shells out to it or reuses its metric list; it is not edited in place |
+| **Add** | Nothing. The agent and `io_chirp.py` live in `ionograms-handler` (§7) |
 
-The web layer is dropped entirely. Tier 2's `api` is the single web surface for
-the whole project — acquisition, extraction and forecasting — which is what the
-PHP dashboard could never have been.
+What *did* strand v1 was adding a custom `.lfs` writer into the acquisition
+source. The rule that matters is: **our code never lands in the fork**, in
+either direction. Configuration in the fork; code in our repo.
 
 ### 2.3 Migration cost — budget these
 
@@ -151,11 +175,124 @@ Atomic JSON status pushed to `api`. Metric list adapted from v2's
 Read-only, near-zero risk, roughly all of the value. The disk-full failure mode
 is what this exists to prevent.
 
+#### What "start/stop sounding" actually controls
+
+v2 is not one program. It is independent long-running processes sharing a
+config and a ringbuffer, so supervision is external and chirpsounder2 is not
+modified to support it.
+
+| Process | Role | Needed? |
+|---|---|---|
+| `rx_uhd_ext_gps` | Records USRP → Digital RF | yes |
+| `detect_chirps.py` | Finds LFM sweeps — **this is stations search** | yes |
+| `detections2metadata.py` | Consolidates detections | yes |
+| `calc_ionograms.py` | Sweeps → `lfm_ionogram-*.h5` | yes |
+| `plot_ionograms.py`, `plot_rtf.py`, `plot_detectionfiles.py` | PNG products | **no** — Tier 2 renders |
+| `station_monitor.py` | Health JSON | reuse, unmodified |
+| `sync_iono_data.py`, `ionowebsync.py` | Publishing | no |
+
+Wrap each in a systemd unit under one `chirp.target`, bound with
+`Requires=` / `After=` / `PartOf=`. The recorder must come up before its
+consumers and go down after them, so the agent starts and stops **one target**
+rather than sequencing five. Control endpoints (§4.3) map to
+`systemctl start|stop chirp.target`.
+
+**Three unit details this station has already paid for.** They are not
+polish; each one cost a day.
+
+- **`KillSignal=SIGINT` and a real `TimeoutStopSec=` on the recorder.** A
+  USRP killed mid-stream keeps transmitting UDP to a host that is gone and
+  wedges: it stops answering ARP and discovery, and no software on the host
+  can recover it — only removing power. UHD's handler sends the
+  stop-streaming command on SIGINT. `SIGTERM`/`SIGKILL` do not.
+- **`ExecStartPre=` for settings that do not survive a reboot.**
+  `ethtool -G <iface> rx 4096` resets to 256 on every boot, and at 25 MS/s
+  over 1 GbE the default ring drops packets continuously.
+- **Real-time priority, granted per-binary.** `setcap cap_sys_nice+ep` on the
+  recorder is cleared by any rebuild, and `limits.conf` does nothing if
+  `pam_limits.so` is absent from `common-session` — which it was here. A
+  systemd unit sidesteps both: set `LimitRTPRIO=` in the unit and neither PAM
+  nor file capabilities are involved.
+
+#### Two acquisition modes, and one flag that is independent of both
+
+`[lfm] serendipitous` selects between them, and they are not "search" versus
+"receiver" — the second is a *schedule*, not a set of receivers:
+
+| | `serendipitous = true` | `serendipitous = false` (default) |
+|---|---|---|
+| what runs | `analyze_parfiles` (`calc_ionograms.py:615`) | `sounder_timings[rank]` (`:422`) |
+| which transmitters | whatever `find_timings.py` discovers | exactly those listed in `[lfm] sounder_timings` |
+| `t0` | **measured** from detections | **imposed** from `rep` and `chirpt` |
+| `txname` in the product | `"unkown"` (upstream's spelling, `:189`) | `transmit_name` from the config (`:456`) |
+| geometry | unavailable — no name to look up | resolves via the station registry |
+
+One process per sounder: `mpirun -np N` with N ≥ the number of entries, since
+`sounder_timings` is indexed by MPI rank.
+
+**`save_raw_voltage` is independent of the mode.** It is a plain `[lfm]` option
+and applies in both, so switching to a schedule does not give you waveforms and
+saving waveforms does not require a schedule. See §3.4.
+
+The practical reason to run a schedule is that `t0` stops being measured. A
+receiver whose epoch is wrong corrupts every range in serendipitous mode
+(§3.4's cousin, and the 2026-08-05 DOB fault) — but a schedule does not rescue
+it either: the dechirp reference is still built on the receiver's own clock, so
+a 45 ms epoch error still displaces the echo by 13,500 km. It puts the echo
+*outside a narrow `manual_range_extent` window*, which is the most likely
+explanation for the 2026-08-04 archive being 381 consecutive empty ionograms
+on a path that was 1013 km long. Unproven — the data outside the window was
+discarded at acquisition — but the detection files from that day put the epoch
+phase at ~43 ms, so the echo would have sat near 13,900 km against a stored
+window of 800–1698 km.
+
+#### Stations search, and reading the answer back
+
+Enabling the search is running `detect_chirps.py`; its sensitivity is one
+`[detection]` config value. The results are files:
+
+| File | From | Holds |
+|---|---|---|
+| `chirp-*.h5` | `detect_chirps.py` | Raw detections: time, start frequency, rate, SNR |
+| `cdetections-*.h5` | `detections2metadata.py` | Time-binned summaries |
+| `par-*.h5` | `find_timings.py` | **Inferred repeat schedules per transmitter** |
+
+**A detection-file reader is new work**, in `ionograms-handler` beside
+`io_chirp.py` (§3). "Which transmitters are we hearing, on what schedule" is a
+question answered by `par-*.h5` and `cdetections-*.h5`, and it feeds the API
+and the web view.
+
+This is the whole point of the migration. v1's schedule table is
+hand-maintained: a transmitter you do not know about is invisible, and one that
+changes its schedule silently yields noise. v2 discovers transmitters and
+writes what it found to a file. The search is not something to build — it is
+what is being migrated *to*. The work is the reader and the view.
+
 #### Control — narrow, authenticated, journaled
 
-Deliberately smaller than the Qt console: start/stop acquisition, edit the
-active schedule, trigger a transfer. Not a remote replica of every local
-control.
+Deliberately smaller than the Qt console. The surface is:
+
+| Command | Maps to |
+|---|---|
+| start / stop / restart sounding | `systemctl start\|stop\|restart chirp.target` |
+| change acquisition mode | `[lfm] serendipitous`, plus `sounder_timings` when scheduled (§2.5) |
+| change storage path | `[config] output_dir` |
+| change the active schedule | `sounder_timings` entries |
+| trigger a transfer | the sync job, out of band from the target |
+
+Not a remote replica of every local control. Anything not on this list is a
+config edit made on the station.
+
+**Parameter changes are edits to one `.ini`, applied by restart.** v2 reads
+its config at process start and never re-reads it, so "change a parameter"
+means: write the file, journal it, restart `chirp.target`. The agent owns that
+sequence so a half-applied change cannot exist — and it writes the file
+atomically, because a truncated config is an acquisition outage.
+
+**A mode change is not just one flag.** Switching to `serendipitous = false`
+without populating `sounder_timings` yields a station that records nothing and
+reports healthy. The agent validates the combination before writing, and
+refuses rather than applying half of it.
 
 > **Any change to acquisition parameters must be journaled to the database.**
 > The schedule sets `rate`, `dur` and `cf`, which determine the sweep bounds,
@@ -166,6 +303,27 @@ control.
 > the configuration that produced it.
 
 Authentication from day one: this is RF acquisition hardware.
+
+#### Logs — the third thing the agent exists for
+
+Health says *that* something is wrong; logs say *what*. This station's failures
+were all diagnosed by reading process output — dropped-packet markers,
+`Unable to set the thread priority`, `ref_locked: false`, `no DigitalRF data
+bounds available` — none of which any metric would have carried.
+
+The agent exposes them **read-only, over the same pull channel as commands**,
+so the station stays a non-listening service:
+
+| Source | Why |
+|---|---|
+| `journalctl -u <unit>` per process in `chirp.target` | systemd already collects them; do not reinvent a log file |
+| Last N lines, or a time window, bounded and rate-limited | a log endpoint that can return a gigabyte is a denial of service against your own station |
+| Severity filter | the recorder is chatty by design; `D` markers are normal in ones and pathological in thousands |
+
+**Counts belong in health, text belongs in logs.** "Dropped packets in the last
+five minutes" is a metric and should trend; the surrounding text is what you
+fetch once the metric moves. Shipping every line to the server continuously
+would make the log the bulk-transfer problem of §5.1 all over again.
 
 ---
 
@@ -215,16 +373,61 @@ computed the product. Passing them should warn, not silently no-op.
 | Completeness | No direct `sweep_complete` equivalent — derive from `freqs` coverage against the nominal sweep. |
 | Caching | Cache key needs a format discriminator; `w`/`z` are not meaningful for `.h5`. |
 
-### 3.4 The consequence to record
+### 3.4 The consequence to record **[settled: mechanism]**
 
-**`.h5` soundings cannot be re-derived at a different FFT window.** This is
-`BACKLOG.md` §1's "window is locked at archive time," now concrete. The
+**By default, `.h5` soundings cannot be re-derived at a different FFT window.**
+This is `BACKLOG.md` §1's "window is locked at archive time," now concrete: v2
+computes its spectrogram, stores the result, and discards the waveform. `SNR`
+is `|FFT|²` — magnitude squared, phase gone — so nothing can invert it. The
 `sounding` table therefore carries `format` and `window` so it is always
 visible which soundings can be reprocessed and which cannot.
 
-Mitigation if it matters: v2 can optionally store raw `z` (downconverted
-complex64) in the h5. Enable it on a rolling window (30–60 days), not
-permanently.
+**One config flag removes the limitation.** `save_raw_voltage = true` in v2's
+`[lfm]` section (`chirp_config.py:91`, default false) makes `calc_ionograms.py`
+write the dechirped voltage as dataset `z` alongside `SNR`
+(`calc_ionograms.py:372`). That is the *same kind* of signal an `.lfs` file
+carries — stretch-processed, decimated, complex — which is what makes
+re-derivation possible rather than merely desirable.
+
+Our side is built:
+
+| Piece | Where |
+|---|---|
+| `ChirpHeader.has_raw_voltage` | `io_chirp` — True when the product carries `z` |
+| `io_chirp.read_raw_voltage(path)` | the waveform, or an error naming the flag |
+| `io_chirp.v2_spectrogram(...)` | a faithful port of `calc_ionograms.spectrogram`: 13× oversampled, Hann, on the conjugate |
+| `io_chirp.reprocess(path, window)` | a new `Ionogram` at any window |
+| `loader.load(..., window=N)` | routes to `reprocess` when `z` is present, warns and ignores when it is not |
+
+The port is reimplemented rather than imported, for the §2.2 reason — the clone
+is pinned and disposable, and our ionograms must not be a property of whichever
+commit is checked out. It is kept honest by re-deriving a product at its
+*original* window and requiring the stored array back.
+
+**Reprocessing recovers two things storage destroys**, beyond the window:
+
+- **Sparsification.** v2 writes NaN below `storage_snr_threshold`, and those
+  cells read back as the row median — a hard floor at 25.571 dB with no noise
+  texture beneath it. Anything estimating a noise *level* rather than crossing
+  a threshold wants the real distribution.
+- **float16 clipping.** `SNR` is stored `float16`, whose maximum 65504 lands at
+  exactly **73.734 dB**. A stronger echo is clipped on the way to disk, so that
+  value in a stored product means "at least this", not a measurement. The DOB
+  archive of 2026-08-05 has 51 such cells in its strongest sounding alone.
+
+**The cost is why it stays off by default.** At DOB — 486 frequency bins,
+20000-sample step, 40 kHz decimated rate — `z` is 9.72 M complex64:
+
+```
+stored product today        0.6 MB
+with z                     ~78 MB      (130x)
+318 soundings/day          ~25 GB/day
+```
+
+Against DATA3's 928 GB free that is about 37 days. So: **enable it on a rolling
+window (30–60 days), not permanently**, and let `iono_housekeeping.py` trim.
+Turn it on before a campaign whose data will want reprocessing, not as a
+standing default.
 
 ---
 
@@ -380,43 +583,79 @@ them. Parameter changes additionally write `config_epoch`.
 
 ## 6. Release plan
 
-Ordered so that **everything through M3 is independent of the v1/v2 decision**.
-That is deliberate: those steps make the migration *measurable* instead of
-speculative, and none of the work is wasted whichever way it goes.
+Two things drive the order. **A live reception fault on `cyprus1`** comes first,
+because an acquisition that is not working makes every downstream milestone
+moot. **Multi-station** is the reason for v2 (§2.1) and follows once the fault
+is understood.
 
-### M0 — Stop the bleeding
+M0 and M1 are independent and should run in parallel: M0 is investigation, M1
+is unattended-operation plumbing that is needed whatever M0 concludes.
+
+> Separate **immediate remediation** from **structural fix**. Whatever M0 finds,
+> the fastest repair is almost certainly a change to the running v1 station, not
+> a migration. v2 is the answer to *"why could nobody tell what went wrong?"* and
+> to multi-station — not to *"reception is down today."*
+
+### M0 — Diagnose the fault **[in progress]**
+
+`tools/diagnose_reception.py` exists and is validated. Run it on the period
+that is actually failing:
+
+```bash
+python tools/diagnose_reception.py <failing-dir> --stride 4 --expect-range 2710
+```
+
+Baseline for comparison, measured over 2026-02-04 → 02-09 (72 soundings):
+median peak echo range **2710.0 km**, σ 34.8 km, **0.59 ms peak-to-peak timing
+stability**. That archive is healthy — the fault is not in it.
+
+| Verdict | Reading | Immediate remediation |
+|---|---|---|
+| **TIMING** | Echo on the axis, outside the gate | Re-extract with `--gate`; the recordings are salvageable. Fix clock discipline or the schedule entry |
+| **NO SIGNAL** | No coherent trace anywhere | Local chain first (antenna, feed, USRP, RFI), then whether Cyprus is on air or changed its chirp rate. Nothing recoverable from these files |
+| **TRUNCATION** | Recordings stop mid-sweep | Acquisition dropouts, `BACKLOG.md` §4. Was ~3% in February |
+
+*Exit:* the fault has a name, and M2's urgency is settled.
+
+### M1 — Stop the bleeding **[parallel with M0]**
 - Automatic file transfer, laptop → server, with delete-after-confirm
-- Station agent, **health only**, read-only JSON
+- Station agent, **health only** (§2.5). Add the diagnostic's two live fault
+  indicators to the metric set: peak echo range against the 2710 km baseline,
+  and `sweep_fraction`
 - Fix `config_enum.py`'s `input()` (§8) — no dependencies, unblocks M6
 
-*Exit:* the disk cannot fill silently, and you learn when acquisition stops.
+*Exit:* the disk cannot fill silently, and a recurrence announces itself
+instead of being found weeks later.
 
-### M1 — Database and backfill
-- Schema per §5.2, plus loader (port `data_handler/muf_load_to_db.py`)
-- Backfill every historical `.lfs` extraction
+### M2 — v2 fork and parallel run
+The structural fix. Priority set by M0: if the fault was undiagnosable from v1's
+output, this moves up; if it was a simple timing or schedule error, it reverts
+to being the multi-station enabler and can wait.
 
-*Exit:* the dataset is queryable — immediately useful for dissertation work,
-independent of everything else.
-
-### M2 — Extractor as a service
-- Queue worker wrapping the existing `muf` CLI
-- New soundings reach the database without intervention
-
-### M3 — API and web, read-only
-- Health views, ionogram browse, MUF/LOF series
-- Answers "is it running?" without AnyDesk
-
-### M4 — v2 fork and parallel run
 - Fork by subtraction (§2.2); `muf/io_chirp.py` (§3)
 - **Measure** the normalization offset against v1 output (§2.4)
 - Station coordinate registry
+- Second USRP is the long-pole procurement item — order at M0 if wanted (§2.4)
 
 *Exit:* v2 MUF agrees with v1 MUF on `cyprus1` within a stated tolerance.
 
-### M5 — Multi-station and cutover
-- Enable opportunistic detection; retire v1 once the web client replaces the
-  Qt console
-- Control endpoints, auth, `config_epoch`
+### M3 — Database and extractor
+- Schema per §5.2, plus loader (port `data_handler/muf_load_to_db.py`)
+- Extractor as a queue worker wrapping the existing `muf` CLI
+- Backfill historical `.lfs` extractions
+
+Backfill is no longer urgent — the dissertation dataset is already in hand — so
+this is infrastructure for what comes next, not a deliverable in itself.
+
+### M4 — API and web, read-only
+- Health views, ionogram browse, MUF/LOF series
+- Answers "is it running?" without AnyDesk
+
+### M5 — Multi-station cutover and control
+- Enable opportunistic detection across transmitters
+- Control endpoints, auth, `config_epoch` (§2.5)
+- Retire v1 **only once the web client covers what operators actually use** —
+  watch usage over M4 rather than building for feature parity
 
 ### M6 — Prediction service
 - Retrain on the accumulated multi-station record
@@ -425,20 +664,77 @@ independent of everything else.
 
 ## 7. Repository map
 
-| Repo | Tier | Role |
-|---|---|---|
-| `chirpsounder` v1 fork | 1 | Current acquisition; `.lfs` writer, Qt console. Frozen, retired at M5 |
-| `chirpsounder2` fork | 1 | Target acquisition; fork by subtraction, tracks upstream |
-| `N:\ionograms-handler` | 2 | `muf` package — extraction, dual-format IO, SAO export, references |
-| `N:\muf` | 2 | Forecasting models, BER / channel availability |
+Four repositories, and **M1–M6 do not add any**. A service is not a reason for a
+repo; a different *lifecycle* is.
 
-Kept separate. `muf` is a clean installable with its own CLI and test suite;
-folding it into a GNU Radio application would destroy that, and the acquisition
-forks have a different lifecycle from everything else.
+| Repo | Tier | Role | Boundary forced by |
+|---|---|---|---|
+| `chirpsounder` v1 fork | 1 | Current acquisition; `.lfs` writer, Qt console. Frozen, retired at M5 | Separate upstream (abandoned) |
+| `chirpsounder2` clone | 1 | Target acquisition. **Pinned clone, not a fork** (§2.2) — nothing of ours in it | **Tracks live upstream** |
+| `ionograms-handler` | 1–3 | `muf` package **and every service** | — |
+| `N:\muf` | 2 | Forecasting models, BER / channel availability | Own heavy deps, research lifecycle |
+
+### The one hard boundary
+
+`chirpsounder2` must contain **nothing but upstream minus deletions** (§2.2).
+Add a `services/` directory there and `git pull` conflicts forever — the exact
+failure that stranded v1. Everything of ours stays out of it, including
+`io_chirp.py`.
+
+### Why the services share one repo
+
+They share a **database schema**. Splitting extractor, api and prediction into
+separate repos turns every schema change into a coordinated multi-repo release
+with version pinning between them — real cost, for one developer and one
+deployment target, buying nothing. The health JSON schema is likewise shared
+between the station agent and `api`; one repo means one definition rather than
+two that drift.
+
+The `muf` library keeps its identity inside the monorepo: it stays the only
+published package, and service dependencies (FastAPI, psycopg, uvicorn) go in
+`[project.optional-dependencies]` alongside the existing `parquet` / `iri` /
+`cnn` / `db` extras, so installing the library never drags in a web stack.
+
+```
+ionograms-handler/
+  muf/              extraction library — the published package, unchanged
+  services/
+    agent/          station health + control      (deploys to the laptop)  M1, M5
+    extractor/      queue worker over muf         M3
+    api/            REST, the only public surface M4, M5
+    renderer/       PNG + SAO.XML on request      M4
+    prediction/     thin wrapper over N:\muf      M6
+  web/              client                        M4
+  db/migrations/    schema, shared by everything  M3
+  tools/            diagnose_reception.py, transfer    M0, M1
+  docs/  tests/
+```
+
+`N:\muf` stays separate and stays a *library*: the prediction **service** is the
+thin container above, importing the models. That keeps TensorFlow, Keras,
+XGBoost, hyperopt and pmdarima out of the service image, and keeps experiment
+code free of service concerns. It also depends on that repo becoming importable
+— which is blocker §8.1.
+
+### When to split later
+
+Splitting a monorepo later is mechanical (`git filter-repo`); merging repos
+later is not. The asymmetry says start together and split on evidence:
+
+- the web client grows real frontend tooling and its own release cadence
+- someone else operates a station and needs only the agent
+- a component needs independent deploy cadence or separate access control
+
+None of these hold today.
 
 ---
 
 ## 8. Blockers and known risks
+
+**Live: `cyprus1` reception is failing.** Cause not yet established — M0. The
+February 2026 archive is healthy (§6), so the fault post-dates it or the
+failing recordings are held elsewhere. Everything downstream of acquisition is
+academic until this is understood, which is why it leads the plan.
 
 **`N:\muf\config_enum.py` calls `input()` inside an `Enum` class body.** The
 config prompts on import, so nothing in the forecasting project can run

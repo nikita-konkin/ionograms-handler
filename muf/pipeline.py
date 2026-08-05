@@ -16,7 +16,8 @@ import pandas as pd
 
 from . import extractors, fit, lof as lof_module, pick as pick_module, spectro, trace
 from .extractors import DEFAULT_METHODS
-from .io_lfs import find_lfs, read_header
+from . import loader
+from .loader import find_soundings, read_header
 
 #: A pick within this many frequency bins of the top of the sweep means the
 #: trace ran off the end of the band: the true MUF is at or above the highest
@@ -49,6 +50,13 @@ class Options:
     #: start, which is right only when the transmitter really does reach it --
     #: see muf.lof.measure_band_floor.
     band_floor_mhz: float | None = None
+    #: Override extension-based format selection. None means dispatch on the
+    #: suffix, which is right unless a recording was renamed.
+    format: str | None = None
+    #: Station coordinate registry, for v2 products whose header carries only
+    #: a transmitter *name*. None leaves the geometry unavailable rather than
+    #: guessed -- see io_chirp.ChirpHeader.has_coordinates.
+    stations: dict | None = None
 
     def per_method(self) -> dict[str, dict]:
         """Method keyword arguments, with the shared picker settings folded in."""
@@ -79,7 +87,8 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
 
     row: dict[str, object] = {"file": path.name}
     try:
-        header = read_header(path)
+        header = read_header(path, format=options.format,
+                             stations=options.stations)
     except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"
         return row
@@ -99,12 +108,15 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
     )
 
     try:
-        ion = spectro.compute_cached(
+        ion = loader.load(
             path,
             window=options.window,
             zero_periods=options.zero_periods,
             gate_km=options.gate_km,
             cache_dir=options.cache_dir,
+            format=options.format,
+            header=header,
+            stations=options.stations,
         )
     except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"
@@ -212,9 +224,9 @@ def process_many(
     all, sorted by time. Use :func:`split_by_day` to write it out per day.
     """
     options = options or Options()
-    paths = find_lfs(target)
+    paths = find_soundings(target, format=options.format)
     if not paths:
-        raise FileNotFoundError(f"no .lfs files under {target}")
+        raise FileNotFoundError(f"no soundings under {target}")
 
     if jobs <= 0:
         jobs = max(1, (os.cpu_count() or 2) - 1)
@@ -257,18 +269,29 @@ DEFAULT_SAVGOL_ORDER = 1
 
 
 def days_in(frame: pd.DataFrame) -> list:
-    """The distinct dates present in a results table, in order."""
+    """The distinct dates present in a results table, in order.
+
+    A sounding whose header could not be read has no ``datetime`` -- the row
+    carries ``error`` instead -- so the column holds NaT and sorting it raises.
+    One truncated file must not abort the day it was found in: a recorder
+    killed mid-write leaves exactly one, and the other 318 soundings are fine.
+    """
     if "datetime" not in frame or frame.empty:
         return []
-    return sorted(pd.to_datetime(frame["datetime"]).dt.date.unique())
+    dates = pd.to_datetime(frame["datetime"], errors="coerce").dt.date
+    return sorted(d for d in dates.dropna().unique())
 
 
 def split_by_day(frame: pd.DataFrame):
-    """Yield ``(date, sub_frame)`` for each day in a results table."""
+    """Yield ``(date, sub_frame)`` for each day in a results table.
+
+    Rows with no usable timestamp belong to no day and are dropped here; they
+    are still counted in the run summary, and ``error`` says why.
+    """
     if "datetime" not in frame or frame.empty:
         return
-    dates = pd.to_datetime(frame["datetime"]).dt.date
-    for day in sorted(dates.unique()):
+    dates = pd.to_datetime(frame["datetime"], errors="coerce").dt.date
+    for day in sorted(d for d in dates.dropna().unique()):
         yield day, frame[dates == day].reset_index(drop=True)
 
 

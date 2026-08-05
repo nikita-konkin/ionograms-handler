@@ -1,0 +1,16 @@
+[Unit]
+Description=chirpsounder2 detections2metadata.py
+PartOf=chirp.target
+Requires=chirp-rx.service
+After=chirp-rx.service
+
+[Service]
+Type=simple
+User=ionouser
+WorkingDirectory=/home/ionouser/chirpsounder2
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 detections2metadata.py /home/ionouser/chirpsounder2/my_station.ini
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=chirp.target

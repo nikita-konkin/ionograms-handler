@@ -1,0 +1,9 @@
+# Acquisition as one unit of control. The agent starts and stops this, never
+# the five services individually -- ordering is systemd's problem.
+[Unit]
+Description=chirpsounder2 acquisition
+Wants=chirp-rx.service
+After=chirp-rx.service
+
+[Install]
+WantedBy=multi-user.target
