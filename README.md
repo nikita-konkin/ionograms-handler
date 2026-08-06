@@ -713,6 +713,14 @@ What comes out, trimmed:
                    GreatCircleDistance="2588.4" Units="km"/>
       <Sweep StartFrequency="7.5000" StopFrequency="32.4856" FrequencyStep="0.020480"
              RangeGateLow="2329.6" RangeGateHigh="5000.0" Complete="true"/>
+      <Acquisition Format="chirp2" ChirpRate="100000.0000" ChirpRateUnits="Hz/s"
+                   SampleRate="40000.0" Decimation="1" Channel="ch0"
+                   SweepStartEpoch="1785888234.055033" NoiseFloorMedian="3.590">
+        <Recorder Software="0.2.0" Commit="0d2712553063" Dirty="true"/>
+        <RangeReference Value="relative" Reason="transmitter is v2's 'unkown'
+                        marker, so the 16499 km implied by t0 rests on a timing
+                        solution nothing has cross-checked"/>
+      </Acquisition>
     </SystemInfo>
     <CharacteristicList>
       <Custom Name="MUF" Units="MHz" Val="12.200"
@@ -1072,6 +1080,8 @@ products, where v2 fixed the window at archive time.
 | `--window N` | FFT window length, default 8192. Sets range resolution and, with `--zero-periods`, the range bin count. |
 | `--zero-periods N` | Zero-padding periods. Subdivides range bins **without improving resolution** — it interpolates, it does not resolve. |
 | `--gate LO,HI` | Virtual-range gate in km. Default comes from the file header's geometry. Narrowing it is the main lever on runtime. |
+| `--reject-interference` | Flatten frequency rows whose above-43 dB energy occupies more than 800 km of range. A burst has no delay and smears across every range bin; an echo is narrow in range and continuous in frequency. Off by default because it changes results — and measured over three archives it changed a MUF about once in twenty soundings, so treat it as a diagnostic first. See `muf/interference.py` for the measured yield. |
+| `--gate auto` | **`plot` only.** Fit the range window to where the echo actually is, per sounding. On DOB's search-mode products the stored axis is ±3998 km and the trace occupies a few hundred, so the default plot is a hairline in an empty field; this is a ~15× vertical zoom. Soundings with no range concentration are left at full extent and counted at the end, rather than cropped to an invented window. |
 | `--cache-dir DIR` | Cache the gated array per sounding, so re-running with different estimator settings skips the FFTs entirely. The useful mode when tuning. |
 
 `--stations FILE` is shared the same way. v2 products carry `txname` and

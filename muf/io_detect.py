@@ -45,6 +45,7 @@ import math
 import statistics
 import warnings
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -277,7 +278,14 @@ def _find(target, pattern: str) -> list[Path]:
     missing: list[Path] = []
     for item in targets:
         if item.is_file():
-            found.append(item)
+            # A named file still has to be the kind being looked for. Without
+            # this, pointing at one cdetections-*.h5 hands it to the par-*.h5
+            # reader and the chirp-*.h5 reader first, and the caller sees two
+            # "skipped 1 unreadable file" warnings before the right reader
+            # gets it. The three finders share this helper precisely so that
+            # a caller can try them in turn.
+            if fnmatch(item.name, pattern):
+                found.append(item)
         elif item.is_dir():
             found.extend(item.rglob(pattern))
         else:
@@ -411,6 +419,41 @@ def load_detections(target) -> list[Detection]:
             bad += 1
     if bad:
         warnings.warn(f"skipped {bad} unreadable detection file(s) under {target}",
+                      stacklevel=2)
+    return out
+
+
+def load_cdetections(target) -> list[Detection]:
+    """Every ``cdetections-*.h5`` under ``target``, as :class:`Detection`.
+
+    The consolidated file is one ``(N, 5)`` array rather than a group of named
+    datasets, so this is the same information as the individual ``chirp-*.h5``
+    minus the fields that array has no columns for -- ``channel``, ``i0``,
+    ``n_samples`` and ``sample_rate`` come back empty, ``-1`` and NaN, matching
+    :func:`read_detection`'s convention for a field the file does not carry.
+    Nothing in :func:`census` reads them.
+
+    Worth having because this is what survives on the archive volume: the
+    per-detection ``chirp-*.h5`` are written into the ringbuffer's tree and
+    rotate away, while ``cdetections-*.h5`` is the 900 s consolidation that
+    gets kept. A census on a synced archive has only these.
+    """
+    out: list[Detection] = []
+    bad = 0
+    for path in find_cdetections(target):
+        try:
+            rows = read_cdetections(path)
+        except Exception:
+            bad += 1
+            continue
+        for chirp_time, _i0_seconds, f0, rate, snr in rows:
+            out.append(Detection(
+                path=path, channel="", chirp_time=float(chirp_time),
+                rate=float(rate), f0=float(f0), snr=float(snr),
+                i0=-1, n_samples=-1, sample_rate=float("nan"),
+            ))
+    if bad:
+        warnings.warn(f"skipped {bad} unreadable cdetections file(s) under {target}",
                       stacklevel=2)
     return out
 

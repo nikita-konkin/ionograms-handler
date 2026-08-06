@@ -107,6 +107,44 @@ class Ionogram:
             f"{self.cal.gate_km[0]:.0f}-{self.cal.gate_km[1]:.0f} km)"
         )
 
+    def regated(self, lo_km: float, hi_km: float) -> "Ionogram":
+        """A copy narrowed to ``lo_km..hi_km``, without re-reading the file.
+
+        Only ever narrows. A gate wider than the one already applied cannot
+        recover range bins that were dropped on load, and quietly returning
+        the same array under a wider label would misdescribe the axis.
+
+        ``cal.gate_idx`` stays relative to the *ungated* axis, which is what
+        every other consumer assumes, so re-gating twice composes correctly.
+        """
+        import dataclasses
+
+        axis = self.cal.vrange
+        keep = (axis >= lo_km) & (axis <= hi_km)
+        if not keep.any():
+            # Two different situations, and only one is an error. A window
+            # narrower than the range step falls between bin centres without
+            # being wrong; snapping to the nearest bin answers the question
+            # that was asked. A window off the axis entirely does not.
+            if hi_km < axis.min() or lo_km > axis.max():
+                raise ValueError(
+                    f"gate {lo_km:.0f}-{hi_km:.0f} km lies outside this "
+                    f"sounding's axis, {axis.min():.0f}-{axis.max():.0f} km")
+            nearest = int(np.argmin(np.abs(axis - (lo_km + hi_km) / 2.0)))
+            keep = np.zeros_like(axis, dtype=bool)
+            keep[nearest] = True
+        first, last = int(np.argmax(keep)), int(len(keep) - 1 - np.argmax(keep[::-1]))
+
+        cal = dataclasses.replace(
+            self.cal,
+            vrange=axis[first:last + 1],
+            gate_km=(float(min(axis[first], axis[last])),
+                     float(max(axis[first], axis[last]))),
+            gate_idx=(self.cal.gate_idx[0] + first, self.cal.gate_idx[0] + last),
+        )
+        return dataclasses.replace(
+            self, power=self.power[:, first:last + 1], cal=cal, _db=None)
+
 
 def compute(
     path: str | Path,

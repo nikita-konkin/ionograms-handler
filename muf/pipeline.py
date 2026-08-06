@@ -14,9 +14,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import extractors, fit, lof as lof_module, pick as pick_module, spectro, trace
+from . import (extractors, fit, interference, loader, lof as lof_module,
+               pick as pick_module, spectro, trace)
 from .extractors import DEFAULT_METHODS
-from . import loader
 from .loader import find_soundings, read_header
 
 #: A pick within this many frequency bins of the top of the sweep means the
@@ -57,6 +57,11 @@ class Options:
     #: a transmitter *name*. None leaves the geometry unavailable rather than
     #: guessed -- see io_chirp.ChirpHeader.has_coordinates.
     stations: dict | None = None
+    #: Flatten frequency rows whose above-threshold energy spans more range
+    #: than any echo can. Off by default because it changes results, and a
+    #: transform that changes a MUF must be asked for -- see muf.interference,
+    #: which also records how little it changed when measured.
+    reject_interference: bool = False
 
     def per_method(self) -> dict[str, dict]:
         """Method keyword arguments, with the shared picker settings folded in."""
@@ -121,6 +126,10 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
     except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"
         return row
+
+    ion, rejected = interference.apply(ion, options)
+    if rejected is not None and rejected.any:
+        row["interference_rows"] = rejected.n_rows
 
     row.update(
         freq_start=round(ion.cal.freq_start, 4),

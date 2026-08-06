@@ -171,9 +171,42 @@ Atomic JSON status pushed to `api`. Metric list adapted from v2's
 | `sweep_fraction` of recent soundings | catches the truncations in `BACKLOG.md` §4 |
 | USRP-vs-system clock lag | `signal-chain.md` §7.3 |
 | Startup grace period | avoid alerting during boot |
+| **Host clock plausibility** | see below — the epoch is copied from it verbatim |
+| **Epoch offset vs a reference transmitter** | the 0.956 s fault; `muf.io_detect.solve_epoch_offset` |
 
 Read-only, near-zero risk, roughly all of the value. The disk-full failure mode
 is what this exists to prevent.
+
+##### Why the host clock is a metric of its own
+
+`rx_uhd_ext_gps` sets the USRP epoch from the **host clock**, not from the
+GPSDO:
+
+```cpp
+// rx_uhd_ext_gps.cpp:433
+usrp->set_time_next_pps(uhd::time_spec_t(pc_secs + 1));
+```
+
+It selects `gpsdo` as clock and time source, waits for `gps_locked`, prints
+the result — and then never reads the `gps_time` sensor. So the PPS *edge* is
+disciplined to sub-microsecond while the *second number* is whatever `ntpd`
+last left behind. `rx_uhd.cpp:312` does read `gps_time`; the `_ext_gps`
+variant, despite the name, is the one that inherits every NTP error.
+
+This is not hypothetical. It produced DOB's 0.956 s offset on 2026-08-05
+(300 km of range error per millisecond, and the transmit *second* wrong on
+top), and on 2026-08-06 a dead RTC made the same line announce
+`PC time now: 1617339242` — 2021-04-02, five years of mis-stamped data.
+
+The epoch-offset metric cannot cover this case: a clock that wrong means there
+are no recent products to solve against, so it reports "no timing solutions"
+and the operator learns nothing. `health.system_clock` answers from nothing —
+a sanity floor, a comparison against files already on disk (which needs no
+hardcoded date), and NTP's own synchronisation state.
+
+Upstream would fix it in one line, but chirpsounder2 is a pinned clone with
+nothing of ours in it (§7), so we detect rather than patch, and the systemd
+unit orders acquisition `After=time-sync.target`.
 
 #### What "start/stop sounding" actually controls
 

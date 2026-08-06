@@ -164,3 +164,73 @@ def test_step_is_independent_of_recording_length(header):
 
     assert short.freq_step_mhz == pytest.approx(full.freq_step_mhz)
     np.testing.assert_allclose(short.freq, full.freq[:347])
+
+
+# --------------------------------------------------------------------------
+# auto_gate -- fitting the range window to the echo
+# --------------------------------------------------------------------------
+
+def _synthetic(n_freq=300, n_range=2000, trace_at=-40.0, half_span=2000.0,
+               seed=0, trace_from=0.5, thickness=8):
+    """A noise field with one horizontal trace, on a descending axis."""
+    rng = np.random.default_rng(seed)
+    vrange = np.linspace(half_span, -half_span, n_range)
+    power = rng.gamma(1.0, 1.0, size=(n_freq, n_range)).astype(np.float32)
+    centre = int(np.argmin(np.abs(vrange - trace_at)))
+    power[int(n_freq * trace_from):, centre - thickness:centre + thickness] += 30.0
+    return power, vrange
+
+
+def test_auto_gate_finds_the_trace_and_ignores_the_empty_axis():
+    """The v2 search-mode case: +/-3998 km stored, a few hundred occupied."""
+    power, vrange = _synthetic(trace_at=-40.0)
+    lo, hi = calibrate.auto_gate(power, vrange)
+
+    assert lo < -40.0 < hi
+    assert (hi - lo) < 600.0, "gate should be a window, not most of the axis"
+    full = vrange.max() - vrange.min()
+    assert full / (hi - lo) > 5.0
+
+
+def test_auto_gate_declines_on_pure_noise():
+    """Inventing a window would crop away the evidence there is nothing here."""
+    rng = np.random.default_rng(1)
+    power = rng.gamma(1.0, 1.0, size=(300, 2000)).astype(np.float32)
+    vrange = np.linspace(2000.0, -2000.0, 2000)
+
+    assert calibrate.auto_gate(power, vrange) is None
+
+
+def test_auto_gate_survives_a_few_very_bright_noise_cells():
+    """Counting bright cells per range beats summing their power.
+
+    `storage_snr_threshold = 2` keeps a lot of noise and float16 saturates at
+    65504, so a handful of isolated cells can carry more total power than the
+    whole trace. A sum-based window follows them; a count-based one does not,
+    because a trace is contiguous in frequency and they are not. Measured on
+    the 2026-08-05 archive: SNR-weighted returned 88 % of the axis, this
+    returns 6 %.
+    """
+    power, vrange = _synthetic(trace_at=0.0, seed=3)
+    rng = np.random.default_rng(11)
+    rows = rng.integers(0, power.shape[0], 40)
+    cols = rng.integers(0, power.shape[1], 40)
+    power[rows, cols] = 65504.0
+
+    lo, hi = calibrate.auto_gate(power, vrange)
+    assert (hi - lo) < 600.0
+    assert lo < 0.0 < hi
+
+
+def test_auto_gate_is_indifferent_to_axis_direction():
+    """`.lfs` and v2 disagree about which way range runs; the gate must not."""
+    power, vrange = _synthetic(trace_at=-40.0)
+    down = calibrate.auto_gate(power, vrange)
+    up = calibrate.auto_gate(power[:, ::-1], vrange[::-1])
+
+    assert down == pytest.approx(up, abs=5.0)
+
+
+def test_auto_gate_returns_none_rather_than_raising_on_junk():
+    assert calibrate.auto_gate(np.zeros((0, 0)), np.array([])) is None
+    assert calibrate.auto_gate(np.zeros((1, 5)), np.arange(5.0)) is None

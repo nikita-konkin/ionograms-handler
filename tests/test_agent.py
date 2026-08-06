@@ -9,6 +9,7 @@ kill, and a config edit must never land half-written.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -96,6 +97,51 @@ def test_one_definite_failure_is_enough(station):
         health.Metric("uptime_s", 99.0, ok=True),
     ])
     assert not report.healthy
+
+
+def test_a_clock_five_years_slow_is_caught_with_no_data_on_disk(monkeypatch, station):
+    """2026-08-06: the RTC had lost five years and the recorder stamped a run
+    2021-04-02. `epoch_offset` cannot see this -- a clock that wrong means no
+    recent products, so it reports "no timing solutions" and says nothing."""
+    monkeypatch.setattr(health.time, "time", lambda: 1617339242.0)
+    metric = health.system_clock(station)
+
+    assert metric.ok is False
+    assert "2021-04-02" in metric.detail
+    assert "unset, not slow" in metric.detail
+
+
+def test_a_clock_behind_files_on_disk_needs_no_hardcoded_date(monkeypatch, station):
+    """The check that keeps working after CLOCK_SANITY_FLOOR_S goes stale."""
+    product = station.output_dir / "lfm_ionogram-1.h5"
+    product.write_bytes(b"x")
+    future = health.CLOCK_SANITY_FLOOR_S + 400 * 86400.0
+    os.utime(product, (future, future))
+    monkeypatch.setattr(health.time, "time",
+                        lambda: health.CLOCK_SANITY_FLOOR_S + 10.0)
+
+    metric = health.system_clock(station)
+    assert metric.ok is False
+    assert "days behind products already on disk" in metric.detail
+
+
+def test_a_plausible_clock_with_no_ntp_is_still_a_failure(monkeypatch, station):
+    """Nothing else holds the epoch: rx_uhd_ext_gps copies the host clock into
+    set_time_next_pps and never reads the GPSDO's gps_time sensor."""
+    monkeypatch.setattr(health.time, "time",
+                        lambda: health.CLOCK_SANITY_FLOOR_S + 86400.0)
+    monkeypatch.setattr(health, "_ntp_synchronised", lambda: False)
+
+    metric = health.system_clock(station)
+    assert metric.ok is False
+    assert "not synchronised" in metric.detail
+
+
+def test_no_timedatectl_is_unknown_not_a_failure(monkeypatch, station):
+    monkeypatch.setattr(health.time, "time",
+                        lambda: health.CLOCK_SANITY_FLOOR_S + 86400.0)
+    monkeypatch.setattr(health, "_ntp_synchronised", lambda: None)
+    assert health.system_clock(station).ok is None
 
 
 def test_epoch_metric_needs_a_reference_and_says_when_it_lacks_one(station):
@@ -274,6 +320,55 @@ def test_signatures_recognise_this_stations_real_failures():
     assert any("not locked" in k for k in found)
     assert any("wedged" in k for k in found)
     assert any("not writing" in k for k in found)
+
+
+def test_signatures_recognise_the_2026_08_06_restart():
+    """Three faults in one paste, none of which any metric would have named."""
+    lines = [
+        "error message = 'No space left on device', buf = 0x7f797f0bb3e8",
+        "Problem detected, dataset_samples_written = 0 after  0 samples_written",
+        "Fatal Digital RF write error on channel 0 at sample index 0",
+        "./examples/marieluise/dombas.sh: 14: source: not found",
+        "Python version: Python 3.5.2",
+    ]
+    found = dict(logs.scan_signatures(lines))
+
+    assert any("volume is full" in k for k in found)
+    assert any("wrote zero samples" in k for k in found)
+    assert any("venv did not activate" in k for k in found)
+
+
+def test_the_patched_recorders_epoch_verdict_is_a_signature():
+    """patches/0001 prints these; triage must name them without the log."""
+    found = dict(logs.scan_signatures([
+        "EPOCH CHECK FAILED: USRP epoch is -1 s from GPS; every range ...",
+        "WARNING: setting USRP epoch from host clock; gps_time unavailable",
+    ]))
+    assert any("300,000 km per second" in k for k in found)
+    assert any("fell back to the host clock" in k for k in found)
+
+
+def test_the_patched_recorders_success_line_is_not_a_signature():
+    assert not logs.scan_signatures([
+        "Epoch check OK: USRP last pps == GPSDO gps_time",
+        "GPSDO gps_time: 1770400123  (host clock is 0 s from GPS)",
+    ])
+
+
+def test_a_plausible_recorder_epoch_is_not_a_signature():
+    """`PC time now:` is printed on every start; only the value makes it news."""
+    sane = int(logs_clock_floor() + 86400)
+    assert not logs.scan_signatures([f"PC time now: {sane} + 0.93 sec"])
+
+
+def test_an_implausible_recorder_epoch_names_the_date():
+    found = dict(logs.scan_signatures(["PC time now: 1617339242 + 0.931616 sec"]))
+    assert any("2021-04-02" in k for k in found)
+    assert any("mis-timestamped" in k for k in found)
+
+
+def logs_clock_floor() -> float:
+    return health.CLOCK_SANITY_FLOOR_S
 
 
 def test_the_count_is_the_diagnosis_not_the_presence():

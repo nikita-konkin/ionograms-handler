@@ -137,3 +137,65 @@ def test_real_sounding_geometry(real_file):
     assert ion.header.tx_name == header.tx_name
     # Gating must leave a small fraction of the 8192-bin axis.
     assert ion.shape[1] < 400
+
+
+# --------------------------------------------------------------------------
+# Re-gating in memory
+# --------------------------------------------------------------------------
+
+def test_regated_narrows_without_rereading(path):
+    ion = spectro.compute(path, window=WINDOW)
+    lo, hi = ion.cal.gate_km
+    mid = (lo + hi) / 2.0
+    half = (hi - lo) / 4.0
+
+    narrow = ion.regated(mid - half, mid + half)
+
+    assert narrow.cal.n_range < ion.cal.n_range
+    assert narrow.power.shape[0] == ion.power.shape[0]
+    assert narrow.cal.vrange.min() >= mid - half - ion.cal.range_step
+    assert narrow.cal.vrange.max() <= mid + half + ion.cal.range_step
+    assert ion.cal.n_range == len(ion.cal.vrange), "the original is untouched"
+
+
+def test_regated_keeps_gate_idx_on_the_ungated_axis(path):
+    """Every other consumer reads gate_idx that way, so re-gating twice has to
+    compose rather than restart from the already-cropped array."""
+    ion = spectro.compute(path, window=WINDOW)
+    lo, hi = ion.cal.gate_km
+    once = ion.regated(lo + 20.0, hi - 20.0)
+    twice = once.regated(lo + 40.0, hi - 40.0)
+
+    for got in (once, twice):
+        first, last = got.cal.gate_idx
+        assert last - first + 1 == got.cal.n_range
+        assert first >= ion.cal.gate_idx[0]
+        assert last <= ion.cal.gate_idx[1]
+
+
+def test_regated_refuses_a_window_off_the_axis(path):
+    """Silently returning an empty array here would surface much later as an
+    estimator failing on a sounding that is actually fine."""
+    ion = spectro.compute(path, window=WINDOW)
+    with pytest.raises(ValueError, match="outside"):
+        ion.regated(ion.cal.gate_km[1] + 1000.0, ion.cal.gate_km[1] + 2000.0)
+
+
+def test_a_window_between_bin_centres_snaps_to_the_nearest(path):
+    """Narrower than the range step is not an error -- the axis is just
+    coarse there, and one bin is the honest answer to the question asked."""
+    ion = spectro.compute(path, window=WINDOW)
+    mid = sum(ion.cal.gate_km) / 2.0
+    sliver = ion.regated(mid - 0.01, mid + 0.01)
+
+    assert sliver.cal.n_range == 1
+    assert abs(sliver.cal.vrange[0] - mid) <= ion.cal.range_step
+
+
+def test_regated_recomputes_db(path):
+    ion = spectro.compute(path, window=WINDOW)
+    _ = ion.db
+    lo, hi = ion.cal.gate_km
+    narrow = ion.regated(lo + 20.0, hi - 20.0)
+
+    assert narrow.db.shape == narrow.power.shape

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -47,14 +48,39 @@ KNOWN_SIGNATURES = (
     (re.compile(r"ref_locked.*false|One or more devices not locked"),
      "USRP is not locked to its reference; range and frequency both drift"),
     (re.compile(r"No UHD Devices Found|No devices found"),
-     "the radio did not answer -- it may be wedged streaming and need power "
-     "removed; no software path recovers that state"),
+     "the radio did not answer -- it may be wedged streaming after a "
+     "non-SIGINT kill. Try ./reset_usrp.sh (uhd_image_loader ...,reset "
+     "--no-fpga) before assuming it needs power removed"),
     (re.compile(r"no DigitalRF data bounds available"),
      "the recorder is not writing; everything downstream is idle by "
      "consequence, not by fault"),
     (re.compile(r"gps_locked:\s*false"),
      "GPSDO has no satellite lock; the epoch is free-running"),
+    (re.compile(r"No space left on device|errno = 28"),
+     "a volume is full. If it is the ringbuffer, the cleaner "
+     "(iono_housekeeping.py) is not running -- 25 MS/s fills a tmpfs in "
+     "minutes, and the recorder's 24 h restart loop does not clear it"),
+    (re.compile(r"Fatal Digital RF write error|dataset_samples_written = 0"),
+     "the recorder started and wrote zero samples; acquisition is down even "
+     "though the process existed long enough to log"),
+    (re.compile(r"EPOCH CHECK FAILED"),
+     "the recorder could not set the USRP clock to GPS time; ranges in this "
+     "run are wrong by 300,000 km per second of error and nothing in the "
+     "products will show it (patches/0001)"),
+    (re.compile(r"setting USRP epoch from host clock"),
+     "the recorder fell back to the host clock for the epoch -- no GPSDO "
+     "lock. Range is only as good as NTP until it locks (patches/0001)"),
+    (re.compile(r"source: not found|Python version: Python 3\.[0-7]\b"),
+     "the venv did not activate and the chain is running on the system "
+     "interpreter; chirpsounder2 needs 3.8 and the consumers die on import "
+     "(usually `sudo`, whose shell has no `source`)"),
 )
+
+#: A ``PC time now:`` line carries the epoch the recorder is about to write
+#: into every sample -- ``rx_uhd_ext_gps`` sets the USRP clock from the host,
+#: not from the GPSDO. Worth reading out of the log rather than only matching,
+#: because the number is the diagnosis.
+PC_TIME_LINE = re.compile(r"PC time now:\s*(\d+)")
 
 
 @dataclass
@@ -81,11 +107,25 @@ def scan_signatures(lines: Iterable[str]) -> list[tuple[str, int]]:
     occasionally under normal load, and pathologically when misconfigured.
     One ``got no data in recv`` is noise; four hundred is a diagnosis.
     """
+    from .health import CLOCK_SANITY_FLOOR_S
+
     counts: dict[str, int] = {}
     for line in lines:
         for pattern, meaning in KNOWN_SIGNATURES:
             if pattern.search(line):
                 counts[meaning] = counts.get(meaning, 0) + 1
+
+        # The one signature whose meaning depends on the value, not on the
+        # words: a recorder announcing a plausible epoch is routine, and one
+        # announcing 2021 has just mis-stamped a whole run.
+        stamp = PC_TIME_LINE.search(line)
+        if stamp and float(stamp.group(1)) < CLOCK_SANITY_FLOOR_S:
+            when = time.strftime("%Y-%m-%d", time.gmtime(int(stamp.group(1))))
+            meaning = (f"the recorder set the USRP epoch from a host clock "
+                       f"reading {when}; every sample of that run is "
+                       f"mis-timestamped and its ranges are meaningless")
+            counts[meaning] = counts.get(meaning, 0) + 1
+
     return sorted(counts.items(), key=lambda kv: -kv[1])
 
 

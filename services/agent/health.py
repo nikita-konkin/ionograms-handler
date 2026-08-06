@@ -50,6 +50,12 @@ DISK_WARN_FRACTION = 0.10
 #: "unknown", not a number.
 EPOCH_SCATTER_LIMIT_S = 10e-3
 
+#: A system clock reading earlier than this is not slow, it is unset. The
+#: season this archive begins; nothing legitimate predates it. Systemd keeps
+#: the same kind of constant in `/usr/lib/clock-epoch` for the same reason.
+#: 2026-01-01T00:00:00Z.
+CLOCK_SANITY_FLOOR_S = 1_767_225_600.0
+
 
 @dataclass
 class Metric:
@@ -181,6 +187,86 @@ def uptime_s() -> Metric:
             return Metric("uptime_s", round(float(fh.read().split()[0]), 1), ok=True)
     except Exception as exc:
         return Metric.unknown("uptime_s", f"{type(exc).__name__}: {exc}")
+
+
+def _ntp_synchronised() -> bool | None:
+    """Does the host believe its clock is disciplined. ``None`` if unaskable.
+
+    Parsed from bare ``timedatectl`` rather than ``timedatectl show``, which
+    only exists from systemd 239 and the acquisition laptop runs 229. The
+    wording moved too: "NTP synchronized" on the old one, "System clock
+    synchronized" on the new.
+    """
+    code, text = _run(["timedatectl"])
+    if code != 0:
+        return None
+    import re
+
+    match = re.search(r"(?:NTP|System clock)\s+synchroniz\w*:\s*(yes|no)",
+                      text, re.IGNORECASE)
+    return match.group(1).lower() == "yes" if match else None
+
+
+def system_clock(config: StationConfig) -> Metric:
+    """Is the host clock plausible at all, before anything is asked of it.
+
+    The precondition for every other timing metric, and the one that has to be
+    answerable with no data on disk. ``rx_uhd_ext_gps`` takes the PPS *edge*
+    from the GPSDO and the *second number* from this clock
+    (``rx_uhd_ext_gps.cpp:433``, ``set_time_next_pps(pc_secs + 1)``); it waits
+    for ``gps_locked``, prints it, and never reads the ``gps_time`` sensor that
+    would make the epoch exact. So the host clock's error lands whole in every
+    sample timestamp. That is what the 0.956 s offset was, and on 2026-08-06
+    the same line stamped a run 2021-04-02 because the RTC had lost five years
+    and NTP had not yet stepped it.
+
+    :func:`epoch_offset` cannot cover this. It needs recent ``par-*.h5``, and a
+    clock this wrong means there are none -- it answers "no timing solutions"
+    and the operator learns nothing. This one answers at boot, from nothing.
+    """
+    now = time.time()
+    when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+    if now < CLOCK_SANITY_FLOOR_S:
+        floor = time.strftime("%Y-%m-%d", time.gmtime(CLOCK_SANITY_FLOOR_S))
+        return Metric("system_clock_s", round(now, 1), ok=False,
+                      detail=f"clock reads {when}, before {floor} -- it is "
+                             f"unset, not slow. Every recorded sample will "
+                             f"carry this epoch. Step it before starting "
+                             f"acquisition, then `hwclock -w`")
+
+    # A clock behind files already written is a definite failure needing no
+    # hardcoded date: those files were stamped by a clock that ran later.
+    newest = None
+    try:
+        root = Path(config.output_dir)
+        if root.is_dir():
+            for path in root.rglob("*.h5"):
+                mtime = path.stat().st_mtime
+                if newest is None or mtime > newest:
+                    newest = mtime
+    except OSError:
+        newest = None
+
+    if newest is not None and now < newest - 60.0:
+        behind = (newest - now) / 86400.0
+        return Metric("system_clock_s", round(now, 1), ok=False,
+                      detail=f"clock reads {when}, {behind:.1f} days behind "
+                             f"products already on disk -- the RTC lost time "
+                             f"and NTP has not stepped it")
+
+    synced = _ntp_synchronised()
+    if synced is None:
+        return Metric("system_clock_s", round(now, 1), ok=None,
+                      detail=f"{when}; plausible, but NTP state is unreadable "
+                             f"(no timedatectl) so nothing is holding it")
+    if not synced:
+        return Metric("system_clock_s", round(now, 1), ok=False,
+                      detail=f"{when} is plausible but NTP is not "
+                             f"synchronised; nothing is holding the epoch and "
+                             f"the recorder copies it into every timestamp")
+    return Metric("system_clock_s", round(now, 1), ok=True,
+                  detail=f"{when}, NTP synchronised")
 
 
 def epoch_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric:
@@ -333,6 +419,7 @@ def collect(config: StationConfig | None = None, *,
     metrics.extend(disk_free(config))
     metrics.append(sample_rate(config))
     metrics.append(uptime_s())
+    metrics.append(system_clock(config))
     if include_epoch:
         metrics.append(epoch_offset(config))
 

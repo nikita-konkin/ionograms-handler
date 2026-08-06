@@ -1,0 +1,156 @@
+diff --git a/rx_uhd_ext_gps.cpp b/rx_uhd_ext_gps.cpp
+index d1d5f3c..f321e77 100644
+--- a/rx_uhd_ext_gps.cpp
++++ b/rx_uhd_ext_gps.cpp
+@@ -19,6 +19,7 @@
+ #include <boost/program_options.hpp>
+ #include <atomic>
+ #include <array>
++#include <cmath>
+ #include <complex>
+ #include <cstdlib>
+ #include <iomanip>
+@@ -363,13 +364,16 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
+         serials.push_back(usrp->get_usrp_tx_info(ch)["mboard_serial"]);
+     }
+     bool using_internal_gpsdo = all_mboards_support_gpsdo(usrp);
++    // Hoisted out of the if-block: the epoch decision further down needs to
++    // know whether the GPSDO actually locked, not merely whether it exists.
++    bool gps_locked = false;
+     if (using_internal_gpsdo) {
+         std::cout << "Using internal GPSDO clock and PPS." << std::endl;
+         for (size_t mb = 0; mb < usrp->get_num_mboards(); mb++) {
+             usrp->set_clock_source("gpsdo", mb);
+             usrp->set_time_source("gpsdo", mb);
+         }
+-        bool gps_locked = wait_for_gps_lock(usrp, gps_lock_timeout_sec);
++        gps_locked = wait_for_gps_lock(usrp, gps_lock_timeout_sec);
+         if (!gps_locked) {
+             std::cout << "WARNING: GPSDO is not locked; using GPSDO reference/PPS if present, but setting USRP time from PC time." << std::endl;
+         }
+@@ -419,18 +423,77 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
+       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+     }
+     
++    // A PPS edge has just passed, so there is most of a second of margin
++    // before the edge this time will be applied on. The GPSDO sensor read
++    // below is a serial round trip and needs that margin.
+     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+     auto now = std::chrono::system_clock::now();
+     auto secs = std::chrono::time_point_cast<std::chrono::seconds>(now);
+     auto frac = std::chrono::duration<double>(now - secs).count();
+ 
+     time_t pc_secs = secs.time_since_epoch().count();
+-    
++
+     std::cout << "PC time now: " << pc_secs << " + " << frac << " sec\n";
+-    std::cout << "Setting USRP time to: " << pc_secs+1 << " at next PPS\n";
++
++    // Prefer the GPSDO's own time over the host clock.
++    //
++    // The PPS *edge* is disciplined to GPS either way, but the *second
++    // number* has to come from somewhere, and taking it from the host makes
++    // every sample timestamp inherit whatever error NTP last left behind.
++    // This is not theoretical. Two observed failures, same line of code:
++    // a 0.956 s offset that displaced every echo by 286,000 km while the
++    // products stayed perfectly self-consistent, and a run stamped
++    // 2021-04-02 after the RTC lost five years. gps_time is exact by
++    // construction and needs nothing configured on the host.
++    //
++    // Falls back to the host clock when there is no internal GPSDO -- the
++    // external 10 MHz / PPS installations have no gps_time sensor to read,
++    // and for them this is unchanged behaviour.
++    //
++    // TIMING NOTE -- do not "simplify" this away. Reading the gps_time sensor
++    // BLOCKS on the GPSDO's serial link until a fresh NMEA sentence arrives:
++    // measured at 1-2 s on this FireFly. The value therefore describes the
++    // second in progress when the call *returns*, not when it was made, and
++    // anything sampled before the call is stale by the read duration.
++    //
++    // That is what makes `set_time_next_pps(gps_time + 1)` correct, and it is
++    // self-correcting rather than lucky: the read completes inside the second
++    // it reports, so the next PPS edge is exactly that second plus one.
++    //
++    // It is also why the host clock is re-read *after* the sensor below. The
++    // first version of this patch compared against `pc_secs`, sampled before
++    // the read, and reported a 1-2 s clock error on a station whose clock was
++    // good to 2 ms. It was measuring the serial link.
++    bool use_gps_time = using_internal_gpsdo && gps_locked
++                        && has_sensor(usrp, "gps_time", 0);
++    time_t epoch_secs = pc_secs;
++    if (use_gps_time) {
++        auto read_started = std::chrono::steady_clock::now();
++        epoch_secs = (time_t)usrp->get_mboard_sensor("gps_time", 0).to_int();
++        double read_took = std::chrono::duration<double>(
++            std::chrono::steady_clock::now() - read_started).count();
++
++        double host_now = std::chrono::duration<double>(
++            std::chrono::system_clock::now().time_since_epoch()).count();
++
++        std::cout << "GPSDO gps_time: " << epoch_secs
++                  << " (sensor read took " << read_took
++                  << " s; host clock is " << (host_now - (double)epoch_secs)
++                  << " s into that GPS second -- expect 0 to 1)\n";
++    } else {
++        std::cout << "WARNING: setting USRP epoch from host clock; gps_time "
++                  << "unavailable (internal GPSDO: "
++                  << (using_internal_gpsdo ? "yes" : "no")
++                  << ", locked: " << (gps_locked ? "yes" : "no")
++                  << "). Verify NTP before trusting any range.\n";
++    }
++
++    std::cout << "Setting USRP time to: " << epoch_secs + 1
++              << " at next PPS [source: "
++              << (use_gps_time ? "GPSDO gps_time" : "host clock") << "]\n";
+     // schedule time reset on next PPS, regardless of whether PPS comes from
+     // the internal GPSDO or the external PPS input.
+-    usrp->set_time_next_pps(uhd::time_spec_t(pc_secs + 1));
++    usrp->set_time_next_pps(uhd::time_spec_t(epoch_secs + 1));
+ 
+     // Wait for it to apply
+     // The wait is 2 seconds because N-Series has a known issue where
+@@ -441,6 +504,44 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
+     uhd::time_spec_t time_last_pps = usrp->get_time_last_pps();
+     printf("USRP time now %1.4f USRP last pps %1.4f\n",usrp->get_time_now().get_real_secs(),time_last_pps.get_real_secs());
+ 
++    // Verify. A clock set one second out is 300,000 km of apparent range, the
++    // products stay entirely self-consistent, and nothing downstream can tell.
++    //
++    // Both sides of the comparison must be sampled at the same instant, so the
++    // USRP clock is read immediately *after* the blocking sensor read returns
++    // -- never against `time_last_pps` latched seconds earlier.
++    //
++    // There is still an ambiguous window. The NMEA sentence for second N
++    // arrives shortly after the edge, so between the edge and its arrival the
++    // sensor still reports N-1 while the USRP already reads N. Rather than
++    // call that a failure, the check reports it as inconclusive: a false
++    // "epoch is wrong" on a healthy station teaches operators to ignore the
++    // line, which costs more than the check is worth.
++    //
++    // Deliberately NO automatic re-set. The first version of this patch
++    // retried on a bad comparison, and a re-set driven by a misread is exactly
++    // how this code would introduce the fault it exists to prevent.
++    if (use_gps_time) {
++        time_t gps_now = (time_t)usrp->get_mboard_sensor("gps_time", 0).to_int();
++        double usrp_now = usrp->get_time_now().get_real_secs();
++        double into_second = usrp_now - std::floor(usrp_now);
++        int64_t err = (int64_t)std::floor(usrp_now) - (int64_t)gps_now;
++
++        if (into_second < 0.3 || into_second > 0.95) {
++            std::cout << "Epoch check inconclusive: sampled " << into_second
++                      << " s into the second, too close to a PPS edge to "
++                      << "compare whole seconds (USRP " << (int64_t)usrp_now
++                      << ", GPS " << gps_now << ")\n";
++        } else if (err != 0) {
++            std::cout << "EPOCH CHECK FAILED: USRP epoch is " << err
++                      << " s from GPS; every range in this run is wrong by "
++                      << (double)err * 299792.458 << " km\n";
++        } else {
++            std::cout << "Epoch check OK: USRP clock agrees with GPSDO "
++                      << "gps_time (" << gps_now << ")\n";
++        }
++    }
++
+     std::vector<std::thread> threads;
+     for(size_t ch=0 ; ch < usrp->get_num_mboards(); ch++){
+       threads.push_back(std::thread(streaming_by_channel, std::stoi(channel_strings[ch]), rate, subdev, outdir, usrp, time_last_pps, end_time));

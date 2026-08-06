@@ -4,6 +4,15 @@ Description=chirpsounder2 recorder (USRP -> Digital RF)
 PartOf=chirp.target
 Before=chirp-detect.service chirp-ionograms.service
 
+# The recorder copies the host clock into the USRP epoch verbatim
+# (rx_uhd_ext_gps.cpp:433 sets time from pc_secs, never from the GPSDO's
+# gps_time sensor), so starting before NTP has stepped the clock stamps every
+# sample with whatever the RTC happened to hold. On 2026-08-06 that was
+# 2021-04-02. This ordering is the whole fix on our side; see health.system_clock
+# for the detection, since ordering cannot help if NTP itself never converges.
+Wants=time-sync.target
+After=time-sync.target
+
 [Service]
 Type=simple
 User=ionouser
@@ -15,6 +24,18 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # 1472 bytes whatever the host MTU.
 ExecStartPre=+/sbin/ethtool -G enp0s25 rx 4096
 ExecStartPre=+/sbin/sysctl -w net.core.rmem_max=500000000
+ExecStartPre=/bin/mkdir -p /dev/shm/hf25
+
+# The ringbuffer belongs to the recorder, so it dies with it. Upstream's
+# `dombas.sh` clears it once at script start but its 24-hour restart loop only
+# re-execs the recorder -- so a run that ended with the pruner dead leaves a
+# full tmpfs, and the next start dies at sample 0 with ENOSPC
+# ("dataset_samples_written = 0", 2026-08-06). Reclaiming on *stop* rather than
+# on start is deliberate: a start-time rm would delete data the consumers are
+# still reading during an in-place restart. A tmpfs filling while the recorder
+# runs is a different fault -- a dead pruner -- and belongs to
+# `ringbuffer_free_fraction`, not here.
+ExecStopPost=-/bin/rm -rf /dev/shm/hf25
 
 # Real-time priority for the receive thread, granted by systemd rather than by
 # limits.conf (which does nothing without pam_limits.so in common-session --

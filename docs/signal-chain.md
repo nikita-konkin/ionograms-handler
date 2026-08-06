@@ -8,6 +8,10 @@ come from the acquisition console on the sounding laptop. Values marked
 **[measured]** were read back from a cached product. Anything else is derived,
 and the derivation is shown.
 
+§2 and §3–§8 describe the v1 `.lfs` chain. **§2A describes the chirpsounder2
+station's USRP and UHD settings**, which have no console and are configured
+entirely by flags, kernel tunables and systemd units.
+
 ---
 
 ## 1. Overview
@@ -91,6 +95,190 @@ supplies `rx_name`, `rx_latitude`, `rx_longitude`.
 
 **Currently operational: `cyprus1` only.** Other columns in the schedule are
 configured but not enabled.
+
+---
+
+## 2A. USRP and UHD parameters — the chirpsounder2 station
+
+Everything in §2 describes the v1 Qt console. The v2 station at DOB has no
+console: acquisition is `rx_uhd_ext_gps` talking to a USRP N200 over 1 GbE,
+and every setting below is either a command-line flag, a kernel tunable, or a
+property of the radio. All of them were touched between 2026-08-04 and
+2026-08-06, most of them because something was broken.
+
+Marked **[flag]** for a recorder command-line option, **[host]** for a Linux
+setting, **[radio]** for hardware state read back from UHD.
+
+### 2A.1 Radio and transport
+
+| Parameter | Value | What it does | Why it is set that way |
+|---|---|---|---|
+| `--usrp_args=addr0=` **[flag]** | `192.168.10.2` | USRP IP on the dedicated NIC | the N200 is on a private link, not the site LAN |
+| `recv_buff_size` **[flag]** | `500000000` | UHD's userspace receive buffer, bytes | 500 MB absorbs scheduler jitter; **useless unless `net.core.rmem_max` is at least as large** — UHD silently gets less and never says so |
+| `--rate` **[flag]** | `25e6` | ADC sample rate, S/s | matches v1's 25 MHz so the range scale is common to both formats (§4.2) |
+| `--subdev` **[flag]** | `A:A` | daughterboard subdevice | single channel |
+| `--channels` **[flag]** | `0` | one thread per channel | one antenna |
+| `--outdir` **[flag]** | `/dev/shm/hf25` | Digital RF ringbuffer | tmpfs: 25 MS/s × 4 B = **100 MB/s**, which no spinning disk sustains |
+| `--gps-lock-timeout` **[flag]** | `-1` | seconds to wait for GPSDO lock, −1 = forever | a station that starts unlocked records unusable time |
+| Ethernet link **[host]** | 1000 Mb/s | | 25 MS/s × 4 B = 800 Mb/s — **80 % of line rate.** There is no headroom, which is why every setting below matters |
+| Frame size **[radio]** | 1472 bytes | UDP payload UHD negotiates | **jumbo frames are not available.** The N2x0 probes at 1472 whatever the host MTU says; `ip link` showing `mtu 9000` is irrelevant. ~68,000 packets/second |
+
+> **Do not diagnose the link with `ping`.** The N200 does not answer ICMP at
+> all — a failed `ping -M do -s 8972` proves nothing about MTU, and a failed
+> plain `ping` proves nothing about the radio being alive. Use
+> `uhd_find_devices`, or `tcpdump -i <nic> host 192.168.10.2` to see whether
+> it is streaming.
+
+### 2A.2 Host tuning — all three reset on reboot
+
+| Parameter | Value | Symptom when wrong | Where it belongs |
+|---|---|---|---|
+| `net.core.rmem_max` **[host]** | `500000000` | `got no data in recv 0`, thousands of lines | `/etc/sysctl.d/99-uhd.conf`, and `ExecStartPre=` in the unit |
+| NIC RX ring **[host]** | 4096 (default **256**, max 4096) | same, and this was the larger of the two effects | `ethtool -G <nic> rx 4096`; `ExecStartPre=` in the unit |
+| `rtprio` limit **[host]** | 99 | `Unable to set the thread priority`, then continuous packet loss | `LimitRTPRIO=99` in the unit |
+
+The `rtprio` one is worth spelling out, because two plausible fixes both
+silently did nothing here:
+
+- `/etc/security/limits.d/uhd.conf` is read by **`pam_limits.so`**, which was
+  **absent from `/etc/pam.d/common-session`** on this machine. The file was
+  correct and inert. Symptom: `ulimit -r` returns 0 while the config says 99.
+- `setcap cap_sys_nice+ep` attaches to the **inode**. It survives reboots and
+  is cleared by any rebuild of the binary, and it must be applied before the
+  process `exec`s — applying it to a running recorder changes nothing.
+
+`LimitRTPRIO=99` in the systemd unit sidesteps both. That is why
+`chirp-rx.service` sets it rather than relying on either mechanism.
+
+Verify with `ulimit -r` (as the acquisition user, not root) and
+`getcap ~/chirpsounder2/rx_uhd_ext_gps`.
+
+### 2A.3 Timing — clock source, time source, and epoch
+
+Three different things, routinely conflated:
+
+| Concept | Set by | What it controls | Failure signature |
+|---|---|---|---|
+| **Clock source** | `set_clock_source("gpsdo")` | the 10 MHz reference the ADC samples on | `ref_locked: false` → sample rate and frequency drift |
+| **Time source** | `set_time_source("gpsdo")` | which PPS edge the USRP counts | edge jitter |
+| **Epoch** | `set_time_next_pps(N + 1)` | *which second number* that edge is called | **nothing** — see below |
+
+The first two are checked and reported at startup. The third was not, and it
+is the one that caused every timing problem this station has had.
+
+```
+ * mboard 0 gps_locked: true          ← GPS receiver has satellites
+ * F5F86F: false                      ← ref_locked; the 10 MHz has not settled
+```
+
+A `ref_locked: false` immediately after `gps_locked: true` is usually not a
+fault: the FireFly GPSDO needs tens of seconds after satellite lock to
+discipline its oscillator, and the recorder checks a few lines later. Confirm
+with `uhd_usrp_probe` a minute after start before treating it as real.
+
+**The epoch is the dangerous one.** Stock `rx_uhd_ext_gps` sets it from the
+host clock (`rx_uhd_ext_gps.cpp:433`), never from the GPSDO's `gps_time`
+sensor. Since this is stretch processing, `range = c·δt`:
+
+```
+1 ms  =  300 km          1 s  =  300,000 km
+```
+
+and there is no internal evidence of the error — the products stay perfectly
+self-consistent. Two observed failures, same line:
+
+| Date | Host clock error | What it produced |
+|---|---|---|
+| 2026-08-05 | −0.9557 s | every echo 286,000 km out; diagnosed only by comparing against Twente's published cyprus1 schedule, two days later |
+| 2026-08-06 | −5.3 years | a run stamped 2021-04-02 after the RTC lost time and NTP had not stepped it |
+
+Three defences, in order of how much they help:
+
+1. **`patches/0001`** — take the epoch from `gps_time` and verify it. Removes
+   the failure rather than detecting it.
+2. **`chirp-rx.service`: `After=time-sync.target`** — do not start before NTP
+   has stepped the clock. Helps only if NTP converges at all.
+3. **`services/agent`: `health.system_clock` and `health.epoch_offset`** — the
+   first catches an implausible clock from nothing on disk, the second
+   measures the residual against a transmitter of known position and published
+   schedule. Both were written because neither the products nor the logs said
+   anything.
+
+Compare §7.3, which measured v1's timing at DOB as stable to 0.59 ms
+peak-to-peak. That was the *stability*, not the *epoch* — v1 was stable and
+could have been wrong by any constant amount without the measurement noticing.
+
+### 2A.4 Ringbuffer and storage
+
+| Parameter | Value | Meaning |
+|---|---|---|
+| `data_dir` | `/dev/shm/hf25` | Digital RF ringbuffer, tmpfs — sized by `/dev/shm`, half of RAM by default |
+| `ringbuffer_max_age_min` | 2 | how much raw voltage is retained; ~12 GB at 4 min, so ~6 GB here |
+| `ringbuffer_cleanup` | `true` | enables the pruner — which runs **inside `iono_housekeeping.py`**, not inside the recorder |
+| `output_dir` | the archive volume | where `lfm_ionogram-*.h5` lands |
+
+The coupling in row three is the trap. If `iono_housekeeping.py` dies, nothing
+prunes, and 100 MB/s fills the tmpfs in about a minute per gigabyte. The
+recorder then dies with `errno = 28` at sample index 0 —
+`dataset_samples_written = 0` — and the log is a page of HDF5 stack trace
+whose one useful line is `No space left on device`.
+
+`dombas.sh` clears the ringbuffer once at script start (via
+`stop_ringbuffer.sh`), but its 24-hour restart loop only re-execs the
+recorder. A session that ended with the pruner dead therefore hands a full
+tmpfs to the next one. `chirp-rx.service` reclaims it with `ExecStopPost=`
+instead — on stop rather than start, so an in-place restart cannot delete data
+the consumers are still reading.
+
+### 2A.5 Shutdown — the setting that is a site visit
+
+`KillSignal=SIGINT`, `TimeoutStopSec=30`.
+
+UHD sends the stop-streaming command to the radio on `SIGINT` and on nothing
+else. A USRP killed mid-stream keeps blasting UDP at a host that is gone: it
+stops answering discovery, `uhd_find_devices` reports `No UHD Devices Found`,
+and `tcpdump -i <nic> host 192.168.10.2` shows it still transmitting.
+
+```bash
+pkill -INT -f rx_uhd     # correct
+pkill -f rx_uhd          # SIGTERM; wedges the radio
+```
+
+Observed 2026-08-05, and the reason `chirp-rx.service` sets `KillSignal`
+explicitly rather than accepting systemd's `SIGTERM` default.
+
+**If it is already wedged, try the software reset before a site visit.** The
+clone ships one:
+
+```bash
+./reset_usrp.sh
+# uhd_image_loader --args "type=usrp2,addr=192.168.10.2,reset" --no-fpga
+```
+
+`--no-fpga` means it sends the reset command without reflashing anything. It
+is not guaranteed — a device that has stopped answering discovery may not
+answer this either — but it is the only remote option and it costs nothing to
+attempt. Power removal is the fallback, not the first move.
+
+### 2A.6 Launching
+
+`dombas.sh` must run **as the acquisition user, not under `sudo`**, from the
+repository root:
+
+```bash
+cd ~/chirpsounder2 && source .venv38/bin/activate && ./examples/marieluise/dombas.sh
+```
+
+`sudo` runs the script through `dash`, which has no `source`, so the venv
+never activates and every `python3` in it becomes the system interpreter —
+Python 3.5 on this box, where chirpsounder2 needs 3.8. The consumers then die
+on import while the recorder keeps running, which is exactly the state that
+fills the ringbuffer. It also leaves root-owned files in `/dev/shm` and the
+output directory that block the next non-root run.
+
+Nothing in the chain needs root: `rtprio` comes from `limits.d` (or the unit),
+and `ethtool`/`sysctl` are `ExecStartPre=+` lines that systemd runs privileged
+on their own.
 
 ---
 
@@ -236,6 +424,72 @@ power spectrum into its mean, putting the noise floor at ~1.0 in linear power.
 
 The median is taken over the **full** spectrum *before* gating, so gating does
 not bias it.
+
+**Both formats land in this convention, by construction.** v2 stores
+`SNR = (P − median)/median` per row, so `SNR + 1 = P/median`, and `io_chirp`
+divides by the same `NOISE_COEF`. A median-noise cell reads 25.571 dB either
+way. That is what lets one 43 dB threshold mean one thing across `.lfs` and
+`.h5` — see `docs/architecture.md` §3.3.
+
+#### Whitening — where it happens, and what it does to this assumption
+
+Two different whitenings, in two different places, and only one touches the
+data this pipeline reads.
+
+**v1 (`.lfs`): the console whitens, and it is in the stored IQ.**
+`whiten`, `whiten_len`, `whiten_n` (header offsets 210/212/216) record it.
+`muf` reads the fields and never applies or reverses them — the samples in the
+payload already are or are not whitened, and you cannot whiten twice.
+
+Measured on the archive, as mean/median of `|FFT|²` over 8192-sample windows.
+An exponentially distributed power spectrum — ideal Rayleigh noise — gives
+`1/ln2 = 1.4427`:
+
+| file | `whiten` | mean/median |
+|---|---|---|
+| `cyprus1_20191023_071510` | 0 | 2.0887 |
+| `cyprus1_20191023_090010` | 0 | 2.1147 |
+| `cyprus1_20260204_000010` | 1 | **1.4439** |
+| `cyprus1_20260204_100010` | 1 | **1.4497** |
+| `cyprus1_20260209_082510` | 1 | **1.4441** |
+| `cyprus1_20260209_164510` | 1 | **1.4461** |
+
+**Whitening makes the noise-floor assumption hold, rather than breaking it.**
+The whitened files land within 0.5 % of the exponential value; the unwhitened
+2019 ones sit 45 % above it, because coloured structure — carriers, band-edge
+shaping — inflates the mean without moving the median. The console's filter
+removes the deterministic colouring and leaves the per-bin Rayleigh
+fluctuation, which is exactly what a median-based noise floor wants.
+
+The consequence is for the **2019 files, not the 2026 ones**: on `whiten=0`
+recordings the noise estimate is biased and dB values from them are not
+directly comparable with the rest of the archive. The whole 2026 archive is
+`whiten=1` and internally consistent.
+
+**v2 (`.h5`): the ionogram path does not whiten.**
+`calc_ionograms.spectrogram` is Hann-windowed `|FFT|²`, 13× oversampled, with
+the sub-steps combined by inverse-variance weighting — `std_est` is the MAD of
+each sub-step's power spectrum and each contributes `1/std_est²`. That weights
+*time* substeps by their noise level; it does not flatten across frequency.
+
+There **is** a `Z/|Z|` spectral whitening in chirpsounder2, at
+`chirp_det.py:213`, but it lives in `ChirpDetector.seek()` — the detection
+path. `calc_ionograms.py` imports `chirp_det` only for `unix2dirname` and
+`unix2datestr`. So it never reaches `lfm_ionogram-*.h5`; it reaches the `snr`
+column of `chirp-*.h5` and `cdetections-*.h5`, which is why that statistic
+orders detections and is not comparable to the 43 dB threshold.
+
+Both formats export the flag in SAO.XML's `<Acquisition>` so two records can
+be compared on it.
+
+> **Aside on `NOISE_COEF`.** The measurement above puts the median-to-mean
+> factor for this noise at `1/ln2 = 1.443`, while `NOISE_COEF = 4·ln2 = 2.773`
+> — so the constant is 1.92× larger than the rationale inherited from
+> `stuffr.medians()` states. It is *not* a bug to fix: it is a fixed scale
+> factor applied identically on both format paths, and the 43 dB threshold and
+> the 25.571 dB noise reading are both calibrated against it. Changing it
+> would move every threshold in the package. Recorded here so the docstring's
+> stated derivation is not mistaken for an audited one.
 
 ### 5.2 The dB scale — the part that does not travel
 

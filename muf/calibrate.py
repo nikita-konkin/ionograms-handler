@@ -117,6 +117,86 @@ def default_gate(header: LfsHeader) -> tuple[float, float]:
     return lo, hi
 
 
+#: Fraction of the peak-above-baseline that still counts as trace, when
+#: :func:`auto_gate` grows the window outward from the busiest range.
+AUTO_GATE_FLOOR_FRACTION = 0.25
+
+#: How much sky to leave above and below what was found, in km. Enough that a
+#: sporadic-E leg or a second hop just outside the main concentration is still
+#: visible rather than cropped into invisibility.
+AUTO_GATE_MARGIN_KM = 150.0
+
+#: Range smoothing before the peak search, in km. One trace is a few bins
+#: wide; without this the argmax lands on whichever single bin got lucky.
+AUTO_GATE_SMOOTH_KM = 40.0
+
+#: Per-frequency quantile above which a cell counts as "bright". 0.98 keeps
+#: roughly the top 2 % of each row, which is a trace and not a noise field.
+AUTO_GATE_QUANTILE = 0.98
+
+
+def auto_gate(power, vrange, *,
+              quantile: float = AUTO_GATE_QUANTILE,
+              floor_fraction: float = AUTO_GATE_FLOOR_FRACTION,
+              margin_km: float = AUTO_GATE_MARGIN_KM,
+              smooth_km: float = AUTO_GATE_SMOOTH_KM) -> tuple[float, float] | None:
+    """Find the range window the echo actually occupies. ``None`` if it does not.
+
+    Search-mode v2 products are stored over the whole analysis window --
+    +/-3998 km at DOB, 3999 bins of 2 km -- while the trace occupies a few
+    hundred. Plotted honestly that is a thin bright line across an empty
+    field, and the ionogram is unreadable at any sensible figure size.
+
+    Works on the loaded array rather than on a header, so it is the same code
+    for both formats: v2 arrives sparsified and NaN-filled to the row median,
+    `.lfs` arrives dense, and "cells above this row's 98th percentile" means
+    the same thing to both.
+
+    The statistic is a *count*, not a sum of power. An ionospheric trace is
+    contiguous in frequency, so it stacks up at one range across many rows;
+    noise that happens to clear the storage threshold is scattered, and
+    contributes to every range equally. Summing SNR instead lets a handful of
+    float16-clipped noise cells drag the window open -- measured on the
+    2026-08-05 archive, the SNR-weighted version returned 88 % of the axis and
+    this one returns 6 %.
+
+    Returns ``None`` -- deliberately, rather than a guess -- when no range
+    stands out above the baseline. A sounding of pure noise has no window to
+    find, and inventing one would crop the evidence that there is nothing
+    there.
+    """
+    power = np.asarray(power)
+    vrange = np.asarray(vrange, dtype=np.float64)
+    if power.ndim != 2 or power.shape[0] < 2 or len(vrange) < 3:
+        return None
+
+    with np.errstate(invalid="ignore"):
+        threshold = np.nanquantile(power, quantile, axis=1, keepdims=True)
+        profile = (power > threshold).sum(axis=0).astype(np.float64)
+    if not np.isfinite(profile).all() or profile.max() <= 0:
+        return None
+
+    step = abs(float(vrange[1] - vrange[0])) or 1.0
+    width = max(3, int(smooth_km / step) | 1)          # odd, so it is centred
+    profile = np.convolve(profile, np.ones(width) / width, mode="same")
+
+    baseline = float(np.median(profile))
+    peak = float(profile.max())
+    if peak <= baseline * 1.5:
+        return None
+
+    cut = baseline + floor_fraction * (peak - baseline)
+    lo_i = hi_i = int(np.argmax(profile))
+    while lo_i > 0 and profile[lo_i - 1] > cut:
+        lo_i -= 1
+    while hi_i < len(profile) - 1 and profile[hi_i + 1] > cut:
+        hi_i += 1
+
+    # The axis descends, so index order is not range order.
+    lo_km, hi_km = sorted((float(vrange[lo_i]), float(vrange[hi_i])))
+    return lo_km - margin_km, hi_km + margin_km
+
+
 def gate_indices(
     half_span: float, step: float, lo_km: float, hi_km: float, n_range: int
 ) -> tuple[int, int]:

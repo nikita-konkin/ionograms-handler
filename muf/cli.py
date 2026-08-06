@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import (__version__, compare, extractors, io_detect, pipeline, render,
-               spectro, track)
+from . import (__version__, calibrate, compare, extractors, interference,
+               io_detect, pipeline, render, spectro, track)
 from .export import saoxml
 from .extractors import ALL_METHODS, DEFAULT_METHODS
 from .reference import ALL_REFERENCES
@@ -19,9 +19,16 @@ from .loader import find_soundings, read_header
 from .pipeline import Options
 
 
-def _gate(text: str | None) -> tuple[float, float] | None:
+#: Sentinel for ``--gate auto``. Not a range, so it cannot be confused with
+#: one, and it survives being carried through `Options.gate_km` untouched.
+AUTO_GATE = "auto"
+
+
+def _gate(text: str | None) -> tuple[float, float] | str | None:
     if not text:
         return None
+    if text.strip().lower() == AUTO_GATE:
+        return AUTO_GATE
     try:
         lo, hi = (float(part) for part in text.split(","))
     except ValueError:
@@ -57,7 +64,11 @@ def _common(parser: argparse.ArgumentParser) -> None:
                         help="zero-padding periods. Subdivides range bins "
                              "without improving resolution (default: %(default)s)")
     parser.add_argument("--gate", type=str, default=None, metavar="LO,HI",
-                        help="virtual-range gate in km (default: from the file header)")
+                        help="virtual-range gate in km (default: from the file "
+                             "header). `--gate auto` fits the window to where "
+                             "the echo actually is, per sounding -- for search-"
+                             "mode v2 products, whose stored axis is thousands "
+                             "of km wider than the trace. `plot` only.")
     parser.add_argument("--cache-dir", type=Path, default=None,
                         help="cache gated spectrograms here to make re-runs fast")
     parser.add_argument("--stations", type=Path, default=None, metavar="FILE",
@@ -70,6 +81,15 @@ def _common(parser: argparse.ArgumentParser) -> None:
                         help="override extension-based format selection "
                              "(default: .lfs -> lfs, .h5 -> chirp2). Only "
                              "needed for a recording that was renamed.")
+    parser.add_argument("--reject-interference", action="store_true",
+                        help="flatten frequency rows whose above-threshold "
+                             "energy spans more range than any echo can "
+                             f"(>{interference.MAX_ECHO_RANGE_KM:.0f} km "
+                             "occupied). A burst has no delay and smears "
+                             "across every range bin; an echo is narrow. Off "
+                             "by default because it changes results -- and "
+                             "measured over two archives it changed very few, "
+                             "so treat it as a diagnostic first.")
     parser.add_argument("--band-floor", type=float, default=None, metavar="MHZ",
                         help="lowest frequency the transmitter actually "
                              "radiates, for flagging LOF that ran off the "
@@ -99,6 +119,11 @@ def cmd_stations(args) -> int:
     return 0
 
 
+def _auto_gate_requested(args) -> bool:
+    return isinstance(getattr(args, "gate", None), str) and \
+        args.gate.strip().lower() == AUTO_GATE
+
+
 def _options(args) -> Options:
     method_options: dict[str, dict] = {}
     if getattr(args, "legacy_algo", False):
@@ -111,7 +136,9 @@ def _options(args) -> Options:
     return Options(
         window=args.window,
         zero_periods=args.zero_periods,
-        gate_km=_gate(args.gate),
+        # `auto` is decided per sounding from the data, so nothing upstream of
+        # the load can know it. The load runs ungated and `cmd_plot` narrows.
+        gate_km=None if _auto_gate_requested(args) else _gate(args.gate),
         methods=getattr(args, "methods", DEFAULT_METHODS),
         min_run=getattr(args, "min_run", None),
         percentile=getattr(args, "percentile", None),
@@ -120,6 +147,7 @@ def _options(args) -> Options:
         band_floor_mhz=getattr(args, "band_floor", None),
         format=getattr(args, "input_format", None),
         stations=_load_registry(getattr(args, "stations", None)),
+        reject_interference=getattr(args, "reject_interference", False),
     )
 
 
@@ -210,11 +238,25 @@ def cmd_plot(args) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     print(f"rendering {len(paths)} ionogram(s)", file=sys.stderr)
 
+    auto = _auto_gate_requested(args)
+    skipped = 0
+
     for path in paths:
         ion = loader.load(
             path, options.window, options.zero_periods,
             options.gate_km, options.cache_dir, format=options.format,
         )
+        ion, rejected = interference.apply(ion, options)
+        if rejected is not None and rejected.any:
+            print(f"  {path.name}: {rejected.describe(ion.freq)}", file=sys.stderr)
+        if auto:
+            found = calibrate.auto_gate(ion.power, ion.cal.vrange)
+            if found is None:
+                # No range stands out. Plot it whole rather than cropping to
+                # an invented window -- "this sounding is empty" is a result.
+                skipped += 1
+            else:
+                ion = ion.regated(*found)
         results = None
         if not args.no_axes and not args.no_muf:
             results = extractors.run(ion, methods=options.methods,
@@ -228,6 +270,9 @@ def cmd_plot(args) -> int:
         render.plot(ion, out_path, results, axes=not args.no_axes, dpi=args.dpi,
                     segments=segments, reconstruction=reconstruction)
         print(f"  {out_path}", file=sys.stderr)
+    if skipped:
+        print(f"{skipped} of {len(paths)} had no range concentration to gate "
+              f"on and were left at full extent", file=sys.stderr)
     return 0
 
 
@@ -643,6 +688,12 @@ def cmd_detect(args) -> int:
         if not records:
             records = io_detect.load_detections(target)
             kind = "detection"
+        if not records:
+            # Last, because it is the coarsest -- but the only one left on a
+            # synced archive, where the per-detection chirp-*.h5 lived in the
+            # ringbuffer tree and rotated away.
+            records = io_detect.load_cdetections(target)
+            kind = "consolidated detection"
         emitters = io_detect.census(records, cycle_s=args.cycle,
                                     min_count=args.min_count)
 

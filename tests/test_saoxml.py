@@ -606,3 +606,116 @@ def test_render_separates_modelled_rows(sounding, tmp_path):
     record = _with_model(sounding, tmp_path)
     out = render.plot_sao(record, tmp_path / "modelled.png", ion=sounding)
     assert out.exists() and out.stat().st_size > 0
+
+
+# --------------------------------------------------------------------------
+# Acquisition parameters and the range reference
+# --------------------------------------------------------------------------
+
+def test_the_chirp_rate_reaches_the_record(make_lfs):
+    """`range = c * f_beat / rate`. A record without it cannot be checked."""
+    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    record = saoxml.build_document(saoxml.records_for(ion, Options()))
+    acq = record.find(".//Acquisition")
+
+    assert acq is not None
+    assert float(acq.get("ChirpRate")) == pytest.approx(float(ion.header.rate))
+    assert acq.get("ChirpRateUnits") == "Hz/s"
+    assert float(acq.get("SampleRate")) > 0
+
+
+def test_an_lfs_record_says_its_ranges_are_absolute(make_lfs):
+    """v1 range zero comes from a scheduled transmit time, not from a fit."""
+    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    root = saoxml.build_document(saoxml.records_for(ion, Options()))
+
+    assert root.find(".//RangeReference").get("Value") == "absolute"
+    for ranges in root.iter("RangeList"):
+        assert ranges.get("Reference") == "absolute"
+
+
+def test_a_relative_axis_is_labelled_on_every_trace(make_lfs, monkeypatch):
+    """The correctness case. A relative axis published as plain group range is
+    a number a consumer will use, and at DOB the zero has been wrong by
+    286,000 km."""
+    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    monkeypatch.setattr(type(ion.header), "range_is_relative",
+                        property(lambda self: True), raising=False)
+    monkeypatch.setattr(type(ion.header), "range_relative_reason",
+                        property(lambda self: "no timing solution"),
+                        raising=False)
+    root = saoxml.build_document(saoxml.records_for(ion, Options()))
+
+    assert root.find(".//RangeReference").get("Value") == "relative"
+    assert "no timing solution" in root.find(".//RangeReference").get("Reason")
+    lists = list(root.iter("RangeList"))
+    assert lists, "the sounding must produce a trace for this test to mean anything"
+    for ranges in lists:
+        assert ranges.get("Reference") == "relative"
+        assert "origin is not" in ranges.get("Description")
+    assert "RANGES ARE RELATIVE" in root.find(".//Comments").text
+
+
+def test_a_missing_acquisition_parameter_is_absent_not_zero(make_lfs):
+    """"The chirp rate was not recorded" and "the chirp rate was 0 Hz/s" must
+    not read the same; the second is impossible."""
+    element = saoxml._acquisition(object())
+
+    assert element.get("ChirpRate") is None
+    assert "ChirpRate" not in element.attrib
+    assert element.find("Recorder") is None
+
+
+def test_the_round_trip_preserves_the_range_reference(make_lfs, tmp_path,
+                                                      monkeypatch):
+    """A reader that silently defaults this to absolute would undo the point."""
+    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    monkeypatch.setattr(type(ion.header), "range_is_relative",
+                        property(lambda self: True), raising=False)
+    root = saoxml.build_document(saoxml.records_for(ion, Options()))
+    out = saoxml.write(root, tmp_path / "r.xml")
+
+    record = saoxml.read(out)[0]
+    assert record.range_is_relative
+    assert all(t.range_reference == "relative" for t in record.traces)
+    assert record.chirp_rate == pytest.approx(float(ion.header.rate))
+
+
+def test_a_record_written_before_the_attribute_reads_as_absolute(tmp_path):
+    """Every SAO.XML in existence predates it, and every one meant absolute."""
+    path = tmp_path / "old.xml"
+    path.write_text(
+        '<SAORecordList><SAORecord FormatVersion="5.0" StartTimeUTC='
+        '"2026-02-04T00:00:10.000Z" URSICode="" StationName="X">'
+        '<TraceList Num="1"><Trace Type="non-standard" Layer="F2">'
+        '<FrequencyList>5.0 6.0</FrequencyList>'
+        '<RangeList>2700.0 2705.0</RangeList>'
+        '</Trace></TraceList></SAORecord></SAORecordList>', encoding="utf-8")
+
+    record = saoxml.read(path)[0]
+    assert not record.range_is_relative
+    assert record.acquisition == {}
+    assert record.chirp_rate is None
+
+
+def test_whitening_is_reported_but_never_applied(make_lfs):
+    """The console whitened or it did not; `muf` neither repeats nor undoes it.
+
+    Exported because `NOISE_COEF = 4*ln2` is the median-to-mean factor for
+    *exponentially distributed* noise, which whitening narrows -- so two
+    records are only comparable on this axis if both say.
+    """
+    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    acq = saoxml._acquisition(ion.header)
+
+    assert acq.get("Whitening") in ("true", "false")
+    assert acq.get("Whitening") == str(bool(ion.header.whiten)).lower()
+    assert int(acq.get("WhiteningLength")) == ion.header.whiten_len
+
+
+def test_a_header_without_whitening_omits_it(make_lfs):
+    """v2 has no such field, and a blank would read as "not whitened"."""
+    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    acq = saoxml._acquisition(object())
+
+    assert "Whitening" not in acq.attrib

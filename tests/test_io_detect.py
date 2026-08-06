@@ -288,3 +288,68 @@ def test_real_detection_tree_yields_the_known_emitters(real_chirp_dir):
     assert emitters[0].fraction_sd_s < 5e-3
     assert emitters[0].count > 20
     assert emitters[0].span_hours > 1.0
+
+
+# --------------------------------------------------------------------------
+# The consolidated file
+# --------------------------------------------------------------------------
+
+def test_cdetections_load_as_detections(make_detection_h5):
+    """The 900 s consolidation is what survives on a synced archive.
+
+    The per-detection `chirp-*.h5` are written into the ringbuffer tree and
+    rotate away with it, so a census run on the archive volume -- which is
+    where anyone actually runs one -- has only these.
+    """
+    tree = make_detection_h5("cdetections", transmit_seconds=CYPRUS_SLOTS,
+                             distance_km=CYPRUS_KM, cycles=5)
+    items = io_detect.load_cdetections(tree)
+
+    assert len(items) == 15
+    assert all(isinstance(d, io_detect.Detection) for d in items)
+    emitters = io_detect.census(items)
+    assert len(emitters) == 1
+    assert tuple(emitters[0].observed_seconds) == CYPRUS_SLOTS
+
+
+def test_cdetections_do_not_invent_the_fields_they_lack(make_detection_h5):
+    """The (N, 5) array has no columns for these, and a plausible-looking
+    zero would be worse than the sentinel `read_detection` already uses."""
+    tree = make_detection_h5("cdetections")
+    one = io_detect.load_cdetections(tree)[0]
+
+    assert one.channel == ""
+    assert one.i0 == -1 and one.n_samples == -1
+    assert np.isnan(one.sample_rate)
+
+
+def test_cdetections_still_carry_the_epoch_error(make_detection_h5):
+    """The consolidation loses fields, not timing -- which is the whole point
+    of being willing to read it."""
+    tree = make_detection_h5("cdetections", transmit_seconds=CYPRUS_SLOTS,
+                             distance_km=CYPRUS_KM, epoch_offset_s=-0.9557,
+                             cycles=6)
+    offset = io_detect.solve_epoch_offset(
+        io_detect.load_cdetections(tree), rate=100e3,
+        transmit_seconds=CYPRUS_SLOTS, distance_km=CYPRUS_KM, window_s=2.0)
+
+    assert offset.seconds == pytest.approx(-0.9557, abs=1e-6)
+
+
+def test_a_named_file_of_the_wrong_kind_is_not_offered_to_the_reader(
+        make_detection_h5):
+    """`muf detect` tries par, then chirp, then cdetections against the same
+    target. Without this, naming one cdetections file hands it to the first
+    two readers, and the caller sees two "skipped 1 unreadable file" warnings
+    before the right one gets it."""
+    tree = make_detection_h5("cdetections")
+    named = next(tree.glob("cdetections-*.h5"))
+
+    assert io_detect.find_cdetections(named) == [named]
+    assert io_detect.find_timings(named) == []
+    assert io_detect.find_detections(named) == []
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert io_detect.load_timings(named) == []
+        assert io_detect.load_detections(named) == []

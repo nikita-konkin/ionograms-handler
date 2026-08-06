@@ -236,14 +236,114 @@ def _system_info(ion, method: str) -> ET.Element:
         Fraction=f"{cal.sweep_fraction:.4f}",
     ))
 
-    ET.SubElement(info, "Comments").text = (
+    info.append(_acquisition(header))
+
+    comments = [
         "Oblique-incidence chirp sounding over a fixed transmitter-receiver "
         "path. Ranges are group range along the path, not virtual height. "
         "Vertical characteristics (foF2, foE, h'F, hmF2) are not measurable on "
         "this geometry and are absent rather than blank. No polarimetry, so "
         "traces carry no Polarization attribute."
-    )
+    ]
+    if _range_is_relative(header):
+        comments.append(
+            "RANGES ARE RELATIVE. " + _relative_reason(header) + " Range "
+            "*differences* in this record are correct; the zero is not, so "
+            "group range and any height derived from it must not be read as "
+            "absolute. See RangeList/@Reference on every trace."
+        )
+    ET.SubElement(info, "Comments").text = "\n".join(comments)
     return info
+
+
+def _range_is_relative(header) -> bool:
+    """Whether this sounding's range axis has a trustworthy zero.
+
+    ``.lfs`` headers have no such concept and answer False, which is right:
+    their range zero comes from a scheduled transmit time, not from a fitted
+    detection.
+    """
+    return bool(getattr(header, "range_is_relative", False))
+
+
+def _relative_reason(header) -> str:
+    return str(getattr(header, "range_relative_reason", "") or
+               "the range offset could not be established")
+
+
+def _acquisition(header) -> ET.Element:
+    """Acquisition parameters, the ones that decide what the numbers mean.
+
+    ``<Sweep>`` describes the axes; this describes the radio that produced
+    them. The chirp rate above all -- ``range = c * f_beat / rate`` is the
+    whole measurement, and a record that omits it cannot be checked, let
+    alone reproduced. Everything is read with ``getattr`` so one writer serves
+    both header types: v1 has no ``t0`` or git provenance, v2 has no
+    ``whiten``, and an attribute that does not apply is omitted rather than
+    written blank.
+    """
+    element = ET.Element("Acquisition", _attrs(
+        Format=str(getattr(header, "format", "") or ""),
+        ChirpRate=_fmt(getattr(header, "rate", None), "{:.4f}"),
+        ChirpRateUnits="Hz/s",
+        SampleRate=_fmt(getattr(header, "sample_rate", None), "{:.1f}"),
+        Decimation=_fmt(getattr(header, "dec", None), "{:.0f}"),
+        SampleRateUnits="Hz",
+        Channel=str(getattr(header, "channel", "") or "") or None,
+        # v2's t0 carries the sub-second sweep start, and its fractional part
+        # *is* the one-way travel time (io_chirp.range_offset_km). StartTimeUTC
+        # is written to whole seconds for compatibility, so without this the
+        # record cannot be re-derived.
+        SweepStartEpoch=_fmt(getattr(header, "t0", None), "{:.6f}"),
+        SweepStartEpochUnits="s",
+        NoiseFloorMedian=_fmt(getattr(header, "noise_floor_median", None),
+                              "{:.3f}"),
+        Detections=_fmt(getattr(header, "num_detections", None), "{:.0f}"),
+        # Recorded by the v1 console, never applied by us -- you cannot whiten
+        # twice. Exported because it decides whether the median-based noise
+        # floor is well founded: measured over the archive, `whiten=1` files
+        # sit within 0.5 % of an exponential power spectrum and `whiten=0`
+        # ones 45 % above it, so dB values from the two are not directly
+        # comparable. See docs/signal-chain.md sec. 5.1.
+        Whitening=(None if getattr(header, "whiten", None) is None
+                   else str(bool(header.whiten)).lower()),
+        WhiteningLength=_fmt(getattr(header, "whiten_len", None), "{:.0f}"),
+    ))
+
+    # Provenance: which acquisition code wrote the product. `git_dirty` is
+    # written even when False -- a record that does not say is different from
+    # one that says the tree was clean.
+    version = getattr(header, "software_version", "")
+    commit = getattr(header, "git_commit", "")
+    dirty = getattr(header, "git_dirty", None)
+    if version or commit:
+        ET.SubElement(element, "Recorder", _attrs(
+            Software=str(version) or None,
+            Commit=str(commit) or None,
+            Dirty=None if dirty is None else str(bool(dirty)).lower(),
+        ))
+
+    ET.SubElement(element, "RangeReference", _attrs(
+        Value="relative" if _range_is_relative(header) else "absolute",
+        Reason=_relative_reason(header) if _range_is_relative(header) else None,
+    ))
+    return element
+
+
+def _fmt(value, spec: str) -> str | None:
+    """Format a number, or ``None`` so ``_attrs`` drops the attribute.
+
+    A missing acquisition parameter must be absent, never zero: "the chirp
+    rate was not recorded" and "the chirp rate was 0 Hz/s" would otherwise
+    read the same, and the second is impossible.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return spec.format(number) if np.isfinite(number) else None
 
 
 @dataclass(frozen=True)
@@ -389,10 +489,11 @@ def _characteristics(ion, result, nose, letter: str,
     return chars
 
 
-def _trace_list(segments, layer: str = DEFAULT_LAYER) -> ET.Element | None:
+def _trace_list(segments, layer: str = DEFAULT_LAYER, header=None) -> ET.Element | None:
     if not segments:
         return None
 
+    relative = _range_is_relative(header) if header is not None else False
     traces = ET.Element("TraceList", Num=str(len(segments)))
     for item in segments:
         element = ET.SubElement(traces, "Trace", _attrs(
@@ -408,9 +509,18 @@ def _trace_list(segments, layer: str = DEFAULT_LAYER) -> ET.Element | None:
         ET.SubElement(element, "FrequencyList", _attrs(
             Type="float", SigFig="5", Units="MHz", Description="Nominal Frequency",
         )).text = _numbers(item.freq, "{:.3f}")
+        # `Reference` is not optional decoration. A relative axis published as
+        # plain group range is a number a consumer will use, and at DOB the
+        # zero has been wrong by as much as 286,000 km. Differences survive;
+        # the origin does not.
         ET.SubElement(element, "RangeList", _attrs(
             Type="float", SigFig="6", Units="km",
-            Description="Group Range along the oblique path",
+            Reference="relative" if relative else "absolute",
+            Description=(
+                "Group range offsets along the oblique path, relative to an "
+                "unestablished zero -- differences are correct, the origin is "
+                "not" if relative else
+                "Group Range along the oblique path"),
         )).text = _numbers(item.vrange, "{:.1f}")
         if item.weight is not None and len(item.weight):
             ET.SubElement(element, "TraceValueList", _attrs(
@@ -460,7 +570,7 @@ def build_record(
     record.append(_system_info(ion, result.method))
     record.append(_characteristics(ion, result, nose, letter, model,
                                    lof, lof_ladder))
-    traces = _trace_list(segments, layer)
+    traces = _trace_list(segments, layer, header)
     if traces is not None:
         record.append(traces)
     return record
@@ -505,12 +615,21 @@ def records_for(ion, options: Options | None = None, **kwargs) -> list[ET.Elemen
 
 
 def export_file(path, options: Options | None = None, **kwargs) -> ET.Element:
-    """Read one ``.lfs`` sounding and return its ``<SAORecordList>``."""
+    """Read one sounding of either format and return its ``<SAORecordList>``.
+
+    Goes through :mod:`muf.loader` rather than :func:`spectro.compute_cached`,
+    so ``.h5`` exports at all -- calling the ``.lfs`` reader directly made this
+    the last command that could not (``architecture.md`` sec. 3.2).
+    """
+    from .. import interference, loader
+
     options = options or Options()
-    ion = spectro.compute_cached(
-        Path(path), window=options.window, zero_periods=options.zero_periods,
-        gate_km=options.gate_km, cache_dir=options.cache_dir,
+    ion = loader.load(
+        Path(path), options.window, options.zero_periods,
+        options.gate_km, options.cache_dir,
+        format=options.format, stations=options.stations,
     )
+    ion, _ = interference.apply(ion, options)
     return build_document(records_for(ion, options, **kwargs))
 
 
@@ -577,6 +696,15 @@ class Trace:
     group: int | None = None
     hops: int | None = None
     height_km: float | None = None
+    #: ``RangeList/@Reference``. ``"relative"`` means `vrange` differences are
+    #: correct and the origin is not, so these must not be read as group
+    #: range. Defaults to absolute, which is what every record written before
+    #: the attribute existed meant.
+    range_reference: str = "absolute"
+
+    @property
+    def range_is_relative(self) -> bool:
+        return self.range_reference == "relative"
 
     @property
     def n_points(self) -> int:
@@ -603,8 +731,23 @@ class Record:
     scaler: str = ""
     path: dict[str, str] = field(default_factory=dict)
     sweep: dict[str, str] = field(default_factory=dict)
+    #: ``<Acquisition>`` attributes: chirp rate, sample rate, sweep start
+    #: epoch, recorder provenance. Empty for a record written before it
+    #: existed, which is why every reader must treat a missing key as unknown
+    #: rather than defaulting it.
+    acquisition: dict[str, str] = field(default_factory=dict)
     characteristics: list[Characteristic] = field(default_factory=list)
     traces: list[Trace] = field(default_factory=list)
+
+    @property
+    def range_is_relative(self) -> bool:
+        """True when any trace in this record has no trustworthy range zero."""
+        return any(t.range_is_relative for t in self.traces)
+
+    @property
+    def chirp_rate(self) -> float | None:
+        """Hz/s. ``range = c * f_beat / rate``, so nothing checks out without it."""
+        return _float(self.acquisition.get("ChirpRate"))
 
     @property
     def method(self) -> str:
@@ -703,16 +846,20 @@ def _parse_trace(element) -> Trace:
         group=_int(element.get("NoseGroup")),
         hops=_int(element.get("Multiple")),
         height_km=_float(element.get("ReflectionHeight")),
+        range_reference=(ranges.get("Reference", "absolute")
+                         if (ranges := element.find("RangeList")) is not None
+                         else "absolute"),
     )
 
 
 def _parse_record(element) -> Record:
     info = element.find("SystemInfo")
-    scaler = path = sweep = None
+    scaler = path = sweep = acquisition = None
     if info is not None:
         scaler = info.findtext("AutoScaler", "")
         path = info.find("ObliquePath")
         sweep = info.find("Sweep")
+        acquisition = info.find("Acquisition")
 
     characteristics = []
     for group in element.findall("CharacteristicList"):
@@ -731,6 +878,8 @@ def _parse_record(element) -> Record:
         scaler=(scaler or "").strip(),
         path=dict(path.attrib) if path is not None else {},
         sweep=dict(sweep.attrib) if sweep is not None else {},
+        acquisition=(dict(acquisition.attrib)
+                     if acquisition is not None else {}),
         characteristics=characteristics,
         traces=[_parse_trace(t) for t in element.iter("Trace")],
     )
