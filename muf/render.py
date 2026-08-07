@@ -9,6 +9,7 @@ measured are the same array.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import IO
 
 import numpy as np
 import pandas as pd
@@ -83,9 +84,23 @@ def _overlay_trace(ax, segments, reconstruction) -> None:
                 label=f"reconstructed ({reconstruction.rms_residual_km:.1f} km rms)")
 
 
+def _destination(out_path):
+    """A path (whose parent is created) or an already-open binary stream.
+
+    Detected by `write`, not by type: BytesIO, a real file and a socket-backed
+    stream are all valid targets for `savefig` and share no base class worth
+    checking against.
+    """
+    if hasattr(out_path, "write"):
+        return out_path
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    return out_path
+
+
 def plot(
     ion: Ionogram,
-    out_path: str | Path,
+    out_path: str | Path | IO[bytes],
     results: dict[str, MufResult] | None = None,
     vmin_db: float = DEFAULT_VMIN_DB,
     vmax_db: float = DEFAULT_VMAX_DB,
@@ -96,9 +111,15 @@ def plot(
     segments=None,
     reconstruction=None,
 ) -> Path:
-    """Render one ionogram, optionally marking MUFs and the reconstructed trace."""
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    """Render one ionogram, optionally marking MUFs and the reconstructed trace.
+
+    ``out_path`` may be a path or an open binary file. The second is for the
+    on-demand renderer (``architecture.md`` sec. 4.2), which serves a PNG per
+    request and has no reason to touch the filesystem to do it -- a temporary
+    file per request would be an extra failure mode and a cleanup problem in a
+    container.
+    """
+    out_path = _destination(out_path)
 
     plt, (fig, ax) = _figure(figsize)
 

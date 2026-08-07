@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}MUF series{% endblock %}
+{% block hint %}{{ points|length }} point(s){% endblock %}
+{% block body %}
+
+<div class="panel">
+  <h2>MUF against time</h2>
+  <div>
+    {% for m in methods %}
+      <a href="/ui/series?method={{ m }}"
+         class="pill {% if m == method %}ok{% endif %}">{{ m }}</a>
+    {% endfor %}
+    {% if not methods %}<span class="muted">nothing ingested yet</span>{% endif %}
+  </div>
+
+  {% if points %}
+  <svg id="plot" viewBox="0 0 1000 360" style="width:100%;height:auto;margin-top:1rem"></svg>
+  <p class="note">
+    Hollow markers are <b>lower bounds</b> &mdash; the pick sat at the top of the
+    sweep, so the real MUF is at or above it. They are drawn rather than filtered
+    out: dropping them silently would bias the curve high.
+    Click a point to open its ionogram.
+  </p>
+  {% else %}
+  <p class="muted">No picks for this method.</p>
+  {% endif %}
+</div>
+
+{% if points %}
+<script>
+const pts = {{ points|tojson }};
+const svg = document.getElementById('plot');
+const W = 1000, H = 360, L = 55, R = 12, T = 14, B = 34;
+
+const t = pts.map(p => Date.parse(p.datetime.replace(' ', 'T') + 'Z'));
+const y = pts.map(p => p.muf);
+const t0 = Math.min(...t), t1 = Math.max(...t);
+const y0 = 0, y1 = Math.max(...y) * 1.1;
+const X = v => L + (W - L - R) * (t1 === t0 ? 0.5 : (v - t0) / (t1 - t0));
+const Y = v => H - B - (H - T - B) * (v - y0) / (y1 - y0);
+
+const ns = 'http://www.w3.org/2000/svg';
+function el(name, attrs, parent) {
+  const e = document.createElementNS(ns, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(e);
+  return e;
+}
+const css = getComputedStyle(document.body);
+const line = css.getPropertyValue('--line'), dim = css.getPropertyValue('--dim');
+const accent = css.getPropertyValue('--accent');
+
+// axes
+el('line', {x1:L, y1:H-B, x2:W-R, y2:H-B, stroke:line});
+el('line', {x1:L, y1:T,   x2:L,   y2:H-B, stroke:line});
+for (let i = 0; i <= 5; i++) {
+  const v = y0 + (y1 - y0) * i / 5;
+  el('line', {x1:L, y1:Y(v), x2:W-R, y2:Y(v), stroke:line, 'stroke-dasharray':'2 4'});
+  const lab = el('text', {x:L-8, y:Y(v)+4, fill:dim, 'font-size':11, 'text-anchor':'end'});
+  lab.textContent = v.toFixed(1);
+}
+const ylab = el('text', {x:14, y:H/2, fill:dim, 'font-size':11,
+                         transform:`rotate(-90 14 ${H/2})`, 'text-anchor':'middle'});
+ylab.textContent = 'MUF (MHz)';
+for (let i = 0; i <= 4; i++) {
+  const v = t0 + (t1 - t0) * i / 4;
+  const lab = el('text', {x:X(v), y:H-B+16, fill:dim, 'font-size':11, 'text-anchor':'middle'});
+  lab.textContent = new Date(v).toISOString().slice(5, 16).replace('T', ' ');
+}
+
+// points -- hollow where the value is a lower bound
+pts.forEach((p, i) => {
+  const limited = !!p.limited;
+  const c = el('circle', {cx:X(t[i]), cy:Y(p.muf), r:2.6,
+                          fill: limited ? 'none' : accent,
+                          stroke: accent, 'stroke-width': limited ? 1.2 : 0,
+                          style:'cursor:pointer'});
+  const title = el('title', {}, c);
+  title.textContent = `${p.datetime}  ${p.muf.toFixed(2)} MHz`
+    + (limited ? '  (lower bound: pick at the top of the sweep)' : '')
+    + `\n${p.tx} → ${p.rx}`;
+  c.addEventListener('click', () => location.href = '/ui/sounding/' + p.id);
+});
+</script>
+{% endif %}
+{% endblock %}

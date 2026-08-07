@@ -33,3 +33,15 @@ pytest==8.3.4
 # --- Optional: legacy forecasting scripts ------------------------------------
 # data_handler/muf_data_handler.py additionally wants:
 #   pip install statsmodels xgboost
+
+# --- Optional: the api service (services/api/) -------------------------------
+# Only needed to run the server; the muf pipeline and the station agent do not
+# import any of these. `tests/test_api.py` skips itself when fastapi is absent.
+#
+# fastapi and starlette are version-coupled and break loudly when mismatched:
+# on this machine fastapi 0.111.0 against starlette 1.0.0 made a bare
+# `FastAPI()` raise TypeError. Pin both, together.
+fastapi==0.141.1
+starlette==1.0.0
+uvicorn[standard]==0.30.1
+jinja2==3.1.4

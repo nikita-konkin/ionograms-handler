@@ -497,15 +497,27 @@ GET /ionogram/{id}.png            → renderer
 GET /sao/{id}.xml                 → renderer
 GET /forecast?horizon=&from=
 
-GET  /health/stations                  latest status per station
-GET  /health/stations/{id}/history     for trends and alerting
-POST /health/report                    ← station agent pushes here
+GET  /stations                         latest status per station, with age
+GET  /stations/{id}/health             latest report and recent commands
+GET  /stations/{id}/health/history     for trends and alerting
 
+POST /stations/health                  ← station agent pushes here
+GET  /stations/{id}/commands           ← agent pulls pending work
+POST /stations/{id}/commands/{cid}/ack ← agent reports what it did
+
+POST /stations/{id}/commands           authed, queue start | stop | restart
 GET  /stations/{id}/schedule           authed
 POST /stations/{id}/schedule           authed, writes a config_epoch row
-POST /stations/{id}/acquisition        authed, start | stop
 POST /stations/{id}/transfer           authed, trigger sync
 ```
+
+> **The three agent paths were corrected to match `services/agent/client.py`.**
+> This section originally proposed `POST /health/report`. The agent that got
+> built posts to `/stations/health` and pulls from `/stations/{id}/commands`,
+> and it is the deployed half — it lives on an acquisition laptop reached over
+> AnyDesk, where a redeploy is a manual errand. The server serves what the
+> client speaks. `tests/test_api.py` drives the real client against the real
+> routes so the two cannot silently desynchronise again.
 
 One surface across acquisition, extraction and forecasting — but **separate
 auth scopes**. Public read of soundings and forecasts must not share a scope
@@ -672,8 +684,43 @@ to being the multi-station enabler and can wait.
 
 *Exit:* v2 MUF agrees with v1 MUF on `cyprus1` within a stated tolerance.
 
+### M2.5 — Docker test rig **[done 2026-08-07]**
+
+Not originally a milestone. It exists because M3, M4 and the control half of
+M5 could not be evaluated separately: the station agent was built and tested,
+and there was nothing for it to talk to, so the loop that matters — push,
+pull, execute, acknowledge — had never run end to end.
+
+Deliberately throwaway, and it takes the shortcuts a temporary thing should:
+SQLite rather than Postgres, stdlib SQL rather than an ORM, Jinja rather than
+a JavaScript build, one process rather than a queue.
+
+- `services/api/` — the §5.2 schema on SQLite, the three agent endpoints, read
+  endpoints, on-demand ionogram rendering, two auth scopes
+- `deploy/` — compose file, an api image and a **simulated station** running
+  the real agent
+- `tests/test_api.py` — including one test that drives the real
+  `services.agent.runner` against the real routes
+
+What it settled, which is the point of building it:
+
+- **The endpoint paths in §4.3 were wrong.** The agent posts to
+  `/stations/health`, not `/health/report`. Found at integration, corrected in
+  the doc, and now covered by a test.
+- **`render.plot` could not write to a stream**, so §4.2's "render on request"
+  needed a temporary file per request. It takes a file object now.
+- **The tri-state metric survives SQL only if you make it.** `health_metric.ok`
+  is nullable end to end; a boolean column would turn "could not measure" into
+  "failing" somewhere between the station and the screen.
+
+*Exit:* an operator can see station health and queue a restart in a browser,
+and 318 of 319 real v2 soundings load into the schema. **Superseded by M3 and
+M4, which should not inherit its shortcuts.**
+
 ### M3 — Database and extractor
-- Schema per §5.2, plus loader (port `data_handler/muf_load_to_db.py`)
+- Schema per §5.2 — **now exercised**; `services/api/schema.sql` is the SQLite
+  form and the ingest path from `pipeline` output is written and tested
+- Postgres, migrations, and a real queue worker: none of which M2.5 has
 - Extractor as a queue worker wrapping the existing `muf` CLI
 - Backfill historical `.lfs` extractions
 
@@ -681,12 +728,17 @@ Backfill is no longer urgent — the dissertation dataset is already in hand —
 this is infrastructure for what comes next, not a deliverable in itself.
 
 ### M4 — API and web, read-only
-- Health views, ionogram browse, MUF/LOF series
+- Health views, ionogram browse, MUF/LOF series — **prototyped in M2.5**
 - Answers "is it running?" without AnyDesk
+- What M2.5 does not have: TLS, sessions, pagination beyond a limit, any
+  caching of rendered products
 
 ### M5 — Multi-station cutover and control
 - Enable opportunistic detection across transmitters
-- Control endpoints, auth, `config_epoch` (§2.5)
+- Control endpoints, auth, `config_epoch` (§2.5). M2.5 routes **start/stop/
+  restart only**; `control.py`'s validated parameter edits are implemented and
+  deliberately not exposed, because a parameter change rewrites the station's
+  `.ini` and needs a restart to take effect
 - Retire v1 **only once the web client covers what operators actually use** —
   watch usage over M4 rather than building for feature parity
 

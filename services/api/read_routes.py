@@ -1,0 +1,278 @@
+"""Read endpoints: soundings, series, health views, ionograms.
+
+``architecture.md`` sec. 4.3, read scope only. Nothing here can change the
+station.
+
+Ionograms are rendered **on request** (sec. 4.2). 288 images a day
+precomputed is 105k files a year that mostly nobody opens; rendering from the
+stored product is about 0.2 s, and the file is on disk anyway.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
+
+from . import db
+from .auth import require_read
+
+router = APIRouter(tags=["read"], dependencies=[Depends(require_read)])
+
+#: Soundings returned when the caller does not say. High enough to draw a day,
+#: low enough that a bare `/soundings` cannot pull the whole archive into one
+#: response.
+DEFAULT_LIMIT = 500
+MAX_LIMIT = 5000
+
+
+@router.get("/stations")
+def list_stations(request: Request) -> dict:
+    """Every station, its latest report, and how long ago it arrived.
+
+    ``age_s`` is the number the operator actually reads. Under sec. 5.4
+    silence is the alert, so a station that stopped reporting must be visible
+    as *stale*, not merely as whatever it last claimed.
+    """
+    conn = request.app.state.db
+    out = []
+    for station in db.stations(conn):
+        latest = db.latest_health(conn, station)
+        entry: dict = {"station": station, "last_report": None, "age_s": None,
+                       "healthy": None, "failing": 0, "unknown": 0, "ok": 0}
+        if latest:
+            metrics = db.metrics_for(conn, int(latest["id"]))
+            entry.update(
+                last_report=latest["received_at"],
+                age_s=_age_seconds(latest["received_at"]),
+                healthy=_tri(latest["healthy"]),
+                agent_version=latest["agent_version"],
+                failing=sum(1 for m in metrics if m["ok"] == 0),
+                unknown=sum(1 for m in metrics if m["ok"] is None),
+                ok=sum(1 for m in metrics if m["ok"] == 1),
+            )
+        out.append(entry)
+    return {"stations": out}
+
+
+@router.get("/stations/{station}/health")
+def station_health(station: str, request: Request) -> dict:
+    """Latest report and recent commands for one station.
+
+    A station with queued commands but no report yet is **not** a 404. It
+    appears in ``/stations`` the moment a command is queued for it, so 404ing
+    the detail view would make the list link to a page that denies the station
+    exists -- and "commanded but never reported" is a state worth looking at,
+    not one to hide. Only a name with neither reports nor commands is unknown.
+    """
+    conn = request.app.state.db
+    latest = db.latest_health(conn, station)
+    commands = [_command(c) for c in db.recent_commands(conn, station)]
+    if latest is None and not commands:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no reports and no commands for {station!r}")
+
+    if latest is None:
+        return {"station": station, "received_at": None, "age_s": None,
+                "healthy": None, "agent_version": None, "metrics": [],
+                "commands": commands,
+                "note": "commands queued, but this station has never reported"}
+
+    return {
+        "station": station,
+        "received_at": latest["received_at"],
+        "age_s": _age_seconds(latest["received_at"]),
+        "healthy": _tri(latest["healthy"]),
+        "agent_version": latest["agent_version"],
+        "metrics": [
+            {**m, "ok": _tri(m["ok"])} for m in db.metrics_for(conn, int(latest["id"]))
+        ],
+        "commands": commands,
+    }
+
+
+@router.get("/stations/{station}/health/history")
+def station_history(station: str, request: Request,
+                    limit: int = Query(200, ge=1, le=5000)) -> dict:
+    """Report-level history, for trends and for spotting gaps."""
+    rows = db.rows(request.app.state.db,
+                   "SELECT id, received_at, healthy FROM health_report"
+                   " WHERE station = ? ORDER BY received_at DESC LIMIT ?",
+                   (station, limit))
+    return {"station": station,
+            "history": [{"received_at": r["received_at"],
+                         "healthy": _tri(r["healthy"])} for r in rows]}
+
+
+@router.get("/soundings")
+def soundings(request: Request,
+              tx: str | None = None, rx: str | None = None,
+              start: str | None = Query(None, alias="from"),
+              end: str | None = Query(None, alias="to"),
+              limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)) -> dict:
+    sql = ["SELECT * FROM sounding WHERE 1 = 1"]
+    params: list = []
+    for column, value in (("tx", tx), ("rx", rx)):
+        if value:
+            sql.append(f"AND {column} = ?")
+            params.append(value)
+    if start:
+        sql.append("AND datetime >= ?")
+        params.append(start)
+    if end:
+        sql.append("AND datetime <= ?")
+        params.append(end)
+    sql.append("ORDER BY datetime LIMIT ?")
+    params.append(limit)
+
+    found = db.rows(request.app.state.db, " ".join(sql), tuple(params))
+    return {"count": len(found), "soundings": found}
+
+
+@router.get("/series/muf")
+def series_muf(request: Request,
+               method: str = "algo",
+               tx: str | None = None, rx: str | None = None,
+               start: str | None = Query(None, alias="from"),
+               end: str | None = Query(None, alias="to"),
+               smoothed: bool = False,
+               limit: int = Query(MAX_LIMIT, ge=1, le=MAX_LIMIT)) -> dict:
+    """MUF against time for one estimator.
+
+    ``limited`` travels with every point rather than being filtered out here.
+    A midday lower bound is a real observation and dropping it silently would
+    bias the series high; the caller decides what to do with it, having been
+    told. See ``BACKLOG.md`` sec. 3.
+    """
+    column = "e.muf_smooth" if smoothed else "e.muf"
+    sql = ["SELECT s.id, s.datetime, s.tx, s.rx,", column, "AS muf,",
+           "e.lof, e.snr, e.run, e.limited, e.loflim",
+           "FROM extraction e JOIN sounding s ON s.id = e.sounding_id",
+           "WHERE e.method = ? AND", column, "IS NOT NULL"]
+    params: list = [method]
+    for name, value in (("s.tx", tx), ("s.rx", rx)):
+        if value:
+            sql.append(f"AND {name} = ?")
+            params.append(value)
+    if start:
+        sql.append("AND s.datetime >= ?")
+        params.append(start)
+    if end:
+        sql.append("AND s.datetime <= ?")
+        params.append(end)
+    sql.append("ORDER BY s.datetime LIMIT ?")
+    params.append(limit)
+
+    points = db.rows(request.app.state.db, " ".join(sql), tuple(params))
+    return {"method": method, "smoothed": smoothed,
+            "count": len(points), "points": points}
+
+
+@router.get("/methods")
+def methods(request: Request) -> dict:
+    rows = db.rows(request.app.state.db,
+                   "SELECT method, COUNT(*) AS n,"
+                   " SUM(CASE WHEN muf IS NOT NULL THEN 1 ELSE 0 END) AS picks"
+                   " FROM extraction GROUP BY method ORDER BY method")
+    return {"methods": rows}
+
+
+@router.get("/ionogram/{sounding_id}.png")
+def ionogram(sounding_id: int, request: Request,
+             gate: str | None = None,
+             trace: bool = False,
+             muf: bool = True,
+             dpi: int = Query(110, ge=40, le=300)) -> Response:
+    """Render one sounding on demand.
+
+    ``gate=auto`` fits the range window to where the echo is, which is what
+    makes a search-mode v2 product legible at all -- its stored axis is
+    +/-3998 km and the trace occupies a few hundred.
+    """
+    row = db.one(request.app.state.db,
+                 "SELECT * FROM sounding WHERE id = ?", (sounding_id,))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such sounding")
+
+    path = Path(row["path"])
+    if not path.is_absolute():
+        path = Path(request.app.state.archive_root) / path
+    if not path.is_file():
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            f"{row['file']} is in the database but not on disk at {path}. "
+            f"Check ARCHIVE_ROOT matches the root it was ingested with.")
+
+    png = _render(path, gate=gate, trace=trace, muf=muf, dpi=dpi)
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+def _render(path: Path, *, gate, trace, muf, dpi) -> bytes:
+    import matplotlib
+    matplotlib.use("Agg")                      # no display in a container
+
+    from muf import calibrate, extractors, loader, render
+
+    ion = loader.load(path)
+    if gate == "auto":
+        found = calibrate.auto_gate(ion.power, ion.cal.vrange)
+        if found is not None:
+            ion = ion.regated(*found)
+    elif gate:
+        lo, hi = (float(part) for part in gate.split(","))
+        ion = ion.regated(lo, hi)
+
+    results = extractors.run(ion) if muf else None
+    segments = reconstruction = None
+    if trace and results:
+        from muf import fit as fit_module, geometry, trace as trace_module
+
+        best = next((r for r in results.values() if r.ok), None)
+        if best is not None:
+            _, _, ground = geometry.path_of(ion.header)
+            freq, vrange, weight = trace_module.extract_points(ion, best)
+            segments, reconstruction = trace_module.analyse(
+                freq, vrange, ground, weight=weight)
+
+    buffer = io.BytesIO()
+    render.plot(ion, buffer, results, axes=True, dpi=dpi,
+                segments=segments, reconstruction=reconstruction)
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
+# helpers
+# --------------------------------------------------------------------------
+
+def _tri(value):
+    """SQLite integer back to a tri-state. ``None`` stays ``None``."""
+    return None if value is None else bool(value)
+
+
+def _age_seconds(received_at: str | None) -> float | None:
+    from datetime import datetime, timezone
+
+    if not received_at:
+        return None
+    try:
+        when = datetime.strptime(received_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return round((datetime.now(timezone.utc) - when).total_seconds(), 1)
+
+
+def _command(row: dict) -> dict:
+    return {
+        "id": row["id"], "name": row["name"],
+        "params": json.loads(row["params"] or "{}"),
+        "issued_at": row["issued_at"], "issued_by": row["issued_by"],
+        "delivered_at": row["delivered_at"], "acked_at": row["acked_at"],
+        "ok": _tri(row["ok"]),
+        "state": ("acked" if row["acked_at"] else
+                  "delivered" if row["delivered_at"] else "pending"),
+    }

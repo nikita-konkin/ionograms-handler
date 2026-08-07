@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}soundings{% endblock %}
+{% block hint %}{{ total }} in the database{% endblock %}
+{% block body %}
+<div class="panel">
+  <h2>soundings</h2>
+  <div class="scroll"><table>
+    <tr><th>time (UTC)</th><th>tx &rarr; rx</th><th>format</th>
+        <th>sweep MHz</th><th>gate km</th><th>complete</th><th>picks</th><th></th></tr>
+    {% for s in soundings %}
+    <tr>
+      <td>{{ s.datetime }}</td>
+      <td>{{ s.tx }} &rarr; {{ s.rx }}</td>
+      <td class="muted">{{ s.format or '?' }}</td>
+      <td class="muted">{{ '%.2f'|format(s.freq_start or 0) }}&ndash;{{ '%.2f'|format(s.freq_stop or 0) }}</td>
+      <td class="muted">{{ '%.0f'|format(s.gate_lo or 0) }}&ndash;{{ '%.0f'|format(s.gate_hi or 0) }}</td>
+      <td>{% if s.sweep_complete %}<span class="pill ok">yes</span>
+          {% else %}<span class="pill fail">{{ '%.0f'|format(100 * (s.sweep_fraction or 0)) }}%</span>{% endif %}</td>
+      <td>{{ s.n_picks }}/{{ s.n_methods }}</td>
+      <td><a href="/ui/sounding/{{ s.id }}">open</a></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+
+  <p style="margin-top:.8rem">
+    {% if offset > 0 %}
+      <a href="/ui/soundings?limit={{ limit }}&offset={{ [offset - limit, 0]|max }}">&larr; previous</a>
+    {% endif %}
+    <span class="muted">{{ offset + 1 }}&ndash;{{ offset + soundings|length }} of {{ total }}</span>
+    {% if offset + limit < total %}
+      <a href="/ui/soundings?limit={{ limit }}&offset={{ offset + limit }}">next &rarr;</a>
+    {% endif %}
+  </p>
+</div>
+{% endblock %}

@@ -1,0 +1,37 @@
+# What the api container installs.
+#
+# Separate from the repository's `requirements.txt` for two reasons, and the
+# second is the one that bit:
+#
+#   * A server image has no business carrying pytest.
+#   * `requirements.txt` documents the *development machine* -- versions
+#     "verified working on Python 3.12.10 on Windows". Several of those pins
+#     are Windows wheel versions with no Linux counterpart at the same number,
+#     so installing that file verbatim inside a Linux container asks pip to
+#     resolve a set that was never meant to co-exist there.
+#
+# Pinned to majors, not to the development machine's patch versions. The
+# pipeline's numerics do not turn on a scipy patch release, and a container
+# that cannot be rebuilt six months from now is worse than one that drifts.
+
+# --- pipeline ---------------------------------------------------------------
+numpy>=1.26,<2.0
+scipy>=1.13,<2.0
+pandas>=2.2,<3.0
+scikit-learn>=1.5,<2.0
+matplotlib>=3.8,<4.0
+pyarrow>=16.0
+tqdm>=4.66
+
+# Headless: the api never opens a window, and opencv-python drags in GUI
+# shared libraries that then have to be installed with apt. The -headless
+# build is the same cv2 without them.
+opencv-python-headless>=4.10,<5.0
+
+# --- service ----------------------------------------------------------------
+# fastapi and starlette are version-coupled and break loudly when mismatched:
+# fastapi 0.111.0 against starlette 1.0.0 makes a bare `FastAPI()` raise
+# TypeError. Let pip pick the pair rather than pinning one of them.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+jinja2>=3.1

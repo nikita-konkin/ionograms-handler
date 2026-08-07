@@ -1453,8 +1453,14 @@ muf/                    the pipeline
   export/               saoxml.py -- SAO.XML 5.0 write and read, for interchange
   pipeline.py           per-file and per-day driving, parallelism
   compare.py            agreement metrics and reports
+  interference.py       rejecting burst rows that cannot be echoes
   render.py, cli.py
-tests/                  285 tests; `python -m pytest tests -q`
+services/
+  agent/                runs ON the station: health push, control, logs
+  api/                  runs on the server: health ingest, read API, web UI
+patches/                diffs against the pinned chirpsounder2 clone
+deploy/                 Docker Compose test rig -- see deploy/README.md
+tests/                  469 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1473,6 +1479,39 @@ regression pinning and for physical plausibility instead.
 The original scripts (`MUF.py`, `stuffr.py`, `muf_interpolation.py`,
 `data_handler/`, …) are untouched and still present for reference. They need
 `psycopg2` and a reachable PostgreSQL server; the `muf/` pipeline needs neither.
+
+---
+
+## Running the server
+
+A temporary Docker rig brings up the api, the web console and a simulated
+station. Full instructions, including how to point the real acquisition laptop
+at it, are in **[`deploy/README.md`](deploy/README.md)**.
+
+```bash
+cp deploy/.env.example deploy/.env          # set CONTROL_TOKEN
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
+```
+
+Then <http://127.0.0.1:8000/ui>. The console is empty until an archive is
+ingested:
+
+```bash
+python -m services.api.ingest F:/MyData/ND/lfs/ionozond_data2/2026-08-05 \
+    --db data/ionograms.sqlite3 --archive-root F:/MyData/ND/lfs \
+    --methods algo,kmeans,contour
+```
+
+Two things about it worth knowing before you rely on it. **`CONTROL_TOKEN`
+unset disables control rather than opening it** — a missing secret must never
+be the same as a granted one, since these endpoints can stop a radio. And the
+service **binds to `127.0.0.1` by default**; reaching it from the sounding
+laptop means naming a LAN address on purpose, or tunnelling, which
+`deploy/README.md` covers.
+
+It is deliberately throwaway: SQLite, plain HTTP, no migrations. See
+`architecture.md` §6 M2.5 for what it settled and what M3/M4 should not
+inherit from it.
 
 ---
 

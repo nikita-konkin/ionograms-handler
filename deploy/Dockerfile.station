@@ -1,0 +1,36 @@
+# A simulated station: the *real* agent, in a container.
+#
+# Nothing here is a mock. `python -m services.agent run` is exactly what runs on
+# the acquisition laptop, so the push/pull loop, the JSON document, the command
+# dispatch and the acknowledgement are all genuinely exercised.
+#
+# Two things a container cannot provide, and the agent reports both correctly
+# rather than pretending:
+#
+#   * no systemd  -> `systemctl` is absent, so unit states come back UNKNOWN.
+#     That is the tri-state working as designed; set AGENT_FAKE_SYSTEMCTL=1 to
+#     demonstrate the command path anyway.
+#   * no journald -> `journalctl` is absent, so log reads return an error
+#     string instead of lines.
+#
+# Slim is fine here: the agent is urllib and stdlib. `muf` is installed only so
+# the epoch-offset metric can import io_detect; it is disabled in the sim
+# config because there are no par-*.h5 to solve against.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN pip install --no-cache-dir "numpy==1.26.4" "h5py==3.11.0"
+
+COPY muf/ /app/muf/
+COPY services/ /app/services/
+
+RUN useradd --create-home --uid 10002 station \
+ && mkdir -p /var/lib/station/products /etc/agent \
+ && chown -R station:station /var/lib/station /etc/agent
+USER station
+
+CMD ["python", "-m", "services.agent", "run"]

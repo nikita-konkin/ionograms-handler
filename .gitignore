@@ -176,3 +176,6 @@ imgs/
 database.ini
 database_to.ini
 database2.ini
+data/
+deploy/.env
+*.sqlite3

@@ -72,6 +72,25 @@ class CommandResult:
 ALLOWED_VERBS = ("start", "stop", "restart", "status", "is-active")
 
 
+#: Set ``AGENT_FAKE_SYSTEMCTL=1`` to log verbs instead of running them.
+#:
+#: For the Docker test rig, where the agent runs in a container that has no
+#: systemd -- ``systemctl`` is simply absent, so every control command would
+#: report "not found" and the command path could never be demonstrated end to
+#: end. Named for what it is, off unless explicitly asked for, and it prints
+#: every call so a fake success can never be mistaken for a real one.
+FAKE_SYSTEMCTL_ENV = "AGENT_FAKE_SYSTEMCTL"
+
+
+def _fake_runner(args, **kwargs):
+    import sys
+
+    print(f"agent: FAKE systemctl {' '.join(args[1:])} "
+          f"(AGENT_FAKE_SYSTEMCTL is set; nothing was actually done)",
+          file=sys.stderr)
+    return subprocess.CompletedProcess(args, 0, "", "")
+
+
 def systemctl(verb: str, target: str, *, timeout: float = 120.0,
               runner=None) -> CommandResult:
     """One systemctl verb against one unit or target.
@@ -84,6 +103,8 @@ def systemctl(verb: str, target: str, *, timeout: float = 120.0,
         raise ControlError(
             f"verb {verb!r} is not allowed; choose from {', '.join(ALLOWED_VERBS)}")
 
+    if runner is None and os.environ.get(FAKE_SYSTEMCTL_ENV, "").strip() not in ("", "0"):
+        runner = _fake_runner
     runner = runner or subprocess.run
     args = ["systemctl", verb, target]
     try:

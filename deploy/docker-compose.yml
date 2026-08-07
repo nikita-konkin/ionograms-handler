@@ -1,0 +1,53 @@
+# Temporary test rig: api + web on one host, plus a simulated station.
+#
+#   cp deploy/.env.example deploy/.env   and edit it
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
+#
+# BIND_ADDR defaults to 127.0.0.1. This service can stop acquisition on a
+# radio, so reaching it from the sounding laptop is a deliberate act: set
+# BIND_ADDR to the LAN address of this machine, and understand that the only
+# thing between the LAN and the stop button is CONTROL_TOKEN over plain HTTP.
+# Across untrusted networks, tunnel it instead -- see deploy/README.md.
+
+name: ionograms
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      ARCHIVE_ROOT: /archive
+      READ_TOKEN: "${READ_TOKEN:-}"
+      CONTROL_TOKEN: "${CONTROL_TOKEN:?set CONTROL_TOKEN in deploy/.env}"
+    volumes:
+      - api-data:/data
+      # Read-only, and it stays read-only. The api renders from the archive and
+      # has no business writing to it.
+      - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
+    restart: unless-stopped
+
+  station-sim:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.station
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      AGENT_CONFIG: /etc/agent/station.json
+      # Log the verb instead of running it: there is no systemd in here, so
+      # without this the command path can be queued and delivered but never
+      # seen to succeed.
+      AGENT_FAKE_SYSTEMCTL: "1"
+    volumes:
+      - ./station-sim.json:/etc/agent/station.json:ro
+      - sim-products:/var/lib/station/products
+    restart: unless-stopped
+
+volumes:
+  api-data:
+  sim-products:

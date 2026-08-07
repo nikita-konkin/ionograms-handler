@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Agent config for the REAL acquisition laptop. Copy to the station as",
+    "/etc/agent/station.json (or anywhere, and point AGENT_CONFIG at it):",
+    "",
+    "  scp deploy/station-dob.json.example ionouser@<laptop>:~/agent.json",
+    "  # edit server_url and token, then:",
+    "  cd ~/chirpsounder2 && source .venv38/bin/activate",
+    "  AGENT_CONFIG=~/agent.json python -m services.agent health",
+    "",
+    "The agent is Python 3.8 clean, so the station's .venv38 runs it. It needs",
+    "the ionograms-handler repo on PYTHONPATH for `services` and `muf`.",
+    "",
+    "server_url must be reachable FROM the laptop. Health is pushed and",
+    "commands are pulled, so the laptop only ever makes outbound connections",
+    "and never needs an inbound port -- but the server does. See",
+    "deploy/README.md for the two network cases."
+  ],
+
+  "station": "DOB",
+  "server_url": "http://<work-pc-lan-ip>:8000",
+  "token": "<the CONTROL_TOKEN from deploy/.env>",
+  "push_interval_s": 60,
+
+  "chirp_config": "/home/ionouser/chirpsounder2/examples/marieluise/dombas.ini",
+  "output_dir": "/media/ionouser/DATA3/ionozond_data2",
+  "ringbuffer_dir": "/dev/shm/hf25",
+
+  "units": [
+    "chirp-rx.service",
+    "chirp-detect.service",
+    "chirp-timings.service",
+    "chirp-ionograms.service",
+    "chirp-metadata.service"
+  ],
+  "target": "chirp.target",
+
+  "startup_grace_s": 300,
+  "expected_sample_rate": 25000000,
+
+  "reference_tx": {
+    "name": "cyprus1",
+    "rate": 100000.0,
+    "transmit_seconds": [235, 240, 245, 300],
+    "distance_km": 3436.0,
+    "cycle_s": 300.0,
+    "window_s": 2.0
+  }
+}

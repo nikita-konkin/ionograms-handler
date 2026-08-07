@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}station console{% endblock %}
+{% block hint %}auto-refresh 15 s{% endblock %}
+{% block body %}
+
+<div class="panel">
+  <h2>archive</h2>
+  <span class="muted">{{ n_soundings }} sounding(s) ingested.</span>
+  {% for m in methods %}
+    <span class="pill">{{ m.method }} &middot; {{ m.picks }}/{{ m.n }} picks</span>
+  {% endfor %}
+  {% if not methods %}<span class="muted">no extractions yet &mdash;
+    run <code>python -m services.api.ingest &lt;archive&gt;</code></span>{% endif %}
+</div>
+
+{% if not stations %}
+<div class="panel">
+  <h2>no stations</h2>
+  <p class="muted">Nothing has pushed a health report yet. Start the agent with
+  <code>server_url</code> pointing here and it will appear within one push
+  interval.</p>
+</div>
+{% endif %}
+
+{% for s in stations %}
+<div class="panel">
+  <h2>
+    {{ s.name }}
+    {% if s.stale %}
+      <span class="pill fail">STALE</span>
+    {% elif s.healthy %}
+      <span class="pill ok">HEALTHY</span>
+    {% else %}
+      <span class="pill fail">UNHEALTHY</span>
+    {% endif %}
+    <span class="muted" style="font-weight:normal">
+      {% if s.age_s is not none %}last report {{ '%.0f'|format(s.age_s) }} s ago{%
+      else %}never reported{% endif %}
+      {% if s.agent_version %} &middot; agent {{ s.agent_version }}{% endif %}
+    </span>
+  </h2>
+
+  {% if s.stale %}
+  <p class="note">Nothing has arrived for more than {{ '%.0f'|format(stale_after) }} s.
+  Health is pushed, so silence is itself the alert &mdash; the metrics below are
+  the last ones received, not the current state.</p>
+  {% endif %}
+
+  <div class="scroll"><table>
+    <tr><th></th><th>metric</th><th>value</th><th>detail</th></tr>
+    {% for m in s.metrics %}
+    <tr>
+      <td>{% if m.ok is none %}<span class="pill unk">?</span>
+          {% elif m.ok %}<span class="pill ok">ok</span>
+          {% else %}<span class="pill fail">FAIL</span>{% endif %}</td>
+      <td>{{ m.name }}</td>
+      <td>{{ m.value if m.value is not none else '&mdash;'|safe }}</td>
+      <td class="wrap">{{ m.detail }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+
+  <p class="note" style="margin-top:.8rem">
+    Grey <span class="pill unk">?</span> is <b>unknown</b>, not fine: the agent
+    could not measure it. Only a definite failure makes a station unhealthy.
+  </p>
+
+  <div style="margin-top:.8rem">
+    <button onclick="send('{{ s.name }}','start')">start</button>
+    <button onclick="send('{{ s.name }}','stop')">stop</button>
+    <button onclick="send('{{ s.name }}','restart')">restart</button>
+    <span class="note">queued now, collected on the station's next pull</span>
+  </div>
+
+  {% if s.commands %}
+  <div class="scroll" style="margin-top:.8rem"><table>
+    <tr><th>command</th><th>state</th><th>issued</th><th>acked</th><th>result</th></tr>
+    {% for c in s.commands %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td>{% if c.state == 'acked' %}
+            {% if c.ok %}<span class="pill ok">acked</span>
+            {% else %}<span class="pill fail">failed</span>{% endif %}
+          {% elif c.state == 'delivered' %}<span class="pill unk">delivered</span>
+          {% else %}<span class="pill">pending</span>{% endif %}</td>
+      <td class="muted">{{ c.issued_at }}</td>
+      <td class="muted">{{ c.acked_at or '&mdash;'|safe }}</td>
+      <td class="wrap">{{ c.params if c.params else '' }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="panel">
+  <h2>control token</h2>
+  <input id="tok" type="password" size="40" placeholder="CONTROL_TOKEN"
+         oninput="sessionStorage.setItem('tok', this.value)">
+  <span class="note">Held in this tab only (sessionStorage), never baked into
+  the page. Required for start/stop/restart.</span>
+</div>
+
+<script>
+  const tokField = document.getElementById('tok');
+  tokField.value = sessionStorage.getItem('tok') || '';
+
+  async function send(station, name) {
+    const token = tokField.value.trim();
+    if (!token) { alert('Paste the control token first.'); return; }
+    if (name === 'stop' && !confirm(
+        'Stop acquisition on ' + station + '?\n\n' +
+        'The recorder is stopped with SIGINT so the USRP is released cleanly. ' +
+        'Nothing will be recorded until it is started again.')) return;
+    const r = await fetch('/stations/' + encodeURIComponent(station) + '/commands', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token},
+      body: JSON.stringify({name: name, issued_by: 'web'})
+    });
+    const body = await r.json().catch(() => ({}));
+    alert(r.ok ? (name + ' queued (' + (body.id || '').slice(0, 8) + ')')
+               : ('refused: ' + (body.detail || r.status)));
+    if (r.ok) setTimeout(() => location.reload(), 400);
+  }
+
+  // Poll rather than push: this page has one reader and a 15 s refresh is
+  // cheaper in every sense than a websocket that must be reconnected.
+  setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

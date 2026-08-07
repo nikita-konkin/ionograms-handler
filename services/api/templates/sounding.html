@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ sounding.file if sounding else 'not found' }}{% endblock %}
+{% block body %}
+
+{% if not sounding %}
+<div class="panel"><h2>not found</h2></div>
+{% else %}
+
+<div class="panel">
+  <h2>{{ sounding.file }}</h2>
+  <div class="scroll"><table>
+    <tr><th>time (UTC)</th><td>{{ sounding.datetime }}</td>
+        <th>path</th><td>{{ sounding.tx }} &rarr; {{ sounding.rx }}
+            {% if sounding.path_km %}({{ '%.0f'|format(sounding.path_km) }} km,
+            {{ sounding.path_type }}){% endif %}</td></tr>
+    <tr><th>format</th><td>{{ sounding.format or '?' }}</td>
+        <th>sweep</th><td>{{ '%.3f'|format(sounding.freq_start or 0) }}&ndash;{{ '%.3f'|format(sounding.freq_stop or 0) }} MHz
+            {% if not sounding.sweep_complete %}
+            <span class="pill fail">{{ '%.0f'|format(100 * (sounding.sweep_fraction or 0)) }}% complete</span>
+            {% endif %}</td></tr>
+    <tr><th>gate</th><td>{{ '%.0f'|format(sounding.gate_lo or 0) }}&ndash;{{ '%.0f'|format(sounding.gate_hi or 0) }} km</td>
+        <th>file</th><td class="muted">{{ sounding.path }}</td></tr>
+  </table></div>
+</div>
+
+<div class="panel">
+  <h2>ionogram</h2>
+  <span class="note">range gate:</span>
+  <a class="pill {% if gate == 'auto' %}ok{% endif %}"
+     href="/ui/sounding/{{ sounding.id }}?gate=auto">auto</a>
+  <a class="pill {% if gate != 'auto' %}ok{% endif %}"
+     href="/ui/sounding/{{ sounding.id }}?gate=full">full</a>
+  <span class="note">&mdash; <b>auto</b> fits the window to where the echo is.
+  A search-mode v2 product stores &plusmn;3998 km while the trace occupies a few
+  hundred, so at full extent it is a hairline in an empty field.</span>
+
+  <p style="margin-top:.8rem">
+    <img class="iono" loading="lazy" alt="ionogram"
+         src="/ionogram/{{ sounding.id }}.png?trace=true{% if gate == 'auto' %}&gate=auto{% endif %}">
+  </p>
+  <p class="note">Rendered on request, not precomputed &mdash; 288 images a day
+  precomputed is 105k files a year that mostly nobody opens.</p>
+</div>
+
+<div class="panel">
+  <h2>extractions</h2>
+  <div class="scroll"><table>
+    <tr><th>method</th><th>MUF</th><th>LOF</th><th>range km</th><th>SNR dB</th>
+        <th>run</th><th>hops</th><th>scatter</th><th>flags</th></tr>
+    {% for e in extractions %}
+    <tr>
+      <td>{{ e.method }}</td>
+      <td>{% if e.muf is not none %}{{ '%.2f'|format(e.muf) }}{% else %}
+          <span class="muted">no pick</span>{% endif %}</td>
+      <td>{% if e.lof is not none %}{{ '%.2f'|format(e.lof) }}{% else %}&mdash;{% endif %}</td>
+      <td>{% if e.vrange is not none %}{{ '%.0f'|format(e.vrange) }}{% else %}&mdash;{% endif %}</td>
+      <td>{% if e.snr is not none %}{{ '%.1f'|format(e.snr) }}{% else %}&mdash;{% endif %}</td>
+      <td>{{ e.run if e.run is not none else '&mdash;'|safe }}</td>
+      <td>{{ e.hops if e.hops is not none else '&mdash;'|safe }}</td>
+      <td>{% if e.scatter is not none %}{{ '%.1f'|format(e.scatter) }}{% else %}&mdash;{% endif %}</td>
+      <td>
+        {% if e.limited %}<span class="pill unk" title="pick at the top of the sweep: the MUF is a lower bound">limited</span>{% endif %}
+        {% if e.loflim %}<span class="pill unk" title="LOF ran off the bottom of the band">loflim</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  <p class="note">Quality columns travel with the value, never separately. A
+  <b>limited</b> MUF is a lower bound, not a measurement.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,15 @@
+{
+  "station": "SIM",
+  "server_url": "http://api:8000",
+  "token": "CHANGE_ME_TO_MATCH_CONTROL_TOKEN",
+  "push_interval_s": 15,
+
+  "chirp_config": "/etc/agent/absent.ini",
+  "output_dir": "/var/lib/station/products",
+  "ringbuffer_dir": "/dev/shm",
+
+  "startup_grace_s": 30,
+  "expected_sample_rate": 25000000,
+
+  "reference_tx": {}
+}
