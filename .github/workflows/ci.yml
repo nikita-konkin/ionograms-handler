@@ -61,19 +61,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Registry credentials are a repository setting, not something the code
+      # can carry, so a fresh clone and a fork both arrive here without them.
+      # Checked first and reported as a notice, because the alternative is
+      # `login-action` failing with "Username and password required" -- true,
+      # but it names neither the secret nor where to put it, and it turns a
+      # green pipeline red for a reason that has nothing to do with the commit.
+      - id: creds
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Images not published::Set the repository secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Settings -> Secrets and variables -> Actions) to publish. Tests ran and passed; only the push was skipped."
+            {
+              echo "### Images not published"
+              echo
+              echo "\`DOCKERHUB_USERNAME\` and \`DOCKERHUB_TOKEN\` are not set on this repository."
+              echo "The test job ran normally; only the registry push was skipped."
+              echo
+              echo "Add them under **Settings -> Secrets and variables -> Actions**."
+              echo "\`DOCKERHUB_TOKEN\` is a Docker Hub *access token* with Read & Write, not the account password."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # The work server is amd64, the development machine arm64. Building both
       # means `docker pull` gives each the right one without either knowing --
       # and it is why this belongs in CI, since cross-building scipy and
       # opencv locally is slow enough that people stop doing it.
       - uses: docker/setup-qemu-action@v3
+        if: steps.creds.outputs.ready == 'true'
       - uses: docker/setup-buildx-action@v3
+        if: steps.creds.outputs.ready == 'true'
 
       - uses: docker/login-action@v3
+        if: steps.creds.outputs.ready == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - id: meta
+        if: steps.creds.outputs.ready == 'true'
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.NAMESPACE }}/${{ matrix.image }}
@@ -89,6 +120,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - uses: docker/build-push-action@v6
+        if: steps.creds.outputs.ready == 'true'
         with:
           context: .
           file: ${{ matrix.dockerfile }}

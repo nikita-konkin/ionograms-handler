@@ -235,6 +235,25 @@ Actions:
 Add the repository *variable* `DOCKERHUB_NAMESPACE` if the Docker Hub account
 is not the GitHub owner; otherwise it defaults to the owner.
 
+**Until those secrets exist the pipeline still runs and still passes.** The
+publish job checks for them first and, finding none, writes a job-summary note
+naming the secrets and where to add them, then skips the registry steps. The
+alternative was `login-action` failing with `Username and password required` --
+accurate, but it names neither the secret nor its location, and it turns a
+pipeline red for a reason that has nothing to do with the commit. A fork sees
+the same thing, which is the other reason it is a skip rather than a failure.
+
+If you see this in the log:
+
+```
+Node 20 is being deprecated. This workflow is running with Node 24 by default.
+```
+
+nothing is wrong and nothing needs changing. It is a notice about actions that
+still bundle the older runtime; the workflow is already on Node 24. Do **not**
+set `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION` -- that pins you *back* to the
+deprecated runtime.
+
 ### Rolling back
 
 `latest` moving is what makes an automatic update convenient and what makes a
