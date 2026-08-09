@@ -12,11 +12,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  # Override with a repository *variable* if the Docker Hub account is not the
-  # GitHub owner. Not a secret -- it appears in every image name.
-  NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || github.repository_owner }}
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -51,6 +46,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # Resolved at *job* level, not workflow level: `secrets` is unavailable
+      # in a workflow-level `env`, so a namespace added under the Secrets tab
+      # instead of the Variables tab silently became empty and fell back to the
+      # GitHub owner. The push then went to a namespace the token does not own
+      # and failed with `insufficient_scope`, naming a repository nobody had
+      # asked for.
+      #
+      # The Docker Hub *username* is the default, because the namespace equals
+      # it unless you are pushing into an organisation. `DOCKERHUB_NAMESPACE`
+      # is only needed for that case, and is accepted from either tab.
+      NAMESPACE: >-
+        ${{ vars.DOCKERHUB_NAMESPACE
+            || secrets.DOCKERHUB_NAMESPACE
+            || secrets.DOCKERHUB_USERNAME
+            || github.repository_owner }}
     strategy:
       matrix:
         include:
@@ -86,6 +97,25 @@ jobs:
               echo "Add them under **Settings -> Secrets and variables -> Actions**."
               echo "\`DOCKERHUB_TOKEN\` is a Docker Hub *access token* with Read & Write, not the account password."
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Namespace
+        env:
+          FROM_VAR: ${{ vars.DOCKERHUB_NAMESPACE }}
+          FROM_SECRET: ${{ secrets.DOCKERHUB_NAMESPACE }}
+          HUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          if   [ -n "$FROM_VAR" ];    then src="repository variable DOCKERHUB_NAMESPACE"
+          elif [ -n "$FROM_SECRET" ]; then src="repository secret DOCKERHUB_NAMESPACE"
+          else                             src="DOCKERHUB_USERNAME"
+          fi
+          echo "::notice title=Pushing as::namespace from ${src}; images ${NAMESPACE}/ionograms-{api,station}"
+          # The token can only push to a namespace it owns or is a member of.
+          # Saying so here turns `insufficient_scope` from a registry mystery
+          # into a one-line mismatch.
+          if [ -n "$HUB_USERNAME" ] && [ "$NAMESPACE" != "$HUB_USERNAME" ]; then
+            echo "::warning title=Namespace differs from the account::Pushing to '${NAMESPACE}' while authenticated as '${HUB_USERNAME}'. That is correct only for a Docker Hub organisation the account belongs to; otherwise the push fails with insufficient_scope."
           fi
 
       # The work server is amd64, the development machine arm64. Building both

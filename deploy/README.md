@@ -232,8 +232,39 @@ Actions:
   (Docker Hub → Account settings → Personal access tokens), scoped
   Read & Write.
 
-Add the repository *variable* `DOCKERHUB_NAMESPACE` if the Docker Hub account
-is not the GitHub owner; otherwise it defaults to the owner.
+**The namespace defaults to `DOCKERHUB_USERNAME`**, which is right unless you
+are pushing into a Docker Hub *organisation*. Only then set
+`DOCKERHUB_NAMESPACE`, and it is read from either the Variables or the Secrets
+tab -- they sit next to each other on the same settings page, and putting it in
+the wrong one used to make it vanish silently.
+
+That is worth spelling out because it is how this first failed. The namespace
+was resolved in a **workflow-level** `env`, where GitHub exposes only the
+`github`, `vars` and `inputs` contexts -- **not `secrets`**. A namespace added
+under Secrets therefore read as empty, fell back to the GitHub owner
+(`nikita-konkin`, which is not the Docker Hub account `nikitaikonkin`), and the
+push failed with:
+
+```
+push access denied, repository does not exist or may require authorization:
+server message: insufficient_scope: authorization failed
+```
+
+That message names neither the account nor the namespace, so the mismatch is
+invisible from the log. The job now resolves the namespace at *job* level,
+where `secrets` is available, and prints where it came from:
+
+```
+Notice: Pushing as: namespace from DOCKERHUB_USERNAME;
+        images nikitaikonkin/ionograms-{api,station}
+```
+
+and warns when the namespace differs from the authenticated account, which is
+legitimate only for an organisation and otherwise is exactly this bug.
+
+If you see `insufficient_scope` with the namespace and account matching, the
+remaining cause is token scope: the Docker Hub access token must be **Read &
+Write**. A read-only token authenticates and then cannot push.
 
 **Until those secrets exist the pipeline still runs and still passes.** The
 publish job checks for them first and, finding none, writes a job-summary note
