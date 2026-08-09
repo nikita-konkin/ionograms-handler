@@ -1032,10 +1032,11 @@ different interpretations of one ionogram, not something to merge.
 
 ### Which commands read which format
 
-`run`, `plot`, `export`, `lof`, `plot-sao` and `info` read **both** `.lfs`
-recordings and chirpsounder2 `lfm_ionogram-*.h5` products, selected by file
-extension (`architecture.md` §3.2, `muf.loader`). A tree holding both — which
-is what the parallel run of §2.4 looks like — works without saying anything:
+`run`, `plot`, `export`, `lof`, `plot-sao` and `info` read **three** formats:
+`.lfs` recordings, chirpsounder2 `lfm_ionogram-*.h5` products, and
+`digisonde_ionogram-*.h5` (`architecture.md` §3.2, `muf.loader`). A tree holding
+all of them — which is what a DOB day looks like — works without saying
+anything:
 
 ```bash
 muf run /media/.../ionozond_data2/2026-08-05 --out out --jobs 4
@@ -1048,9 +1049,48 @@ wrote out/2026-08-05.csv  (318 soundings)
   contour   185/318 picked   6.90-24.50 MHz
 ```
 
-`--input-format {lfs,chirp2}` overrides the extension, for a recording that was
+**The extension does not decide, and cannot.** Two of the three are `.h5`, in
+one directory, alongside three kinds of detection file. Dispatch is by name —
+`digisonde_ionogram-` against `lfm_ionogram-` — which is the writer's own
+prefix rather than a guess, and `io_digisonde.read_header` then confirms it
+against the file's `type` dataset before reading anything.
+
+`--input-format {lfs,chirp2,digisonde}` overrides that, for a file that was
 renamed. It is separate from `run`'s `--format {csv,parquet}`, which is the
 *output* table format.
+
+#### Digisonde products are somebody else's sounder
+
+`receive_digisonde.py` does not download these. It receives the transmissions
+**off air with the station's own USRP**, decoding the complementary phase codes
+a Digisonde transmits — so each one is an *oblique* reception of a **vertical**
+sounder a few hundred kilometres away, and a free extra circuit with a named,
+registered transmitter. At DOB there are four: Juliusruh (864 km), Ramfjordmoen
+(951 km), Chilton (1325 km) and Dourbes (1360 km).
+
+Three things differ from a chirp product, and `muf/io_digisonde.py` documents
+each at the decision:
+
+- **`SNR` is `(2, n_freq, n_range)`** — two polarizations. Physically these are
+  O and X, but nothing in the product records which channel is which, so the
+  reader never claims: they are channel 0 and 1, summed by default, exactly as
+  upstream's own plot shows them. `io_digisonde.load(path, pol=0)` selects one.
+- **NaN means "below threshold", not "missing".** `receive_digisonde.py:535`
+  writes `SNR[SNR < snr_threshold] = nan`, so ~90% of a real array is NaN by
+  construction. Those cells are read back as the noise level rather than
+  propagated into estimators that would each have to special-case them.
+- **The stored range axis starts at zero.** The absolute axis is that plus
+  `offset_us × c` — 600 km at the usual setting — which is how upstream plots
+  it. That offset is *configured*, not measured, so
+  `DigisondeHeader.range_is_configured` says so: differences are right, and the
+  zero is only as good as the ini. Same distinction as
+  `ChirpHeader.range_is_relative`, reached from the other side.
+
+The power scale is deliberately `io_chirp`'s. Both instruments define SNR as
+`(P − median)/median`, so both go through `snr_to_power` and the 43 dB level
+every estimator shares means the same thing in either. Measured on a real
+Juliusruh→DOB sounding, the noise floor lands at **25.6 dB** — the same as a
+chirp product.
 
 `muf detect` is the exception: it reads chirpsounder2 **detection** files
 (`par-*.h5`, `chirp-*.h5`, `cdetections-*.h5`) and nothing else. `daily`,
@@ -1440,6 +1480,9 @@ it, which is the whole point of the SAO.XML record.
 ```
 muf/                    the pipeline
   io_lfs.py             .lfs header and IQ
+  io_chirp.py           chirpsounder2 lfm_ionogram-*.h5
+  io_digisonde.py       digisonde_ionogram-*.h5 -- another station's sounder
+  loader.py             format dispatch across the three
   calibrate.py          header -> frequency and virtual-range axes, range gate
   spectro.py            gated spectrogram, noise equalization, caching
   geometry.py           great-circle path, control point, secant law

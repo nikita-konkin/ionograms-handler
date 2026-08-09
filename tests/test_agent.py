@@ -503,3 +503,42 @@ def test_a_command_is_acknowledged_even_when_it_fails(station):
     assert result.commands_run == 1
     assert len(acked) == 1, "an unacknowledged command is redelivered forever"
     assert any(not r["ok"] for r in acked[0]["results"])
+
+
+# --------------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------------
+
+def test_the_token_can_come_from_the_environment(tmp_path, monkeypatch):
+    """`deploy/station-sim.json` is committed, so the secret must not live in
+    it. The compose rig passes CONTROL_TOKEN through as AGENT_TOKEN instead,
+    and the real station should be deployed the same way."""
+    path = tmp_path / "station.json"
+    path.write_text(json.dumps({"station": "SIM", "token": ""}), encoding="utf-8")
+    monkeypatch.setenv("AGENT_CONFIG", str(path))
+    monkeypatch.setenv("AGENT_TOKEN", "from-the-environment")
+
+    assert StationConfig.from_env().token == "from-the-environment"
+
+
+def test_an_absent_token_env_leaves_the_file_alone(tmp_path, monkeypatch):
+    """Unset must mean "not specified", not "clear it". The station already
+    treats a missing secret as "report to stdout and take no commands", and an
+    empty override silently disarming a configured agent would be the same
+    class of mistake as an unset CONTROL_TOKEN opening control."""
+    path = tmp_path / "station.json"
+    path.write_text(json.dumps({"station": "SIM", "token": "from-the-file"}),
+                    encoding="utf-8")
+    monkeypatch.setenv("AGENT_CONFIG", str(path))
+
+    monkeypatch.delenv("AGENT_TOKEN", raising=False)
+    assert StationConfig.from_env().token == "from-the-file"
+
+    monkeypatch.setenv("AGENT_TOKEN", "")
+    assert StationConfig.from_env().token == "from-the-file"
+
+
+def test_the_token_is_redacted_when_the_config_is_reported(tmp_path):
+    """`as_dict` feeds the health document, which crosses the wire."""
+    assert StationConfig(token="s3cret").as_dict()["token"] == "***"
+    assert StationConfig(token="").as_dict()["token"] == ""

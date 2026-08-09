@@ -6,6 +6,22 @@
 <div class="panel"><h2>not found</h2></div>
 {% else %}
 
+{# Neighbours are by time, not by id -- see the route. Rendered as disabled
+   text rather than hidden at the ends, so the controls do not move about as
+   you step through a day. #}
+<div class="panel" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+  {% if prev %}
+  <a class="pill" href="/ui/sounding/{{ prev.id }}?gate={{ gate }}"
+     title="{{ prev.datetime }}  (left arrow)">&larr; previous</a>
+  {% else %}<span class="pill muted" title="earliest sounding">&larr; previous</span>{% endif %}
+  <a class="pill" href="/ui/soundings">all soundings</a>
+  {% if next %}
+  <a class="pill" href="/ui/sounding/{{ next.id }}?gate={{ gate }}"
+     title="{{ next.datetime }}  (right arrow)">next &rarr;</a>
+  {% else %}<span class="pill muted" title="latest sounding">next &rarr;</span>{% endif %}
+  <span class="note">&larr; and &rarr; step through soundings in time order.</span>
+</div>
+
 <div class="panel">
   <h2>{{ sounding.file }}</h2>
   <div class="scroll"><table>
@@ -68,5 +84,17 @@
   <p class="note">Quality columns travel with the value, never separately. A
   <b>limited</b> MUF is a lower bound, not a measurement.</p>
 </div>
+
+<script>
+// Arrow keys step through soundings. Ignored while a field has focus, so
+// typing in a filter box on the way back does not navigate away mid-word.
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || e.target.isContentEditable) return;
+  {% if prev %}if (e.key === 'ArrowLeft')  location.href = '/ui/sounding/{{ prev.id }}?gate={{ gate }}';{% endif %}
+  {% if next %}if (e.key === 'ArrowRight') location.href = '/ui/sounding/{{ next.id }}?gate={{ gate }}';{% endif %}
+});
+</script>
 {% endif %}
 {% endblock %}

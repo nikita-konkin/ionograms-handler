@@ -1,0 +1,165 @@
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+index a530530..6cdea5b 100755
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -1,4 +1,3 @@
+-
+ #!/usr/bin/env bash
+ #
+ # ntp-public.uit.no
+@@ -23,7 +22,20 @@ RINGBUFFER_DIR=/dev/shm/hf25
+ SAMPLE_RATE=25e6
+ CENTER_FREQ=12.5e6
+ # CONF_FILE="$INSTALL_PATH/examples/marieluise/dombas.ini"
+-CONF_FILE="$INSTALL_PATH/my_station.ini"
++CONF_FILE="${CONF_FILE:-$INSTALL_PATH/my_station.ini}"
++
++# Ringbuffer cap, enforced by `drf ringbuffer` below. Roughly 200 MB under half
++# the machine's RAM for a tmpfs; far more on an SSD or raid.
++#
++# It also sets how far back a consumer can reach, which is what decides whether
++# a sounding can be analysed at all:
++#
++#   seconds of history = RINGBUFFER_SIZE / (sample_rate * 4 bytes per sample)
++#
++# At 25 MS/s that is 100 MB/s, so 12000MB holds 120 s. A sounding has to start
++# processing within that window of its t0; find_timings.py prints the margin
++# for each one as "N s left". Measured start latency here is 65-117 s.
++RINGBUFFER_SIZE=12000MB
+ 
+ cd "$INSTALL_PATH" || exit 1
+ 
+@@ -42,52 +54,104 @@ mkdir -p "$RINGBUFFER_DIR"
+ 
+ mkdir -p logs
+ 
++# --- producers first, and the trimmer with them ----------------------------
++#
++# Order is load-bearing here, and getting it wrong fails silently twice over.
++#
++# Every consumer opens a DigitalRFReader whose channel list is fixed when it is
++# constructed, so one started before the recorder created ch0 can never see
++# that channel. patches/0002 makes losing that race recoverable instead of a
++# permanent hang, but not losing it is better.
++#
++# And nothing deleted old data, because `drf ringbuffer` was never started --
++# every example under examples/ringbuffer/ runs it, and stop_ringbuffer.sh
++# already expects to have to kill it. Without it /dev/shm reaches 100%, the
++# writer can no longer allocate, and the recording develops holes that surface
++# downstream as "missing data - skipping" while the recorder, the detector and
++# every plot carry on looking healthy. Two days of soundings went that way.
++echo "rx_uhd_ext_gps (restarting every 24 hours)"
++(
++    while true;
++    do
++        # TBD: change cpp program so that ini file defines USRP setup!
++        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" > logs/thor.log 2>&1
++
++        sleep 5
++
++        echo "Restarting recording (every 24 hours)."
++        echo "Rotating logs"
++
++        logrotate "$INSTALL_PATH/examples/marieluise/tgo-logrotate.conf" \
++            -s logs/rotate.status
++    done
++) &
++sleep 10
++
++echo "drf ringbuffer ($RINGBUFFER_SIZE)"
++drf ringbuffer -z "$RINGBUFFER_SIZE" "$RINGBUFFER_DIR" -p 2 > logs/ringbuffer.log 2>&1 &
++sleep 10
++
++# --- consumers -------------------------------------------------------------
++#
++# `python3 -u` throughout. stdout redirected to a file is block-buffered, so a
++# process that is merely waiting looks exactly like one that has wedged, and
++# whatever it said before hanging never reaches the log at all.
+ echo "sync_iono_data.py"
+-python3 sync_iono_data.py --config "$CONF_FILE" > logs/sync.log 2>&1 &
++python3 -u sync_iono_data.py --config "$CONF_FILE" > logs/sync.log 2>&1 &
+ 
+ echo "iono_housekeeping.py"
+-python3 iono_housekeeping.py --config "$CONF_FILE" > logs/housekeeping.log 2>&1 &
++python3 -u iono_housekeeping.py --config "$CONF_FILE" > logs/housekeeping.log 2>&1 &
+ 
+ echo "detections2metadata.py"
+-python3 detections2metadata.py --config "$CONF_FILE" > logs/detections2metadata.log 2>&1 &
++python3 -u detections2metadata.py --config "$CONF_FILE" > logs/detections2metadata.log 2>&1 &
+ 
+ echo "receive_digisonde.py"
+-python3 receive_digisonde.py --config "$CONF_FILE" > logs/digisonde.log 2>&1 &
+-python3 receive_digisonde.py --config "$CONF_FILE" --sounder Juliusruh > logs/digisonde_julius_day.log 2>&1 &
+-python3 receive_digisonde.py --config "$CONF_FILE" --sounder JuliusruhN > logs/digisonde_julius_night.log 2>&1 &
+-python3 receive_digisonde.py --config "$CONF_FILE" --sounder Chilton > logs/digisonde_chilton.log 2>&1 &
+-python3 receive_digisonde.py --config "$CONF_FILE" --sounder Dourbes > logs/digisonde_dourbes.log 2>&1 &
++python3 -u receive_digisonde.py --config "$CONF_FILE" > logs/digisonde.log 2>&1 &
++python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder Juliusruh > logs/digisonde_julius_day.log 2>&1 &
++python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder JuliusruhN > logs/digisonde_julius_night.log 2>&1 &
++python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder Chilton > logs/digisonde_chilton.log 2>&1 &
++python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder Dourbes > logs/digisonde_dourbes.log 2>&1 &
+ 
+ echo "plot_rtf.py"
+-python3 plot_rtf.py --config "$CONF_FILE" > logs/plot_rtf.log 2>&1 &
++python3 -u plot_rtf.py --config "$CONF_FILE" > logs/plot_rtf.log 2>&1 &
+ 
+ echo "plot_detectionfiles.py"
+-python3 plot_detectionfiles.py --config "$CONF_FILE" > logs/plot_detectionfiles.log 2>&1 &
++python3 -u plot_detectionfiles.py --config "$CONF_FILE" > logs/plot_detectionfiles.log 2>&1 &
+ 
+ echo "detect_chirps.py"
+-$MPIRUN -np 2 python3 detect_chirps.py --config "$CONF_FILE" > logs/detect.log 2>&1 &
++$MPIRUN -np 2 python3 -u detect_chirps.py --config "$CONF_FILE" > logs/detect.log 2>&1 &
++
++# Only in serendipitous mode: find_timings.py writes the par-*.h5 that
++# calc_ionograms.py's serendipitous branch consumes, and in realtime mode
++# nothing reads them. Without it that branch waits for ever on an input no
++# process is producing -- no error, no output, no ionograms.
++#
++# The config is POSITIONAL here. find_timings.py reads sys.argv[1] rather than
++# --config, and given the flag it prints "No config provided - Using defaults"
++# and quietly scans a data directory belonging to someone else.
++SERENDIPITOUS=$(python3 -c "import chirp_config, sys; print(chirp_config.chirp_config(sys.argv[1], verbose=False).serendipitous)" "$CONF_FILE")
++if [ "$SERENDIPITOUS" = "True" ]; then
++    echo "find_timings.py (serendipitous mode)"
++    python3 -u find_timings.py "$CONF_FILE" > logs/find_timings.log 2>&1 &
++    sleep 10
++fi
+ 
+ echo "calc_ionograms.py"
+-python3 calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
++python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
+ 
+ echo "plot_ionograms.py"
+-python3 plot_ionograms.py --config "$CONF_FILE" > logs/plot_ionograms.log 2>&1 &
++python3 -u plot_ionograms.py --config "$CONF_FILE" > logs/plot_ionograms.log 2>&1 &
+ 
+ echo "station_monitor.py"
+-python3 station_monitor.py --config "$CONF_FILE" > logs/station_monitor.log 2>&1 &
+-
+-echo "Starting rx_uhd with external 1 PPS and 10 MHz. Restarting in 24 hours."
++python3 -u station_monitor.py --config "$CONF_FILE" > logs/station_monitor.log 2>&1 &
+ 
+-while true;
+-do
+-    # TBD: change cpp program so that ini file defines USRP setup!
+-    ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" > logs/thor.log 2>&1
+-
+-    sleep 5
+-
+-    echo "Restarting recording (every 24 hours)."
+-    echo "Rotating logs"
+-
+-    logrotate "$INSTALL_PATH/examples/marieluise/tgo-logrotate.conf" \
+-        -s logs/rotate.status
+-done
++# The recorder loop is a background child now, so this script has to stay in
++# the foreground: systemd's Restart=always supervises *this* process, and
++# KillMode=control-group takes the whole tree down with it.
++#
++# It supervises only this script, though. A background child that dies -- or
++# wedges, which is worse -- leaves the unit "active (running)". Whatever
++# watches this station should watch the age of the newest product, not the
++# unit state.
++echo "all processes started; waiting"
++wait

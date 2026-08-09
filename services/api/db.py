@@ -33,6 +33,47 @@ DEFAULT_DB = Path(os.environ.get("API_DB", "data/ionograms.sqlite3"))
 ARCHIVE_ROOT = Path(os.environ.get("ARCHIVE_ROOT", "."))
 
 
+def time_bound(value: str | None, *, end: bool = False) -> str | None:
+    """Normalize a ``from``/``to`` bound to the spelling ``datetime`` is stored in.
+
+    ``sounding.datetime`` holds ``2026-08-09 00:00:00.009633`` -- a **space**
+    separator -- and SQLite compares these as text, character by character.
+    Two consequences, and both answer the wrong question in silence rather
+    than raising:
+
+    * **An ISO bound excludes the day it names.** Space is 0x20 and ``T`` is
+      0x54, so ``'2026-08-09 00:00:00' >= '2026-08-09T00:00:00'`` is false.
+      ``from=2026-08-09T00:00:00`` returned nothing at all.
+    * **A bare date truncates as an upper bound.** ``'2026-08-09'`` is a prefix
+      of every timestamp on that day, and a prefix sorts first, so
+      ``to=2026-08-09`` dropped all of the 9th. As a *lower* bound the same
+      property is what makes it work, which is why this went unnoticed.
+
+    The same trap one level down: **a whole-second upper bound excludes its own
+    second**, because ``'…23:59:59.999999'`` is longer than ``'…23:59:59'`` with
+    the same prefix and so compares greater. Timestamps here carry
+    microseconds, so ``to=2026-08-09T23:59:59`` dropped the last second of the
+    day -- and every sounding in it.
+
+    So ``T`` becomes a space; a date with no time becomes the first or last
+    instant of that day; and a whole-second upper bound is extended to cover
+    the microseconds inside it. A partial time (``2026-08-09 10``) is passed
+    through as written -- padding it would mean guessing which field was
+    meant, and the guess is wrong often enough to be worse than the literal
+    reading.
+    """
+    if not value:
+        return None
+    text = value.strip().replace("T", " ")
+    if len(text) == 10:                       # YYYY-MM-DD, no time
+        # Microseconds are the finest thing stored, so this is the last
+        # instant of the day that any row can carry.
+        return f"{text} 23:59:59.999999" if end else f"{text} 00:00:00"
+    if end and len(text) == 19 and "." not in text:
+        return f"{text}.999999"               # YYYY-MM-DD HH:MM:SS
+    return text
+
+
 def utcnow() -> str:
     """ISO-8601 UTC, second resolution, with the ``Z``.
 

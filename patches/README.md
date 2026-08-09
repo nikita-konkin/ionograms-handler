@@ -11,6 +11,26 @@ Applied against `0d27125`.
 | Patch | What it changes | Why |
 |---|---|---|
 | `0001-rx_uhd_ext_gps-set-epoch-from-gpsdo.patch` | `rx_uhd_ext_gps.cpp` takes the USRP epoch from the GPSDO's `gps_time` sensor instead of the host clock | the fault behind both observed timing errors at DOB |
+| `0002-calc_ionograms-bounded-digitalrf-bounds-wait.patch` | `calc_ionograms.py`'s `get_valid_bounds` gives up after 30 s instead of polling forever | an empty ringbuffer wedged the reader permanently; two days of soundings with no ionograms |
+| `0003-dombas-start-ringbuffer-and-fix-launch-order.patch` | `examples/marieluise/dombas.sh` starts `drf ringbuffer`, starts the recorder first, runs `find_timings.py` in serendipitous mode, and unbuffers every log | the ram disk was never trimmed, so it sat at 100% and the recording developed holes |
+| `0003-local-dombas-DOB-…patch` | the same change, against **DOB's edited copy** rather than upstream's | DOB's `dombas.sh` has diverged (`$HOME` paths, `.venv38`, `my_station.ini`, quoted variables), so the upstream-based 0003 does not apply there |
+
+**0003 has two forms.** The unsuffixed one is against `0d27125` and is the
+canonical diff, per this directory's convention. DOB's working copy has local
+edits — better ones than upstream's, so the local variant is rebased onto
+*those* rather than reverting them. Its base blob is `a530530`; check with
+`git hash-object examples/marieluise/dombas.sh` before applying, and if it
+differs, the file has moved on again and the patch needs rebasing.
+`0003-local-dombas.sh.result` is the finished file, for when that is simpler
+than a rebase.
+
+All three are independent — different files, different faults — and all three
+are about the same thing: a station that keeps running while producing nothing.
+0002 turns a permanent hang into a logged retry, 0003 removes the condition
+that caused it, and 0001's host-clock fallback is only visible because of them.
+
+**Apply 0003 first if you are applying several.** It fixes the environment the
+other two run in; without a trimmed ringbuffer the rest is treating symptoms.
 
 ## Applying
 
@@ -28,8 +48,43 @@ attached to the inode, not the path, so a new binary has none:
 sudo setcap cap_sys_nice+ep ~/chirpsounder2/rx_uhd_ext_gps
 ```
 
-Under systemd this does not matter: `chirp-rx.service` grants `LimitRTPRIO=99`
-directly, which is why the unit does it that way.
+Under systemd this does not matter where the unit grants `LimitRTPRIO=99`
+directly. `examples/marieluise/chirpsounder_dombas.service` does not, so on DOB
+the `setcap` above is required after every rebuild.
+
+0002 is Python — nothing to build, but the running process keeps the old code
+until it is restarted:
+
+```bash
+cd ~/chirpsounder2
+git apply --check /path/to/0002-calc_ionograms-bounded-digitalrf-bounds-wait.patch
+git apply         /path/to/0002-calc_ionograms-bounded-digitalrf-bounds-wait.patch
+pkill -f calc_ionograms.py     # the launcher restarts it; if not, see 0002 below
+```
+
+0003 is a shell script, so it takes effect on the next launch. It moves the
+recorder into a background subshell and ends on `wait`, so the script must be
+started the way the unit starts it, not sourced:
+
+```bash
+cd ~/chirpsounder2
+git apply --check /path/to/0003-dombas-start-ringbuffer-and-fix-launch-order.patch
+git apply         /path/to/0003-dombas-start-ringbuffer-and-fix-launch-order.patch
+./stop_ringbuffer.sh              # stop everything, including any hand-started process
+./examples/marieluise/dombas.sh   # or: systemctl --user restart chirpsounder_dombas
+```
+
+Check it took, about a minute in:
+
+```bash
+pgrep -af 'drf ringbuffer'; df -h /dev/shm     # expect a PID, and well under 100%
+```
+
+For a station on a different config, `CONF_FILE` is now overridable:
+
+```bash
+CONF_FILE=~/chirpsounder2/my_station.ini ./examples/marieluise/dombas.sh
+```
 
 ## 0001 — epoch from the GPSDO
 
@@ -139,3 +194,209 @@ The GPSDO must be locked. With no satellites the fallback is still the host
 clock, so `health.system_clock` and `chirp-rx.service`'s
 `After=time-sync.target` stay necessary — this patch removes the common
 failure, not the need to keep NTP honest.
+
+---
+
+## 0002 — bounded wait for DigitalRF bounds
+
+### The fault
+
+`calc_ionograms.py` polls the ringbuffer for data bounds before it can process
+anything, and the wait has no exit:
+
+```python
+def get_valid_bounds(d, ch, poll_s=1.0):          # calc_ionograms.py:58
+    while True:
+        b = d.get_bounds(ch)
+        if b is not None and len(b) >= 2 and b[0] is not None and b[1] is not None:
+            return b
+        print("no DigitalRF data bounds available for channel %s; waiting for data" % (ch))
+        time.sleep(poll_s)
+```
+
+`DigitalRFReader` caches its channel list **when it is constructed**. A reader
+built before the recorder created the channel directory can therefore never see
+that channel, however long it polls. The only cure is a new reader — and the
+code that would build one is unreachable:
+
+```python
+elif conf.realtime:
+    while True:
+        try:
+            d = drf.DigitalRFReader(conf.data_dir)   # :632  the only fix
+            analyze_realtime(conf, d)                # :633  -> get_valid_bounds at :432
+        except: print("error ... trying to restart"); time.sleep(1)
+```
+
+`get_valid_bounds` neither returns nor raises, so the `except` never fires and
+`d` is never rebuilt. The process stays alive and busy for ever.
+
+### What triggers it
+
+Anything that leaves the channel empty at the moment the reader is built: a
+reboot (`/dev/shm` is cleared), a recorder restart between soundings, or a
+recorder that never starts streaming at all. The consumer is also started
+before the producer — in `examples/marieluise/dombas.sh`, `calc_ionograms.py`
+is line 62 and `rx_uhd_ext_gps` line 74 — so a cold start is a race in the
+first place.
+
+Observed twice at DOB, and the two look identical from outside:
+
+| | ringbuffer | what was really wrong |
+|---|---|---|
+| 2026-08-05 → 08-07 | **had data** — 638 and 643 detections a day, metadata and digisonde products all arriving | a transient empty window wedged the reader, which then never reopened. This bug, and 0002 fixes it |
+| 2026-08-08 | **empty** | `rx_uhd_ext_gps` stuck in its GPSDO lock wait, never streamed a sample. Not this bug — but 0002 is what put it in the log |
+
+An earlier draft of this section blamed 0001 for the first case, on the grounds
+that its two blocking `gps_time` reads add 2–4 s to recorder startup and could
+tip the race. That was never established, and the second case shows the wait
+hangs just as permanently with no 0001 involved. Recorded here because the
+patch is easier to trust when its rationale is not overstated.
+
+### Why nobody noticed for two days
+
+Three things had to line up, and did:
+
+- the process stays **alive**, so `pgrep` finds it;
+- `chirpsounder_dombas.service` supervises `dombas.sh`, whose main process is
+  the `rx_uhd_ext_gps` loop — a wedged background child is invisible to it, and
+  `Restart=always` never fires;
+- every *other* consumer keeps working, so detections, metadata and digisonde
+  products all keep arriving. Only the ionograms stop.
+
+The single symptom is the log line above repeating once a second in
+`logs/ionograms.log`. Nothing in the products can say it.
+
+### The change
+
+`get_valid_bounds` takes `max_wait_s=30.0` and raises `IOError` when it expires,
+which sends control back to the caller's `DigitalRFReader(conf.data_dir)`. Both
+long-running callers (`:621` par-files, `:632` realtime) already wrap that in
+`while True: try:`, so the retry is a reopen rather than a crash. Batch mode
+(`:641`) has no `try`, so there it surfaces as a failure instead of a hang —
+still the better outcome.
+
+Data that merely arrives *late* is unaffected: the poll loop is unchanged up to
+the deadline, and 30 s is far longer than a recorder that is simply starting up.
+
+### Checking it
+
+```bash
+tail -20 ~/chirpsounder2/logs/ionograms.log
+```
+
+Wedged: `no DigitalRF data bounds available for channel ch0` repeating for ever.
+Healthy: `Rank 0 chirp id 1 name SGO analyzing chirp-rate 500.01 kHz/s`.
+
+After the patch a lost race self-heals within 30 s, and leaves a trail:
+
+```
+no DigitalRF data bounds available for channel ch0; waiting for data
+...
+error in calc_ionograms.py. trying to restart
+IOError: no DigitalRF bounds for channel ch0 after 30 s; reopening the reader
+Rank 0 chirp id 1 name SGO analyzing chirp-rate 500.01 kHz/s chirpt 54.0000 rep 60.00
+```
+
+To recover a wedged station without restarting acquisition, restart just that
+child — the ringbuffer already has data, so it picks up immediately:
+
+```bash
+pkill -f calc_ionograms.py
+cd ~/chirpsounder2 && python3 calc_ionograms.py --config ~/chirpsounder2/my_station.ini \
+    > logs/ionograms.log 2>&1 &
+```
+
+### What it does not fix
+
+The race itself. The patch makes losing it survivable, not impossible; starting
+`calc_ionograms.py` after `rx_uhd_ext_gps`, or having it wait for
+`$RINGBUFFER_DIR/ch0` to exist, would remove it. Nor does it give anything a way
+to *notice* a stalled child — that needs either a per-process unit or an
+external check on product age.
+
+### Note for anyone regenerating this diff
+
+It is against the committed `0d27125`, which has LF line endings. The clone
+synced to the Mac has picked up CRLF, so `git apply --check` fails there while
+succeeding on the station's own checkout. `dos2unix calc_ionograms.py` before
+diffing against that copy.
+
+---
+
+## 0003 — start the ringbuffer, and start things in the right order
+
+### The fault
+
+`dombas.sh` never starts `drf ringbuffer`. Nothing else deletes old data, so the
+ram disk fills and stays full:
+
+```
+/dev/shm   16G   16G used   122M free   100%
+```
+
+122 MB at 25 MS/s is **1.2 seconds** of headroom. The DigitalRF writer can no
+longer allocate, the recording develops holes, and `read_vector_1d` throws on
+one — which becomes `missing data - skipping` in `calc_ionograms.py:243`.
+Meanwhile the recorder, the detector, the metadata merger and every plot keep
+running and keep producing, so the station looks entirely healthy.
+
+Every reference launcher runs the trimmer — `examples/ringbuffer/ringbuffer.sh`,
+`ringbuffer_nodet.sh`, `ringbuffer_eclipse.sh`, `ringbuffer_serendip.sh` — and
+`stop_ringbuffer.sh` already lists `"python.*drf"` among the processes it
+expects to kill. It was simply never started here.
+
+Starting it by hand took `/dev/shm` from 100% to **72%** and ionograms resumed
+within one 300 s cycle.
+
+### Three more, from the same comparison
+
+- **The order is inverted.** `ringbuffer_serendip.sh` goes recorder → trimmer →
+  consumers, ten seconds apart. `dombas.sh` starts all thirteen consumers and
+  only then the recorder, so every one of them opens a `DigitalRFReader`
+  against a ringbuffer that does not exist yet. 0002 makes that survivable;
+  this makes it unlikely.
+- **`find_timings.py` is missing.** Correct for `dombas.ini`, which is realtime
+  mode — but a serendipitous config has `calc_ionograms.py` waiting on
+  `par-*.h5` that no process produces. It now runs when, and only when, the
+  config asks for it. **Its config argument is positional**: it reads
+  `sys.argv[1]`, not `--config`, and given the flag it prints `No config
+  provided - Using defaults` and scans `/mnt/data/juha/hf25`.
+- **Every log is block-buffered.** `python3` writing to a redirected file
+  buffers, so a waiting process and a wedged one produce identical silence, and
+  a process's last words before hanging never reach the log. `-u` throughout.
+
+### Sizing the ringbuffer
+
+`RINGBUFFER_SIZE` is now set rather than commented out, and it is the number
+that decides which soundings are analysable:
+
+```
+seconds of history = RINGBUFFER_SIZE / (sample_rate * 4 bytes)
+```
+
+At 25 MS/s that is 100 MB/s, so `12000MB` holds 120 s. A sounding must begin
+processing within that window of its `t0` — `find_timings.py:138` prints the
+margin for each as `N s left`, and measured start latency at DOB is 65–117 s.
+That fits, but not by much. On a machine with more RAM, or with the ringbuffer
+on an SSD or raid as `dombas.sh:17` suggests, more is strictly better: it is
+the only lever that makes start latency stop mattering.
+
+The read loop advances at `speed x realtime` while the buffer tail advances at
+1x, so a **250 s sweep does not need a 250 s buffer** — only enough to hold
+`t0` when processing starts, plus throughput above 1x thereafter. Do not size
+the ringbuffer to the sweep duration; size it to the start latency.
+
+### What it does not fix
+
+Nothing supervises the background children. `chirpsounder_dombas.service`
+watches this script, and the script waits on the recorder loop, so a consumer
+that dies or wedges leaves the unit `active (running)`. **Watch the age of the
+newest product, not the unit state** — that is the only signal that would have
+caught any of 0002 or 0003 on the day rather than two days later.
+
+`--gps-lock-timeout` is deliberately left at its default of `-1`, wait for
+ever. An unlocked GPSDO means 0001 falls back to the host clock, and recording
+plausible-looking wrong ranges is worse than recording nothing. The cost is
+that the recorder can sit silently in that wait — which is exactly what
+happened here, and what watching product age would have surfaced.

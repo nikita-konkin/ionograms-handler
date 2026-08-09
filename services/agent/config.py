@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 #: The units of ``chirp.target``, in start order. Stop order is the reverse:
@@ -104,9 +104,25 @@ class StationConfig:
 
     @classmethod
     def from_env(cls) -> "StationConfig":
-        """``AGENT_CONFIG`` points at a JSON file; otherwise the defaults."""
+        """``AGENT_CONFIG`` points at a JSON file; otherwise the defaults.
+
+        ``AGENT_TOKEN`` overrides the file's ``token``, and is how the compose
+        rig supplies it. The shared secret is the one field that must not live
+        in the config file: ``deploy/station-sim.json`` is committed, so the
+        obvious instruction -- paste ``CONTROL_TOKEN`` in as ``token`` -- puts
+        a live credential in a tracked file one ``git add`` away from being
+        published. Everything else in here is configuration; this is a
+        credential, and it arrives the way the api's own ``CONTROL_TOKEN``
+        does.
+
+        An unset or empty ``AGENT_TOKEN`` means "not specified" and leaves the
+        file's value alone, rather than clearing it. Absent in both places
+        still means the agent reports to stdout and takes no commands.
+        """
         path = os.environ.get("AGENT_CONFIG")
-        return cls.from_json(path) if path else cls()
+        config = cls.from_json(path) if path else cls()
+        token = os.environ.get("AGENT_TOKEN", "")
+        return replace(config, token=token) if token else config
 
     def as_dict(self) -> dict:
         out = {}

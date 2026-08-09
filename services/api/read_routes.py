@@ -121,10 +121,10 @@ def soundings(request: Request,
             params.append(value)
     if start:
         sql.append("AND datetime >= ?")
-        params.append(start)
+        params.append(db.time_bound(start))
     if end:
         sql.append("AND datetime <= ?")
-        params.append(end)
+        params.append(db.time_bound(end, end=True))
     sql.append("ORDER BY datetime LIMIT ?")
     params.append(limit)
 
@@ -159,10 +159,10 @@ def series_muf(request: Request,
             params.append(value)
     if start:
         sql.append("AND s.datetime >= ?")
-        params.append(start)
+        params.append(db.time_bound(start))
     if end:
         sql.append("AND s.datetime <= ?")
-        params.append(end)
+        params.append(db.time_bound(end, end=True))
     sql.append("ORDER BY s.datetime LIMIT ?")
     params.append(limit)
 

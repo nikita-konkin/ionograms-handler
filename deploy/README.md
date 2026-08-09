@@ -20,8 +20,12 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 
 Then <http://127.0.0.1:8000/ui>. `/docs` is the generated OpenAPI page.
 
-Set the same value in `deploy/station-sim.json` as `token`, or the sim will get
-401s and the console will stay empty.
+`CONTROL_TOKEN` is the only value you have to set. The sim reads it from the
+same `deploy/.env`, as `AGENT_TOKEN`, so there is nothing to keep in sync by
+hand. It deliberately does **not** live in `deploy/station-sim.json`: that file
+is committed, and a secret pasted into it is one `git add` from being
+published. `AGENT_TOKEN` overrides the file's `token` for the real agent too,
+which is what `station-dob.json.example` should be deployed with.
 
 ### If the build cannot reach the network
 
@@ -54,16 +58,32 @@ does not inherit the host's); Settings → Docker Engine, add
 `"dns": ["8.8.8.8"]`; on WSL2, a stale `/etc/resolv.conf` inside the VM does
 it too, so `wsl --shutdown` then restart Docker Desktop.
 
-> **Neither image has been built end to end.** `docker compose config`
-> validates both, and `station-sim` "built" only because every one of its
-> layers was already cached locally. The first genuine `--build` will be on
-> the work PC. Expect to iterate on `deploy/requirements-api.txt` if a wheel is
-> missing for your platform — that file uses version *ranges* rather than the
-> development machine's exact pins for exactly this reason.
+### What the first real build found
 
-Everything else in this rig **has** been verified, by running the api directly
-on the host with `uvicorn` and driving it with the real agent. Docker is the
-only unproven layer.
+Both images have now been built and run end to end, on macOS 26.2 / arm64 with
+OrbStack. The whole of section 4 passes, including the command round-trip and
+the ionogram renderer reading both formats off the mounted archive. Three
+defects only a genuine build could surface, all fixed here:
+
+- **`Dockerfile.station` pinned `h5py==3.11.0`**, which publishes no cp312
+  aarch64 wheel. On an arm64 host pip fell back to building it from source and
+  the image died on a missing `pkg-config` and HDF5 headers. Now ranged like
+  `requirements-api.txt` always was, with `--only-binary=:all:` so a future
+  resolution needing a compiler says so at the pin.
+- **`Dockerfile.station` never chowned `/app`.** `COPY` preserves the source
+  mode, so a checkout whose files are `0600` — a synced or restrictively
+  umasked working copy — landed root-owned and unreadable to the non-root
+  `station` user. The container restart-looped on `PermissionError:
+  /app/services/__init__.py`. `Dockerfile.api` had it right already.
+- **`requirements-api.txt` omitted `h5py` entirely**, though `pyproject.toml`
+  calls it core. Nothing failed: `muf.io_chirp` imports it lazily, so the api
+  came up green, passed its health check, and then skipped every `.h5`
+  sounding at ingest. An archive that loads 514 soundings on the host loaded
+  133 in the container. **A green health check does not mean the image can
+  read your data.**
+
+Two of the three were silent. Compare a container ingest against a host ingest
+before trusting a new image.
 
 ## 2. Load some soundings
 
@@ -84,6 +104,46 @@ the spectrogram rather than reading a stored product.
 same database resolves on the host and inside the container, which mount the
 archive at different paths. Ingest with the wrong root and the ionogram
 endpoint returns `410 Gone` naming the path it tried.
+
+### Keeping up with a growing archive
+
+`ingest` re-derives everything you hand it, which is right for a deliberate
+reload and wrong on a timer. `services.api.watch` enumerates the archive, asks
+the database what it already holds, and ingests only the difference — so the
+usual pass costs a directory scan and one query.
+
+Inside the container, where the database and the archive both live:
+
+```bash
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec api \
+    python -m services.api.watch /archive \
+    --db /data/ionograms.sqlite3 --archive-root /archive \
+    --methods algo,kmeans,contour --jobs 0
+```
+
+```
+2026-08-09T12:34:39Z  623 on disk, 109 new, loaded 109
+2026-08-09T12:36:02Z  623 on disk, 0 new
+```
+
+Run it from cron for one pass, or add `--interval 900` to leave it resident.
+It is idempotent on `(file, method)` — the same key `ingest` upserts on — so a
+pass that dies halfway costs nothing but the work it had not reached, and
+widening `--methods` brings the older soundings back into scope by itself.
+
+Three flags earn their keep on a live station:
+
+- **`--min-age`** (default 60 s) skips files modified more recently than that.
+  A sounding still being written, or still arriving over a sync, reads as a
+  short sweep — and a short sweep does not fail. It ingests with
+  `sweep_complete` false and stays wrong until someone notices.
+- **`--batch N`** caps a pass, so the first run over a large archive does not
+  hold the database for hours.
+- **`--dry-run`** reports what it would do and changes nothing.
+
+A `SKIPPED` count that never falls is worth chasing: unreadable files are not
+recorded, so they are retried every pass, which is right for a half-synced
+file and pointless for a corrupt one.
 
 ## 3. Connect the real acquisition laptop
 

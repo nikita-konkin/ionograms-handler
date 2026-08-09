@@ -639,11 +639,13 @@ def cmd_info(args) -> int:
 
     for path in find_soundings(args.target, format=args.input_format)[: args.limit]:
         header = read_header(path, format=args.input_format)
-        if loader.format_of(path, args.input_format) == loader.CHIRP2:
-            # v2 stores its own axes, so they are read rather than derived.
-            # `calibrate.build` would apply .lfs arithmetic -- a 512-byte
-            # header and 8 bytes per sample -- to a file with neither, and
-            # print a confident +/-60000 km axis for a +/-4000 km product.
+        if loader.format_of(path, args.input_format) != loader.LFS:
+            # Every .h5 product stores its own axes, so they are read rather
+            # than derived. `calibrate.build` would apply .lfs arithmetic -- a
+            # 512-byte header and 8 bytes per sample -- to a file with
+            # neither, and print a confident +/-60000 km axis for a +/-4000 km
+            # product. For a digisonde it does worse and raises, because that
+            # instrument is pulsed and has no chirp rate to compute from.
             cal = loader.load(path, format=args.input_format).cal
         else:
             cal = calibrate.build(

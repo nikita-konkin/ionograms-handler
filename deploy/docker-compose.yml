@@ -39,6 +39,11 @@ services:
         condition: service_healthy
     environment:
       AGENT_CONFIG: /etc/agent/station.json
+      # The sim authenticates with the same secret the api checks. It arrives
+      # from deploy/.env rather than from station.json because that file is
+      # committed -- pasting the token into it would leave a live credential
+      # in the repository. Same reason CONTROL_TOKEN reaches the api this way.
+      AGENT_TOKEN: "${CONTROL_TOKEN:?set CONTROL_TOKEN in deploy/.env}"
       # Log the verb instead of running it: there is no systemd in here, so
       # without this the command path can be queued and delivered but never
       # seen to succeed.

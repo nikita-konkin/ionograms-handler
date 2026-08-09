@@ -595,7 +595,9 @@ forecast(
 )
 ```
 
-The normalized form of the 68-column run CSV.
+The normalized form of the run CSV. Not a fixed column count: the per-method
+block scales with `--methods`, and `interference_rows` and `error` appear only
+on the soundings that earned them.
 
 **`reference` is a separate table by design.** IRI is validation only. If
 modelled and measured values ever share a table, the prediction service can

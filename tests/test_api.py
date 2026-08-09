@@ -336,3 +336,295 @@ def test_the_stored_path_is_relative_to_the_archive_root(conn, tmp_path):
 
     stored = db.rows(conn, "SELECT path FROM sounding")[0]["path"]
     assert stored == "2026-02-04/s.lfs"
+
+
+def test_both_formats_reach_the_database_distinguishable(conn, tmp_path,
+                                                         make_lfs, make_chirp_h5):
+    """Ingesting a real run of each format must leave `sounding.format` set.
+
+    It was NULL for every row: `ingest` read `row.get("format")` and the
+    pipeline never put one there, so `/ui/soundings` showed `?` for all of
+    them. A database holding both a recording and a v2 product -- which is
+    what a parallel run produces -- could not be told apart at all.
+    """
+    import numpy as np
+
+    from muf import pipeline
+    from muf.pipeline import Options
+    from services.api import ingest
+
+    from conftest import synth_iq
+
+    lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
+                            half_span_km=60_000.0, echo_last_bin=120))
+    chirp = make_chirp_h5(np.full((4, 64), 100.0))
+
+    for path in (lfs, chirp):
+        row = pipeline.process_file(path, Options(window=512, methods=("algo",)))
+        assert ingest.ingest_row(conn, row, path, tmp_path, ("algo",)) is not None
+
+    stored = {r["file"]: r for r in
+              db.rows(conn, "SELECT file, format, window FROM sounding")}
+
+    assert stored[lfs.name]["format"] == "lfs"
+    assert stored[chirp.name]["format"] == "chirp2"
+    # Every row carries a window, so "re-derivable?" is answerable from the
+    # database alone rather than by reopening the file.
+    assert all(r["window"] for r in stored.values())
+
+
+# --------------------------------------------------------------------------
+# Watcher
+# --------------------------------------------------------------------------
+
+def test_the_watcher_offers_only_what_is_not_already_held(conn, tmp_path,
+                                                          make_lfs, make_chirp_h5):
+    """The whole point: a recurring check must cost a scan, not a re-derive.
+
+    Pointing `ingest` at the archive root on a timer would re-run the pipeline
+    over the entire history every pass, at a cost that grows with the archive
+    rather than with what arrived.
+    """
+    import numpy as np
+
+    from muf import pipeline
+    from muf.pipeline import Options
+    from services.api import ingest, watch
+
+    from conftest import synth_iq
+
+    lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
+                            half_span_km=60_000.0, echo_last_bin=120))
+    chirp = make_chirp_h5(np.full((4, 64), 100.0))
+    methods = ("algo",)
+
+    new, found, fresh = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    assert found == 2 and {p.name for p in new} == {lfs.name, chirp.name}
+
+    row = pipeline.process_file(lfs, Options(window=512, methods=methods))
+    ingest.ingest_row(conn, row, lfs, tmp_path, methods)
+
+    new, found, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    assert found == 2, "still two on disk"
+    assert [p.name for p in new] == [chirp.name], "the ingested one is not offered again"
+
+
+def test_a_method_added_later_brings_old_soundings_back(conn, tmp_path, make_lfs):
+    """`already_done` is keyed on (file, method), like `ingest`'s upsert.
+
+    Widening --methods must not silently leave the existing rows short of the
+    new estimator, with no way to notice but a column of nulls.
+    """
+    from muf import pipeline
+    from muf.pipeline import Options
+    from services.api import ingest, watch
+
+    from conftest import synth_iq
+
+    lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
+                            half_span_km=60_000.0, echo_last_bin=120))
+    row = pipeline.process_file(lfs, Options(window=512, methods=("algo",)))
+    ingest.ingest_row(conn, row, lfs, tmp_path, ("algo",))
+
+    assert watch.find_new([tmp_path], conn, ("algo",), min_age_s=0)[0] == []
+    still = watch.find_new([tmp_path], conn, ("algo", "kmeans"), min_age_s=0)[0]
+    assert [p.name for p in still] == [lfs.name]
+
+
+def test_a_file_still_arriving_is_left_for_the_next_pass(conn, tmp_path, make_lfs):
+    """A sounding mid-write or mid-sync reads as a short sweep, and a short
+    sweep does not fail -- it ingests with `sweep_complete` false and stays
+    that way. Waiting one pass is cheaper than the wrong row."""
+    from services.api import watch
+
+    from conftest import synth_iq
+
+    make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
+                      half_span_km=60_000.0, echo_last_bin=120))
+
+    new, found, fresh = watch.find_new([tmp_path], conn, ("algo",), min_age_s=3600)
+    assert found == 1 and new == [] and fresh == 1
+
+
+def test_a_tree_with_no_soundings_is_skipped_not_fatal(conn, tmp_path):
+    """Archives hold detection trees, digisonde products and empty days beside
+    the ionograms. One of those must not stop the scan."""
+    from services.api import watch
+
+    (tmp_path / "empty").mkdir()
+    new, found, _ = watch.find_new([tmp_path / "empty"], conn, ("algo",), min_age_s=0)
+    assert new == [] and found == 0
+
+
+# --------------------------------------------------------------------------
+# Web: filtering and neighbours
+# --------------------------------------------------------------------------
+
+def _mk(conn, tmp_path, name, when, *, tx="cyprus1", fmt="lfs", muf=12.0):
+    """Insert a sounding directly. `conn` must be the database the client is
+    serving -- see `api_db`; the `conn` fixture is a different file."""
+    from services.api import ingest
+    (tmp_path / name).write_bytes(b"x")
+    ingest.ingest_row(conn, {"file": name, "datetime": when, "tx": tx, "rx": "rx",
+                             "format": fmt, "muf_algo": muf},
+                      tmp_path / name, tmp_path, ("algo",))
+
+
+@pytest.fixture
+def api_db(client, tmp_path):
+    """A writable handle on the database `client` reads.
+
+    The `conn` fixture points at a different file, so seeding through it makes
+    every assertion here pass or fail for the wrong reason.
+    """
+    with db.session(tmp_path / "api.sqlite3") as conn:
+        yield conn
+
+
+def test_soundings_filters_narrow_the_table(client, api_db, tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 00:00:00", tx="cyprus1", fmt="lfs")
+    _mk(conn, tmp_path, "b.h5", "2026-08-09 00:00:00", tx="unkown", fmt="chirp2")
+    _mk(conn, tmp_path, "c.h5", "2026-08-09 01:00:00", tx="unkown", fmt="chirp2",
+        muf=float("nan"))
+    conn.commit()
+
+    assert "3 matching" in client.get("/ui/soundings").text
+    assert "1 matching" in client.get("/ui/soundings?tx=cyprus1").text
+    assert "2 matching" in client.get("/ui/soundings?fmt=chirp2").text
+    assert "1 matching" in client.get("/ui/soundings?picks=none").text
+    assert "2 matching" in client.get(
+        "/ui/soundings?from=2026-08-09&to=2026-08-09T23:59:59").text
+
+
+def test_an_unknown_sort_key_falls_back_rather_than_reaching_sql(client, api_db,
+                                                                 tmp_path):
+    """`sort` names a column, so it cannot be a bound parameter. It is mapped
+    through a whitelist; anything else must be ignored, not interpolated."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 00:00:00")
+    conn.commit()
+
+    hostile = client.get("/ui/soundings?sort=s.id;DROP TABLE sounding--")
+    assert hostile.status_code == 200
+    assert "1 matching" in hostile.text
+    assert db.rows(conn, "SELECT * FROM sounding"), "table survived"
+
+
+def test_neighbours_follow_time_not_id(client, api_db, tmp_path):
+    """Ids are ingest order, which stops matching time the moment a day is
+    back-filled. Stepping through a day has to follow the clock."""
+    conn = api_db
+    _mk(conn, tmp_path, "late.lfs", "2026-02-04 02:00:00")     # ingested first
+    _mk(conn, tmp_path, "early.lfs", "2026-02-04 01:00:00")
+    conn.commit()
+
+    ids = {r["file"]: r["id"] for r in db.rows(conn, "SELECT id, file FROM sounding")}
+    assert ids["late.lfs"] < ids["early.lfs"], "ingest order is not time order here"
+
+    page = client.get(f"/ui/sounding/{ids['early.lfs']}").text
+    assert f"/ui/sounding/{ids['late.lfs']}" in page, "next is the later time"
+
+    ends = client.get(f"/ui/sounding/{ids['late.lfs']}").text
+    assert "latest sounding" in ends, "the last one offers no next"
+
+
+# --------------------------------------------------------------------------
+# Time bounds
+# --------------------------------------------------------------------------
+
+def test_a_bare_date_covers_the_whole_day_at_either_end():
+    """`datetime` is stored with a space separator and compared as text.
+
+    A bare date is a prefix of every timestamp on that day, and a prefix sorts
+    first -- so it works as a lower bound and silently truncates as an upper
+    one. `to=2026-08-09` used to drop all of the 9th.
+    """
+    assert db.time_bound("2026-08-09") == "2026-08-09 00:00:00"
+    assert db.time_bound("2026-08-09", end=True) == "2026-08-09 23:59:59.999999"
+
+
+def test_an_iso_t_bound_does_not_exclude_its_own_day():
+    """Space is 0x20 and `T` is 0x54, so `'2026-08-09 00:00' >= '2026-08-09T00:00'`
+    is false and `from=2026-08-09T00:00:00` returned nothing at all."""
+    assert db.time_bound("2026-08-09T04:00:00") == "2026-08-09 04:00:00"
+    assert db.time_bound("") is None and db.time_bound(None) is None
+
+
+def test_a_whole_second_upper_bound_covers_its_own_microseconds():
+    """`'…23:59:59.999999'` is longer than `'…23:59:59'` with the same prefix,
+    so it compares greater and `to=…T23:59:59` dropped the whole last second.
+    Timestamps here carry microseconds, so that second is never empty."""
+    assert db.time_bound("2026-08-09 23:59:59", end=True) == "2026-08-09 23:59:59.999999"
+    assert db.time_bound("2026-08-09 23:59:59") == "2026-08-09 23:59:59", "lower bound unchanged"
+    assert db.time_bound("2026-08-09 23:59:59.5", end=True) == "2026-08-09 23:59:59.5"
+
+
+def test_the_bounds_actually_select_that_day(client, api_db, tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-08-08 23:59:59.999")
+    _mk(conn, tmp_path, "b.lfs", "2026-08-09 00:00:00.009633")   # microseconds
+    _mk(conn, tmp_path, "c.lfs", "2026-08-09 23:59:59.999999")
+    _mk(conn, tmp_path, "d.lfs", "2026-08-10 00:00:00")
+    conn.commit()
+
+    def n(query):
+        body = client.get(f"/series/muf?method=algo&{query}").json()
+        return body["count"]
+
+    assert n("") == 4
+    assert n("from=2026-08-09&to=2026-08-09") == 2, "a bare date is one whole day"
+    assert n("from=2026-08-09T00:00:00&to=2026-08-09T23:59:59") == 2
+    assert n("from=2026-08-08&to=2026-08-10") == 4
+
+
+# --------------------------------------------------------------------------
+# Web: circuits
+# --------------------------------------------------------------------------
+
+def test_the_series_shows_one_circuit_by_default(client, api_db, tmp_path):
+    """MUF is a property of a path. Two circuits on one axis describe neither,
+    so the default is the circuit with the most picks, not all of them."""
+    conn = api_db
+    for i in range(3):
+        _mk(conn, tmp_path, f"cy{i}.lfs", f"2026-02-04 0{i}:00:00",
+            tx="cyprus1", muf=20.0)
+    _mk(conn, tmp_path, "dob.h5", "2026-08-09 00:00:00", tx="unkown", fmt="chirp2",
+        muf=12.0)
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo").text
+    assert "3 point(s)" in page, "defaults to the busiest circuit, not the union"
+
+    both = client.get("/ui/series?method=algo&circuit=all").text
+    assert "4 point(s)" in both
+
+    named = client.get("/ui/series?method=algo&circuit=unkown -> rx").text
+    assert "1 point(s)" in named
+
+
+def test_an_unknown_circuit_falls_back_rather_than_drawing_nothing(client, api_db,
+                                                                   tmp_path):
+    """A stale bookmark or a hand-edited query must not produce an empty chart
+    that looks like "no data" -- the reason would be invisible."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 00:00:00", tx="cyprus1")
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo&circuit=nowhere -> nohow")
+    assert page.status_code == 200
+    assert "1 point(s)" in page.text
+
+
+def test_a_circuit_no_estimator_picked_is_not_offered(client, api_db, tmp_path):
+    """SGO -> DOB is 381 soundings and no picks at all. Offering it as a choice
+    would draw an empty chart with no way to tell why."""
+    conn = api_db
+    _mk(conn, tmp_path, "good.lfs", "2026-02-04 00:00:00", tx="cyprus1")
+    _mk(conn, tmp_path, "dead.h5", "2026-08-04 00:00:00", tx="SGO", fmt="chirp2",
+        muf=float("nan"))
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo").text
+    assert "cyprus1 -&gt; rx" in page or "cyprus1 -> rx" in page
+    assert "SGO" not in page, "a circuit with no picks is not a choice"

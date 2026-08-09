@@ -478,3 +478,52 @@ def make_detection_h5(tmp_path):
         return out
 
     return _make
+
+
+@pytest.fixture
+def make_digisonde_h5(tmp_path):
+    """Factory writing a synthetic ``digisonde_ionogram-*.h5``. Returns the path.
+
+    Mirrors ``receive_digisonde.py``'s write path: SNR is ``(P - median)/median``
+    per (polarization, frequency) over range, and everything below
+    ``snr_threshold`` is stored as NaN rather than as a number.
+    """
+    h5py = pytest.importorskip("h5py")
+
+    def _make(power=None, *, n_pol=2, n_freq=32, n_range=64,
+              freq0=1e6, dfreq=50e3, range_step_m=3e3, offset_us=2000.0,
+              t0=1786245496.0, transmitter="Juliusruh", receiver="DOB",
+              snr_threshold=2.0, kind="digisonde", drop=(),
+              name=None) -> Path:
+        if power is None:
+            power = np.ones((n_pol, n_freq, n_range))
+        power = np.asarray(power, dtype=np.float64)
+        n_pol, n_freq, n_range = power.shape
+
+        snr = np.zeros_like(power)
+        for j in range(n_pol):
+            for i in range(n_freq):
+                nf = np.median(power[j, i, :])
+                snr[j, i, :] = (power[j, i, :] - nf) / nf
+        snr[snr < snr_threshold] = np.nan       # exactly what upstream stores
+
+        path = tmp_path / (name or
+                           f"digisonde_ionogram-{transmitter}-{receiver}-{t0:.2f}.h5")
+        with h5py.File(path, "w") as fh:
+            data = {
+                "type": kind,
+                "SNR": snr.astype(np.float32),
+                "freqs": (freq0 + np.arange(n_freq) * dfreq).astype(np.float32),
+                "ranges": (np.arange(n_range) * range_step_m).astype(np.float32),
+                "noise_floor": np.ones((n_pol, n_freq), dtype=np.float32),
+                "transmitter": transmitter,
+                "receiver": receiver,
+                "offset_us": offset_us,
+                "t0": t0,
+            }
+            for key, value in data.items():
+                if key not in drop:
+                    fh[key] = value
+        return path
+
+    return _make

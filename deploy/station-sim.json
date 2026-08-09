@@ -1,7 +1,8 @@
 {
   "station": "SIM",
   "server_url": "http://api:8000",
-  "token": "CHANGE_ME_TO_MATCH_CONTROL_TOKEN",
+  "_token": "Supplied by AGENT_TOKEN from deploy/.env -- this file is committed, so the secret does not go here.",
+  "token": "",
   "push_interval_s": 15,
 
   "chirp_config": "/etc/agent/absent.ini",

@@ -39,6 +39,46 @@ def test_row_has_a_column_per_method(synthetic_path, options):
     assert "error" not in row
 
 
+def test_the_row_names_its_format_and_window(synthetic_path, make_chirp_h5,
+                                             options):
+    """`sounding.format` and `sounding.window` are read straight off the row.
+
+    They were absent from it for as long as the column existed, so every
+    ingested sounding stored NULL for both and the console could not tell a
+    recording from a v2 product -- which is the one thing they are for when a
+    parallel run puts both in one database (architecture.md sec. 2.4, 3.4).
+
+    The spellings are the loader's, not the headers': a `.lfs` header carries
+    the file's magic number "LFSG", and storing that beside v2's "chirp2"
+    would be two vocabularies in one column.
+    """
+    lfs_row = pipeline.process_file(synthetic_path, options)
+    assert lfs_row["format"] == "lfs"
+    assert lfs_row["window"] == WINDOW
+
+    chirp = make_chirp_h5(np.full((4, 64), 100.0))
+    chirp_row = pipeline.process_file(chirp, Options(window=WINDOW))
+
+    assert chirp_row["format"] == "chirp2"
+    # Not `options.window`: v2 fixed the window when it wrote the product and
+    # the raw IQ is not in the file, so the ionogram cannot be re-derived at
+    # the one that was asked for. The row records what it was actually formed
+    # at, which is what makes the pair meaningful.
+    assert chirp_row["window"] != WINDOW
+
+
+def test_an_error_row_still_names_the_file_but_claims_no_format(tmp_path, options):
+    """A row that never reached a header must not assert a format it did not
+    establish -- `ingest` skips it, and a half-filled row would be worse than
+    an empty one if that ever changed."""
+    bad = tmp_path / "bad.lfs"
+    bad.write_bytes(b"\x00" * 512)
+
+    row = pipeline.process_file(bad, options)
+    assert row["file"] == "bad.lfs"
+    assert "format" not in row
+
+
 def test_unreadable_file_yields_an_error_row(tmp_path, options):
     bad = tmp_path / "bad.lfs"
     bad.write_bytes(b"\x00" * 512)

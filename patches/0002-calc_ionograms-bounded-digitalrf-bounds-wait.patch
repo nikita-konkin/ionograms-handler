@@ -1,0 +1,55 @@
+diff --git a/calc_ionograms.py b/calc_ionograms.py
+index 03e3cfd..1ae6295 100644
+--- a/calc_ionograms.py
++++ b/calc_ionograms.py
+@@ -55,15 +55,48 @@ def kill(conf):
+     exists = os.path.isfile(conf.kill_path)
+     return exists
+ 
+-def get_valid_bounds(d, ch, poll_s=1.0):
+-    """Return DigitalRF bounds once both endpoints are available."""
++def get_valid_bounds(d, ch, poll_s=1.0, max_wait_s=30.0):
++    """Return DigitalRF bounds once both endpoints are available.
++
++    Bounded, because polling forever cannot recover from the case that
++    actually happens. DigitalRFReader caches its channel list when it is
++    constructed, so a reader built before the recorder created the channel
++    directory can never see that channel however long it waits. The only cure
++    is a new reader, and raising is what lets the caller build one: both
++    long-running callers wrap DigitalRFReader(conf.data_dir) in a
++    `while True: try:`, so an exception here reopens the ringbuffer while an
++    infinite loop here never reaches them.
++
++    Anything that leaves the channel empty when the reader is built triggers
++    it: a reboot, a recorder restart between soundings, or a recorder that
++    never starts at all. Observed twice at DOB. Once with data flowing
++    normally -- two days of detections and metadata, no ionograms, because a
++    transient empty window had wedged a reader that then never reopened. Once
++    with no data to be had, rx_uhd_ext_gps sitting in its GPSDO lock wait
++    (--gps-lock-timeout defaults to -1, wait for ever) having streamed
++    nothing. The first case is a bug here and this fixes it; the second is a
++    recorder fault, and the point of failing is that the log then says so
++    instead of looking identical.
++
++    The hang is invisible from outside: the process stays alive and busy, the
++    unit stays active because it supervises the recorder loop and not this
++    child, and the only symptom is the message below repeating once a second
++    in the log. Failing after max_wait_s converts that into a retry that can
++    actually succeed.
++    """
++    waited = 0.0
+     while True:
+         b = d.get_bounds(ch)
+         if b is not None and len(b) >= 2 and b[0] is not None and b[1] is not None:
+             return b
+ 
++        if waited >= max_wait_s:
++            raise IOError("no DigitalRF bounds for channel %s after %1.0f s; "
++                          "reopening the reader" % (ch, waited))
++
+         print("no DigitalRF data bounds available for channel %s; waiting for data" % (ch))
+         time.sleep(poll_s)
++        waited += poll_s
+ 
+ 
+ comm = MPI.COMM_WORLD

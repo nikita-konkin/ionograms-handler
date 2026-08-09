@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Mapping
 
 from . import io_chirp, spectro, stations as _stations
+from . import io_digisonde
 from .io_lfs import find_lfs
 from .io_lfs import read_header as _read_lfs_header
 from .spectro import DEFAULT_WINDOW, DEFAULT_ZERO_PERIODS, Ionogram
@@ -41,12 +42,17 @@ from .spectro import DEFAULT_WINDOW, DEFAULT_ZERO_PERIODS, Ionogram
 LFS = "lfs"
 #: chirpsounder2 ``lfm_ionogram-*.h5`` -- the ionogram arrives already formed.
 CHIRP2 = "chirp2"
+#: chirpsounder2 ``digisonde_ionogram-*.h5`` -- another station's *vertical*
+#: sounder, received obliquely here. Also already formed, and also ``.h5``,
+#: which is why extension alone no longer decides. See :func:`format_of`.
+DIGISONDE = "digisonde"
 
-FORMATS = (LFS, CHIRP2)
+FORMATS = (LFS, CHIRP2, DIGISONDE)
 
-#: Extension to format. ``.h5`` is chirpsounder2's only product extension, and
-#: ``io_chirp.find_h5`` is what distinguishes an ionogram from the detection
-#: files sharing the tree.
+#: Extension to format, for the cases an extension settles. ``.h5`` is not one
+#: of them: chirpsounder2 writes chirp ionograms, digisonde ionograms and three
+#: kinds of detection file into one tree with that suffix, so the ``.h5`` entry
+#: is only the fallback :func:`format_of` reaches after the name says nothing.
 SUFFIXES = {".lfs": LFS, ".h5": CHIRP2}
 
 
@@ -66,7 +72,14 @@ def format_of(path: str | Path, override: str | None = None) -> str:
             raise FormatError(
                 f"unknown format {override!r}; choose from {', '.join(FORMATS)}")
         return override
+    name = Path(path).name
     suffix = Path(path).suffix.lower()
+    # Name before extension, because both product kinds are `.h5`. The prefix
+    # is the writer's own (`receive_digisonde.py` builds it), so this is
+    # reading the file's identity rather than guessing at it -- and a
+    # mis-dispatch is not subtle: the schemas share no dataset but `t0`.
+    if suffix == ".h5" and name.startswith(io_digisonde.FILE_PREFIX):
+        return DIGISONDE
     fmt = SUFFIXES.get(suffix)
     if fmt is None:
         raise FormatError(
@@ -93,7 +106,8 @@ def find_soundings(target, *, format: str | None = None) -> list[Path]:
             f"unknown format {format!r}; choose from {', '.join(FORMATS)}")
 
     found: list[Path] = []
-    for fmt, finder in ((LFS, find_lfs), (CHIRP2, io_chirp.find_h5)):
+    for fmt, finder in ((LFS, find_lfs), (CHIRP2, io_chirp.find_h5),
+                        (DIGISONDE, io_digisonde.find_digisonde)):
         if format is not None and fmt != format:
             continue
         try:
@@ -134,8 +148,11 @@ def read_header(path: str | Path, *, format: str | None = None,
     answer, such as ``ChirpHeader.range_is_relative``. A caller that needs the
     difference should ask for it, not have it flattened away.
     """
-    if format_of(path, format) == CHIRP2:
+    fmt = format_of(path, format)
+    if fmt == CHIRP2:
         return io_chirp.read_header(path, resolve_stations(stations))
+    if fmt == DIGISONDE:
+        return io_digisonde.read_header(path, resolve_stations(stations))
     return _read_lfs_header(path)
 
 
@@ -153,7 +170,7 @@ def cache_key(path: Path, window: int, zero_periods: int,
     if fmt == LFS:
         return spectro.cache_key(path, window, zero_periods, gate_km)
     gate = "auto" if gate_km is None else f"{gate_km[0]:.0f}-{gate_km[1]:.0f}"
-    return f"{path.stem}_{CHIRP2}_g{gate}"
+    return f"{path.stem}_{fmt}_g{gate}"
 
 
 def load(path: str | Path,
@@ -182,6 +199,15 @@ def load(path: str | Path,
     if fmt == LFS:
         return spectro.compute_cached(path, window, zero_periods, gate_km,
                                       cache_dir)
+
+    if fmt == DIGISONDE:
+        # No `window`/`zero_periods` warning: a digisonde product is pulse
+        # compressed rather than transformed, so those flags describe nothing
+        # here even by analogy -- there is no window that could have been used
+        # instead, and warning about one would invent a knob.
+        return io_digisonde.load(path, gate_km,
+                                 stations=resolve_stations(stations),
+                                 header=header)
 
     header = header or io_chirp.read_header(path, resolve_stations(stations))
 

@@ -100,6 +100,12 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
 
     row.update(
         datetime=header.datetime.replace(tzinfo=None),
+        # `loader.format_of`, not `header.format`: the header carries the .lfs
+        # file's magic number ("LFSG") against v2's "chirp2", which is two
+        # spellings of one distinction. The loader's constants are the
+        # normalized pair, and are what `sounding.format` is documented to
+        # hold (`services/api/schema.sql`).
+        format=loader.format_of(path, options.format),
         tx=header.tx_name,
         rx=header.rx_name,
         path_type=header.path_type,
@@ -132,6 +138,12 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         row["interference_rows"] = rejected.n_rows
 
     row.update(
+        # The window the ionogram was actually formed at, which for .h5 is what
+        # `io_chirp` reconstructed from the stored axes rather than what
+        # `options.window` asked for -- v2 fixed it at archive time and the raw
+        # IQ is gone, so the two differ. Paired with `format` this is what says
+        # whether a sounding can be re-derived at another window (sec. 3.4).
+        window=ion.window,
         freq_start=round(ion.cal.freq_start, 4),
         freq_stop=round(ion.cal.freq_stop, 4),
         gate_lo=round(ion.cal.gate_km[0], 1),

@@ -23,14 +23,29 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN pip install --no-cache-dir "numpy==1.26.4" "h5py==3.11.0"
+# Majors, not the development machine's exact patch versions -- the same rule
+# deploy/requirements-api.txt states, and for the same reason. `h5py==3.11.0`
+# publishes no cp312 aarch64 wheel, so on an arm64 host pip fell back to
+# building it from source and the image failed on a missing pkg-config and
+# HDF5 headers. `--only-binary` makes that failure mode loud instead: if a
+# resolution ever needs a compiler again, it says so at the pin rather than
+# 200 lines into a build log.
+RUN pip install --no-cache-dir --only-binary=:all: \
+      "numpy>=1.26,<2.0" "h5py>=3.11,<4.0"
 
 COPY muf/ /app/muf/
 COPY services/ /app/services/
 
+# `/app` is in the chown for the same reason Dockerfile.api has it there:
+# COPY preserves the source mode, and a checkout whose files are 0600 -- which
+# is what a synced or restrictively-umasked working copy looks like -- lands
+# root-owned and unreadable to `station`. The agent then dies on
+# `PermissionError: /app/services/__init__.py` before it can log anything
+# useful, and the container restart-loops. Owning its own code costs nothing
+# and does not make the process any more privileged.
 RUN useradd --create-home --uid 10002 station \
  && mkdir -p /var/lib/station/products /etc/agent \
- && chown -R station:station /var/lib/station /etc/agent
+ && chown -R station:station /var/lib/station /etc/agent /app
 USER station
 
 CMD ["python", "-m", "services.agent", "run"]

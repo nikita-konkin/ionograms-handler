@@ -28,6 +28,14 @@ tqdm>=4.66
 # build is the same cv2 without them.
 opencv-python-headless>=4.10,<5.0
 
+# chirpsounder2 `lfm_ionogram-*.h5` products. Core, exactly as in
+# pyproject.toml -- dual-format input is a permanent requirement, not a
+# migration step (docs/architecture.md sec. 3). Omitting it here did not fail
+# the build or the health check: `muf.io_chirp` imports it lazily, so the api
+# came up green and then skipped every .h5 sounding at ingest as unreadable.
+# An archive that loads 514 soundings on the host loaded 133 in the container.
+h5py>=3.11,<4.0
+
 # --- service ----------------------------------------------------------------
 # fastapi and starlette are version-coupled and break loudly when mismatched:
 # fastapi 0.111.0 against starlette 1.0.0 makes a bare `FastAPI()` raise

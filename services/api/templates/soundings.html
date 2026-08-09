@@ -1,12 +1,63 @@
 {% extends "base.html" %}
 {% block title %}soundings{% endblock %}
-{% block hint %}{{ total }} in the database{% endblock %}
+{% block hint %}{{ total }} matching{% endblock %}
 {% block body %}
+
+{# Everything except `offset` survives a sort or a page step. Losing the filter
+   when you click a column heading is the classic way a table like this becomes
+   useless on the second click. #}
+{%- set filters = 'limit=' ~ limit
+      ~ ('&tx=' ~ tx if tx else '')
+      ~ ('&fmt=' ~ fmt if fmt else '')
+      ~ ('&picks=' ~ picks if picks else '')
+      ~ ('&from=' ~ start if start else '')
+      ~ ('&to=' ~ end if end else '') -%}
+{%- macro th(key, label) -%}
+  {%- set flip = 'desc' if (sort == key and dir == 'asc') else 'asc' -%}
+  <th><a href="/ui/soundings?{{ filters }}&sort={{ key }}&dir={{ flip }}"
+         style="text-decoration:none">{{ label }}{% if sort == key %}
+         <span class="muted">{{ '▲' if dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
+{%- endmacro -%}
+
 <div class="panel">
   <h2>soundings</h2>
+
+  <form method="get" action="/ui/soundings" style="margin-bottom:.8rem">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <input type="hidden" name="limit" value="{{ limit }}">
+    <label class="muted" style="font-size:.85rem">tx
+      <select name="tx">
+        <option value="">any</option>
+        {% for v in facets.tx %}
+        <option value="{{ v }}" {% if v == tx %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">format
+      <select name="fmt">
+        <option value="">any</option>
+        {% for v in facets.format %}
+        <option value="{{ v }}" {% if v == fmt %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">picks
+      <select name="picks">
+        <option value="">any</option>
+        <option value="some" {% if picks == 'some' %}selected{% endif %}>at least one</option>
+        <option value="none" {% if picks == 'none' %}selected{% endif %}>none</option>
+      </select></label>
+    <label class="muted" style="font-size:.85rem">from
+      <input type="text" name="from" value="{{ start }}" placeholder="2026-08-09" size="12"></label>
+    <label class="muted" style="font-size:.85rem">to
+      <input type="text" name="to" value="{{ end }}" placeholder="2026-08-09T23:59:59" size="19"></label>
+    <button type="submit" class="pill">apply</button>
+    <a href="/ui/soundings" class="pill">clear</a>
+  </form>
+
   <div class="scroll"><table>
-    <tr><th>time (UTC)</th><th>tx &rarr; rx</th><th>format</th>
-        <th>sweep MHz</th><th>gate km</th><th>complete</th><th>picks</th><th></th></tr>
+    <tr>{{ th('time', 'time (UTC)') }}{{ th('tx', 'tx → rx') }}{{ th('format', 'format') }}
+        {{ th('sweep', 'sweep MHz') }}<th>gate km</th>{{ th('complete', 'complete') }}
+        {{ th('picks', 'picks') }}<th></th></tr>
     {% for s in soundings %}
     <tr>
       <td>{{ s.datetime }}</td>
@@ -20,15 +71,20 @@
       <td><a href="/ui/sounding/{{ s.id }}">open</a></td>
     </tr>
     {% endfor %}
+    {% if not soundings %}
+    <tr><td colspan="8" class="muted">Nothing matches these filters.
+        <a href="/ui/soundings">Clear them.</a></td></tr>
+    {% endif %}
   </table></div>
 
   <p style="margin-top:.8rem">
     {% if offset > 0 %}
-      <a href="/ui/soundings?limit={{ limit }}&offset={{ [offset - limit, 0]|max }}">&larr; previous</a>
+      <a href="/ui/soundings?{{ filters }}&sort={{ sort }}&dir={{ dir }}&offset={{ [offset - limit, 0]|max }}">&larr; previous</a>
     {% endif %}
-    <span class="muted">{{ offset + 1 }}&ndash;{{ offset + soundings|length }} of {{ total }}</span>
+    <span class="muted">{% if soundings %}{{ offset + 1 }}&ndash;{{ offset + soundings|length }}
+      of {{ total }}{% else %}0 of {{ total }}{% endif %}</span>
     {% if offset + limit < total %}
-      <a href="/ui/soundings?limit={{ limit }}&offset={{ offset + limit }}">next &rarr;</a>
+      <a href="/ui/soundings?{{ filters }}&sort={{ sort }}&dir={{ dir }}&offset={{ offset + limit }}">next &rarr;</a>
     {% endif %}
   </p>
 </div>
