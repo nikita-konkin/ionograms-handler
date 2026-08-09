@@ -7,6 +7,8 @@ party's uptime.
 
 from __future__ import annotations
 
+import json
+
 import datetime as dt
 
 import numpy as np
@@ -224,3 +226,52 @@ def test_indices_fetch_live():
     assert si.ssn_daily is not None
     assert si.is_smoothed          # 2022 is old enough to have a real R12
     assert 0 < si.r12 < 400
+
+
+# --------------------------------------------------------------------------
+# GIRO history mirror
+# --------------------------------------------------------------------------
+
+def _history_payload():
+    return json.dumps([
+        {"code": "JR055", "name": "Juliusruh", "history": [
+            ["2026-08-09 00:03:16", 90, 2.59, 9.1, 332.3],
+            ["2026-08-09 09:03:16", 95, 5.28, 17.4, 243.5],
+        ]},
+        {"code": "RL052", "name": "Chilton", "history": []},
+    ])
+
+
+def test_history_parses_the_undocumented_field_order(tmp_path, monkeypatch):
+    """The feed documents neither the order nor the units, so the order was
+    verified against the same station's live record before being relied on."""
+    from muf.reference import giro
+
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _history_payload())
+    frame = giro.history("JR055")
+
+    assert list(frame.columns) == ["confidence", "fof2", "mufd", "hmf2"]
+    assert frame.fof2.tolist() == [2.59, 5.28]
+    assert frame.hmf2.tolist() == [332.3, 243.5]
+    assert str(frame.index.tz) == "UTC"
+
+
+def test_a_station_with_no_feed_returns_empty_not_an_error(tmp_path, monkeypatch):
+    """Chilton is in DIDBase but not in the real-time mirror. A caller asking
+    for it should get nothing, not an exception -- one missing station must not
+    stop a comparison across four."""
+    from muf.reference import giro
+
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _history_payload())
+    assert giro.history("RL052").empty
+    assert giro.history("NOSUCH").empty
+
+
+def test_the_stations_dob_receives_are_in_the_registry():
+    """`io_digisonde` resolves these by name; `giro` has to resolve the same
+    places by URSI code, or the vertical-versus-oblique comparison cannot be
+    made at all."""
+    from muf.reference import giro
+
+    for ursi in ("JR055", "RL052", "DB049", "TR169"):
+        assert ursi in giro.STATIONS, ursi

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from . import db
+from . import sources as sources_mod
 from .auth import require_read
 
 router = APIRouter(tags=["read"], dependencies=[Depends(require_read)])
@@ -169,6 +170,23 @@ def series_muf(request: Request,
     points = db.rows(request.app.state.db, " ".join(sql), tuple(params))
     return {"method": method, "smoothed": smoothed,
             "count": len(points), "points": points}
+
+
+@router.get("/sources")
+def sources(request: Request,
+            max_days: int = Query(sources_mod.DEFAULT_MAX_DAYS, ge=1, le=14),
+            cycle_s: float | None = None,
+            min_count: int = Query(3, ge=1, le=100)) -> dict:
+    """Repeating transmitters the station has heard, newest days first.
+
+    Read scope, because it is a census of what is on air -- but it is the list
+    a schedule is built from, so each row carries the `sounder_timings` entry
+    it would become. See `services.api.sources` for why the seconds are as
+    received rather than as transmitted.
+    """
+    return sources_mod.census(request.app.state.archive_root,
+                              max_days=max_days, cycle_s=cycle_s,
+                              min_count=min_count)
 
 
 @router.get("/methods")

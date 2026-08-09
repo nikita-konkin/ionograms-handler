@@ -8,7 +8,7 @@ After=chirp-rx.service
 Type=simple
 User=ionouser
 WorkingDirectory=/home/ionouser/chirpsounder2
-ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 detections2metadata.py /home/ionouser/chirpsounder2/my_station.ini
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 detections2metadata.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15
 

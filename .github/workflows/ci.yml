@@ -1,0 +1,100 @@
+# Test, then publish. Never the second without the first.
+#
+# `publish` depends on `test`, so a red suite cannot produce an image. That
+# ordering is the point of having this in CI rather than in a script on
+# somebody's laptop: the work server pulls what this pushes, unattended.
+name: ci
+
+on:
+  push:
+    branches: [develope, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Override with a repository *variable* if the Docker Hub account is not the
+  # GitHub owner. Not a secret -- it appears in every image name.
+  NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || github.repository_owner }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # numpy<2 matches deploy/requirements-api.txt and the machine the
+          # numerics were verified on. httpx2 is what starlette's TestClient
+          # needs; it is test-only and deliberately not in pyproject.
+          pip install -e ".[test,parquet]" "numpy<2.0" \
+                      fastapi "uvicorn[standard]" jinja2 httpx2
+
+      - name: Tests
+        # MUF_TEST_DATA is unset here, so tests needing real recordings skip
+        # rather than fail. Correctness is established on synthetic soundings
+        # by design -- see the README's Layout section.
+        run: python -m pytest tests -q
+
+  publish:
+    needs: test
+    # Pull requests are tested, not published: a fork must not be able to push
+    # an image the work server would then pull.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - image: ionograms-api
+            dockerfile: deploy/Dockerfile.api
+          - image: ionograms-station
+            dockerfile: deploy/Dockerfile.station
+    steps:
+      - uses: actions/checkout@v4
+
+      # The work server is amd64, the development machine arm64. Building both
+      # means `docker pull` gives each the right one without either knowing --
+      # and it is why this belongs in CI, since cross-building scipy and
+      # opencv locally is slow enough that people stop doing it.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.NAMESPACE }}/${{ matrix.image }}
+          # `sha-` on every build, always: it is the tag a rollback names, and
+          # `latest` tells you nothing about what is actually running. `latest`
+          # moves only on the default branch, because that is what the work
+          # server's watcher follows.
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max

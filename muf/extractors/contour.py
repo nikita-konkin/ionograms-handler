@@ -140,6 +140,7 @@ def extract(
     select: str = "all",
     min_height: int = DEFAULT_MIN_HEIGHT,
     min_run: int = DEFAULT_MIN_RUN,
+    max_range_slope: float | None = None,
     percentile: float = 100.0,
 ) -> MufResult:
     """Estimate MUF by thresholding and contour analysis."""
@@ -166,5 +167,6 @@ def extract(
         presence, ion.freq,
         power_db=ion.db, vrange=ion.vrange,
         min_run=min_run, percentile=percentile,
+        max_range_slope=max_range_slope,
     )
     return MufResult(method=NAME, pick=pick, presence=presence, mask=mask)

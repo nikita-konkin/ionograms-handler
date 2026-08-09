@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}sources{% endblock %}
+{% block hint %}{{ census.count }} emitter(s){% endblock %}
+{% block body %}
+
+<div class="panel">
+  <h2>transmitters heard</h2>
+  <p class="note">
+    From <b>{{ census.kind }}</b> files over the last {{ max_days }} day(s), grouped
+    by chirp rate and arrival phase on a {{ '%.0f'|format(census.cycle_s) }} s cycle.
+    This is what <b>search</b> mode is for: it finds who is transmitting, and each
+    row is the <code>sounder_timings</code> entry that would put the station on it in
+    <b>scheduled</b> mode.
+  </p>
+
+  {% if census.emitters %}
+  <div class="scroll"><table>
+    <tr><th></th><th>rate</th><th>heard at (s into cycle)</th><th>n</th>
+        <th>phase ms</th><th>SNR</th><th>span h</th></tr>
+    {% for e in census.emitters %}
+    <tr>
+      <td><input type="checkbox" class="pick" data-entry='{{ e.timing_entry|tojson }}'></td>
+      <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
+      <td>{{ e.observed_seconds|join(', ') }}</td>
+      <td>{{ e.count }}</td>
+      <td class="muted">{{ '%.2f'|format(e.fraction_s * 1000) }}
+          <span class="muted">&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}</span></td>
+      <td>{{ '%.1f'|format(e.snr_median) }}</td>
+      <td class="muted">{{ e.span_hours }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+
+  <p class="note">
+    <b>Seconds are as received, not as transmitted.</b> A slot is the transmit
+    second plus the one-way travel time plus this receiver's epoch offset. For
+    scheduling that is the number you want &mdash; the station needs to know when to
+    <i>listen</i> &mdash; but it is not a transmit time and not a range.
+  </p>
+  {% else %}
+  <p class="muted">No repeating emitter found in the last {{ max_days }} day(s)
+     with at least {{ min_count }} detections. Search mode has to be running, and
+     its detection files have to be reaching this archive.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>sounding mode</h2>
+  <p class="note">
+    <b>search</b> records whatever sweeps past and infers the schedule.
+    <b>scheduled</b> downconverts a fixed list at times it is told &mdash; named
+    products, an absolute range zero, and no dependence on the detector. Leaving
+    search mode <b>requires</b> a schedule in the same command: a scheduled station
+    with an empty one records nothing while every process reports healthy.
+  </p>
+
+  {% if not stations %}
+  <p class="muted">No station has reported yet, so there is nothing to command.</p>
+  {% else %}
+  <p>
+    <label class="muted" style="font-size:.85rem">station
+      <select id="station">
+        {% for s in stations %}<option>{{ s }}</option>{% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">mode
+      <select id="mode">
+        {% for m in modes %}<option>{{ m }}</option>{% endfor %}
+      </select></label>
+    <button class="pill" id="apply">apply</button>
+    <span class="note">takes effect on the next restart</span>
+  </p>
+  <p class="note">Schedule to send (ticked rows above, editable):</p>
+  <textarea id="timings" rows="4" style="width:100%;font-family:inherit;font-size:.85rem"></textarea>
+  <p id="result" class="note"></p>
+  {% endif %}
+</div>
+
+<script>
+// The control token lives in sessionStorage, put there on the console page --
+// never baked into a page that might be left open. Same contract as the
+// start/stop buttons.
+const picks = () => [...document.querySelectorAll('.pick:checked')]
+  .map(c => JSON.parse(c.dataset.entry));
+
+function refresh() {
+  const box = document.getElementById('timings');
+  if (!box) return;
+  const chosen = picks();
+  // Nested one level: the ini stores sounder_timings per MPI rank.
+  box.value = chosen.length ? JSON.stringify([chosen], null, 1) : '';
+}
+document.querySelectorAll('.pick').forEach(c => c.addEventListener('change', refresh));
+
+const apply = document.getElementById('apply');
+if (apply) apply.addEventListener('click', async () => {
+  const out = document.getElementById('result');
+  const token = sessionStorage.getItem('tok') || '';
+  if (!token) { out.textContent = 'No control token. Paste it on the console page first.'; return; }
+
+  const mode = document.getElementById('mode').value;
+  const raw = document.getElementById('timings').value.trim();
+  const changes = {mode};
+  if (raw) changes.sounder_timings = raw;
+
+  out.textContent = 'sending...';
+  const r = await fetch(`/stations/${document.getElementById('station').value}/commands`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+    body: JSON.stringify({name: 'set_config', params: {changes}}),
+  });
+  const body = await r.json().catch(() => ({}));
+  out.textContent = r.ok
+    ? `queued (${body.id}); the station applies it on its next pull, and it takes effect on restart`
+    : `refused: ${body.detail || r.status}`;
+});
+</script>
+{% endblock %}

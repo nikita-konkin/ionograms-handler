@@ -1,0 +1,90 @@
+# The work server: pull images, do not build them.
+#
+#   docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env up -d
+#
+# `docker-compose.yml` builds from a checkout, which is right on a development
+# machine and wrong here: a server that builds needs the source, a toolchain
+# and ten minutes, and it can drift from what CI tested. This one names images
+# by tag and nothing else.
+#
+# The station agent is deliberately absent. It runs on the *sounding laptop*,
+# next to the radio, not on the server -- see deploy/README.md.
+
+name: ionograms
+
+services:
+  api:
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      ARCHIVE_ROOT: /archive
+      READ_TOKEN: "${READ_TOKEN:-}"
+      CONTROL_TOKEN: "${CONTROL_TOKEN:?set CONTROL_TOKEN in deploy/.env}"
+    volumes:
+      - api-data:/data
+      # Read-only, and it stays read-only. The api renders from the archive and
+      # has no business writing to it.
+      - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
+    labels:
+      # Opt-in, not opt-out. Watchtower updates only what carries this.
+      com.centurylinklabs.watchtower.enable: "true"
+    restart: unless-stopped
+
+  # Ingests whatever is new, on a timer. Same image as the api -- it is the
+  # same code -- but a separate container so a long pass cannot block a request
+  # and a crash here does not take the console down.
+  watch:
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      python -m services.api.watch /archive
+      --db /data/ionograms.sqlite3 --archive-root /archive
+      --methods ${INGEST_METHODS:-algo,kmeans,contour}
+      --jobs ${INGEST_JOBS:-0}
+      --interval ${INGEST_INTERVAL_S:-900}
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      ARCHIVE_ROOT: /archive
+    # The image's healthcheck curls the api's own /healthz, and this container
+    # runs no server -- inherited, it would sit permanently unhealthy and teach
+    # everyone to ignore the column. Its liveness is the log line it prints
+    # every INGEST_INTERVAL_S.
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    restart: unless-stopped
+
+  # Polls Docker Hub and restarts a container when its image digest changes.
+  #
+  # Scoped to labelled containers only (`WATCHTOWER_LABEL_ENABLE`), so adding a
+  # container to this file does not silently enrol it in auto-updates. Nothing
+  # that talks to a radio is labelled: the api is a read surface plus a command
+  # queue, and an unattended restart of it loses nothing but a few seconds of
+  # uptime. The station agent is not here at all.
+  watchtower:
+    image: containrrr/watchtower:latest
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"          # drop the superseded image
+      WATCHTOWER_POLL_INTERVAL: "${WATCHTOWER_POLL_S:-300}"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Only needed for private repositories; harmless when the config is
+      # absent, and it is what lets watchtower authenticate the pull.
+      - "${DOCKER_CONFIG_HOST:-/dev/null}:/config.json:ro"
+    restart: unless-stopped
+
+volumes:
+  api-data:

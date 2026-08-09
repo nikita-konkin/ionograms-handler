@@ -234,3 +234,43 @@ def test_auto_gate_is_indifferent_to_axis_direction():
 def test_auto_gate_returns_none_rather_than_raising_on_junk():
     assert calibrate.auto_gate(np.zeros((0, 0)), np.array([])) is None
     assert calibrate.auto_gate(np.zeros((1, 5)), np.arange(5.0)) is None
+
+
+def test_geometry_gate_brackets_the_hop_families():
+    """Both edges come from `trace.hop_range_km`, the same formula
+    `identify_hops` labels segments with, so a gate and a hop label cannot
+    disagree about what a range means."""
+    from muf import calibrate, trace
+
+    class _H:
+        is_oblique = True
+        tx_latitude, tx_longitude = 54.63, 13.37      # Juliusruh
+        rx_latitude, rx_longitude = 62.073, 9.111     # DOB
+
+    lo, hi = calibrate.geometry_gate(_H(), margin_km=0.0)
+    ground = calibrate.ground_range_km(_H())
+
+    assert lo == pytest.approx(trace.hop_range_km(ground, 1,
+                                                  min(trace.HOP_HEIGHTS_KM)))
+    assert hi == pytest.approx(trace.hop_range_km(ground,
+                                                  calibrate.DEFAULT_MAX_HOPS,
+                                                  max(trace.HOP_HEIGHTS_KM)))
+    assert 0 < lo < hi
+
+
+def test_geometry_gate_is_none_without_a_usable_path():
+    """Vertical sounding and missing coordinates both mean "no path", which is
+    the caller's cue to fall back rather than to crop on a guess."""
+    from muf import calibrate
+
+    class _Vertical:
+        is_oblique = False
+        tx_latitude = tx_longitude = rx_latitude = rx_longitude = 0.0
+
+    class _NoCoords:
+        is_oblique = True
+        tx_latitude = tx_longitude = float("nan")
+        rx_latitude, rx_longitude = 62.0, 9.0
+
+    assert calibrate.geometry_gate(_Vertical()) is None
+    assert calibrate.geometry_gate(_NoCoords()) is None

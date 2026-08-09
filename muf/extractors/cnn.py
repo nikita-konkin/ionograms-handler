@@ -138,6 +138,7 @@ def extract(
     threshold_db: float = DEFAULT_THRESHOLD_DB,
     min_height: int = 2,
     min_run: int = DEFAULT_MIN_RUN,
+    max_range_slope: float | None = None,
     percentile: float = 100.0,
 ) -> MufResult:
     """Denoise with the autoencoder, then segment its output.
@@ -159,5 +160,6 @@ def extract(
         presence, ion.freq,
         power_db=ion.db, vrange=ion.vrange,
         min_run=min_run, percentile=percentile,
+        max_range_slope=max_range_slope,
     )
     return MufResult(method="cnn", pick=pick, presence=presence, mask=mask)

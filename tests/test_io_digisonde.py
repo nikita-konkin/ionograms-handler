@@ -221,6 +221,53 @@ def test_a_gate_that_misses_entirely_is_an_error(make_digisonde_h5):
                           gate_km=(50_000.0, 60_000.0))
 
 
+def test_the_default_gate_comes_from_the_path_not_the_pulse_timing(make_digisonde_h5):
+    """The stored extent is `c` times the inter-pulse period -- a property of
+    the transmitter's timing, not of this circuit. On the 864 km Juliusruh
+    path it reaches 3597 km while no echo can arrive before ~998, and the near
+    third of that window is where the interference sits."""
+    from muf import calibrate
+
+    path = make_digisonde_h5(n_range=1000, range_step_m=3e3, offset_us=2000.0,
+                             transmitter="Juliusruh", receiver="DOB")
+    header = loader.read_header(path)
+    want = calibrate.geometry_gate(header)
+    assert want is not None
+
+    ion = loader.load(path)
+    assert ion.cal.vrange.min() >= want[0]
+    assert ion.cal.vrange.max() <= want[1]
+    assert ion.power.shape[1] < 1000, "the window narrowed"
+    # The near end is the point: nothing below one hop at the lowest height.
+    assert ion.cal.vrange.min() > 800.0
+
+
+def test_an_explicit_gate_still_wins(make_digisonde_h5):
+    path = make_digisonde_h5(n_range=1000, range_step_m=3e3, offset_us=0.0,
+                             transmitter="Juliusruh", receiver="DOB")
+    ion = loader.load(path, gate_km=(100.0, 400.0))
+    assert ion.cal.vrange.min() >= 100.0 and ion.cal.vrange.max() <= 400.0
+
+
+def test_without_geometry_the_stored_extent_is_kept(make_digisonde_h5):
+    """No coordinates, no gate -- falling back to a guess would crop real data
+    on a path nothing knows the length of."""
+    path = make_digisonde_h5(n_range=64, transmitter="nowhere")
+    ion = io_digisonde.load(path, stations={})
+    assert ion.power.shape[1] == 64
+
+
+def test_a_derived_gate_that_misses_warns_instead_of_raising(make_digisonde_h5):
+    """A geometry gate missing entirely means the range zero and the path
+    disagree -- `offset_us`, most likely. The caller never asked for a gate,
+    so keep the data and say so."""
+    path = make_digisonde_h5(n_range=16, range_step_m=3e3, offset_us=0.0,
+                             transmitter="Juliusruh", receiver="DOB")
+    with pytest.warns(UserWarning, match="offset_us"):
+        ion = loader.load(path)
+    assert ion.power.shape[1] == 16, "data kept"
+
+
 # --------------------------------------------------------------------------
 # Through the loader
 # --------------------------------------------------------------------------
@@ -239,8 +286,11 @@ def test_window_and_zero_periods_do_not_warn(make_digisonde_h5, recwarn):
     """They warn for chirp2, where a window genuinely was fixed at archive
     time. A digisonde product is pulse compressed, so there is no window that
     could have been used instead and warning about one would invent a knob."""
-    loader.load(make_digisonde_h5(), window=4096, zero_periods=3)
-    assert not [w for w in recwarn if "window" in str(w.message)]
+    # Enough range bins that the geometry gate lands inside the file, so the
+    # only warning that could appear is the one under test.
+    loader.load(make_digisonde_h5(n_range=1000, range_step_m=3e3),
+                window=4096, zero_periods=3)
+    assert not [w for w in recwarn if "ignored" in str(w.message)]
 
 
 def test_the_cache_key_separates_the_formats(make_digisonde_h5, tmp_path):

@@ -117,6 +117,52 @@ def default_gate(header: LfsHeader) -> tuple[float, float]:
     return lo, hi
 
 
+#: Hops a geometry gate leaves room for. Three covers what is worth keeping on
+#: the paths this receives: at 864 km a 3-hop echo is still inside the
+#: unambiguous window, and beyond that the returns are too weak to scale.
+DEFAULT_MAX_HOPS = 3
+
+#: Slack on each edge of a geometry gate, in km. The hop calculation is
+#: flat-Earth and the mirror heights are a scanned band, not a measurement, so
+#: an echo may sit slightly outside the predicted family. Cropping a real trace
+#: is worse than admitting some noise.
+GEOMETRY_GATE_MARGIN_KM = 100.0
+
+
+def geometry_gate(header, *,
+                  max_hops: int = DEFAULT_MAX_HOPS,
+                  margin_km: float = GEOMETRY_GATE_MARGIN_KM
+                  ) -> tuple[float, float] | None:
+    """Range window an echo on this path can physically occupy. ``None`` if unknown.
+
+    Where :func:`default_gate` asks the *instrument* what it recorded, this
+    asks the *path* what is possible: the shortest echo is one hop at the
+    lowest plausible mirror height, the longest is ``max_hops`` at the highest.
+    Both edges come from :func:`muf.trace.hop_range_km`, the same formula
+    ``identify_hops`` labels segments with, so a gate and a hop label cannot
+    disagree about what a range means.
+
+    This exists for receivers whose stored extent says nothing about the path.
+    A ``.lfs`` header carries an ``rmax`` chosen for its own circuit, and a v2
+    chirp product was gated at acquisition -- but a digisonde product holds the
+    whole unambiguous window, ``c`` times the inter-pulse period, which is a
+    property of the transmitter's pulse timing and not of the geometry. On an
+    864 km path that window reaches 3597 km while no echo can arrive before
+    998, and the near third of it is where the interference lives.
+
+    Returns ``None`` for vertical sounding and for headers without usable
+    coordinates, which is the caller's cue to fall back.
+    """
+    from .trace import HOP_HEIGHTS_KM, hop_range_km
+
+    ground = ground_range_km(header)
+    if ground is None:
+        return None
+    lo = hop_range_km(ground, 1, min(HOP_HEIGHTS_KM)) - margin_km
+    hi = hop_range_km(ground, max(1, max_hops), max(HOP_HEIGHTS_KM)) + margin_km
+    return max(lo, 0.0), hi
+
+
 #: Fraction of the peak-above-baseline that still counts as trace, when
 #: :func:`auto_gate` grows the window outward from the busiest range.
 AUTO_GATE_FLOOR_FRACTION = 0.25

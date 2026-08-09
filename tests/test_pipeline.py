@@ -304,3 +304,39 @@ def test_real_day_is_physically_plausible(real_dir):
     assert midday > night, "MUF must be higher in daylight than at night"
     assert 5 < night < 25
     assert 10 < midday < 40
+
+
+def test_the_range_rule_is_on_for_digisonde_and_off_for_lfs(synthetic_path, options,
+                                                            make_digisonde_h5):
+    """Scoped per format on purpose: switching it on for `.lfs` would move every
+    result already published, and leaving it off for a digisonde reception lets
+    a crowded band satisfy the consecutive-bins rule by accident."""
+    from muf import pick as pick_module
+
+    lfs_opts = pipeline.Options(window=WINDOW, gate_km=(2000.0, 5000.0),
+                                methods=("algo",))
+    assert lfs_opts.per_method()["algo"].get("max_range_slope") is None
+
+    seen = {}
+    real_run = pipeline.extractors.run
+
+    def spy(ion, methods=(), **kwargs):
+        seen.update(kwargs)
+        return real_run(ion, methods=methods, **kwargs)
+
+    pipeline.extractors.run = spy
+    try:
+        pipeline.process_file(synthetic_path, lfs_opts)
+        assert "max_range_slope" not in seen.get("algo", {}), ".lfs untouched"
+
+        seen.clear()
+        digi = make_digisonde_h5(n_range=1000, range_step_m=3e3)
+        pipeline.process_file(digi, pipeline.Options(methods=("algo",)))
+        assert seen["algo"]["max_range_slope"] == pick_module.DEFAULT_MAX_RANGE_SLOPE
+    finally:
+        pipeline.extractors.run = real_run
+
+
+def test_an_explicit_slope_overrides_the_per_format_default(make_digisonde_h5):
+    opts = pipeline.Options(methods=("algo",), max_range_slope=999.0)
+    assert opts.per_method()["algo"]["max_range_slope"] == 999.0

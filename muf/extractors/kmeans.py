@@ -110,6 +110,7 @@ def extract(
     min_db: float | None = None,
     margin_db: float = DEFAULT_MARGIN_DB,
     min_run: int = DEFAULT_MIN_RUN,
+    max_range_slope: float | None = None,
     percentile: float = 100.0,
     fit_sample: int = DEFAULT_FIT_SAMPLE,
     random_state: int = DEFAULT_RANDOM_STATE,
@@ -141,5 +142,6 @@ def extract(
         presence, ion.freq,
         power_db=ion.db, vrange=ion.vrange,
         min_run=min_run, percentile=percentile,
+        max_range_slope=max_range_slope,
     )
     return MufResult(method="kmeans", pick=pick, presence=presence, mask=mask)

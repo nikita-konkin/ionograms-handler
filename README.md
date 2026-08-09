@@ -1092,6 +1092,108 @@ every estimator shares means the same thing in either. Measured on a real
 Juliusruh→DOB sounding, the noise floor lands at **25.6 dB** — the same as a
 chirp product.
 
+**The default gate comes from the path, not the pulse timing.** A digisonde
+product stores the whole unambiguous window — `c` times the inter-pulse
+period, 2997 km at the usual 10 ms — which is a property of the transmitter's
+timing and says nothing about this circuit. `calibrate.geometry_gate` asks the
+geometry instead: the near edge is one hop at the lowest plausible mirror
+height, the far edge `DEFAULT_MAX_HOPS` at the highest, both from
+`trace.hop_range_km` so a gate and a hop label cannot disagree about what a
+range means.
+
+| path | stored | geometry gate | kept |
+|---|---|---|---|
+| Juliusruh, 864 km | 600–3597 km | 898–3222 km | 775 of 1000 bins |
+| Chilton, 1325 km | 600–3597 km | 1317–3380 km | 687 of 1000 bins |
+
+On the 864 km path nothing can arrive before ~998 km, and the near third of
+the stored window is where the interference sits. Gating it removed two
+spurious bright patches and moved the picked MUF from 2.96 to 3.44 MHz, onto
+the edge of the actual echo. `--gate` still overrides; without usable
+coordinates the stored extent is kept rather than cropped on a guess.
+
+**The range-consistency rule, and why these files yield nothing.** Across all
+four stations the picks landed at 3.05–3.06 MHz — identical to 0.01 MHz on
+paths of 864 to 1360 km, at latitudes from 51°N to 69°N, with no diurnal
+movement over ten hours — while the pick *range* wandered randomly over
+1700 km. Four circuits cannot share a MUF that precisely, and a real echo's
+range does not jump. `min_run` asks whether neighbouring frequencies are lit,
+which a crowded band satisfies by accident; `max_range_slope` asks whether
+they agree about **where**, which it cannot.
+
+The test splits a run wherever the brightest range jumps by more than
+`DEFAULT_MAX_RANGE_SLOPE` (150 km/MHz) per frequency step, then re-applies
+`min_run` so a long stretch of interference cannot survive as several short
+ones. It is **off by default** and on only for digisonde, because switching it
+on for `.lfs` would move every result already published.
+
+It is not a novel test. ARTIST 5 — Galkin and Reinisch, UMLCAR, the authors of
+the SAO.XML spec `muf export` writes — groups echoes by "the proximity and
+**good continuation** principles of the Gestalt perception", having found that
+tags alone are unreliable ("even polarization tags can be wrong"). Ding et al.
+state the same criterion as "the continuity of the slope of the single layer
+trace and rejection of impractical changes in slope when the ionogram is
+traversed in the frequency axis".
+
+Measured against a real trace, it is not aggressive:
+
+| | raw run | after the range test |
+|---|---|---|
+| `cyprus1_20260204_030010.lfs` | 39 bins | **22** |
+| `cyprus1_20260204_031010.lfs` | 31 bins | **28** |
+| Juliusruh digisonde | 14 bins | **2** |
+| Ramfjordmoen digisonde | 6 bins | **1** |
+
+A genuine trace keeps 60–70% of its run, well above `min_run = 5`. The
+digisonde runs collapse to 1–2 bins, and **all 334 soundings now yield no
+pick** — which is the correct answer, not a failure: nothing in them is a
+range-consistent trace above 43 dB. Heavy rejection at these latitudes is also
+what the reference implementation reports. ARTIST 5 excludes "only ~5%" of
+records at "mid-latitude, low interference observatories" but "up to 70% … at
+polar stations during severe spread F conditions", and DOB sits at 62°N with
+Ramfjordmoen at 69.6°N.
+
+**The paired vertical foF2 settles it.** Each of these stations scales its own
+*vertical* ionogram and publishes it, so `muf.reference.giro.history` fetches
+what the transmitter measured directly overhead at the same instant, and
+`geometry.fof2_to_muf` converts it to the oblique MUF this receiver should see:
+
+| station | path | its own foF2, 00–11:30Z | implied oblique MUF |
+|---|---|---|---|
+| Juliusruh | 864 km | 1.85 → 6.25 MHz | **3.4 → 11.5 MHz** |
+| Dourbes | 1360 km | 2.85 → 8.00 MHz | **6.7 → 18.8 MHz** |
+| Tromsø | 951 km | 3.50 → 5.12 MHz | **7.2 → 10.5 MHz** |
+
+So the ionosphere was varying strongly — the implied MUF roughly triples
+through the morning — while every pick sat flat at 3.05 MHz. The picks were
+never measuring it. (Chilton has no real-time feed; DIDBase carries it, the
+mirror does not.)
+
+**Lowering the detection threshold does not recover the trace, and was
+measured rather than assumed.** On a 09:00Z Juliusruh sounding, where the
+station's own foF2 implies a MUF near 10.3 MHz:
+
+| threshold | lit bins | longest run | after the range test |
+|---|---|---|---|
+| 43 dB | 18 | 8 | **0** |
+| 37 dB | 34 | 8 | **0** |
+| 34 dB | 57 | 10 | **0** |
+| 28 dB | 172 | 34 | **0** |
+
+28 dB is barely above the 25.6 dB noise median, and still nothing
+range-consistent appears. `--reject-interference` removes 5 rows and changes
+nothing. The reason is visible in the array: at 2.96 MHz **350 lit range cells
+span 1902 km** — a signal filling the whole range window, which is what an
+unsynchronised emitter does after pulse compression. Loosening the range
+tolerance to 60–250 km readmits exactly that blob, which is why it stays tight.
+
+So the threshold is deliberately unchanged. It is already tunable per method
+when there is reason to —
+`Options(method_options={"contour": {"threshold_db": 34}})` — and on this data
+there is not. What is missing is signal, not sensitivity: the Digisonde
+radiates weakly at the low elevation angles an 864 km hop needs, and nothing
+from it clears the noise on a range-consistent path.
+
 `muf detect` is the exception: it reads chirpsounder2 **detection** files
 (`par-*.h5`, `chirp-*.h5`, `cdetections-*.h5`) and nothing else. `daily`,
 `track` and `compare` read result tables, not soundings.

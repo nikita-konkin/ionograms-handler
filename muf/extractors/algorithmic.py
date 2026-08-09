@@ -97,6 +97,7 @@ def extract(
     neighbour_threshold: float = DEFAULT_NEIGHBOUR_THRESHOLD,
     run_length: int = RUN_LENGTH,
     min_run: int = DEFAULT_MIN_RUN,
+    max_range_slope: float | None = None,
     percentile: float = 100.0,
     legacy: bool = False,
 ) -> MufResult:
@@ -122,6 +123,7 @@ def extract(
         presence, ion.freq,
         power_db=ion.db, vrange=ion.vrange,
         min_run=min_run, percentile=percentile,
+        max_range_slope=max_range_slope,
     )
     return MufResult(
         method="algo", pick=pick, presence=presence, mask=mask,

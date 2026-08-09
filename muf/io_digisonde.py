@@ -55,6 +55,7 @@ from typing import Mapping
 
 import numpy as np
 
+from . import calibrate
 from .calibrate import Calibration
 from .io_chirp import snr_to_power
 from .spectro import Ionogram
@@ -291,17 +292,42 @@ def load(path: str | Path,
     vrange_km = absolute_km[::-1]
     power = snr_to_power(combined)[:, ::-1]
 
-    lo, hi = float(vrange_km.min()), float(vrange_km.max())
-    if gate_km is not None:
-        want_lo, want_hi = float(gate_km[0]), float(gate_km[1])
+    stored_lo, stored_hi = float(vrange_km.min()), float(vrange_km.max())
+    lo, hi = stored_lo, stored_hi
+
+    want = gate_km
+    if want is None:
+        # The stored extent is `c` times the inter-pulse period -- a property
+        # of the transmitter's pulse timing, not of this path. On an 864 km
+        # circuit it reaches 3597 km while no echo can arrive before 998, and
+        # the near third of that window is where the interference sits. Ask
+        # the geometry instead, and fall back to the stored extent only when
+        # the geometry is unavailable.
+        want = calibrate.geometry_gate(header)
+
+    if want is not None:
+        want_lo, want_hi = float(want[0]), float(want[1])
         keep = (vrange_km >= want_lo) & (vrange_km <= want_hi)
         if not keep.any():
-            raise ValueError(
-                f"{path}: gate {want_lo:.0f}-{want_hi:.0f} km does not overlap "
-                f"the stored {lo:.0f}-{hi:.0f} km")
-        vrange_km = vrange_km[keep]
-        power = power[:, keep]
-        lo, hi = float(vrange_km.min()), float(vrange_km.max())
+            if gate_km is not None:
+                raise ValueError(
+                    f"{path}: gate {want_lo:.0f}-{want_hi:.0f} km does not "
+                    f"overlap the stored {stored_lo:.0f}-{stored_hi:.0f} km")
+            # A *derived* gate that misses entirely means the geometry and the
+            # range zero disagree -- most likely `offset_us`. Say so and keep
+            # the data rather than raising on a file the caller never gated.
+            warnings.warn(
+                f"{path.name}: no stored range falls in the "
+                f"{want_lo:.0f}-{want_hi:.0f} km window this "
+                f"{header.tx_name}->{header.rx_name} path allows; keeping the "
+                f"stored {stored_lo:.0f}-{stored_hi:.0f} km. Check `offset_us` "
+                f"-- the range zero is configured, not measured.",
+                stacklevel=2,
+            )
+        else:
+            vrange_km = vrange_km[keep]
+            power = power[:, keep]
+            lo, hi = float(vrange_km.min()), float(vrange_km.max())
 
     freqs_mhz = freqs_hz / 1e6
     cal = _build_calibration(freqs_mhz, vrange_km, (lo, hi), absolute_km)

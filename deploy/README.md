@@ -145,6 +145,128 @@ A `SKIPPED` count that never falls is worth chasing: unreadable files are not
 recorded, so they are retried every pass, which is right for a half-synced
 file and pointless for a corrupt one.
 
+### Sounding mode, and where a schedule comes from
+
+`/ui/sources` lists the transmitters the station has actually heard, from the
+detection files under `ARCHIVE_ROOT`, and offers each as a `sounder_timings`
+entry. The panel below it switches the station between the two sounding modes.
+
+That pairing is the point. **search** (serendipitous) mode records whatever
+sweeps past and infers who was transmitting; **scheduled** mode downconverts a
+fixed list at times it is told, giving named products with an absolute range
+zero. The output of the first is the input to the second, and `control.py`
+enforces it: leaving search mode without a schedule is refused, because a
+scheduled station with an empty `sounder_timings` records nothing while every
+process reports healthy.
+
+**This widens what the web can do to a radio**, so it is narrow on purpose.
+Of the five settings `control.py` can edit, only `mode` and `sounder_timings`
+are routed — `output_dir` decides where a week of data lands and a typo is
+unrecoverable from here. The allow-list is checked at the server as well as at
+the agent, `mode` is validated against `control.MODES`, and the change rewrites
+the ini and takes effect on the **next restart**, so it is two deliberate
+actions rather than one.
+
+The seconds shown are **as received**, not as transmitted — a slot is the
+transmit second plus travel time plus this receiver's epoch offset. For
+scheduling that is the number you want; it is not a transmit time and not a
+range.
+
+## 2b. Deploying from Docker Hub (the work server)
+
+`docker-compose.yml` **builds** from a checkout. That is right on a development
+machine and wrong on a server: building needs the source, a toolchain and ten
+minutes, and what comes out can differ from what CI tested.
+`docker-compose.hub.yml` pulls instead.
+
+```bash
+cp deploy/.env.example deploy/.env      # set CONTROL_TOKEN and IMAGE_NAMESPACE
+docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env up -d
+```
+
+Three services, and the third is the one to think about:
+
+| service | what it does |
+|---|---|
+| `api` | the console and read API, as before |
+| `watch` | `services.api.watch` on a timer — ingests whatever is new, every `INGEST_INTERVAL_S` |
+| `watchtower` | polls Docker Hub and restarts a container when its image digest changes |
+
+`watch` is the same image as `api` because it is the same code, but a separate
+container so a long ingest cannot block a request and a crash in one does not
+take the other down. Its healthcheck is **disabled** on purpose: the image's
+check curls the api's `/healthz`, and this container runs no server, so
+inheriting it would leave a permanently-unhealthy container and teach everyone
+to ignore the column. Its liveness is the line it logs each pass:
+
+```
+2026-08-09T20:46:11Z  1722 on disk, 0 new
+```
+
+### The pipeline
+
+`.github/workflows/ci.yml` runs the suite on every push and pull request, and
+publishes **only if the suite is green** — `publish` declares `needs: test`,
+so a red build cannot produce an image the server would then pull. Pull
+requests are tested but never published, so a fork cannot push into your
+registry.
+
+Both images are built for `linux/amd64` and `linux/arm64`, so `docker pull`
+gives the work server and a development Mac the right one without either
+asking. That is most of why this belongs in CI: cross-building scipy and
+opencv locally is slow enough that people stop doing it.
+
+Tags:
+
+| tag | when | use |
+|---|---|---|
+| `sha-<short>` | every build | **what a rollback names.** `latest` does not tell you what is running |
+| `latest` | default branch only | what `watchtower` follows |
+| `v1.2.3`, `1.2` | on a `v*` git tag | releases |
+
+Two repository secrets are needed, under Settings → Secrets and variables →
+Actions:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN` — a Docker Hub **access token**, not the account password
+  (Docker Hub → Account settings → Personal access tokens), scoped
+  Read & Write.
+
+Add the repository *variable* `DOCKERHUB_NAMESPACE` if the Docker Hub account
+is not the GitHub owner; otherwise it defaults to the owner.
+
+### Rolling back
+
+`latest` moving is what makes an automatic update convenient and what makes a
+bad one land unattended. To pin a server, or to undo:
+
+```bash
+# in deploy/.env
+IMAGE_TAG=sha-1a2b3c4
+```
+```bash
+docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env up -d
+```
+
+A pinned tag also stops watchtower moving it, since the digest behind a `sha-`
+tag never changes.
+
+### What is deliberately *not* auto-updated
+
+`watchtower` runs with `WATCHTOWER_LABEL_ENABLE`, so it updates **only**
+containers carrying `com.centurylinklabs.watchtower.enable=true`. Adding a
+service to the compose file does not silently enrol it.
+
+Nothing that touches a radio is labelled. The `api` is a read surface plus a
+command queue; an unattended restart costs a few seconds of uptime and no
+data. **The station agent is not on this server at all** — it runs on the
+sounding laptop, and it should be updated when somebody is watching, because
+a restart there interrupts acquisition.
+
+If you later containerise the agent on the laptop, leave it unlabelled and
+update it by hand. An auto-updating process that can stop a radio is a
+different risk from an auto-updating web page.
+
 ## 3. Connect the real acquisition laptop
 
 This is the part that needs a decision, because it is the only step that makes

@@ -174,11 +174,75 @@ def test_a_command_is_queued_delivered_once_and_acked(client):
     assert shown["commands"][0]["ok"] is True
 
 
-def test_only_process_verbs_are_queueable_from_the_web(client):
-    """control.py allows more; the web surface deliberately does not."""
-    for name in ("set_config", "isolate", "mask", "logs"):
+SCHEDULE = [{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0}]
+
+
+def test_the_web_queues_process_verbs_and_the_mode_edit_only(client):
+    """`control.py` allows more than this. The widening to `set_config` is
+    deliberate -- the sounding mode is what the emitter census on /ui/sources
+    is *for* -- but it stops there."""
+    for name in ("isolate", "mask", "logs", "enable"):
         r = client.post("/stations/SIM/commands", json={"name": name}, headers=CTL)
         assert r.status_code == 400, name
+
+    ok = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"mode": "scheduled",
+                               "sounder_timings": SCHEDULE}}})
+    assert ok.status_code == 200
+
+
+def test_settings_outside_the_web_list_are_refused(client):
+    """`output_dir` decides where a week of data lands and a typo is
+    unrecoverable from here. The agent would accept it; the web does not."""
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {"output_dir": "/tmp/x"}}})
+    assert r.status_code == 400
+    assert "output_dir" in r.json()["detail"]
+
+
+def test_leaving_search_mode_without_a_schedule_is_refused(client):
+    """The failure the agent exists to prevent: a scheduled station with no
+    schedule records nothing while every process reports healthy. Refused at
+    the server too, so the operator sees it immediately."""
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {"mode": "scheduled"}}})
+    assert r.status_code == 400
+    assert "record nothing" in r.json()["detail"]
+
+    partial = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"mode": "scheduled",
+                               "sounder_timings": [{"chirp-rate": 100e3}]}}})
+    assert partial.status_code == 400
+    assert "missing" in partial.json()["detail"]
+
+
+def test_going_back_to_search_needs_no_schedule(client):
+    """Search mode records whatever sweeps past, so it has nothing to be
+    missing. The asymmetry is the point."""
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {"mode": "search"}}})
+    assert r.status_code == 200
+
+
+def test_an_unknown_mode_is_refused(client):
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {"mode": "turbo"}}})
+    assert r.status_code == 400
+    assert "unknown" in r.json()["detail"]
+
+
+def test_a_schedule_sent_as_json_text_is_accepted(client):
+    """A browser form sends a string; the ini stores a nested list. Both are
+    schedules and both have to parse, or the UI cannot post what it renders."""
+    import json as _json
+
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"mode": "scheduled",
+                               "sounder_timings": _json.dumps([SCHEDULE])}}})
+    assert r.status_code == 200
 
 
 def test_a_failed_command_is_recorded_as_failed(client):
@@ -628,3 +692,61 @@ def test_a_circuit_no_estimator_picked_is_not_offered(client, api_db, tmp_path):
     page = client.get("/ui/series?method=algo").text
     assert "cyprus1 -&gt; rx" in page or "cyprus1 -> rx" in page
     assert "SGO" not in page, "a circuit with no picks is not a choice"
+
+
+# --------------------------------------------------------------------------
+# Sources: search mode's output is scheduled mode's input
+# --------------------------------------------------------------------------
+
+def test_the_census_offers_each_emitter_as_a_schedule_entry(tmp_path,
+                                                            make_detection_h5):
+    """The join between the two sounding modes. `control.py` refuses to leave
+    search mode without a `sounder_timings` list, so search has to be able to
+    produce one."""
+    from services.api import sources
+
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    got = sources.census(tmp_path, max_days=2, min_count=2)
+    assert got["count"] >= 1, got
+    entry = got["emitters"][0]["timing_entry"]
+    assert set(entry) == {"chirp-rate", "rep", "chirpt"}, entry
+    assert entry["chirp-rate"] > 0 and entry["rep"] > 0
+
+
+def test_the_census_names_no_transmitter(tmp_path, make_detection_h5):
+    """Nothing in a detection identifies who sent it. A guessed name would
+    reach the product file name and then the database, looking like
+    knowledge -- so `transmit_name` is left for the operator."""
+    from services.api import sources
+
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    for emitter in sources.census(tmp_path, min_count=2)["emitters"]:
+        assert "transmit_name" not in emitter["timing_entry"]
+
+
+def test_an_archive_with_no_detections_is_empty_not_an_error(tmp_path):
+    """A station that has never run search mode, or whose detection files have
+    not synced, is a normal state and not a failure."""
+    from services.api import sources
+
+    got = sources.census(tmp_path)
+    assert got == {"count": 0, "kind": "none", "cycle_s": got["cycle_s"],
+                   "emitters": []}
+
+
+def test_the_sources_page_and_endpoint_agree(client, tmp_path, make_detection_h5):
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    client.app.state.archive_root = tmp_path
+
+    api = client.get("/sources?min_count=2").json()
+    page = client.get("/ui/sources?min_count=2")
+    assert page.status_code == 200
+    assert f"{api['count']} emitter(s)" in page.text

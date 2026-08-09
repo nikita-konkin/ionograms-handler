@@ -41,6 +41,12 @@ class Options:
     methods: tuple[str, ...] = DEFAULT_METHODS
     min_run: int | None = None
     percentile: float | None = None
+    #: Steepest range-against-frequency slope a run may have, km/MHz. ``None``
+    #: means "decide per format": off for ``.lfs`` and chirp2, where every
+    #: result to date was produced without it, and on for digisonde, where the
+    #: band is crowded enough that consecutive lit bins are no evidence of a
+    #: trace on their own. Set it explicitly to force either way.
+    max_range_slope: float | None = None
     cache_dir: Path | None = None
     method_options: dict[str, dict] | None = None
     fit: bool = True
@@ -70,6 +76,8 @@ class Options:
             shared["min_run"] = self.min_run
         if self.percentile is not None:
             shared["percentile"] = self.percentile
+        if self.max_range_slope is not None:
+            shared["max_range_slope"] = self.max_range_slope
 
         out: dict[str, dict] = {}
         for name in self.methods:
@@ -155,7 +163,19 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         sweep_fraction=round(ion.cal.sweep_fraction, 4),
     )
 
-    results = extractors.run(ion, methods=options.methods, **options.per_method())
+    per_method = options.per_method()
+    if options.max_range_slope is None and getattr(header, "format", "") == "digisonde":
+        # A digisonde reception is one antenna listening to a crowded band it
+        # was never pointed at, and the consecutive-bins rule is easy to
+        # satisfy there by accident: four DOB circuits all reported 3.05 MHz
+        # while their pick ranges wandered over 1700 km. Requiring the range
+        # to agree across neighbouring frequencies is what separates a trace
+        # from a coincidence. Applied per format rather than globally, because
+        # switching it on for `.lfs` would move every result already published.
+        for opts in per_method.values():
+            opts.setdefault("max_range_slope", pick_module.DEFAULT_MAX_RANGE_SLOPE)
+
+    results = extractors.run(ion, methods=options.methods, **per_method)
     band_edge = ion.cal.freq_stop - BAND_EDGE_BINS * ion.cal.freq_step_mhz
 
     for name, result in results.items():

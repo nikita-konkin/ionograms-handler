@@ -21,6 +21,35 @@ import numpy as np
 # trace fades over a few bins.
 DEFAULT_MIN_RUN = 5
 
+#: Steepest range-against-frequency slope a real trace is allowed, km/MHz.
+#:
+#: An ionospheric echo's virtual range is a smooth function of frequency:
+#: measured on this instrument the low ray runs +2 to +17 km/MHz and the high
+#: ray -24 to -76, steepening only at the nose. Interference has no such
+#: constraint -- consecutive frequency bins light up at unrelated ranges,
+#: because there is no propagation path tying them together.
+#:
+#: This is not a novel test. It is the "good continuation" half of the pair of
+#: Gestalt grouping principles ARTIST 5 rests its echo grouping on -- Galkin
+#: and Reinisch, *The New ARTIST 5 for all Digisondes*, INAG, 2008, the same
+#: authors as the SAO.XML spec `muf.export.saoxml` writes -- and the same
+#: criterion Ding et al. state as "the continuity of the slope of the single
+#: layer trace and rejection of impractical changes in slope when the ionogram
+#: is traversed in the frequency axis". Both arrived at it because thresholding
+#: alone does not separate an echo from a crowded band.
+#:
+#: 150 is roughly twice the steepest real leg measured here, so it admits the
+#: nose while rejecting a range that jumps. It is a *rate*, applied per
+#: frequency step, so it means the same thing on a 25 kHz digisonde axis and a
+#: 20.5 kHz .lfs one.
+DEFAULT_MAX_RANGE_SLOPE = 150.0
+
+#: Floor on the per-step range tolerance, in range bins. Two bins of jitter is
+#: the peak-finding, not the ionosphere: without this the rule would reject a
+#: real trace on a fine frequency axis, where the allowed slope works out
+#: smaller than the range resolution.
+RANGE_SLOPE_FLOOR_BINS = 2.0
+
 
 @dataclass(frozen=True)
 class MufPick:
@@ -53,6 +82,55 @@ def find_runs(presence: np.ndarray, min_run: int) -> list[tuple[int, int]]:
         for a, b in zip(starts, stops)
         if b - a >= min_run
     ]
+
+
+def echo_ranges(presence: np.ndarray, power_db: np.ndarray,
+                vrange: np.ndarray) -> np.ndarray:
+    """Brightest range at each detected frequency; NaN where nothing was found.
+
+    The brightest cell rather than a centroid: a centroid of a row holding both
+    a trace and an interferer sits between them, at a range neither occupies,
+    which is precisely the reading this rule exists to catch.
+    """
+    out = np.full(presence.shape, np.nan, dtype=float)
+    idx = np.flatnonzero(presence)
+    if idx.size:
+        out[idx] = np.asarray(vrange)[np.argmax(power_db[idx], axis=1)]
+    return out
+
+
+def split_on_range_jumps(runs, ranges: np.ndarray,
+                         tolerance_km: float) -> list[tuple[int, int]]:
+    """Break runs wherever the echo range jumps between adjacent bins.
+
+    A run of consecutive lit frequency bins is only evidence of a trace if
+    those bins agree about *where* the echo is. Interference satisfies the
+    consecutive-bins test easily -- a crowded band lights up many neighbouring
+    frequencies -- and fails this one, because nothing ties its ranges
+    together.
+    """
+    out: list[tuple[int, int]] = []
+    for a, b in runs:
+        start = a
+        for i in range(a + 1, b + 1):
+            previous, current = ranges[i - 1], ranges[i]
+            broken = not (np.isfinite(previous) and np.isfinite(current)) \
+                or abs(current - previous) > tolerance_km
+            if broken:
+                out.append((start, i - 1))
+                start = i
+        out.append((start, b))
+    return out
+
+
+def _range_tolerance(freq: np.ndarray, vrange: np.ndarray,
+                     slope_km_per_mhz: float) -> float:
+    """Per-step range tolerance in km, from the slope limit and the axes."""
+    freq_step = float(np.median(np.abs(np.diff(freq)))) if freq.size > 1 else 0.0
+    range_step = (float(np.median(np.abs(np.diff(vrange))))
+                  if np.size(vrange) > 1 else 0.0)
+    return max(slope_km_per_mhz * freq_step,
+               RANGE_SLOPE_FLOOR_BINS * range_step)
 
 
 def _parabolic_offset(y_prev: float, y_peak: float, y_next: float) -> float:
@@ -90,6 +168,7 @@ def pick_muf(
     min_run: int = DEFAULT_MIN_RUN,
     percentile: float = 100.0,
     parabolic: bool = True,
+    max_range_slope: float | None = None,
 ) -> MufPick:
     """Pick the MUF from per-frequency trace presence.
 
@@ -107,6 +186,17 @@ def pick_muf(
         parabolic: interpolate the echo's range between bins. This recovers the
             sub-bin precision that zero-padding was previously used for, at no
             cost -- see ``calibrate.range_resolution_km``.
+        max_range_slope: steepest range-against-frequency slope a run may have,
+            in km/MHz. ``None`` disables the test, which is the default and
+            what every ``.lfs`` result to date was produced with.
+
+            The consecutive-bins rule asks whether neighbouring frequencies are
+            lit; this asks whether they agree about *where*. On a crowded band
+            the first is easy to satisfy by accident -- received obliquely at
+            DOB, four different digisonde circuits all reported a MUF of
+            3.05 MHz while their pick ranges wandered over 1700 km, which is
+            not four ionospheres agreeing but one interferer being found four
+            times.
 
     Returns:
         A ``MufPick``; ``NO_PICK`` when no run qualifies.
@@ -117,6 +207,17 @@ def pick_muf(
 
     n_detections = int(presence.sum())
     runs = find_runs(presence, min_run)
+
+    if (max_range_slope is not None and runs
+            and power_db is not None and vrange is not None and len(vrange)):
+        # Split first, then re-apply min_run: a run broken in half by a range
+        # jump has to earn its length again, or a long stretch of interference
+        # would survive as several short ones.
+        ranges = echo_ranges(presence, power_db, vrange)
+        tolerance = _range_tolerance(freq, vrange, max_range_slope)
+        runs = [(a, b) for a, b in split_on_range_jumps(runs, ranges, tolerance)
+                if b - a + 1 >= min_run]
+
     if not runs:
         return MufPick(np.nan, np.nan, n_detections, 0, np.nan, -1)
 

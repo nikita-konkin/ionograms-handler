@@ -131,6 +131,29 @@ def series(request: Request, method: str = "algo",
     })
 
 
+@router.get("/ui/sources")
+def sources_page(request: Request, max_days: int = 3, min_count: int = 3):
+    """Transmitters heard, and the schedule they would become.
+
+    The page exists because `control.py` refuses to leave search mode without
+    a `sounder_timings` list, and until now the only way to get one was to run
+    `muf detect` on the station and transcribe the numbers.
+    """
+    from . import sources as sources_mod
+
+    census = sources_mod.census(request.app.state.archive_root,
+                                max_days=max_days, min_count=min_count)
+    return templates.TemplateResponse(request, "sources.html", {
+        "census": census, "max_days": max_days, "min_count": min_count,
+        # `control.MODES` holds four keys for two modes -- "serendipitous" and
+        # "schedule" are the ini's own vocabulary, kept so a command written
+        # by hand in either dialect works. Offering all four as choices would
+        # suggest four modes, so the page shows the canonical pair.
+        "modes": ("search", "scheduled"),
+        "stations": db.stations(request.app.state.db),
+    })
+
+
 #: Sortable columns, by the name that appears in the query string.
 #:
 #: A whitelist rather than interpolation: `sort` reaches SQL as an identifier

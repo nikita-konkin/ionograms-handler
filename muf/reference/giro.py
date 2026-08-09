@@ -22,6 +22,7 @@ https://ulcar.uml.edu/DIDB/RulesOfTheRoadForDIDBase.htm
 from __future__ import annotations
 
 import datetime as dt
+import json
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,6 +50,13 @@ STATIONS: dict[str, tuple[str, float, float]] = {
     "NI135": ("Nicosia", 35.03, 33.16),
     "PQ052": ("Pruhonice", 50.00, 14.60),
     "JR055": ("Juliusruh", 54.60, 13.40),
+    # The digisondes DOB receives obliquely (`muf.io_digisonde`). Coordinates
+    # from https://lgdc.uml.edu/common/DIDBFastStationList, converted to
+    # -180..180. Chilton publishes no GIRO feed -- DIDBase carries it, the
+    # real-time mirror does not -- so `history` returns nothing for RL052.
+    "RL052": ("Chilton", 51.50, -0.60),
+    "DB049": ("Dourbes", 50.10, 4.60),
+    "TR169": ("Tromso", 69.60, 19.20),
     "EA036": ("El Arenosillo", 37.10, -6.70),
     "IR352": ("Irkutsk", 52.30, 104.30),
     "NV355": ("Novosibirsk", 54.60, 83.20),
@@ -271,3 +279,52 @@ def _to_times(series: pd.Series, index: pd.DatetimeIndex,
         index, method="nearest", tolerance=pd.Timedelta(minutes=tolerance_min)
     )
     return aligned.astype(float)
+
+
+#: Real-time mirror of GIRO scaled characteristics, used when DIDBase itself is
+#: unreachable. It is not a substitute: it carries the last ~7 days for the
+#: subset of stations feeding the propagation maps, where DIDBase holds the
+#: full archive for every station. But when `DIDBGetValues` is down -- which it
+#: was on 2026-08-09, GIRO's own documented example URLs returning 404 -- this
+#: is the difference between a comparison and none.
+HISTORY_URL = "https://prop.kc2g.com/api/history.json"
+
+#: Field order of one `history` entry. Verified against the same station's
+#: live record rather than assumed: the feed documents neither.
+HISTORY_FIELDS = ("time", "confidence", "fof2", "mufd", "hmf2")
+
+
+def history(ursi: str, cache_dir: Path | None = None,
+            offline: bool = False) -> pd.DataFrame:
+    """Recent scaled characteristics for one station, from the GIRO mirror.
+
+    Returns a frame indexed by UTC time with ``fof2``, ``mufd``, ``hmf2`` and
+    ``confidence``; empty when the station has no feed. Roughly a week of
+    history at the station's own cadence.
+
+    Use it for the check nothing else in this pipeline can make. Every
+    estimator here shares a spectrogram, a gate, a threshold and a picker, so a
+    common bias cannot show up in their agreement -- and IRI is a model. A
+    digisonde's *own vertical* ``foF2``, measured by a different instrument at
+    the same instant, converts through :func:`muf.geometry.fof2_to_muf` into
+    the oblique MUF this receiver should be seeing on that path. On
+    2026-08-09 that comparison is what showed the DOB picks to be interference:
+    Juliusruh's own foF2 rose 2.59 to 5.28 MHz through the morning, implying an
+    oblique MUF from 3.8 to 11.3 MHz, while every pick sat flat at 3.05.
+    """
+    text = fetch(HISTORY_URL, cache_dir=cache_dir, offline=offline)
+    stations = json.loads(text)
+    for station in stations:
+        if str(station.get("code", "")).upper() != ursi.upper():
+            continue
+        rows = station.get("history") or []
+        if not rows:
+            break
+        frame = pd.DataFrame(rows, columns=list(HISTORY_FIELDS))
+        frame["time"] = pd.to_datetime(frame["time"], utc=True, errors="coerce")
+        for column in ("fof2", "mufd", "hmf2", "confidence"):
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        return frame.dropna(subset=["time"]).set_index("time").sort_index()
+    return pd.DataFrame(
+        columns=[c for c in HISTORY_FIELDS if c != "time"],
+        index=pd.DatetimeIndex([], tz="UTC", name="time"))
