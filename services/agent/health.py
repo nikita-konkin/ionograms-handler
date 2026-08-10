@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -31,8 +32,32 @@ from typing import Any
 from .config import StationConfig
 
 #: Anything older than this and the station is not producing, whatever the
-#: processes say. Three sounding periods at DOB's 300 s cycle.
-STALE_PRODUCT_S = 900.0
+#: processes say.
+#:
+#: This measures the *sounding's* age, not the file's, so it has to cover the
+#: cycle plus however long the pipeline takes to emit the product. Three
+#: periods at DOB's 300 s cycle is 900 s and would false-alarm continuously:
+#: measured latency there is ~960 s, so the newest sounding is routinely older
+#: than 900 s while everything works perfectly.
+STALE_PRODUCT_S = 1800.0
+
+#: ``lfm_ionogram-{tx}-{rx}-{ch}-{cid}-{t0:.2f}.h5``. The trailing field is the
+#: sounding's start time, from the recorder's GPS-disciplined epoch -- the same
+#: number ``muf.io_chirp._NAME_RE`` reads. Duplicated as a bare regex rather
+#: than imported because this package is stdlib-only: it runs under the
+#: station's Python with no numpy and no h5py.
+_PRODUCT_T0_RE = re.compile(r"-(\d{9,12}(?:\.\d+)?)\.h5$")
+
+
+def _t0_from_name(name: str) -> float | None:
+    """The sounding's own start time, or None if the name does not carry one."""
+    match = _PRODUCT_T0_RE.search(name)
+    if match is None:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:                                        # pragma: no cover
+        return None
 
 #: How far a product may be stamped ahead of the clock before the age becomes
 #: unmeasurable rather than merely small. A few seconds is ordinary skew --
@@ -113,46 +138,74 @@ def unit_states(config: StationConfig) -> list[Metric]:
 
 
 def newest_product_age(config: StationConfig) -> Metric:
-    """Seconds since the newest product file. Soundings stopping is not the
-    same as a process dying, and this is the metric that separates them.
+    """Age of the newest sounding. Soundings stopping is not the same as a
+    process dying, and this is the metric that separates them.
 
-    A *negative* age is not a fresh product, it is a broken measurement: the
-    newest file is stamped after the clock reads, so the two disagree and the
-    subtraction means nothing. Measured on DOB as -20420 s, and reported `ok`
-    -- because `age < 900` is trivially true for every negative number, so the
-    one metric that watches for acquisition stopping was passing on a station
-    whose clock had slipped 4.8 hours. It would have gone on passing with the
-    recorder dead.
+    **From the filename, not from mtime.** The trailing field of
+    ``lfm_ionogram-...-{t0}.h5`` is the sounding's start time on the recorder's
+    GPS-disciplined epoch. A file's mtime is written by whichever clock touched
+    it last, and on DOB that has been wrong three separate ways: an RTC that
+    booted at 2021-04-02, a CIFS server running 5 h 36 m fast, and the stamps
+    that survived on disk after the server was corrected. Data time is the
+    thing being asked about anyway -- "when did we last hear the ionosphere",
+    not "when did a file appear" -- so reading it directly is both more robust
+    and, on a network share with a large archive, far cheaper than stat()ing
+    every product.
 
-    Reported unknown rather than failing: `system_clock_s` already fails
-    definitively for this, and duplicating it here would say "products have
-    stopped", which is a different and unproven claim.
+    mtime remains the fallback for names that carry no epoch.
+
+    A *negative* age is not a fresh product but a broken measurement, and it is
+    reported unknown rather than failing: with mtime that means a clock
+    disagreement `system_clock_s` already covers, and claiming "products have
+    stopped" would be a different and unproven thing to say. It was measured on
+    DOB at -20420 s and reported `ok`, because `age < threshold` is trivially
+    true for every negative number -- so the one metric watching for
+    acquisition stopping was passing unconditionally, and would have gone on
+    passing with the recorder dead.
     """
     root = Path(config.output_dir)
     if not root.is_dir():
         return Metric.unknown("newest_product_age_s", f"{root}: no such directory")
-    newest = None
+
+    newest_t0, newest_mtime = None, None
     try:
         for path in root.rglob("lfm_ionogram-*.h5"):
-            mtime = path.stat().st_mtime
-            if newest is None or mtime > newest:
-                newest = mtime
+            t0 = _t0_from_name(path.name)
+            if t0 is not None:
+                newest_t0 = t0 if newest_t0 is None else max(newest_t0, t0)
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue                  # vanished mid-scan; the rest still count
+            newest_mtime = (mtime if newest_mtime is None
+                            else max(newest_mtime, mtime))
     except OSError as exc:
         return Metric.unknown("newest_product_age_s", f"{type(exc).__name__}: {exc}")
-    if newest is None:
+
+    if newest_t0 is not None:
+        newest, source = newest_t0, "sounding start time from the filename"
+    elif newest_mtime is not None:
+        newest, source = newest_mtime, "file mtime (no epoch in the filename)"
+    else:
         return Metric("newest_product_age_s", None, ok=False,
                       detail="no products under the output directory at all")
+
     age = time.time() - newest
     if age < -FUTURE_PRODUCT_TOLERANCE_S:
-        fstype = _fstype_of(root)
-        whose = (f"{fstype} share's server clock is ahead"
-                 if fstype in REMOTE_FSTYPES else "see system_clock_s")
+        if newest_t0 is not None:
+            whose = ("the recorder's epoch is ahead of this clock -- one of "
+                     "the two is wrong, see system_clock_s and epoch_offset_s")
+        else:
+            fstype = _fstype_of(root)
+            whose = (f"{fstype} share's server clock is ahead"
+                     if fstype in REMOTE_FSTYPES else "see system_clock_s")
         return Metric.unknown(
             "newest_product_age_s",
             f"newest product is {-age:.0f}s in the future, so age cannot be "
             f"measured -- {whose}")
     return Metric("newest_product_age_s", round(age, 1), ok=(age < STALE_PRODUCT_S),
-                  detail=f"threshold {STALE_PRODUCT_S:.0f}s")
+                  detail=f"{source}; threshold {STALE_PRODUCT_S:.0f}s")
 
 
 def disk_free(config: StationConfig) -> list[Metric]:
@@ -262,8 +315,6 @@ def _ntp_synchronised() -> bool | None:
     code, text = _run(["timedatectl"])
     if code != 0:
         return None
-    import re
-
     match = re.search(r"(?:NTP|System clock)\s+synchroniz\w*:\s*(yes|no)",
                       text, re.IGNORECASE)
     return match.group(1).lower() == "yes" if match else None

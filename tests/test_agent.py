@@ -17,6 +17,9 @@ from pathlib import Path
 import pytest
 
 from services.agent import client, control, health, logs, runner
+
+#: Read from the module so the tests move with the threshold, not against it.
+STALE = health.STALE_PRODUCT_S
 from services.agent.config import StationConfig
 
 
@@ -100,6 +103,52 @@ def test_small_clock_skew_is_still_measured(station):
     metric = health.newest_product_age(station)
     assert metric.ok is True
     assert metric.value < 0
+
+
+def _sounding(station, t0, mtime=None):
+    """A product named the way the recorder names them, with its own t0."""
+    path = (Path(station.output_dir)
+            / f"lfm_ionogram-unkown-DOB-ch0-000-{t0:.2f}.h5")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_product_age_reads_the_filename_not_the_stamp(station):
+    """DOB's mtimes ran 5 h 36 m ahead while the data time was correct.
+
+    t0 is on the recorder's GPS-disciplined epoch; mtime belongs to whichever
+    clock touched the file last -- an RTC stuck in 2021, a fast CIFS server,
+    or the stamps left behind after that server was fixed. Only one of the two
+    answers "when did we last hear the ionosphere".
+    """
+    now = time.time()
+    _sounding(station, t0=now - 600, mtime=now + 20565)
+
+    metric = health.newest_product_age(station)
+    assert metric.ok is True, "a correct 10-minute-old sounding is not a failure"
+    assert 590 < metric.value < 615
+    assert "filename" in metric.detail
+
+
+def test_a_sounding_past_the_threshold_still_fails(station):
+    """Reading t0 must not cost the detection this metric exists for."""
+    now = time.time()
+    _sounding(station, t0=now - 4 * STALE, mtime=now)
+
+    metric = health.newest_product_age(station)
+    assert metric.ok is False
+    assert metric.value > STALE
+
+
+def test_pipeline_latency_alone_does_not_trip_the_threshold(station):
+    """DOB emits products ~960 s after t0, which the old 900 s would fail."""
+    now = time.time()
+    _sounding(station, t0=now - 1260, mtime=now)      # latency + one 300 s cycle
+
+    assert health.newest_product_age(station).ok is True
 
 
 def _future_product(station, name="lfm_ionogram-DOB-002.h5", ahead=20565):
