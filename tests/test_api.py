@@ -11,6 +11,7 @@ different.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -462,13 +463,13 @@ def test_the_watcher_offers_only_what_is_not_already_held(conn, tmp_path,
     chirp = make_chirp_h5(np.full((4, 64), 100.0))
     methods = ("algo",)
 
-    new, found, fresh = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    new, found, fresh, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
     assert found == 2 and {p.name for p in new} == {lfs.name, chirp.name}
 
     row = pipeline.process_file(lfs, Options(window=512, methods=methods))
     ingest.ingest_row(conn, row, lfs, tmp_path, methods)
 
-    new, found, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    new, found, *_ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
     assert found == 2, "still two on disk"
     assert [p.name for p in new] == [chirp.name], "the ingested one is not offered again"
 
@@ -506,8 +507,40 @@ def test_a_file_still_arriving_is_left_for_the_next_pass(conn, tmp_path, make_lf
     make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                       half_span_km=60_000.0, echo_last_bin=120))
 
-    new, found, fresh = watch.find_new([tmp_path], conn, ("algo",), min_age_s=3600)
+    new, found, fresh, _ = watch.find_new([tmp_path], conn, ("algo",), min_age_s=3600)
     assert found == 1 and new == [] and fresh == 1
+
+
+def test_a_future_dated_file_is_ingested_not_withheld_forever(conn, tmp_path, make_lfs):
+    """DOB's archive moved to CIFS and the NAS clock ran 5 h 43 m fast.
+
+    `now - mtime` went negative for every product, negative is below any
+    threshold, and the watcher reported the whole archive as "too fresh" on
+    every pass while ingesting none of it. A file whose stamp we did not write
+    tells us nothing about whether it finished writing, and withholding it is
+    permanent where taking it early is self-correcting.
+    """
+    import os
+
+    from services.api import watch
+
+    from conftest import synth_iq
+
+    lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
+                            half_span_km=60_000.0, echo_last_bin=120))
+    ahead = time.time() + 20565          # the measured NAS skew
+    os.utime(lfs, (ahead, ahead))
+
+    new, found, fresh, skewed = watch.find_new([tmp_path], conn, ("algo",),
+                                               min_age_s=3600)
+    assert found == 1
+    assert [p.name for p in new] == [lfs.name], "must not be withheld"
+    assert fresh == 0, "not fresh -- mis-stamped, and the difference matters"
+    assert skewed == 1
+
+    assert "FUTURE-DATED" in watch.describe(
+        {"found": 1, "new": 1, "too_fresh": 0, "future_dated": 1,
+         "held_back": 0, "loaded": 1, "skipped": 0})
 
 
 def test_a_tree_with_no_soundings_is_skipped_not_fatal(conn, tmp_path):
@@ -516,7 +549,7 @@ def test_a_tree_with_no_soundings_is_skipped_not_fatal(conn, tmp_path):
     from services.api import watch
 
     (tmp_path / "empty").mkdir()
-    new, found, _ = watch.find_new([tmp_path / "empty"], conn, ("algo",), min_age_s=0)
+    new, found, *_ = watch.find_new([tmp_path / "empty"], conn, ("algo",), min_age_s=0)
     assert new == [] and found == 0
 
 

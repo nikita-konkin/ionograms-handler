@@ -102,6 +102,58 @@ def test_small_clock_skew_is_still_measured(station):
     assert metric.value < 0
 
 
+def _future_product(station, name="lfm_ionogram-DOB-002.h5", ahead=20565):
+    path = Path(station.output_dir) / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    os.utime(path, (time.time() + ahead, time.time() + ahead))
+    return path
+
+
+def test_a_network_archive_is_not_evidence_about_our_clock(station, monkeypatch):
+    """DOB's products moved to CIFS, and the metric blamed the host anyway.
+
+    The NAS was 5 h 43 m fast while the laptop sat 47 ms from its NTP server.
+    Worse than the wrong words: the early return also skipped the NTP check,
+    so the one question that *is* about this host went unasked.
+    """
+    _future_product(station)
+    monkeypatch.setattr(health, "_fstype_of", lambda path: "cifs")
+    monkeypatch.setattr(health, "_ntp_synchronised", lambda: True)
+
+    metric = health.system_clock(station)
+    assert metric.ok is True                     # not False
+    assert "RTC lost time" not in metric.detail
+    assert "NTP synchronised" in metric.detail   # the check actually ran
+    assert "cifs" in metric.detail
+
+
+def test_a_local_archive_ahead_of_the_clock_still_convicts_it(station, monkeypatch):
+    """The original inference is sound when we stamped the files ourselves."""
+    _future_product(station)
+    monkeypatch.setattr(health, "_fstype_of", lambda path: "ext4")
+
+    metric = health.system_clock(station)
+    assert metric.ok is False
+    assert "RTC lost time" in metric.detail
+
+
+def test_product_age_names_the_share_rather_than_our_clock(station, monkeypatch):
+    _future_product(station)
+    monkeypatch.setattr(health, "_fstype_of", lambda path: "cifs")
+
+    metric = health.newest_product_age(station)
+    assert metric.ok is None
+    assert "cifs" in metric.detail
+
+
+def test_fstype_of_resolves_a_real_path():
+    """Longest-prefix match against /proc/self/mounts, where there is one."""
+    if not Path("/proc/self/mounts").exists():
+        pytest.skip("no /proc/self/mounts on this platform")
+    assert health._fstype_of(Path("/")) is not None
+
+
 def test_collect_never_raises_on_a_machine_that_is_not_a_station(tmp_path):
     config = StationConfig(chirp_config=tmp_path / "absent.ini",
                            output_dir=tmp_path / "absent",

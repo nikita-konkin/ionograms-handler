@@ -144,10 +144,13 @@ def newest_product_age(config: StationConfig) -> Metric:
                       detail="no products under the output directory at all")
     age = time.time() - newest
     if age < -FUTURE_PRODUCT_TOLERANCE_S:
+        fstype = _fstype_of(root)
+        whose = (f"{fstype} share's server clock is ahead"
+                 if fstype in REMOTE_FSTYPES else "see system_clock_s")
         return Metric.unknown(
             "newest_product_age_s",
             f"newest product is {-age:.0f}s in the future, so age cannot be "
-            f"measured -- see system_clock_s")
+            f"measured -- {whose}")
     return Metric("newest_product_age_s", round(age, 1), ok=(age < STALE_PRODUCT_S),
                   detail=f"threshold {STALE_PRODUCT_S:.0f}s")
 
@@ -213,6 +216,41 @@ def uptime_s() -> Metric:
         return Metric.unknown("uptime_s", f"{type(exc).__name__}: {exc}")
 
 
+#: Filesystems whose timestamps are written by somebody else's clock. A file on
+#: one of these is stamped by the server, so "the newest file is ahead of me"
+#: says nothing whatever about my clock. On DOB it accused a host sitting 47 ms
+#: from its NTP server, because the archive moved to a CIFS share on a NAS that
+#: was 5 h 43 m fast.
+REMOTE_FSTYPES = frozenset({
+    "cifs", "smbfs", "smb3", "nfs", "nfs4", "afs", "ncpfs", "9p",
+    "fuse.sshfs", "fuse.s3fs", "fuse.rclone", "davfs",
+})
+
+
+def _fstype_of(path: Path) -> str | None:
+    """Filesystem type carrying ``path``, or None if it cannot be read.
+
+    By longest matching mount point in ``/proc/self/mounts``. Not ``st_dev``:
+    two mounts of the *same* share get different device numbers, so st_dev
+    answers "are these the same mount" when the question is "is the clock
+    behind this filesystem mine".
+    """
+    try:
+        target = str(Path(path).resolve())
+        with open("/proc/self/mounts", encoding="utf-8") as handle:
+            entries = [(parts[1].replace("\\040", " "), parts[2])
+                       for parts in (line.split() for line in handle)
+                       if len(parts) >= 3]
+    except OSError:
+        return None
+    best, best_type = "", None
+    for mount, fstype in entries:
+        if (target == mount or target.startswith(mount.rstrip("/") + "/")) \
+                and len(mount) >= len(best):
+            best, best_type = mount, fstype
+    return best_type
+
+
 def _ntp_synchronised() -> bool | None:
     """Does the host believe its clock is disciplined. ``None`` if unaskable.
 
@@ -235,14 +273,19 @@ def system_clock(config: StationConfig) -> Metric:
     """Is the host clock plausible at all, before anything is asked of it.
 
     The precondition for every other timing metric, and the one that has to be
-    answerable with no data on disk. ``rx_uhd_ext_gps`` takes the PPS *edge*
-    from the GPSDO and the *second number* from this clock
+    answerable with no data on disk. Stock ``rx_uhd_ext_gps`` takes the PPS
+    *edge* from the GPSDO and the *second number* from this clock
     (``rx_uhd_ext_gps.cpp:433``, ``set_time_next_pps(pc_secs + 1)``); it waits
     for ``gps_locked``, prints it, and never reads the ``gps_time`` sensor that
     would make the epoch exact. So the host clock's error lands whole in every
     sample timestamp. That is what the 0.956 s offset was, and on 2026-08-06
     the same line stamped a run 2021-04-02 because the RTC had lost five years
     and NTP had not yet stepped it.
+
+    ``patches/0001`` removes that dependency by reading ``gps_time``, and DOB
+    now runs a build that does. This metric stays regardless: the patch falls
+    back to the host clock whenever the GPSDO is absent or unlocked, which is
+    precisely when nobody is watching.
 
     :func:`epoch_offset` cannot cover this. It needs recent ``par-*.h5``, and a
     clock this wrong means there are none -- it answers "no timing solutions"
@@ -272,25 +315,38 @@ def system_clock(config: StationConfig) -> Metric:
     except OSError:
         newest = None
 
+    # "Files ahead of me" only convicts my clock if my clock wrote them. On a
+    # network share the server stamps them, and the inference is not merely
+    # weaker -- it is about a different machine. Returning here on a CIFS
+    # archive also skipped the NTP check below, which is the only part of this
+    # function that is about *this* host.
+    note = ""
     if newest is not None and now < newest - 60.0:
-        behind = (newest - now) / 86400.0
-        return Metric("system_clock_s", round(now, 1), ok=False,
-                      detail=f"clock reads {when}, {behind:.1f} days behind "
-                             f"products already on disk -- the RTC lost time "
-                             f"and NTP has not stepped it")
+        fstype = _fstype_of(Path(config.output_dir))
+        if fstype in REMOTE_FSTYPES:
+            note = (f"; the newest product is {(newest - now) / 3600.0:.1f} h "
+                    f"ahead, but the archive is {fstype} and those timestamps "
+                    f"come from the file server, not from here -- fix the "
+                    f"server's clock or product age stays unmeasurable")
+        else:
+            behind = (newest - now) / 86400.0
+            return Metric("system_clock_s", round(now, 1), ok=False,
+                          detail=f"clock reads {when}, {behind:.1f} days behind "
+                                 f"products already on disk -- the RTC lost time "
+                                 f"and NTP has not stepped it")
 
     synced = _ntp_synchronised()
     if synced is None:
         return Metric("system_clock_s", round(now, 1), ok=None,
                       detail=f"{when}; plausible, but NTP state is unreadable "
-                             f"(no timedatectl) so nothing is holding it")
+                             f"(no timedatectl) so nothing is holding it{note}")
     if not synced:
         return Metric("system_clock_s", round(now, 1), ok=False,
                       detail=f"{when} is plausible but NTP is not "
                              f"synchronised; nothing is holding the epoch and "
-                             f"the recorder copies it into every timestamp")
+                             f"the recorder copies it into every timestamp{note}")
     return Metric("system_clock_s", round(now, 1), ok=True,
-                  detail=f"{when}, NTP synchronised")
+                  detail=f"{when}, NTP synchronised{note}")
 
 
 def epoch_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric:

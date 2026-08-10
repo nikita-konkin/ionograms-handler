@@ -40,6 +40,17 @@ from . import db
 #: minute costs one cycle and removes the whole class.
 DEFAULT_MIN_AGE_S = 60.0
 
+#: A file stamped further ahead of us than this is not recent, it is
+#: mis-stamped, and `now - mtime` says nothing about whether writing finished.
+#:
+#: DOB's archive moved to a CIFS share whose NAS clock ran 5 h 43 m fast. Every
+#: product's age came out negative, negative beats any threshold, and the
+#: watcher skipped the entire archive on every pass -- reporting it as "too
+#: fresh", which is the most reassuring possible word for "nothing will ever be
+#: ingested". Timestamps on a network share belong to the file server; this
+#: watcher must not assume they belong to it.
+FUTURE_MTIME_TOLERANCE_S = 5.0
+
 #: How long to wait for a writer to release the database before giving up.
 #: The api reads on every request and SQLite locks the whole file, so a
 #: default-timeout connection loses this race often enough to matter.
@@ -71,17 +82,17 @@ def already_done(conn: sqlite3.Connection, methods: tuple[str, ...]) -> set[str]
 def find_new(targets, conn, methods, min_age_s: float, now: float | None = None):
     """Soundings on disk that the database does not already hold.
 
-    Returns ``(new, n_found, n_too_fresh)``. Targets holding no soundings at
-    all are skipped rather than fatal: an archive normally contains detection
-    trees, digisonde products and empty days beside the ionograms, and one of
-    those must not stop the scan.
+    Returns ``(new, n_found, n_too_fresh, n_skewed)``. Targets holding no
+    soundings at all are skipped rather than fatal: an archive normally
+    contains detection trees, digisonde products and empty days beside the
+    ionograms, and one of those must not stop the scan.
     """
     from muf import loader
 
     now = time.time() if now is None else now
     done = already_done(conn, methods)
 
-    found, fresh, new = 0, 0, []
+    found, fresh, skewed, new = 0, 0, 0, []
     for target in targets:
         try:
             paths = loader.find_soundings(target)
@@ -95,12 +106,18 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None)
                 age = now - path.stat().st_mtime
             except OSError:
                 continue                  # vanished mid-scan; next cycle
-            if age < min_age_s:
+            if age < -FUTURE_MTIME_TOLERANCE_S:
+                # Withholding is the worse guess here. A mis-stamped file held
+                # back is held back forever, while one taken mid-write fails to
+                # parse and simply returns on the next pass -- which is exactly
+                # what `skipped` already exists to absorb.
+                skewed += 1
+            elif age < min_age_s:
                 fresh += 1
                 continue
             new.append(path)
     new.sort(key=lambda p: p.name)
-    return new, found, fresh
+    return new, found, fresh, skewed
 
 
 def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
@@ -109,14 +126,15 @@ def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
 
     from . import ingest as ingest_mod
 
-    new, found, fresh = find_new(targets, conn, methods, min_age_s)
+    new, found, fresh, skewed = find_new(targets, conn, methods, min_age_s)
     held_back = 0
     if batch and len(new) > batch:
         held_back = len(new) - batch
         new = new[:batch]
 
     result = {"found": found, "new": len(new), "too_fresh": fresh,
-              "held_back": held_back, "loaded": 0, "skipped": 0}
+              "future_dated": skewed, "held_back": held_back,
+              "loaded": 0, "skipped": 0}
     if not new or dry_run:
         return result
 
@@ -132,6 +150,11 @@ def describe(result: dict) -> str:
     bits = [f"{result['found']} on disk", f"{result['new']} new"]
     if result["too_fresh"]:
         bits.append(f"{result['too_fresh']} too fresh")
+    if result.get("future_dated"):
+        # Ingested anyway, but say so every pass: it means the archive's clock
+        # is not ours, and a count that never falls is a file server to fix.
+        bits.append(f"{result['future_dated']} FUTURE-DATED (archive clock is "
+                    f"ahead of ours)")
     if result["held_back"]:
         bits.append(f"{result['held_back']} held for the next pass")
     if result["new"]:
