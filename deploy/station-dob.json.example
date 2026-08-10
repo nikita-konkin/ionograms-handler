@@ -4,9 +4,9 @@
     "/etc/agent/station.json (or anywhere, and point AGENT_CONFIG at it):",
     "",
     "  scp deploy/station-dob.json.example ionouser@<laptop>:~/agent.json",
-    "  # edit server_url and token, then:",
+    "  # edit server_url (NOT token -- see below), then:",
     "  cd ~/chirpsounder2 && source .venv38/bin/activate",
-    "  AGENT_CONFIG=~/agent.json python -m services.agent health",
+    "  AGENT_TOKEN=... AGENT_CONFIG=~/agent.json python -m services.agent health",
     "",
     "The agent is Python 3.8 clean, so the station's .venv38 runs it. It needs",
     "the ionograms-handler repo on PYTHONPATH for `services` and `muf`.",
@@ -18,11 +18,17 @@
     "",
     "Leave \"token\" empty and pass the secret as AGENT_TOKEN in the unit's",
     "environment instead. It overrides this field, and keeps the shared secret",
-    "out of a file that gets copied around and backed up."
+    "out of a file that gets copied around and backed up. The unit reads",
+    "/etc/default/chirp-agent (root-owned, 0600); its one line is",
+    "AGENT_TOKEN=<the server's CONTROL_TOKEN>.",
+    "",
+    "This laptop needs no deploy/.env -- that file configures Compose on the",
+    "work server, and is host-specific besides. This file plus that one-line",
+    "token file is the whole of the station's configuration."
   ],
 
   "station": "DOB",
-  "server_url": "http://<work-pc-lan-ip>:8000",
+  "server_url": "http://<work-pc-lan-ip>:8002",
   "token": "",
   "push_interval_s": 60,
 

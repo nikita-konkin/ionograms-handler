@@ -18,7 +18,9 @@ $EDITOR deploy/.env
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 ```
 
-Then <http://127.0.0.1:8000/ui>. `/docs` is the generated OpenAPI page.
+Then <http://127.0.0.1:8000/ui>, or whatever `PORT` you set in `deploy/.env` —
+the shipped example sets `8002`, because the work server's 8000 is taken.
+`/docs` is the generated OpenAPI page.
 
 `CONTROL_TOKEN` is the only value you have to set. The sim reads it from the
 same `deploy/.env`, as `AGENT_TOKEN`, so there is nothing to keep in sync by
@@ -375,16 +377,42 @@ BIND_ADDR=192.168.1.50        # the work PC's LAN address, NOT 0.0.0.0
 `0.0.0.0` would also publish it on every other interface, including any VPN
 adapter. Name the interface you mean.
 
+**The laptop needs no `deploy/.env`.** That file configures Compose, and the
+laptop runs no containers -- it runs the agent under systemd, next to the
+radio. It is also per-host by nature (`PORT` is about this server's port
+collisions, `ARCHIVE_HOST_PATH` is a path on this server), so copying it across
+would carry nothing true. The laptop gets two things instead: `agent.json`, and
+the token in the unit's environment.
+
+Exactly one value spans both machines -- `CONTROL_TOKEN` here must equal
+`AGENT_TOKEN` there. Everything else is independent.
+
 Then on the laptop:
 
 ```bash
 scp deploy/station-dob.json.example ionouser@<laptop>:~/agent.json
-# edit server_url → http://192.168.1.50:8000 and token → your CONTROL_TOKEN
+# edit server_url → http://192.168.1.50:8002   (PORT from deploy/.env)
+```
 
+The token does **not** go in that file -- leave `"token": ""`. `agent.json` is
+copied, edited and backed up; a secret in it travels with every copy. It goes
+in the unit's environment file, root-owned and unreadable by anyone else:
+
+```bash
+printf 'AGENT_TOKEN=%s\n' '<the CONTROL_TOKEN>' | sudo tee /etc/default/chirp-agent
+sudo chmod 600 /etc/default/chirp-agent
+```
+
+`chirp-agent.service` reads it via `EnvironmentFile=`, and `AGENT_TOKEN`
+overrides the file's `token`. For the two commands below, which run in your own
+shell rather than under the unit, export it by hand:
+
+```bash
 cd ~/chirpsounder2 && source .venv38/bin/activate
 export PYTHONPATH=~/ionograms-handler
-AGENT_CONFIG=~/agent.json python -m services.agent health      # local check
-AGENT_CONFIG=~/agent.json python -m services.agent run --passes 1   # one push
+export AGENT_CONFIG=~/agent.json AGENT_TOKEN='<the CONTROL_TOKEN>'
+python -m services.agent health          # local check, no server needed
+python -m services.agent run --passes 1  # one push
 ```
 
 The agent is Python 3.8-clean, so the station's `.venv38` runs it unmodified.
@@ -404,8 +432,8 @@ Use an SSH tunnel instead. If the laptop can reach the work PC's SSH:
 
 ```bash
 # on the laptop
-ssh -N -L 8000:127.0.0.1:8000 you@work-pc
-# agent server_url stays http://127.0.0.1:8000, and BIND_ADDR stays 127.0.0.1
+ssh -N -L 8002:127.0.0.1:8002 you@work-pc
+# agent server_url stays http://127.0.0.1:8002, and BIND_ADDR stays 127.0.0.1
 ```
 
 If only the reverse is possible — you can reach the laptop but it cannot reach
@@ -413,7 +441,7 @@ you — push the tunnel from the work PC:
 
 ```bash
 # on the work PC
-ssh -N -R 8000:127.0.0.1:8000 ionouser@laptop
+ssh -N -R 8002:127.0.0.1:8002 ionouser@laptop
 ```
 
 Either way the API stays bound to localhost on both ends and nothing is
@@ -422,9 +450,13 @@ not a listening service.
 
 ## 4. Verify
 
+Ports below are written as `$PORT`, from `deploy/.env`. Unset it and the two
+rigs differ on purpose: the test rig takes 8000, the work server takes 8002,
+where 8000 belongs to `tec-backend`.
+
 | check | expected |
 |---|---|
-| `curl localhost:8000/healthz` | `{"ok":true,...}` |
+| `curl localhost:$PORT/healthz` | `{"ok":true,...}` |
 | `/ui` after one push interval | `SIM` appears, `HEALTHY`, most metrics grey |
 | Queue `restart`, then watch the sim's log | `FAKE systemctl restart chirp.target` |
 | `/ui` again | the command shows `acked` |
