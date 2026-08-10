@@ -8,6 +8,20 @@ After=chirp-rx.service
 Type=simple
 User=ionouser
 WorkingDirectory=/home/ionouser/chirpsounder2
+
+# The one process here with a deadline. It must reach a sounding's samples
+# before the ringbuffer overwrites them, and the margin is not generous: over
+# 165 soundings on DOB, 3% came in under 30 s and the worst was 0.50 s. Every
+# other unit on this station can be late without losing anything, so this one
+# is the only one given priority over them -- modestly, because starving the
+# recorder to feed its consumer would be a worse trade than the one it fixes.
+#
+# Products must be written to a LOCAL directory. `output_dir` pointing at a
+# network share puts the file server's latency inside this deadline: an SMB
+# stall blocks the write while the ringbuffer keeps advancing behind it.
+# chirp-archive-sync.service mirrors them to the NAS afterwards, where being
+# slow is free. (Not chirp-sync.service -- that only uploads dashboard PNGs.)
+Nice=-5
 ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15

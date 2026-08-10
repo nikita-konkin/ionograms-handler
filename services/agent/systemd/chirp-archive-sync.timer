@@ -1,0 +1,24 @@
+# Runs chirp-archive-sync.service on a timer rather than as a loop.
+#
+# A timer, not `Restart=always` with a `sleep` inside: systemd then owns the
+# schedule, `systemctl list-timers` shows when it last ran and when it runs
+# next, and a pass that hangs on a dead NFS-like mount is killed by
+# ExecStart's own timeout instead of wedging forever inside a Python loop.
+#
+# Five minutes matches the sounding cycle: at most one cycle of products waits
+# on the laptop, and a NAS outage of any length is caught up by the next pass
+# that succeeds.
+
+[Unit]
+Description=mirror the ionogram archive to the NAS, every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+# Measured from when the last run *finished*, so a slow pass cannot overlap
+# itself and stack up copies competing for the same disk.
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

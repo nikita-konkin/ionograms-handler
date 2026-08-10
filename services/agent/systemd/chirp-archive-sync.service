@@ -1,0 +1,55 @@
+# Mirrors the local product archive to the NAS. The thing that lets
+# `output_dir` be a local path.
+#
+# `calc_ionograms` must reach a sounding's samples before the ringbuffer
+# overwrites them; on DOB 3% of soundings came within 30 s of that and the
+# worst within 0.50 s. Writing products straight to //10.10.65.102 put SMB
+# latency inside that deadline -- a stalled network write blocks the process
+# while the ringbuffer keeps advancing behind it. So acquisition writes to
+# local disk at local-disk speed, and this job carries the result across the
+# network afterwards, where being slow costs nothing.
+#
+# Deliberately NOT PartOf=chirp.target and not ordered against the recorder:
+# it touches no radio, so it runs on a station still launched by dombas.sh,
+# today, without waiting for the systemd migration. A backlog is also worth
+# clearing whether or not acquisition is currently up.
+#
+# Mirror, never move. rsync is re-run on a timer and is idempotent, so a file
+# copied while still being written is simply corrected on the next pass. A
+# `--remove-source-files` variant would delete the only good copy the one time
+# the destination was silently wrong, and the point of this file is to stop
+# losing data, not to find a new way.
+
+[Unit]
+Description=mirror the local ionogram archive to the NAS
+After=network-online.target
+Wants=network-online.target
+# Nothing to do if the share is not mounted, and rsync would otherwise
+# cheerfully fill the local disk's mountpoint directory instead.
+ConditionPathIsMountPoint=/mnt/ionozond_16tb
+
+[Service]
+Type=oneshot
+User=ionouser
+
+# Same asymmetry as everywhere else on this station: this job has no deadline
+# and the one it shares a disk with does. Late is free; lost is not.
+Nice=19
+IOSchedulingClass=idle
+
+Environment=ARCHIVE_LOCAL=/media/ionouser/DATA3/ionozond_data2
+Environment=ARCHIVE_REMOTE=/mnt/ionozond_16tb/ionozond_data2
+
+# Trailing slash on the source: copy the *contents*, not the directory itself.
+# --partial-dir keeps interrupted transfers out of the destination tree, so a
+# consumer never reads a half-arrived product as a short sweep.
+# --no-times: SMB timestamps come from the file server, so trying to preserve
+# them fails noisily on some shares and lies on others. Product time is in the
+# filename, which is what everything downstream reads.
+ExecStart=/usr/bin/rsync -rlD --partial-dir=.rsync-partial --no-times \
+    --exclude='.rsync-partial' --exclude='*.tmp' \
+    ${ARCHIVE_LOCAL}/ ${ARCHIVE_REMOTE}/
+
+# A failed pass is normal -- the NAS reboots, the network drops. The timer
+# brings it back; systemd should not mark the unit failed for it.
+SuccessExitStatus=0 23 24

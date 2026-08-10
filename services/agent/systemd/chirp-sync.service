@@ -1,6 +1,16 @@
-# Gets products off the station. Without it the archive never leaves the laptop.
+# Uploads the dashboard images. NOT an archive mover -- see below.
+#
+# The name invites the wrong assumption, and this file previously made it:
+# "gets products off the station". It does not. `sync_iono_data.py` globs
+# /tmp/latest*.png and /tmp/yesterday*.png and posts them to a web server via
+# `ionowebsync`, gated on `copy_to_server` in the ini. No `.h5` product is ever
+# copied anywhere by it.
+#
+# Nothing in chirpsounder2 moves the archive off the laptop. That is what
+# chirp-archive-sync.service exists for, and why `output_dir` may be a local
+# path without stranding the data.
 [Unit]
-Description=chirpsounder2 sync_iono_data.py
+Description=chirpsounder2 dashboard image upload (sync_iono_data.py)
 PartOf=chirp.target
 After=network-online.target
 Wants=network-online.target
@@ -9,6 +19,22 @@ Wants=network-online.target
 Type=simple
 User=ionouser
 WorkingDirectory=/home/ionouser/chirpsounder2
+
+# This job has no deadline. `calc_ionograms` has a hard one: it must reach a
+# sounding's samples before the ringbuffer overwrites them, and on DOB the
+# margin already reaches 0.50 s at the bottom of its distribution. Without the
+# two lines below, a sync burst competes for CPU and disk on equal terms with
+# the process that cannot wait -- and the near-misses in find_timings.log
+# arrive on a regular spacing, which is what a scheduled competitor looks like
+# rather than network jitter.
+#
+# Late data costs nothing; lost data cannot be recovered at any speed.
+#
+# IOSchedulingClass=idle needs an I/O scheduler that honours ioprio -- CFQ or
+# BFQ. Under mq-deadline (default on newer kernels) it is silently a no-op, so
+# Nice carries the CPU half regardless: `cat /sys/block/sda/queue/scheduler`.
+Nice=19
+IOSchedulingClass=idle
 
 # Deliberately not ordered After=chirp-rx.service: syncing a backlog is useful
 # whether or not the radio is currently running, and making it wait on the

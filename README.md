@@ -1752,12 +1752,20 @@ processing while its samples are still in `/dev/shm`. `find_timings.py` prints
 that margin per sounding:
 
 ```bash
-grep -o '[0-9.]* s left' ~/chirpsounder2/logs/find_timings.log | tail -20
+grep -o '[0-9.]* s left' ~/chirpsounder2/logs/find_timings.log \
+  | awk '{n++; if($1<30) a++; if($1<60) b++} END {printf "n=%d  <30s:%d  <60s:%d\n", n, a, b}'
 ```
 
-Add slots while the *minimum* stays comfortably positive, and re-read it after
-each step. Storage scales too: at 0.6 MB per ionogram, 37 slots is 10,656
-soundings and 6.4 GB a day.
+**Read the whole log, not a `tail`.** The distribution is long-tailed, and only
+the tail loses data. Twenty consecutive soundings on DOB had a minimum margin
+of 90 s and looked comfortable; fifty had a minimum of **0.68 s** — one
+sounding within a second of having its samples overwritten before processing
+reached them. That loss is silent: "missing data - skipping", or a short sweep
+that `sweep_complete` records and nothing rejects.
+
+Add slots only while the count below 30 s stays at zero, and re-measure after
+each step. Storage scales independently: at 0.6 MB per ionogram, 37 slots is
+10,656 soundings and 6.4 GB a day.
 
 ---
 
