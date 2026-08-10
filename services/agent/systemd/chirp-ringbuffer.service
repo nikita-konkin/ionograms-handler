@@ -25,11 +25,23 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 #
 #     seconds of history = size / (sample_rate * 4 bytes)
 #
-# At 25 MS/s that is 100 MB/s, so 12000MB holds 120 s. A sounding must begin
-# processing within that window of its t0; find_timings.py prints the margin
-# for each as "N s left", and measured start latency here is 65-117 s. Raise it
-# on a machine with more RAM, or move the ringbuffer to an SSD -- it is the
-# only lever that makes start latency stop mattering.
+# At 25 MS/s that is 100 MB/s, so 12000MB holds 120 s by that arithmetic. A
+# sounding must begin processing within its window of history, and
+# find_timings.py prints the margin for each as "N s left" -- which is the
+# number to trust, because the arithmetic above does not match it. Measured on
+# DOB 2026-08-11 over 20 consecutive soundings: min 90.6 s, median 128.4 s,
+# max 217.6 s, none under 60. Fifteen of the twenty exceed 120 s outright, so
+# either the effective window is larger than size/(rate*4) suggests or "s left"
+# is not measured from it. An earlier note here claimed a 65-117 s start
+# latency, i.e. 3-55 s of margin; that was used to argue against scheduling
+# more than a few slots, and it was wrong.
+#
+# Read the log before sizing a schedule:
+#
+#     grep -o '[0-9.]* s left' logs/find_timings.log | tail -20
+#
+# Raise the size on a machine with more RAM, or move the ringbuffer to an SSD
+# -- it is the only lever that makes start latency stop mattering.
 ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/drf ringbuffer \
     -z 12000MB /dev/shm/hf25 -p 2
 

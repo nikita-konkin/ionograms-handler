@@ -1602,10 +1602,15 @@ muf/                    the pipeline
   render.py, cli.py
 services/
   agent/                runs ON the station: health push, control, logs
+    health.py           the metrics; unknown is never zero, see below
+    control.py          systemctl verbs and ini edits, allow-listed
+    systemd/            unit files -- the migration off dombas.sh
   api/                  runs on the server: health ingest, read API, web UI
+    watch.py            incremental ingest on a timer
+    sources.py          emitters heard -> a `sounder_timings` schedule
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  469 tests; `python -m pytest tests -q`
+tests/                  562 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1638,7 +1643,9 @@ cp deploy/.env.example deploy/.env          # set CONTROL_TOKEN
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 ```
 
-Then <http://127.0.0.1:8000/ui>. The console is empty until an archive is
+Then <http://127.0.0.1:8000/ui>, or whatever `PORT` you set — the shipped
+`.env.example` uses **8002**, because 8000 is already taken on the work server.
+The console is empty until an archive is
 ingested:
 
 ```bash
@@ -1657,6 +1664,100 @@ laptop means naming a LAN address on purpose, or tunnelling, which
 It is deliberately throwaway: SQLite, plain HTTP, no migrations. See
 `architecture.md` §6 M2.5 for what it settled and what M3/M4 should not
 inherit from it.
+
+### On the acquisition laptop
+
+The agent is stdlib-only and Python 3.7-clean, so the sounder's own virtualenv
+runs it. Two files, both outside the checkout so `git pull` cannot touch them
+and `git add -A` cannot publish them:
+
+| | |
+|---|---|
+| `~/agent.json` | station name, `server_url`, paths, `units` — from `deploy/station-dob.json.example` |
+| `/etc/default/chirp-agent` | one line, `AGENT_TOKEN=<the server's CONTROL_TOKEN>`, root-owned `0600` |
+
+`chirp-agent.service` is deliberately **not** `PartOf=chirp.target`: it has to
+survive a stop of acquisition, or "stop sounding" would be the last command the
+server could ever issue. It also names the venv interpreter explicitly —
+`/usr/bin/python3` on that laptop is 3.5, and under `Restart=always` a wrong
+interpreter repeats a SyntaxError every 30 s forever. `services/agent/__init__`
+is 3.5-syntax on purpose so it can say so instead.
+
+**A station whose acquisition is run by a script, not systemd, sets `units` to
+`[]` and `target` to `""`.** `systemctl is-active` cannot see another
+supervisor's children, so listing units there is eleven permanent red lights;
+and `systemctl restart chirp.target` would not restart that script's recorder,
+it would start a *second* one against the same USRP. With no target the agent
+refuses the verb and says why. Both go back to normal after the migration in
+`services/agent/systemd/`.
+
+### What health measures, and what it refuses to claim
+
+Every collector returns its own failure as a value, and a metric that cannot be
+measured is `None`, never zero — "no soundings in the last hour" and "could not
+tell" need different responses.
+
+- **`newest_product_age_s` reads the sounding's `t0` from the filename**, not
+  the file's mtime. mtime belongs to whichever clock touched the file last, and
+  on one station that has been wrong three ways: an RTC that booted at
+  2021-04-02, a CIFS server running 5 h 36 m fast, and the stamps that outlived
+  the fix. `t0` is on the recorder's GPS-disciplined epoch. It is also what the
+  question actually means — when did we last hear the ionosphere, not when did
+  a file appear — and it avoids `stat()`ing a large archive over a network
+  share. The threshold covers pipeline latency, which is ~960 s on DOB.
+- **A file newer than the clock is unknown, not fresh.** `age < threshold` is
+  trivially true for every negative number, so the one metric watching for
+  acquisition stopping once passed unconditionally at −20420 s and would have
+  gone on passing with the recorder dead.
+- **"Files newer than me" only convicts *my* clock if my clock wrote them.**
+  On a network archive `system_clock_s` reports the NTP state instead and
+  carries the skew as a note — it once accused a host sitting 47 ms from its
+  NTP server, and worse, returned before the NTP check ran at all.
+- **`epoch_offset_s` needs `par-*.h5`**, which only search mode produces. It is
+  the only external check on the recorder's clock — it caught a 0.956 s offset
+  that displaced every echo by 286,000 km while every product stayed
+  self-consistent — so consider leaving `find_timings.py` running even in
+  scheduled mode, and keep `chirp-timings.service` in `units` to match.
+
+### From search mode to a schedule
+
+`/ui/sources` is the join between the two sounding modes: search records
+whatever sweeps past and infers who was transmitting, and each row is the
+`sounder_timings` entry that would put the station on it. Tick rows, and the
+page builds the JSON and posts it as a `set_config` command.
+
+A search-mode archive is mostly interference, so three filters run first, all
+on **shape rather than strength** — the loudest group in one real archive had a
+higher median SNR than cyprus1 and was pure noise:
+
+| test | default | what it catches |
+|---|---|---|
+| arrival-phase scatter | 5 ms | 500 kHz/s "emitter" whose phase wandered ±274 ms |
+| share of the cycle | 25% | a group claiming all 300 seconds of a 300 s cycle |
+| detections per slot | 3 | thirteen groups that saw each second exactly once |
+
+Rejects are **listed with their reason**, not dropped silently: if the row you
+came for is among them, the thresholds are wrong, not the transmitter.
+
+Two things the page cannot do for you. Rows are grouped by chirp rate and
+arrival phase, so several transmitters that all start near the second boundary
+merge into one row — split it by hand. And `rep` is written as the assumed
+cycle, so an emitter whose slots step every 30 s needs `rep` corrected or you
+will hear it a tenth as often.
+
+**How many slots you can afford is set by the ringbuffer, not the CPU.** At
+100 kHz/s a sweep across a 25 MHz recorded band takes ~250 s of a 300 s cycle,
+so N scheduled slots means N sweeps in flight at once, and each must begin
+processing while its samples are still in `/dev/shm`. `find_timings.py` prints
+that margin per sounding:
+
+```bash
+grep -o '[0-9.]* s left' ~/chirpsounder2/logs/find_timings.log | tail -20
+```
+
+Add slots while the *minimum* stays comfortably positive, and re-read it after
+each step. Storage scales too: at 0.6 MB per ionogram, 37 slots is 10,656
+soundings and 6.4 GB a day.
 
 ---
 
