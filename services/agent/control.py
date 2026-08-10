@@ -103,6 +103,21 @@ def systemctl(verb: str, target: str, *, timeout: float = 120.0,
         raise ControlError(
             f"verb {verb!r} is not allowed; choose from {', '.join(ALLOWED_VERBS)}")
 
+    # An empty target means this station is not supervised by systemd -- DOB
+    # runs `dombas.sh`, which owns the recorder as its own child. Refusing here
+    # is not pedantry: `systemctl restart chirp.target` on such a host does not
+    # restart what is running, it *starts a second recorder against the same
+    # USRP*, and a USRP with two streamers has to be power-cycled by hand. The
+    # honest answer to "restart" on a script-run station is "I cannot", said
+    # plainly, rather than a systemctl invocation that appears to work.
+    if not target.strip():
+        return CommandResult(
+            verb, False,
+            "no systemd target configured for this station (`target` is empty "
+            "in the agent config), so there is nothing this agent may act on. "
+            "A station whose acquisition is run by a script must be controlled "
+            "the same way it is started.")
+
     if runner is None and os.environ.get(FAKE_SYSTEMCTL_ENV, "").strip() not in ("", "0"):
         runner = _fake_runner
     runner = runner or subprocess.run

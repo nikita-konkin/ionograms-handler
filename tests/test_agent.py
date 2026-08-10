@@ -183,6 +183,27 @@ def test_only_allowed_systemctl_verbs(station):
         control.systemctl("mask", station.target)
 
 
+@pytest.mark.parametrize("target", ["", "   "])
+def test_an_unset_target_refuses_instead_of_running_systemctl(station, target):
+    """A script-supervised station must not be 'restarted' by systemd.
+
+    DOB runs `dombas.sh`, which owns the recorder as its own child, so
+    `systemctl restart chirp.target` there does not restart anything -- it
+    starts a *second* recorder against the same USRP, and two streamers means
+    a power cycle by hand. The runner must never be reached.
+    """
+    calls = []
+
+    def runner(args, **kw):                       # pragma: no cover - must not run
+        calls.append(args)
+        raise AssertionError(f"systemctl was invoked: {args}")
+
+    result = control.systemctl("restart", target, runner=runner)
+    assert calls == []
+    assert result.ok is False
+    assert "no systemd target configured" in result.detail
+
+
 def test_a_stop_that_times_out_warns_about_the_radio(station):
     """systemd escalates to SIGKILL, and a killed USRP needs a site visit."""
     def timeout_runner(args, **kw):
