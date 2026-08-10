@@ -21,7 +21,15 @@ Environment=AGENT_CONFIG=/home/ionouser/ionograms-handler/agent.json
 # token yet still starts -- it reports to stdout and accepts no commands, which
 # is the honest behaviour for an agent with no credential.
 EnvironmentFile=-/etc/default/chirp-agent
-ExecStart=/usr/bin/python3 -m services.agent run
+
+# NOT /usr/bin/python3. On this laptop that is 3.5 (Ubuntu 16.04) and the agent
+# needs 3.7 for `from __future__ import annotations` and dataclasses -- it dies
+# at an f-string before main() is reached, and `Restart=always` then repeats
+# that SyntaxError every 30 seconds. The agent is stdlib-only, so the sounder's
+# own virtualenv runs it unmodified and adds no dependency of its own.
+# `services/agent/__init__.py` refuses early with an explanation if this ever
+# points somewhere too old again.
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python -m services.agent run
 Restart=always
 RestartSec=30
 
