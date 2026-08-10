@@ -89,7 +89,28 @@ class StationConfig:
 
     @classmethod
     def from_json(cls, path: str | Path) -> "StationConfig":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        """Read the station config, and fail legibly when it is not there.
+
+        Both errors below are re-raised with the path and the environment
+        variable that chose it. The agent runs under ``Restart=always``, so a
+        config mistake is not a crash you read once -- it repeats every 30
+        seconds, and a bare ``FileNotFoundError`` several frames deep buys the
+        reader nothing on the twentieth repetition.
+        """
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                "%s: no such file. This is the station config, named by "
+                "AGENT_CONFIG. It belongs outside the repository -- normally "
+                "~/agent.json -- so that `git pull` cannot overwrite it and it "
+                "cannot be committed by accident. Copy "
+                "deploy/station-dob.json.example there and edit server_url."
+                % path) from None
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("%s: not valid JSON (%s)" % (path, exc)) from None
         return cls.from_dict(data)
 
     @classmethod

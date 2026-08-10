@@ -9,7 +9,10 @@ After=network-online.target
 Type=simple
 User=ionouser
 WorkingDirectory=/home/ionouser/ionograms-handler
-Environment=AGENT_CONFIG=/home/ionouser/ionograms-handler/agent.json
+# Outside the checkout on purpose: `agent.json` is not gitignored, so a copy
+# inside the working tree is one `git add -A` from being committed and one
+# `git checkout` from being lost. deploy/README.md scp's it to ~/agent.json.
+Environment=AGENT_CONFIG=/home/ionouser/agent.json
 # The shared secret, and nothing else. agent.json gets scp'd, edited and backed
 # up; a token in it spreads with every copy. This file is root-owned 0600 and
 # stays on the machine:

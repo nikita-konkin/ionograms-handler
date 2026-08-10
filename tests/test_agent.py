@@ -563,3 +563,22 @@ def test_the_token_is_redacted_when_the_config_is_reported(tmp_path):
     """`as_dict` feeds the health document, which crosses the wire."""
     assert StationConfig(token="s3cret").as_dict()["token"] == "***"
     assert StationConfig(token="").as_dict()["token"] == ""
+
+
+def test_a_missing_config_names_itself_and_agent_config(tmp_path):
+    """Under Restart=always this message is read on the twentieth repeat."""
+    missing = tmp_path / "nowhere" / "agent.json"
+    with pytest.raises(FileNotFoundError) as caught:
+        StationConfig.from_json(missing)
+    text = str(caught.value)
+    assert str(missing) in text
+    assert "AGENT_CONFIG" in text
+
+
+def test_malformed_config_json_names_the_file(tmp_path):
+    """`json.JSONDecodeError` gives a line and column but never the path."""
+    broken = tmp_path / "agent.json"
+    broken.write_text('{"station": "DOB",}', encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        StationConfig.from_json(broken)
+    assert str(broken) in str(caught.value)
