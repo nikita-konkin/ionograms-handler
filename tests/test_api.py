@@ -787,20 +787,46 @@ def test_interference_is_rejected_by_shape_not_by_strength():
 
     from services.api import sources
 
-    def verdict(sd_ms, slots):
+    def verdict(sd_ms, slots, count):
         return sources._rejection(
-            SimpleNamespace(fraction_sd_s=sd_ms / 1e3,
+            SimpleNamespace(fraction_sd_s=sd_ms / 1e3, count=count,
                             observed_seconds=list(range(slots))),
             300.0, sources.DEFAULT_MAX_SCATTER_S,
-            sources.DEFAULT_MAX_SLOT_FRACTION)
+            sources.DEFAULT_MAX_SLOT_FRACTION, sources.DEFAULT_MIN_REPEATS)
 
-    assert verdict(0.91, 6) is None, "the tightest real emitter must survive"
-    assert verdict(2.27, 37) is None, "cyprus1's group, 12% of the cycle"
-    assert "274 ms" in verdict(273.93, 300)
-    assert "scatters" in verdict(20.54, 150)
+    assert verdict(0.91, 6, 235) is None, "the tightest real emitter must survive"
+    assert verdict(2.27, 37, 31637) is None, "cyprus1's group, 12% of the cycle"
+    assert "274 ms" in verdict(273.93, 300, 11468)
+    assert "scatters" in verdict(20.54, 150, 2844)
     # Tight but everywhere: rejected on occupancy alone, so a narrow-scatter
     # detector artefact cannot slip through by being consistent.
-    assert "sparse" in verdict(0.5, 200)
+    assert "sparse" in verdict(0.5, 200, 4000)
+
+
+def test_each_slot_heard_once_is_coincidence_not_a_schedule():
+    """Thirteen groups on DOB scored exactly 1.0 detection per slot.
+
+    A transmitter on a 300 s cycle hands back the same second every cycle --
+    the real ones scored 24, 39 and 855. Nothing landed between 1.5 and 24, so
+    this is the cleanest of the three cuts. It is also independent of scatter:
+    the 500 kHz/s interference repeated 38 times per slot and still isn't a
+    transmitter, while these are phase-tight and still aren't.
+    """
+    from types import SimpleNamespace
+
+    from services.api import sources
+
+    def verdict(sd_ms, slots, count):
+        return sources._rejection(
+            SimpleNamespace(fraction_sd_s=sd_ms / 1e3, count=count,
+                            observed_seconds=list(range(slots))),
+            300.0, sources.DEFAULT_MAX_SCATTER_S,
+            sources.DEFAULT_MAX_SLOT_FRACTION, sources.DEFAULT_MIN_REPEATS)
+
+    assert "coincidence" in verdict(3.80, 12, 12)     # phase-tight, once each
+    assert "coincidence" in verdict(0.08, 3, 3)       # tightest of all, n=3
+    assert "coincidence" in verdict(4.72, 34, 52)     # 1.5 per slot
+    assert verdict(1.58, 6, 144) is None              # 24 per slot -- real
 
 
 def test_rejects_are_reported_not_hidden(tmp_path, make_detection_h5):

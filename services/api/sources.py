@@ -47,6 +47,18 @@ DEFAULT_MAX_SCATTER_S = 5e-3
 #: which is a detector firing on broadband interference, not a schedule.
 DEFAULT_MAX_SLOT_FRACTION = 0.25
 
+#: Times a slot must be heard again before it is a schedule and not a
+#: coincidence. `count` is detection records; `observed_seconds` is the
+#: *distinct* seconds they fell in, so their ratio is how often the emitter
+#: came back to the same second.
+#:
+#: A transmitter on a 300 s cycle hands you the same slot ~240 times in 20
+#: hours. Thirteen groups on DOB scored exactly 1.0 -- every slot seen once and
+#: never again -- which is what unrelated detections look like when the phase
+#: grouping collects them. The real ones scored 24, 39 and 855; nothing landed
+#: between 1.5 and 24, so this threshold is in open space.
+DEFAULT_MIN_REPEATS = 3.0
+
 
 #: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
 _DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
@@ -89,7 +101,8 @@ def census(archive_root: str | os.PathLike, *,
            cycle_s: float | None = None,
            min_count: int = 3,
            max_scatter_s: float = DEFAULT_MAX_SCATTER_S,
-           max_slot_fraction: float = DEFAULT_MAX_SLOT_FRACTION) -> dict:
+           max_slot_fraction: float = DEFAULT_MAX_SLOT_FRACTION,
+           min_repeats: float = DEFAULT_MIN_REPEATS) -> dict:
     """Repeating emitters under ``archive_root``, newest days first.
 
     Reads whichever detection product the tree actually has, in the order
@@ -123,7 +136,8 @@ def census(archive_root: str | os.PathLike, *,
     emitters = io_detect.census(records, cycle_s=cycle, min_count=min_count)
     kept, rejected = [], []
     for emitter in emitters:
-        why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction)
+        why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction,
+                         min_repeats)
         (rejected if why else kept).append(
             (emitter, why) if why else emitter)
     return {
@@ -139,8 +153,15 @@ def census(archive_root: str | os.PathLike, *,
     }
 
 
+def _repeats_per_slot(emitter) -> float:
+    """How often the emitter came back to the same second."""
+    slots = len(emitter.observed_seconds)
+    return (emitter.count / slots) if slots else 0.0
+
+
 def _rejection(emitter, cycle_s: float, max_scatter_s: float,
-               max_slot_fraction: float) -> str | None:
+               max_slot_fraction: float,
+               min_repeats: float = DEFAULT_MIN_REPEATS) -> str | None:
     """Why this group is not a transmitter, or None if it might be.
 
     Both tests are about self-consistency rather than strength, because
@@ -159,6 +180,11 @@ def _rejection(emitter, cycle_s: float, max_scatter_s: float,
     if share > max_slot_fraction:
         return (f"occupies {slots} of {cycle_s:.0f} seconds "
                 f"({share * 100:.0f}%); a schedule is sparse")
+    repeats = _repeats_per_slot(emitter)
+    if repeats < min_repeats:
+        return (f"each slot heard {repeats:.1f} time(s); a transmitter on a "
+                f"{cycle_s:.0f} s cycle returns to its slot every cycle, so "
+                f"this is coincidence, not a schedule")
     return None
 
 
@@ -167,6 +193,7 @@ def _as_row(emitter) -> dict:
     row = asdict(emitter)
     row["span_hours"] = round(emitter.span_hours, 2)
     row["observed_seconds"] = list(emitter.observed_seconds)
+    row["repeats_per_slot"] = round(_repeats_per_slot(emitter), 1)
     # The entry `control.set_config` would write. `transmit_name` is left for
     # the operator: nothing in a detection identifies the transmitter, and a
     # guessed name would end up in the product file name and then in the

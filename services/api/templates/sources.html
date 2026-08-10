@@ -16,6 +16,7 @@
   {% if census.emitters %}
   <div class="scroll"><table>
     <tr><th></th><th>rate</th><th>heard at (s into cycle)</th><th>n</th>
+        <th title="detections divided by distinct slots: how often it came back">/slot</th>
         <th>phase ms</th><th>SNR</th><th>span h</th></tr>
     {% for e in census.emitters %}
     <tr>
@@ -23,6 +24,7 @@
       <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
       <td>{{ e.observed_seconds|join(', ') }}</td>
       <td>{{ e.count }}</td>
+      <td>{{ e.repeats_per_slot }}</td>
       <td class="muted">{{ '%.2f'|format(e.fraction_s * 1000) }}
           <span class="muted">&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}</span></td>
       <td>{{ '%.1f'|format(e.snr_median) }}</td>
@@ -56,11 +58,13 @@
       the thresholds are wrong, not the transmitter.
     </p>
     <div class="scroll"><table>
-      <tr><th>rate</th><th>n</th><th>phase ms</th><th>SNR</th><th>rejected because</th></tr>
+      <tr><th>rate</th><th>n</th><th>/slot</th><th>phase ms</th><th>SNR</th>
+          <th>rejected because</th></tr>
       {% for e in census.rejected %}
       <tr class="muted">
         <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
         <td>{{ e.count }}</td>
+        <td>{{ e.repeats_per_slot }}</td>
         <td>{{ '%.2f'|format(e.fraction_s * 1000) }}
             &plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}</td>
         <td>{{ '%.1f'|format(e.snr_median) }}</td>
