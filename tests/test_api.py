@@ -749,6 +749,78 @@ def test_the_census_offers_each_emitter_as_a_schedule_entry(tmp_path,
     assert entry["chirp-rate"] > 0 and entry["rep"] > 0
 
 
+def test_days_are_ranked_by_date_not_by_string(tmp_path):
+    """Both halves of this were live on the real archive.
+
+    `2026.02.09` sorts above `2026-08-10` because '.' is 0x2E and '-' is 0x2D,
+    so a reverse lexical sort served February as "what is on air today"; and
+    `ionozond_data2` beats every digit, taking a slot without being a day at
+    all. Between them, no August directory was ever opened.
+    """
+    from services.api import sources
+
+    for name in ("2026-08-09", "2026-08-10", "2026.02.04", "2026.02.09",
+                 "20260807", "ionozond_data2", "logs"):
+        (tmp_path / name).mkdir()
+
+    picked = [p.name for p in sources._day_directories(tmp_path, 3)]
+    assert picked == ["2026-08-10", "2026-08-09", "20260807"], picked
+
+
+def test_a_flat_archive_still_scans_the_root(tmp_path):
+    """No dated subdirectory means the products are here, not below."""
+    from services.api import sources
+
+    (tmp_path / "ionozond_data2").mkdir()
+    assert sources._day_directories(tmp_path, 3) == [tmp_path]
+
+
+def test_interference_is_rejected_by_shape_not_by_strength():
+    """The loudest group on DOB was the least real.
+
+    500 kHz/s, median SNR 68 -- above cyprus1 -- claiming every one of the 300
+    seconds in the cycle with a fractional offset scattering +/-274 ms. A
+    transmitter is quiet in most seconds and arrives at the same instant
+    within the ones it uses; strength says nothing either way.
+    """
+    from types import SimpleNamespace
+
+    from services.api import sources
+
+    def verdict(sd_ms, slots):
+        return sources._rejection(
+            SimpleNamespace(fraction_sd_s=sd_ms / 1e3,
+                            observed_seconds=list(range(slots))),
+            300.0, sources.DEFAULT_MAX_SCATTER_S,
+            sources.DEFAULT_MAX_SLOT_FRACTION)
+
+    assert verdict(0.91, 6) is None, "the tightest real emitter must survive"
+    assert verdict(2.27, 37) is None, "cyprus1's group, 12% of the cycle"
+    assert "274 ms" in verdict(273.93, 300)
+    assert "scatters" in verdict(20.54, 150)
+    # Tight but everywhere: rejected on occupancy alone, so a narrow-scatter
+    # detector artefact cannot slip through by being consistent.
+    assert "sparse" in verdict(0.5, 200)
+
+
+def test_rejects_are_reported_not_hidden(tmp_path, make_detection_h5):
+    """A schedule page that silently drops rows cannot be checked, and the
+    operator is the one who knows whether the discard was what they came for."""
+    from services.api import sources
+
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    # Via occupancy, not scatter: a synthetic emitter has *exactly* zero
+    # scatter, and zero is not greater than any threshold.
+    got = sources.census(tmp_path, max_days=2, min_count=2,
+                         max_slot_fraction=0.0)
+    assert got["emitters"] == []
+    assert got["rejected"], "everything was dropped and nothing said so"
+    assert "rejected_because" in got["rejected"][0]
+
+
 def test_the_census_names_no_transmitter(tmp_path, make_detection_h5):
     """Nothing in a detection identifies who sent it. A guessed name would
     reach the product file name and then the database, looking like

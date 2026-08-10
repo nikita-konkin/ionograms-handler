@@ -8,6 +8,7 @@ kill, and a config edit must never land half-written.
 
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import subprocess
@@ -17,10 +18,10 @@ from pathlib import Path
 import pytest
 
 from services.agent import client, control, health, logs, runner
+from services.agent.config import StationConfig
 
 #: Read from the module so the tests move with the threshold, not against it.
 STALE = health.STALE_PRODUCT_S
-from services.agent.config import StationConfig
 
 
 @pytest.fixture
@@ -334,6 +335,38 @@ def test_an_unset_target_refuses_instead_of_running_systemctl(station, target):
     assert calls == []
     assert result.ok is False
     assert "no systemd target configured" in result.detail
+
+
+@pytest.mark.parametrize("shape,label", [
+    ([{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0}], "flat"),
+    ([[{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0}]], "one MPI rank"),
+    ([[{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0}],
+      [{"chirp-rate": 1.25e5, "rep": 30.0, "chirpt": 15.0}]], "two ranks"),
+])
+def test_both_schedule_shapes_are_accepted(shape, label):
+    """`/ui/sources` builds the per-rank shape; the validator knew only flat.
+
+    It reached `set(entry)` with a list and raised TypeError: unhashable type
+    'dict' -- not a ControlError, so the operator saw the command fail with a
+    Python internal and nothing to act on.
+    """
+    parser = configparser.ConfigParser()
+    parser.add_section("lfm")
+    control._validate(parser, {"mode": "scheduled",
+                               "sounder_timings": json.dumps(shape)})
+
+
+@pytest.mark.parametrize("shape,expect", [
+    ([[{"rep": 300.0, "chirpt": 235.0}]], "chirp-rate"),
+    ([["not an object"]], "not an object"),
+    ([[]], "list of entries"),
+])
+def test_a_malformed_schedule_says_what_is_wrong(shape, expect):
+    parser = configparser.ConfigParser()
+    parser.add_section("lfm")
+    with pytest.raises(control.ControlError, match=expect):
+        control._validate(parser, {"mode": "scheduled",
+                                   "sounder_timings": json.dumps(shape)})
 
 
 def test_a_stop_that_times_out_warns_about_the_radio(station):

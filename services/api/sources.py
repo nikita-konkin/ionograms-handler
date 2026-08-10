@@ -25,6 +25,7 @@ not a transmit time and it is not a range.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -33,20 +34,62 @@ from pathlib import Path
 #: for "what is on air today", not for a survey.
 DEFAULT_MAX_DAYS = 3
 
+#: Scatter of the fractional-second offset, past which a group is not one
+#: transmitter. A real chirp starts at the same point within its second every
+#: time -- the tight groups on DOB sit at +/-0.9 and +/-1.6 ms across hundreds
+#: of detections. Noise does not: the worst group in that archive claimed
+#: +/-274 ms, which is most of a second of "when".
+DEFAULT_MAX_SCATTER_S = 5e-3
+
+#: Share of the cycle's seconds a single emitter may occupy. One transmitter
+#: does not transmit in half the seconds of its own repeat period. On DOB the
+#: 500 kHz/s group claimed *all three hundred* -- every second, 0 to 299 --
+#: which is a detector firing on broadband interference, not a schedule.
+DEFAULT_MAX_SLOT_FRACTION = 0.25
+
+
+#: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
+_DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
+
+
+def _day_key(name: str) -> tuple[int, int, int] | None:
+    match = _DAY_RE.match(name)
+    return (int(match.group(1)), int(match.group(2)),
+            int(match.group(3))) if match else None
+
 
 def _day_directories(root: Path, max_days: int) -> list[Path]:
-    """Newest dated subdirectories, or the root itself if it holds files."""
+    """Newest dated subdirectories, or the root itself if it holds files.
+
+    Sorted by the date the name *means*, not by the string. A reverse lexical
+    sort is wrong twice over on a real archive, and both were live here:
+
+    * Two conventions coexist. ``.`` is 0x2E and ``-`` is 0x2D, so every
+      ``2026.02.*`` sorts ahead of every ``2026-08-*`` -- the census reported
+      February as "what is on air today" and never opened an August day.
+    * Not every subdirectory is a day. ``ionozond_data2`` beats any digit and
+      took a slot outright.
+
+    A directory whose name is not a date is not a day, and is skipped rather
+    than ranked. If none of them are dates the tree is flat, and the root is
+    scanned as before.
+    """
     if not root.exists():
         return []
-    days = sorted((p for p in root.iterdir() if p.is_dir()),
-                  key=lambda p: p.name, reverse=True)
-    return days[:max_days] if days else [root]
+    dated = [(key, p) for p in root.iterdir() if p.is_dir()
+             for key in (_day_key(p.name),) if key is not None]
+    if not dated:
+        return [root]
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in dated[:max_days]]
 
 
 def census(archive_root: str | os.PathLike, *,
            max_days: int = DEFAULT_MAX_DAYS,
            cycle_s: float | None = None,
-           min_count: int = 3) -> dict:
+           min_count: int = 3,
+           max_scatter_s: float = DEFAULT_MAX_SCATTER_S,
+           max_slot_fraction: float = DEFAULT_MAX_SLOT_FRACTION) -> dict:
     """Repeating emitters under ``archive_root``, newest days first.
 
     Reads whichever detection product the tree actually has, in the order
@@ -78,12 +121,45 @@ def census(archive_root: str | os.PathLike, *,
         return {"count": 0, "kind": "none", "cycle_s": cycle, "emitters": []}
 
     emitters = io_detect.census(records, cycle_s=cycle, min_count=min_count)
+    kept, rejected = [], []
+    for emitter in emitters:
+        why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction)
+        (rejected if why else kept).append(
+            (emitter, why) if why else emitter)
     return {
-        "count": len(emitters),
+        "count": len(kept),
         "kind": kind,
         "cycle_s": cycle,
-        "emitters": [_as_row(e) for e in emitters],
+        "emitters": [_as_row(e) for e in kept],
+        # Kept, not silently dropped. A schedule page that hides its rejects
+        # cannot be checked, and the operator is the one who knows whether the
+        # thing it threw away was the transmitter they came for.
+        "rejected": [dict(_as_row(e), rejected_because=why)
+                     for e, why in rejected],
     }
+
+
+def _rejection(emitter, cycle_s: float, max_scatter_s: float,
+               max_slot_fraction: float) -> str | None:
+    """Why this group is not a transmitter, or None if it might be.
+
+    Both tests are about self-consistency rather than strength, because
+    strength is exactly what fools you here: the 500 kHz/s group on DOB had a
+    median SNR of 68 -- higher than cyprus1 -- while occupying every second of
+    the cycle. Loud and everywhere is interference; a transmitter is quiet in
+    291 seconds out of 300 and always arrives at the same instant within the
+    nine.
+    """
+    scatter = getattr(emitter, "fraction_sd_s", 0.0) or 0.0
+    if scatter > max_scatter_s:
+        return (f"fractional offset scatters by +/-{scatter * 1e3:.0f} ms; a "
+                f"transmitter holds it under {max_scatter_s * 1e3:.0f} ms")
+    slots = len(emitter.observed_seconds)
+    share = slots / cycle_s if cycle_s else 0.0
+    if share > max_slot_fraction:
+        return (f"occupies {slots} of {cycle_s:.0f} seconds "
+                f"({share * 100:.0f}%); a schedule is sparse")
+    return None
 
 
 def _as_row(emitter) -> dict:

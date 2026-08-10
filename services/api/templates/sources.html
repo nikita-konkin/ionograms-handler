@@ -42,6 +42,34 @@
      with at least {{ min_count }} detections. Search mode has to be running, and
      its detection files have to be reaching this archive.</p>
   {% endif %}
+
+  {% if census.rejected %}
+  <details>
+    <summary>{{ census.rejected|length }} group(s) rejected as interference</summary>
+    <p class="note">
+      Rejected on <b>shape, not strength</b>. The loudest group in this archive was
+      the least real: 500 kHz/s at a higher median SNR than cyprus1, claiming every
+      one of the 300 seconds in the cycle with its arrival phase scattering
+      &plusmn;274&nbsp;ms. A transmitter is silent in most seconds and arrives at the
+      same instant within the few it uses.
+      Shown so the list can be checked &mdash; if the row you came for is down here,
+      the thresholds are wrong, not the transmitter.
+    </p>
+    <div class="scroll"><table>
+      <tr><th>rate</th><th>n</th><th>phase ms</th><th>SNR</th><th>rejected because</th></tr>
+      {% for e in census.rejected %}
+      <tr class="muted">
+        <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
+        <td>{{ e.count }}</td>
+        <td>{{ '%.2f'|format(e.fraction_s * 1000) }}
+            &plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}</td>
+        <td>{{ '%.1f'|format(e.snr_median) }}</td>
+        <td>{{ e.rejected_because }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+  </details>
+  {% endif %}
 </div>
 
 <div class="panel">

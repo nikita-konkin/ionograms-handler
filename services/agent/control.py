@@ -204,11 +204,30 @@ def _validate(parser: configparser.ConfigParser, changes: dict) -> None:
                 "scheduled mode with an empty sounder_timings would record "
                 "nothing while every process reported healthy. Supply the "
                 "schedule in the same command, or stay in search mode.")
-        for entry in parsed:
-            missing = {"chirp-rate", "rep", "chirpt"} - set(entry)
-            if missing:
+        # The ini stores `sounder_timings` **per MPI rank**, so the real shape
+        # is a list of lists -- `[[{...}, {...}]]` for one rank -- and that is
+        # what `/ui/sources` builds when you tick rows. This validator only
+        # understood the flat form and reached `set(entry)` with a list, which
+        # raised an unhandled TypeError rather than a ControlError: the
+        # operator saw the command fail with "unhashable type: 'dict'" and no
+        # indication of what to change. Both shapes are accepted; a flat list
+        # is read as a single rank.
+        ranks = parsed if all(isinstance(item, list) for item in parsed) else [parsed]
+        for rank in ranks:
+            if not isinstance(rank, list) or not rank:
                 raise ControlError(
-                    f"sounder_timings entry {entry} is missing {sorted(missing)}")
+                    f"sounder_timings must be a list of entries, or a list of "
+                    f"one such list per MPI rank; got {rank!r}")
+            for entry in rank:
+                if not isinstance(entry, dict):
+                    raise ControlError(
+                        f"sounder_timings entry {entry!r} is not an object with "
+                        f"chirp-rate, rep and chirpt")
+                missing = {"chirp-rate", "rep", "chirpt"} - set(entry)
+                if missing:
+                    raise ControlError(
+                        f"sounder_timings entry {entry} is missing "
+                        f"{sorted(missing)}")
 
     if "output_dir" in changes:
         target = Path(str(changes["output_dir"]).strip('"'))
