@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,36 @@ def test_no_products_at_all_is_a_failure_not_an_unknown(station):
     metric = health.newest_product_age(station)
     assert metric.ok is False
     assert "no products" in metric.detail
+
+
+def test_a_future_dated_product_is_unknown_not_ok(station):
+    """DOB reported `ok` at -20420 s, because every negative age beats 900.
+
+    The clock had slipped 4.8 hours behind the products on disk, so the one
+    metric watching for acquisition stopping was passing unconditionally --
+    and would have kept passing with the recorder dead.
+    """
+    product = Path(station.output_dir) / "lfm_ionogram-DOB-000.h5"
+    product.parent.mkdir(parents=True, exist_ok=True)
+    product.write_bytes(b"")
+    os.utime(product, (time.time() + 20420, time.time() + 20420))
+
+    metric = health.newest_product_age(station)
+    assert metric.ok is None                     # not True, and not False
+    assert "in the future" in metric.detail
+    assert "system_clock_s" in metric.detail
+
+
+def test_small_clock_skew_is_still_measured(station):
+    """A second or two ahead is ordinary mtime skew, not a broken clock."""
+    product = Path(station.output_dir) / "lfm_ionogram-DOB-001.h5"
+    product.parent.mkdir(parents=True, exist_ok=True)
+    product.write_bytes(b"")
+    os.utime(product, (time.time() + 2, time.time() + 2))
+
+    metric = health.newest_product_age(station)
+    assert metric.ok is True
+    assert metric.value < 0
 
 
 def test_collect_never_raises_on_a_machine_that_is_not_a_station(tmp_path):

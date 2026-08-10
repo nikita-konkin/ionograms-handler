@@ -34,6 +34,12 @@ from .config import StationConfig
 #: processes say. Three sounding periods at DOB's 300 s cycle.
 STALE_PRODUCT_S = 900.0
 
+#: How far a product may be stamped ahead of the clock before the age becomes
+#: unmeasurable rather than merely small. A few seconds is ordinary skew --
+#: mtime granularity, a write finishing after the stat, a network filesystem.
+#: DOB's -20420 s was not skew.
+FUTURE_PRODUCT_TOLERANCE_S = 5.0
+
 #: Ringbuffer occupancy past this is the hour-before-failure signal. Observed
 #: at 94 % on 2026-08-05 with `ringbuffer_max_age_min` too high.
 RINGBUFFER_WARN_FRACTION = 0.85
@@ -108,7 +114,20 @@ def unit_states(config: StationConfig) -> list[Metric]:
 
 def newest_product_age(config: StationConfig) -> Metric:
     """Seconds since the newest product file. Soundings stopping is not the
-    same as a process dying, and this is the metric that separates them."""
+    same as a process dying, and this is the metric that separates them.
+
+    A *negative* age is not a fresh product, it is a broken measurement: the
+    newest file is stamped after the clock reads, so the two disagree and the
+    subtraction means nothing. Measured on DOB as -20420 s, and reported `ok`
+    -- because `age < 900` is trivially true for every negative number, so the
+    one metric that watches for acquisition stopping was passing on a station
+    whose clock had slipped 4.8 hours. It would have gone on passing with the
+    recorder dead.
+
+    Reported unknown rather than failing: `system_clock_s` already fails
+    definitively for this, and duplicating it here would say "products have
+    stopped", which is a different and unproven claim.
+    """
     root = Path(config.output_dir)
     if not root.is_dir():
         return Metric.unknown("newest_product_age_s", f"{root}: no such directory")
@@ -124,6 +143,11 @@ def newest_product_age(config: StationConfig) -> Metric:
         return Metric("newest_product_age_s", None, ok=False,
                       detail="no products under the output directory at all")
     age = time.time() - newest
+    if age < -FUTURE_PRODUCT_TOLERANCE_S:
+        return Metric.unknown(
+            "newest_product_age_s",
+            f"newest product is {-age:.0f}s in the future, so age cannot be "
+            f"measured -- see system_clock_s")
     return Metric("newest_product_age_s", round(age, 1), ok=(age < STALE_PRODUCT_S),
                   detail=f"threshold {STALE_PRODUCT_S:.0f}s")
 
