@@ -375,10 +375,19 @@ def system_clock(config: StationConfig) -> Metric:
     if newest is not None and now < newest - 60.0:
         fstype = _fstype_of(Path(config.output_dir))
         if fstype in REMOTE_FSTYPES:
-            note = (f"; the newest product is {(newest - now) / 3600.0:.1f} h "
-                    f"ahead, but the archive is {fstype} and those timestamps "
-                    f"come from the file server, not from here -- fix the "
-                    f"server's clock or product age stays unmeasurable")
+            # Deliberately not an instruction. A skew that is already fixed
+            # persists in the stamps of files written before the fix, and it
+            # takes exactly as long to age out as the skew was large -- 5.6 h
+            # on DOB. Telling the operator to go and fix a server they have
+            # just fixed is how a note stops being read. Whether the gap
+            # shrinks is the thing that distinguishes the two cases, so say
+            # that instead and let them look twice.
+            note = (f"; the newest product's mtime is "
+                    f"{(newest - now) / 3600.0:.1f} h ahead, but the archive "
+                    f"is {fstype} -- those stamps come from the file server, "
+                    f"not from here. Stamps written before a clock fix age out "
+                    f"on their own; a gap that does not shrink is a server "
+                    f"clock still to correct")
         else:
             behind = (newest - now) / 86400.0
             return Metric("system_clock_s", round(now, 1), ok=False,
