@@ -184,6 +184,45 @@ cp deploy/.env.example deploy/.env      # set CONTROL_TOKEN and IMAGE_NAMESPACE
 docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env up -d
 ```
 
+### Fitting alongside what the host already runs
+
+The work server already runs other stacks, and two of them collide with the
+defaults:
+
+| already there | collision |
+|---|---|
+| `tec-backend` on **8000** | the api's old default. `PORT` is now **8002** |
+| `watchtower` | ours would be a **second** one on the same Docker socket |
+
+`PORT` is the host side only; the container still listens on 8000 internally,
+so nothing else changes.
+
+**Do not start a second watchtower.** Two of them poll, restart and prune the
+same containers, which is wasted work at best and a race over one image at
+worst. Ours is behind a compose *profile* so it stays out of the way:
+
+```bash
+# host already has watchtower -- the normal case here
+docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env up -d
+
+# only on a host that has none
+docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env \
+    --profile watchtower up -d
+```
+
+The existing watchtower needs nothing from us except the labels already on
+`api` and `watch` -- **provided it is label-scoped**. Check:
+
+```bash
+sudo docker inspect watchtower --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -i label
+```
+
+`WATCHTOWER_LABEL_ENABLE=true` means it updates only labelled containers, and
+ours are labelled, so they are picked up automatically. If that variable is
+absent it updates **everything on the host**, including these -- which still
+works, but means the opt-in the labels were meant to provide is not actually in
+force for anything on that machine.
+
 Three services, and the third is the one to think about:
 
 | service | what it does |

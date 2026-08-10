@@ -1,0 +1,40 @@
+# The pruner. Its absence cost two days of soundings.
+[Unit]
+Description=chirpsounder2 ringbuffer pruner (drf ringbuffer)
+PartOf=chirp.target
+# After the recorder, which creates the directory. `drf ringbuffer` watches a
+# path rather than owning it, so starting first would leave it watching
+# nothing until the next inotify event.
+After=chirp-rx.service
+Before=chirp-detect.service chirp-ionograms.service
+
+[Service]
+Type=simple
+User=ionouser
+WorkingDirectory=/home/ionouser/chirpsounder2
+
+# Nothing else deletes ringbuffer data. Every example under
+# examples/ringbuffer/ starts this process and stop_ringbuffer.sh already
+# expects to kill it -- but no launcher started it, so /dev/shm reached 100%,
+# the writer could no longer allocate, and the recording developed holes that
+# surfaced downstream as "missing data - skipping" while the recorder, the
+# detector and every plot carried on looking healthy.
+#
+# The size is also how far back a consumer can reach, which is what decides
+# whether a sounding is analysable at all:
+#
+#     seconds of history = size / (sample_rate * 4 bytes)
+#
+# At 25 MS/s that is 100 MB/s, so 12000MB holds 120 s. A sounding must begin
+# processing within that window of its t0; find_timings.py prints the margin
+# for each as "N s left", and measured start latency here is 65-117 s. Raise it
+# on a machine with more RAM, or move the ringbuffer to an SSD -- it is the
+# only lever that makes start latency stop mattering.
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/drf ringbuffer \
+    -z 12000MB /dev/shm/hf25 -p 2
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=chirp.target

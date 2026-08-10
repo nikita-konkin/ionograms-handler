@@ -16,8 +16,11 @@ services:
   api:
     image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-api:${IMAGE_TAG:-latest}
     pull_policy: always
+    # 8000 is a popular default and is often already taken -- on the work
+    # server it belongs to tec-backend. PORT is the host side only; the
+    # container still listens on 8000.
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8002}:8000"
     environment:
       API_DB: /data/ionograms.sqlite3
       ARCHIVE_ROOT: /archive
@@ -66,12 +69,19 @@ services:
 
   # Polls Docker Hub and restarts a container when its image digest changes.
   #
+  # OPT-IN, because a host that already runs services probably already runs
+  # one: `docker compose --profile watchtower up -d`. Two watchtowers on one
+  # Docker socket both poll, both restart and both prune, which is at best
+  # wasted work and at worst a race over the same image. If the host has one
+  # already, leave this out -- the labels below are all it needs from us.
+  #
   # Scoped to labelled containers only (`WATCHTOWER_LABEL_ENABLE`), so adding a
   # container to this file does not silently enrol it in auto-updates. Nothing
   # that talks to a radio is labelled: the api is a read surface plus a command
   # queue, and an unattended restart of it loses nothing but a few seconds of
   # uptime. The station agent is not here at all.
   watchtower:
+    profiles: ["watchtower"]
     image: containrrr/watchtower:latest
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"

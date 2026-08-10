@@ -1,0 +1,24 @@
+# Gets products off the station. Without it the archive never leaves the laptop.
+[Unit]
+Description=chirpsounder2 sync_iono_data.py
+PartOf=chirp.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ionouser
+WorkingDirectory=/home/ionouser/chirpsounder2
+
+# Deliberately not ordered After=chirp-rx.service: syncing a backlog is useful
+# whether or not the radio is currently running, and making it wait on the
+# recorder would mean a station with a dead receiver also stops delivering the
+# data it already has.
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 -u sync_iono_data.py \
+    --config /home/ionouser/chirpsounder2/my_station.ini
+
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=chirp.target

@@ -14,24 +14,42 @@
     "server_url must be reachable FROM the laptop. Health is pushed and",
     "commands are pulled, so the laptop only ever makes outbound connections",
     "and never needs an inbound port -- but the server does. See",
-    "deploy/README.md for the two network cases."
+    "deploy/README.md for the two network cases.",
+    "",
+    "Leave \"token\" empty and pass the secret as AGENT_TOKEN in the unit's",
+    "environment instead. It overrides this field, and keeps the shared secret",
+    "out of a file that gets copied around and backed up."
   ],
 
   "station": "DOB",
   "server_url": "http://<work-pc-lan-ip>:8000",
-  "token": "<the CONTROL_TOKEN from deploy/.env>",
+  "token": "",
   "push_interval_s": 60,
 
-  "chirp_config": "/home/ionouser/chirpsounder2/examples/marieluise/dombas.ini",
+  "chirp_config": "/home/ionouser/chirpsounder2/my_station.ini",
   "output_dir": "/media/ionouser/DATA3/ionozond_data2",
   "ringbuffer_dir": "/dev/shm/hf25",
 
+  "_units_comment": [
+    "Every unit whose death should be visible. A process missing from this",
+    "list cannot be reported unhealthy, and chirp-ringbuffer is the reason",
+    "that matters: nothing trimmed /dev/shm, it sat at 100%, the recording",
+    "developed holes, and every other process stayed green for two days.",
+    "Drop chirp-timings when not in serendipitous mode -- it produces the",
+    "par-*.h5 that only that mode consumes."
+  ],
   "units": [
     "chirp-rx.service",
+    "chirp-ringbuffer.service",
     "chirp-detect.service",
     "chirp-timings.service",
     "chirp-ionograms.service",
-    "chirp-metadata.service"
+    "chirp-metadata.service",
+    "chirp-sync.service",
+    "chirp-digisonde@Juliusruh.service",
+    "chirp-digisonde@JuliusruhN.service",
+    "chirp-digisonde@Chilton.service",
+    "chirp-digisonde@Dourbes.service"
   ],
   "target": "chirp.target",
 

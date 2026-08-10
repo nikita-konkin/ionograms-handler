@@ -1,0 +1,32 @@
+# One instance per remote digisonde. `systemctl enable chirp-digisonde@Dourbes`.
+[Unit]
+Description=chirpsounder2 receive_digisonde.py (%i)
+PartOf=chirp.target
+After=chirp-rx.service
+
+[Service]
+Type=simple
+User=ionouser
+WorkingDirectory=/home/ionouser/chirpsounder2
+
+# The instance name selects the ini section: `--sounder Dourbes` reads
+# [digisonde-Dourbes] (receive_digisonde.py:71). An instance with no matching
+# section fails at startup rather than silently receiving the wrong station.
+#
+# The bare [digisonde] section is what `--sounder ""` reads, and on this
+# station that section *is* Ramfjordmoen. A template cannot express an empty
+# instance, so give it a [digisonde-Ramfjordmoen] section -- a copy of
+# [digisonde] -- and every receiver then has the same shape.
+#
+# These are oblique receptions of *vertical* sounders a few hundred km away,
+# which is why they are worth running at all: each is a free extra circuit with
+# a named, registered transmitter. See muf/io_digisonde.py.
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 -u receive_digisonde.py \
+    --config /home/ionouser/chirpsounder2/my_station.ini \
+    --sounder %i
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=chirp.target
