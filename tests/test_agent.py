@@ -204,6 +204,103 @@ def test_fstype_of_resolves_a_real_path():
     assert health._fstype_of(Path("/")) is not None
 
 
+# --------------------------------------------------------------------------
+# Prune: deleting only what is provably archived
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def staging(tmp_path):
+    """A local staging dir and a remote archive, both with one product."""
+    from services.agent import prune
+
+    local, remote = tmp_path / "local", tmp_path / "remote"
+    (local / "2026-08-11").mkdir(parents=True)
+    (remote / "2026-08-11").mkdir(parents=True)
+    name = "2026-08-11/lfm_ionogram-unkown-DOB-ch0-000-1786364945.01.h5"
+    (local / name).write_bytes(b"x" * 512)
+    (remote / name).write_bytes(b"x" * 512)
+    old = time.time() - 10 * 86400
+    os.utime(local / name, (old, old))
+    return prune, local, remote, name
+
+
+def test_an_unmounted_archive_prunes_nothing(staging):
+    """An unmounted share is an empty directory, and every `exists()` on a
+    path under it fails -- so each file would be 'unverified' and kept. But an
+    empty *remote root* is the signal that the mount is gone, and the guard is
+    there so a future refactor cannot turn 'nothing to compare against' into
+    'nothing worth keeping'."""
+    prune, local, _, name = staging
+    empty = local.parent / "not-mounted"
+    empty.mkdir()
+
+    result = prune.run(local, empty, min_age_s=0)
+    assert result["mounted"] is False
+    assert result["removed"] == 0
+    assert (local / name).exists()
+    assert "guard working" in prune.describe(result)
+
+
+def test_a_verified_copy_is_removed(staging):
+    prune, local, remote, name = staging
+    result = prune.run(local, remote, min_age_s=86400)
+
+    assert result["removed"] == 1
+    assert not (local / name).exists()
+    assert (remote / name).exists(), "the archive copy must survive"
+
+
+def test_a_size_mismatch_is_not_a_copy(staging):
+    """Truncated by an interrupted transfer. Timestamps cannot be trusted --
+    SMB stamps come from the file server -- so size is the check."""
+    prune, local, remote, name = staging
+    (remote / name).write_bytes(b"x" * 100)
+
+    result = prune.run(local, remote, min_age_s=86400)
+    assert result["removed"] == 0
+    assert (local / name).exists()
+
+
+def test_a_missing_copy_is_not_a_copy(staging):
+    prune, local, remote, name = staging
+    (remote / name).unlink()
+
+    assert prune.run(local, remote, min_age_s=86400)["removed"] == 0
+    assert (local / name).exists()
+
+
+def test_recent_products_are_left_alone(staging):
+    """They may still be mid-write, and the mirror may not have reached them."""
+    prune, local, remote, name = staging
+    os.utime(local / name, None)                  # now
+
+    assert prune.run(local, remote, min_age_s=86400)["removed"] == 0
+    assert (local / name).exists()
+
+
+def test_dry_run_deletes_nothing_but_reports(staging):
+    prune, local, remote, name = staging
+    result = prune.run(local, remote, min_age_s=86400, dry_run=True)
+
+    assert result["removed"] == 1
+    assert (local / name).exists(), "dry run must not touch the disk"
+    assert "would remove" in prune.describe(result, dry_run=True)
+
+
+def test_only_products_are_considered(staging):
+    """The staging tree holds logs and partial transfers too. A prune by age
+    alone would take them; this one matches product names."""
+    prune, local, remote, _ = staging
+    old = time.time() - 10 * 86400
+    for junk in ("2026-08-11/notes.txt", "2026-08-11/.rsync-partial"):
+        (local / junk).write_bytes(b"keep me")
+        os.utime(local / junk, (old, old))
+
+    prune.run(local, remote, min_age_s=86400)
+    assert (local / "2026-08-11/notes.txt").exists()
+    assert (local / "2026-08-11/.rsync-partial").exists()
+
+
 def test_collect_never_raises_on_a_machine_that_is_not_a_station(tmp_path):
     config = StationConfig(chirp_config=tmp_path / "absent.ini",
                            output_dir=tmp_path / "absent",

@@ -1,0 +1,41 @@
+# Deletes staged products that are provably already on the NAS.
+#
+# The other half of chirp-archive-sync.service, and only needed because the
+# staging area moved to a 256 GB boot SSD. The mirror never deletes -- that is
+# deliberate, since a mover removes the only good copy the one time the
+# destination is silently wrong -- so on a small volume something else has to,
+# and it has to be careful rather than fast.
+#
+# `services/agent/prune.py` checks three things before any unlink: the archive
+# is mounted and non-empty (an unmounted share is an empty directory that every
+# existence check passes), the file is older than --min-age-days, and the same
+# relative path exists remotely **with the same size**. Not the timestamp: SMB
+# stamps come from the file server, and this station's was 5 h 36 m fast for a
+# day.
+#
+# Run it with --dry-run first. It prints exactly what it would remove.
+
+[Unit]
+Description=prune staged products already copied to the NAS
+After=chirp-archive-sync.service
+# Same guard as the sync job, one layer earlier: no mount, nothing to verify
+# against, so do not even start.
+ConditionPathIsMountPoint=/mnt/ionozond_16tb
+
+[Service]
+Type=oneshot
+User=ionouser
+WorkingDirectory=/home/ionouser/ionograms-handler
+
+# No deadline here either, and it shares a disk with the process that has one.
+Nice=19
+IOSchedulingClass=idle
+
+Environment=ARCHIVE_LOCAL=/media/ionouser/DATA3/ionozond_data2
+Environment=ARCHIVE_REMOTE=/mnt/ionozond_16tb/ionozond_data2
+
+# Three days of local history at ~3 GB/day is ~9 GB -- a weekend-long NAS
+# outage stays invisible, and it fits a boot-SSD budget. Raise it if the
+# staging volume has room; the cost of keeping more is only space.
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python -m services.agent.prune \
+    ${ARCHIVE_LOCAL} ${ARCHIVE_REMOTE} --min-age-days 3

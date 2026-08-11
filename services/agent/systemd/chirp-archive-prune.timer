@@ -1,0 +1,19 @@
+# Hourly, not every five minutes like the mirror.
+#
+# The mirror is racing to get products off a machine that could lose power.
+# This one is reclaiming space that is not urgently needed: at ~3 GB/day a
+# staging volume with days of headroom does not care whether a file goes now
+# or in an hour, and a rarer job is a rarer chance to walk the tree while
+# `calc_ionograms` is trying to meet its deadline on the same disk.
+
+[Unit]
+Description=prune staged products already on the NAS, hourly
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=1h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
