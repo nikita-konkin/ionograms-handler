@@ -46,9 +46,18 @@ Environment=ARCHIVE_REMOTE=/mnt/ionozond_16tb/ionozond_data2
 # --no-times: SMB timestamps come from the file server, so trying to preserve
 # them fails noisily on some shares and lies on others. Product time is in the
 # filename, which is what everything downstream reads.
+# On `--exclude='chirp-*.h5'`, which is commented out because it is a policy
+# choice, not a fact: those are the raw detection snippets, and on DOB they are
+# deleted minutes after they appear -- rsync logs a page of "file has vanished"
+# every pass. Since there is no `--delete` here, whichever ones a pass happens
+# to catch are kept on the NAS forever and the rest are not, so the remote copy
+# is an arbitrary sample of a transient stream rather than an archive of it.
+# Excluding them costs nothing if they are meant to be transient, and loses a
+# product if they are not. Decide, then uncomment or delete this note.
 ExecStart=/usr/bin/rsync -rlD --partial-dir=.rsync-partial --no-times \
     --exclude='.rsync-partial' --exclude='*.tmp' \
     ${ARCHIVE_LOCAL}/ ${ARCHIVE_REMOTE}/
+#   --exclude='chirp-*.h5'
 
 # A failed pass is normal -- the NAS reboots, the network drops. The timer
 # brings it back; systemd should not mark the unit failed for it.

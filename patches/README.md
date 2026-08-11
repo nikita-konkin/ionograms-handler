@@ -14,6 +14,7 @@ Applied against `0d27125`.
 | `0002-calc_ionograms-bounded-digitalrf-bounds-wait.patch` | `calc_ionograms.py`'s `get_valid_bounds` gives up after 30 s instead of polling forever | an empty ringbuffer wedged the reader permanently; two days of soundings with no ionograms |
 | `0003-dombas-start-ringbuffer-and-fix-launch-order.patch` | `examples/marieluise/dombas.sh` starts `drf ringbuffer`, starts the recorder first, runs `find_timings.py` in serendipitous mode, and unbuffers every log | the ram disk was never trimmed, so it sat at 100% and the recording developed holes |
 | `0003-local-dombas-DOB-…patch` | the same change, against **DOB's edited copy** rather than upstream's | DOB's `dombas.sh` has diverged (`$HOME` paths, `.venv38`, `my_station.ini`, quoted variables), so the upstream-based 0003 does not apply there |
+| `0004-dombas-run-calc_ionograms-under-mpi.patch` | `calc_ionograms.py` runs under `$MPIRUN -np 4`, as `detect_chirps.py` already does | it ran as one process on one of eight cores and missed the ringbuffer window for **4.28% of soundings**, lost silently as "missing data - skipping" |
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
@@ -28,6 +29,18 @@ All three are independent — different files, different faults — and all thre
 are about the same thing: a station that keeps running while producing nothing.
 0002 turns a permanent hang into a logged retry, 0003 removes the condition
 that caused it, and 0001's host-clock fallback is only visible because of them.
+
+**0004 applies on top of 0003**, whose context it assumes — it edits the same
+line region of the same file. It is the only patch here that is a performance
+change rather than a correctness one, and it is measured: re-run
+
+```bash
+grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
+  | awk '{n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
+```
+
+after a day. Baseline to beat is 4.28%. Note the `-?` — without it the sign is
+dropped and every failure counts as a comfortable pass.
 
 **Apply 0003 first if you are applying several.** It fixes the environment the
 other two run in; without a trimmed ringbuffer the rest is treating symptoms.

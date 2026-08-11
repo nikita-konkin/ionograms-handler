@@ -1,0 +1,65 @@
+Run calc_ionograms.py under MPI, like detect_chirps.py already is.
+
+`calc_ionograms.py` is the only process on DOB with a deadline: it must reach a
+sounding's samples before the ringbuffer overwrites them. Measured over 1333
+soundings on 2026-08-11 it missed 57 of them -- **4.28% of the archive, lost
+silently** as "missing data - skipping" in ionograms.log, with a median
+lateness of 171 s and a worst case of 653 s.
+
+It was running as a single process.
+
+    93.8  python3 -u detect_chirps.py      <- rank 0
+    93.7  python3 -u detect_chirps.py      <- rank 1
+    81.9  python3 -u calc_ionograms.py     <- one process, no mpirun
+
+Eight cores, ~2.7 busy. The consumer that could not keep up had one of them
+while five sat idle.
+
+It is MPI-aware already -- `from mpi4py import MPI` at calc_ionograms.py:8,
+`Get_size`/`Get_rank` at :100-101 -- and the configuration format says so too:
+`sounder_timings` in the ini is a list of lists, **one schedule per rank**.
+That structure only exists because this script is meant to run distributed.
+Line 122 already launches `detect_chirps.py` this way; this is the same change
+for the process that actually needed it.
+
+-np 4, not more: measured RSS is 437 MB per rank (~1.7 GB for four, against
+11 GB available), and leaving cores for detect_chirps' two ranks plus the
+recorder matters more than the last increment of throughput.
+
+**This does not fix a slow write path.** The same measurement was taken with
+products going to a 5400 rpm laptop disk over ntfs-3g. Parallelism divides the
+compute; it does not make a seek-bound filesystem faster, and four ranks
+writing to one spindle may contend. Re-measure after applying:
+
+    grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
+      | awk '{n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
+
+Baseline to beat: 4.28%.
+
+Apply on top of 0003, which this context assumes:
+
+    cd ~/chirpsounder2
+    git apply --check /path/to/0004-dombas-run-calc_ionograms-under-mpi.patch
+    git apply         /path/to/0004-dombas-run-calc_ionograms-under-mpi.patch
+
+Takes effect on the next launch of dombas.sh -- and only on a relaunch, since
+the script starts these processes once. Never start a second calc_ionograms
+beside the running one: two consumers on one ringbuffer, both writing the same
+products, is worse than the fault this fixes.
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -137,7 +137,11 @@ if [ "$SERENDIPITOUS" = "True" ]; then
+ fi
+ 
+ echo "calc_ionograms.py"
+-python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
++# Under MPI: this is the process with the ringbuffer deadline, and as a single
++# process it lost 4.28% of soundings while five of eight cores idled. It reads
++# its rank from MPI.COMM_WORLD (calc_ionograms.py:99-101), and `sounder_timings`
++# is stored one list per rank for exactly this reason.
++$MPIRUN -np 4 python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
+ 
+ echo "plot_ionograms.py"
+ python3 -u plot_ionograms.py --config "$CONF_FILE" > logs/plot_ionograms.log 2>&1 &

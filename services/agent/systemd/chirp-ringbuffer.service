@@ -32,23 +32,45 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # on DOB exceed 120 s outright, so either the effective window is larger than
 # size/(rate*4) suggests, or "s left" is not measured from it.
 #
-# **Read the tail, never a sample.** Twenty consecutive soundings on DOB gave
-# min 90.6 s, median 128.4 s, none under 60 -- which reads as comfortable and
-# is not. Fifty gave a minimum of **0.68 s**: one sounding that arrived within
-# a second of having its samples overwritten before processing reached them.
-# The distribution is long-tailed, the tail is the only part that loses data,
-# and it loses it silently -- as "missing data - skipping", or as a short sweep
-# that `sweep_complete` records and nothing rejects.
+# **Match the minus sign, and read the whole log.** Two ways to get this wrong,
+# both of which happened on DOB 2026-08-11:
 #
-# So size a schedule from the low percentiles of the whole log, not from a
-# `tail`:
+#   * `grep -o '[0-9.]* s left'` silently drops the sign, so `-5.2 s left` is
+#     counted as a comfortable 5.2. Every failure reads as a pass. Use
+#     `grep -oE '\-?[0-9.]+ s left'`.
+#   * A `tail -20` gave min 90.6 s and "none under 60", which reads as healthy.
+#     The full log said otherwise.
 #
-#     grep -o '[0-9.]* s left' logs/find_timings.log \
-#       | awk '{n++; if($1<30) a++; if($1<60) b++} \
-#              END {printf "n=%d  <30s:%d  <60s:%d\n", n, a, b}'
+# Measured correctly over 1333 soundings: **57 negative (4.28%)**, 6.3% under
+# 10 s, 13.1% under 30 s. The 57 match the `missing data - skipping` lines in
+# ionograms.log one for one -- that is data lost, not close calls, and it is
+# lost silently. A margin under 30 s is a near miss; only <= 0 is a loss.
 #
-# Raise the size on a machine with more RAM, or move the ringbuffer to an SSD
-# -- it is the only lever that makes start latency stop mattering.
+#     grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
+#       | awk '{n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
+#
+# Storage under the consumer matters as much as this buffer's size. DOB lost
+# 4.28% while writing products to a 5400 rpm laptop disk over ntfs-3g -- FUSE,
+# userspace, seek-bound -- with a mirror job reading the same spindle every
+# five minutes. `ionice` does not reach the ntfs-3g daemon that does that I/O.
+#
+# Raise the size on a machine with more RAM. **Do not move this to an SSD.**
+# An earlier version of this comment recommended exactly that, and the
+# arithmetic says otherwise: 25 MS/s of complex int16 is 100 MB/s, which is
+# 8.64 TB written *per day*. A 1 TB consumer SSD rated ~600 TBW is exhausted
+# in 69 days; a write-intensive enterprise drive at 3 DWPD lasts under two
+# years. tmpfs has no write endurance to spend, which is why a ring buffer
+# belongs in RAM and why the only real lever here is more of it.
+#
+# The SSD advice is right for the *products* -- 0.6 MB per ionogram, a few
+# thousand a day -- just never for the stream.
+#
+# Before buying RAM, check the size would help. The margin that matters is how
+# far *below* zero the failures fall: another 120 s of history saves a sounding
+# that missed by 5 s and does nothing for one that missed by 200.
+#
+#     grep -oE '\-?[0-9.]+ s left' logs/find_timings.log | awk '$1<=0' \
+#       | awk '{n++; if($1>-120) s++} END {printf "%d of %d saved by +120s\n", s+0, n}'
 ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/drf ringbuffer \
     -z 12000MB /dev/shm/hf25 -p 2
 

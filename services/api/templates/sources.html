@@ -101,7 +101,16 @@
     <button class="pill" id="apply">apply</button>
     <span class="note">takes effect on the next restart</span>
   </p>
-  <p class="note">Schedule to send (ticked rows above, editable):</p>
+  <p class="note">
+    Schedule to send (ticked rows above, editable). <b>One entry per ticked
+    row, using that row's first slot</b> &mdash; a row listing 37 seconds gives
+    you one of them. Add an entry per slot you actually want, and remember
+    <code>rep</code> is written as the assumed cycle: an emitter whose slots
+    step every 30 s needs <code>rep: 30</code>, or you hear it a tenth as
+    often. Each extra entry is another sounding per cycle competing for the
+    ringbuffer window &mdash; see the README on reading
+    <code>find_timings.log</code> before adding many.
+  </p>
   <textarea id="timings" rows="4" style="width:100%;font-family:inherit;font-size:.85rem"></textarea>
   <p id="result" class="note"></p>
   {% endif %}

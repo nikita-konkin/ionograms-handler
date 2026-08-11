@@ -1752,20 +1752,39 @@ processing while its samples are still in `/dev/shm`. `find_timings.py` prints
 that margin per sounding:
 
 ```bash
-grep -o '[0-9.]* s left' ~/chirpsounder2/logs/find_timings.log \
-  | awk '{n++; if($1<30) a++; if($1<60) b++} END {printf "n=%d  <30s:%d  <60s:%d\n", n, a, b}'
+grep -oE '\-?[0-9.]+ s left' ~/chirpsounder2/logs/find_timings.log \
+  | awk '{n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
 ```
 
-**Read the whole log, not a `tail`.** The distribution is long-tailed, and only
-the tail loses data. Twenty consecutive soundings on DOB had a minimum margin
-of 90 s and looked comfortable; fifty had a minimum of **0.68 s** — one
-sounding within a second of having its samples overwritten before processing
-reached them. That loss is silent: "missing data - skipping", or a short sweep
-that `sweep_complete` records and nothing rejects.
+**Match the minus sign.** `grep -o '[0-9.]* s left'` drops it, so `-5.2 s left`
+is counted as a comfortable 5.2 and every failure reads as a pass. And read the
+whole log, not a `tail` — a 20-sounding sample on DOB gave a 90 s minimum and
+"none under 60", which looked healthy. Measured properly over 1333 soundings it
+was **57 negative, 4.28% lost**, matching the `missing data - skipping` lines
+in `ionograms.log` one for one. A margin under 30 s is a near miss; only `<= 0`
+is a loss, and the loss is silent.
 
-Add slots only while the count below 30 s stays at zero, and re-measure after
-each step. Storage scales independently: at 0.6 MB per ionogram, 37 slots is
-10,656 soundings and 6.4 GB a day.
+**Storage under the consumer matters as much as the buffer's size.** That 4.28%
+was measured while products went to a 5400 rpm laptop disk over ntfs-3g — FUSE,
+userspace, seek-bound — with the archive mirror reading the same spindle every
+five minutes. `ionice` does not reach the ntfs-3g daemon doing that I/O. A
+network share is not automatically the worse choice; measure both.
+
+**The ring buffer belongs in RAM, not on an SSD.** 25 MS/s of complex int16 is
+100 MB/s — **8.64 TB written per day**. A 1 TB consumer SSD rated ~600 TBW is
+exhausted in 69 days, and a write-intensive enterprise drive in under two
+years; tmpfs has no endurance to spend. Buy RAM, and check first that a bigger
+window would even help — another 120 s saves a sounding that missed by 5 s and
+does nothing for one that missed by 200:
+
+```bash
+grep -oE '\-?[0-9.]+ s left' ~/chirpsounder2/logs/find_timings.log | awk '$1<=0' \
+  | awk '{n++; if($1>-120) s++} END {printf "%d of %d saved by +120s\n", s+0, n}'
+```
+
+Add slots only once the loss rate is zero, and re-measure after each step.
+Storage scales independently: at 0.6 MB per ionogram, 37 slots is 10,656
+soundings and 6.4 GB a day.
 
 ---
 
