@@ -22,8 +22,14 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # ~68,000 packets/second into a ring sized for a tenth of it, and the recorder
 # drops data continuously. Jumbo frames are NOT an option: the N2x0 probes at
 # 1472 bytes whatever the host MTU.
-ExecStartPre=+/sbin/ethtool -G enp0s25 rx 4096
-ExecStartPre=+/sbin/sysctl -w net.core.rmem_max=500000000
+# PermissionsStartOnly, not the `+` prefix. `+` needs systemd 231 and DOB runs
+# 229 (Ubuntu 16.04), where an ExecStart path beginning with `+` is not a
+# prefix at all -- it is a path that is not absolute, so the unit fails to load
+# and the recorder never starts. This unit had that bug from the day it was
+# written; it was never caught because nothing has installed it yet.
+PermissionsStartOnly=true
+ExecStartPre=/sbin/ethtool -G enp0s25 rx 4096
+ExecStartPre=/sbin/sysctl -w net.core.rmem_max=500000000
 ExecStartPre=/bin/mkdir -p /dev/shm/hf25
 
 # The ringbuffer belongs to the recorder, so it dies with it. Upstream's

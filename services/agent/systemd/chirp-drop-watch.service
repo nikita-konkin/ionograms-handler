@@ -12,10 +12,19 @@ Type=oneshot
 User=ionouser
 ExecStart=/home/ionouser/ionograms-handler/tools/drop-watch.sh
 
-# /var/lib/chirp-drop-watch, created and chowned by systemd. The log lives here
-# rather than in $HOME so the unit needs no write access to the home directory
-# at all -- it only ever reads thor.log.
-StateDirectory=chirp-drop-watch
+# The log lives in /var/lib rather than in $HOME so the unit needs no write
+# access to the home directory at all -- it only ever reads thor.log.
+#
+# `StateDirectory=` would create and chown this in one line, but it needs
+# systemd 235 and DOB runs 229. An unknown key is only a warning, so the unit
+# loaded, ran, and died on `mkdir` as an unprivileged user -- a failure that
+# looks like a broken script rather than a too-new unit file.
+# `PermissionsStartOnly` is the pre-231 idiom: ExecStartPre as root, ExecStart
+# as User=.
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/lib/chirp-drop-watch
+ExecStartPre=/bin/chown ionouser:ionouser /var/lib/chirp-drop-watch
+
 Environment=DROP_WATCH_LOG=/var/lib/chirp-drop-watch/drop-watch.log
 Environment=DROP_WATCH_STATE=/var/lib/chirp-drop-watch/state
 Environment=DROP_WATCH_THOR=/home/ionouser/chirpsounder2/logs/thor.log
@@ -24,12 +33,14 @@ Environment=DROP_WATCH_THOR=/home/ionouser/chirpsounder2/logs/thor.log
 # unattended next to a radio that needs a hand-delivered power cycle if a
 # process kills it. ProtectHome=read-only is the load-bearing line -- it can
 # read thor.log and can touch nothing else the station owns.
-ProtectSystem=strict
+#
+# `full` rather than `strict`: strict needs systemd 232. It leaves /var
+# writable, which this unit needs anyway, and still protects /usr, /boot
+# and /etc.
+ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
 NoNewPrivileges=true
-RestrictSUIDSGID=true
-LockPersonality=true
 
 # It samples the load; it is never the reason for it.
 Nice=19
