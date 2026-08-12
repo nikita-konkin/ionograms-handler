@@ -445,15 +445,26 @@ that survived has not been measured — it needs several hours of fresh
    been measured on a quiet evening.
 2. **Did the epoch rebuild move `epoch_offset_s`?** −2.2 ms / 659 km was
    stable across 75 samples beforehand. It cannot change without a recorder
-   restart, and one has now happened.
+   restart, and one has now happened. **Blocked** — see below.
 3. **How much of the 4.28% sounding loss was really Fault A or B?**
    `find_timings.log` margins were measured on a stream that was missing 6%
    at the socket and up to 45% at the device. Every conclusion about ringbuffer
    size, consumer throughput and schedule capacity rests on that stream and
-   should be re-derived once the recorder is clean.
+   should be re-derived once the recorder is clean. **Blocked** — see below.
 4. **Was Fault B present before 2026-08-11?** No historical data —
    `dombas.sh` truncates `thor.log` on every launch. Fault A demonstrably was.
 
-Nothing about scheduled mode, slot counts or ringbuffer sizing should be
-decided until 1 and 3 are answered. Those measurements were taken on a
-recording with holes in it.
+**2 and 3 are blocked by the move to scheduled mode** on 2026-08-12. Both are
+computed from files only search mode produces — `find_timings.log` and
+`par-*.h5` — and `dombas.sh` does not start `find_timings.py` when
+`serendipitous` is false. Reopening them costs one day back in search mode;
+`BACKLOG.md` §16 carries the detail and the commands.
+
+That was a decision taken with the cost known, not an oversight. It does mean
+this stands: nothing about slot counts or ringbuffer sizing should be decided
+from the numbers now on file. They were measured on a recording with holes in
+it, and the measurement that would replace them is not currently running.
+
+Question 1 is **not** blocked — `~/drop-watch.sh` samples both counters against
+the load average every 15 minutes regardless of mode, and its truncation check
+survives the `thor.log` reset at each `dombas.sh` launch.

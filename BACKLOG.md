@@ -537,3 +537,68 @@ other still needs the link budget of eq (17)-(18) -- transmitter power and
 antenna gain -- so the honest output would be a modelled *absorption* to compare
 against the measured LOF ladder, not a modelled LOF to compare against a
 measured one.
+
+---
+
+## 16. One serendipitous day, owed to DOB
+
+DOB went to `serendipitous = false` on 2026-08-12 without first spending a clean
+day in search mode. That was a deliberate call -- the emitter census was already
+in hand and the schedule was the thing wanted -- but it left three measurements
+unpaid, and **scheduled mode is what blocks them**: `dombas.sh` only starts
+`find_timings.py` when `serendipitous` is true (patch 0003's branch), so neither
+`find_timings.log` nor `par-*.h5` exists any more. Reopening all three costs one
+day back in search mode, and they should be reopened together.
+
+**1. The sounding-loss figure, against a 4.28% baseline.** `find_timings.log`'s
+`s left` margins are the only measurement of how many soundings the pipeline
+misses. 4.28% was measured with `calc_ionograms.py` running as a single process,
+and is what patch 0004 (`-np 2`) was meant to improve. It has never been re-read
+on a healthy recorder:
+
+```bash
+grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
+  | awk '{n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
+```
+
+The `-?` matters -- without it the sign is dropped and every failure counts as a
+comfortable pass. A cumulative count over the whole log is also worthless here;
+count only entries past marker 15 (2026-08-12 17:06), which is where the stream
+became clean. Everything before that was measured on a recording missing 6% at
+the socket and up to 45% at the device.
+
+**2. `epoch_offset_s`, which is still unverified.** −2.2 ms (659 km), stable
+across 75 samples, measured *before* the epoch rebuild. It cannot change without
+a recorder restart and several have now happened, so the number on file is
+merely old rather than wrong -- but it is computed from `par-*.h5`, which
+scheduled mode does not write. This matters more in scheduled mode than in
+search mode, not less: `t0` is **imposed** from `rep`/`chirpt` rather than
+measured, so a receiver epoch error lands raw in every range instead of being
+partly absorbed into a fitted solution.
+
+**3. Capacity numbers that rest on a damaged stream.** Ringbuffer sizing, cycle
+counts, consumer throughput and schedule margins were all derived before
+2026-08-12. Nothing about slot counts or `/dev/shm` sizing should be decided
+from them.
+
+**Not blocked, and worth keeping:** `~/drop-watch.sh` on the station samples
+both recorder loss counters against the load average every 15 minutes and is
+mode-independent. It is the open evidence for patch 0008 (core isolation), whose
+validating windows all fell at load 6-8 while the fault was measured at 9.4 --
+see `docs/2026-08-11-recorder-packet-loss.md` sec. 5.
+
+**Already paid, do not redo:** the emitter census. Three days of `par-*.h5`
+through `muf detect` gave five rate/phase groups, of which the two with
+sub-millisecond phase scatter (500 kHz/s at `rep=60, chirpt=54`, ±0.74 ms; and
+125 kHz/s at `rep=30, chirpt=15`, ±0.96 ms) became the first schedule. Two
+findings from it are worth carrying forward:
+
+- The 100 kHz/s group at ±3.50 ms is **several emitters merged**, not one. It
+  has the most detections by far (2466) and is the least usable as a schedule
+  entry. Splitting it needs a finer phase clustering than `muf detect` does now.
+- Two emitters have arrival phases that **cannot be propagation delays**:
+  415.28 ms is 124,000 km and 863.37 ms is 259,000 km. The receiver epoch is
+  shared and the other groups give sane ranges (5.46 ms -> 1640 km), so these
+  transmitters start off the integer second. Whether `chirpt` wants the integer
+  slot or the true sweep start including that offset is unresolved, and getting
+  it wrong displaces every echo without any process reporting a fault.
