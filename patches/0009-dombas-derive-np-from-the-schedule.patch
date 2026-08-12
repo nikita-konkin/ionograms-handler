@@ -1,0 +1,111 @@
+Derive calc_ionograms' rank count from the schedule instead of hardcoding it.
+
+**In scheduled mode `-np` is not a tuning knob. It is part of the schedule.**
+`calc_ionograms.py:452` reads
+
+    st = conf.sounder_timings[rank]
+
+with no guard, so each MPI rank takes one entry of the outer list. The rank
+count and the schedule length are therefore the same number written in two
+places -- one in `my_station.ini`, one in this script -- and nothing checks
+that they agree.
+
+**Both ways of disagreeing are silent.** Too few ranks and the transmitters
+past the cut are never sounded: no error, no warning, and `ionograms.log` looks
+exactly as it should because the ranks that do exist are working. Too many and
+the surplus rank dies of `IndexError` at startup while the others carry on, so
+the process count is wrong but every product that appears is correct. Neither
+failure is visible in the thing an operator checks.
+
+This became reachable the moment DOB went to `serendipitous=false`
+(2026-08-12). In search mode the timings come from `find_timings.py` and any
+`-np` is valid, which is why the coupling never mattered before. It matters
+now, and it will matter every time a transmitter is added -- adding Cyprus
+already required editing this number by hand, and getting it right was luck
+rather than process.
+
+**In search mode the ranks stay free parallelism, and the answer stays 2.**
+That is patch 0004's measured value: as a single process `calc_ionograms` lost
+4.28% of soundings, and at four ranks the machine saturated badly enough that
+the *recorder* lost 63% of its stream. The fallback when the derivation cannot
+run is also 2, so a broken `python3` reproduces exactly the behaviour this
+patch replaces rather than quietly dropping to one rank.
+
+The launch line now prints the number it derived. `-np` is the one parameter
+here whose wrongness is invisible in the log, so it goes in the log.
+
+The agent enforces the same rule from the other side: `services/agent/control.py`
+refuses a `set_config` whose schedule length disagrees with the `-np` it reads
+out of this script, and stops checking once that `-np` is a variable -- which is
+what this patch makes it. See `tests/test_agent.py::test_np_must_match_the_schedule`.
+
+**Do not run any of the changed lines by hand.** `$MPIRUN` and `$CONF_FILE` are
+set earlier in the script; pasted at a prompt they expand to nothing, and a
+second `calc_ionograms` beside the running one competes for the same ringbuffer.
+
+Anchored at line 141 (`fi`), which assumes 0003 through 0008 are already
+applied: `echo "calc_ionograms.py"` at 143, the invocation at 149, and
+`echo "station_monitor.py"` at 151. That is DOB's layout as of 2026-08-13.
+`git apply` locates by context and will report an offset if it has moved, but
+check first:
+
+    git apply --check 0009-dombas-derive-np-from-the-schedule.patch
+
+The derivation itself was exercised against every config shape it can meet:
+two ranks -> 2, one rank -> 1, a flat (non-nested) list -> 1, search mode -> 2,
+and an unreadable config -> 2.
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -141,12 +141,43 @@ fi
+ fi
+ 
+-echo "calc_ionograms.py"
+-# Under MPI: this is the process with the ringbuffer deadline, and as a single
+-# process it lost 4.28% of soundings. Two ranks, not four -- at four the
+-# machine saturated and the RECORDER lost 63% of its stream. It reads
+-# its rank from MPI.COMM_WORLD (calc_ionograms.py:99-101), and `sounder_timings`
+-# is stored one list per rank for exactly this reason.
+-$MPIRUN -np 2 python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
++# One transmitter per MPI rank -- `st = conf.sounder_timings[rank]` at
++# calc_ionograms.py:452, with no guard -- so in scheduled mode this count is
++# part of the schedule and not a tuning knob. Hardcoded, every schedule change
++# is two edits, and forgetting the second one fails silently: too few ranks and
++# the transmitters past the cut are never sounded, too many and one rank dies
++# of IndexError while the rest carry on. The log reads as healthy either way,
++# because for the ranks that survive it is.
++#
++# In search mode the timings come from find_timings.py and the ranks are free
++# parallelism, so the answer there is patch 0004's measured 2.
++NP_IONO=$(python3 - "$CONF_FILE" <<'PY'
++import configparser, json, sys
++
++parser = configparser.ConfigParser()
++parser.read(sys.argv[1])
++flag = parser.get("lfm", "serendipitous", fallback="true")
++scheduled = flag.strip().strip('"').lower() in ("false", "0", "no")
++try:
++    timings = json.loads(parser.get("lfm", "sounder_timings", fallback="") or "[]")
++except ValueError:
++    timings = []
++if not scheduled:
++    print(2)
++elif timings and all(isinstance(entry, list) for entry in timings):
++    print(len(timings))
++else:
++    print(1)
++PY
++)
++# An empty result means python3 failed, not that the schedule is empty. 2 is
++# the value this patch replaced, so the fallback is the old behaviour rather
++# than a silent drop to one rank.
++[ -n "$NP_IONO" ] || NP_IONO=2
++
++# The one parameter whose wrongness is invisible in the log, so it goes in the
++# log.
++echo "calc_ionograms.py -np $NP_IONO"
++$MPIRUN -np "$NP_IONO" python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
+ 
+ echo "station_monitor.py"
+ python3 -u station_monitor.py --config "$CONF_FILE" > logs/station_monitor.log 2>&1 &

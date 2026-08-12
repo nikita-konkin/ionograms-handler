@@ -31,6 +31,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -185,7 +186,39 @@ def read_config(path: str | Path) -> configparser.ConfigParser:
     return parser
 
 
-def _validate(parser: configparser.ConfigParser, changes: dict) -> None:
+def _launcher_ranks(path: str | Path | None) -> int | None:
+    """How many MPI ranks the launcher starts ``calc_ionograms.py`` with.
+
+    ``None`` means "no answer, do not check": the file is unreadable, does not
+    mention `calc_ionograms.py`, or -- the good case -- passes a variable to
+    ``-np`` because it derives the count from `sounder_timings` itself, which
+    is patch 0009 and makes the mismatch this guards against impossible.
+
+    Deliberately a text scan and not an execution. The launcher is a shell
+    script that starts a radio; the agent reads it and never runs it.
+    """
+    if path is None:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "calc_ionograms.py" not in stripped or stripped.startswith("#"):
+            continue
+        found = re.search(r"-np\s+(\S+)", stripped)
+        if found is None:
+            # Not under mpirun at all: one process, hence rank 0 only.
+            return 1
+        count = found.group(1).strip('"\'')
+        return int(count) if count.isdigit() else None
+    return None
+
+
+def _validate(parser: configparser.ConfigParser, changes: dict,
+              launcher: str | Path | None = None) -> None:
     """Refuse combinations that record nothing while looking healthy."""
     def value_of(key, section, option):
         if key in changes:
@@ -228,6 +261,25 @@ def _validate(parser: configparser.ConfigParser, changes: dict) -> None:
                     raise ControlError(
                         f"sounder_timings entry {entry} is missing "
                         f"{sorted(missing)}")
+
+        # `calc_ionograms.py:452` does `st = conf.sounder_timings[rank]` with
+        # no guard, so the rank count and the schedule length must agree.
+        # Neither way of disagreeing announces itself: too few ranks and the
+        # transmitters past the cut are simply never sounded, too many and one
+        # rank dies of IndexError while the others carry on. In both cases the
+        # log looks normal, because for the surviving ranks it is.
+        started = _launcher_ranks(launcher)
+        if started is not None and started != len(ranks):
+            raise ControlError(
+                f"the schedule has {len(ranks)} rank group(s) but the launcher "
+                f"starts calc_ionograms.py with -np {started}. "
+                + (f"{len(ranks) - started} transmitter(s) would never be "
+                   f"sounded, silently."
+                   if started < len(ranks) else
+                   f"{started - len(ranks)} rank(s) would die of IndexError "
+                   f"while the rest carried on looking healthy.")
+                + " Match -np to the schedule, or apply patch 0009 so the "
+                  "launcher derives it.")
 
     if "output_dir" in changes:
         target = Path(str(changes["output_dir"]).strip('"'))
@@ -292,7 +344,7 @@ def apply_config(config: StationConfig, changes: dict, *,
                 f"choose from {sorted(set(MODES))}")
         normalized["mode"] = MODES[raw]
 
-    _validate(parser, normalized)
+    _validate(parser, normalized, launcher=getattr(config, "launcher", None))
 
     before = {}
     for key, value in normalized.items():

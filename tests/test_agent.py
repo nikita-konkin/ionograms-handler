@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -464,6 +465,85 @@ def test_a_malformed_schedule_says_what_is_wrong(shape, expect):
     with pytest.raises(control.ControlError, match=expect):
         control._validate(parser, {"mode": "scheduled",
                                    "sounder_timings": json.dumps(shape)})
+
+
+def _launcher(tmp_path, line: str) -> Path:
+    """A launcher script whose only interesting line is the one under test."""
+    path = tmp_path / "dombas.sh"
+    path.write_text("#!/bin/sh\necho detect_chirps.py\n"
+                    "$MPIRUN -np 4 python3 -u detect_chirps.py --config \"$C\" &\n"
+                    f"{line}\n"
+                    "echo plot_ionograms.py\n")
+    return path
+
+
+def _schedule(n: int) -> str:
+    return json.dumps([[{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0,
+                         "transmit_name": f"TX{i}"}] for i in range(n)])
+
+
+@pytest.mark.parametrize("line,ranks,expect", [
+    ('$MPIRUN -np 2 python3 -u calc_ionograms.py --config "$C" &', 2, None),
+    ('$MPIRUN -np 2 python3 -u calc_ionograms.py --config "$C" &', 3,
+     "never be sounded"),
+    ('$MPIRUN -np 3 python3 -u calc_ionograms.py --config "$C" &', 2,
+     "IndexError"),
+    # No mpirun at all: one process, so rank 0 and nothing else.
+    ('python3 -u calc_ionograms.py --config "$C" &', 2, "never be sounded"),
+    ('python3 -u calc_ionograms.py --config "$C" &', 1, None),
+])
+def test_np_must_match_the_schedule(tmp_path, station, line, ranks, expect):
+    """The silent half of a schedule change, and the reason for patch 0009.
+
+    `calc_ionograms.py:452` indexes `sounder_timings` by MPI rank with no
+    guard. Set a three-rank schedule through the UI while the launcher still
+    says `-np 2` and the third transmitter is never sounded -- no error, and
+    the log reads as healthy because for ranks 0 and 1 it is.
+    """
+    station = replace(station, launcher=_launcher(tmp_path, line))
+    changes = {"mode": "scheduled", "sounder_timings": _schedule(ranks)}
+    if expect is None:
+        assert control.apply_config(station, changes).ok
+    else:
+        with pytest.raises(control.ControlError, match=expect):
+            control.apply_config(station, changes)
+
+
+def test_a_derived_np_disables_the_check(tmp_path, station):
+    """Patch 0009 makes `-np` a variable, which is the point: nothing to check.
+
+    A literal count is a claim the agent can falsify. `-np "$NP_IONO"` is the
+    launcher promising to compute it from the same `sounder_timings` the agent
+    just wrote, so any schedule length is fine and guessing otherwise would
+    refuse correct commands.
+    """
+    station = replace(station, launcher=_launcher(
+        tmp_path, '$MPIRUN -np "$NP_IONO" python3 -u calc_ionograms.py &'))
+    assert control.apply_config(
+        station, {"mode": "scheduled", "sounder_timings": _schedule(5)}).ok
+
+
+@pytest.mark.parametrize("launcher_line,label", [
+    ('# $MPIRUN -np 1 python3 -u calc_ionograms.py --config "$C" &', "commented out"),
+    ('echo "nothing to see"', "no calc_ionograms line"),
+])
+def test_an_unreadable_np_does_not_block_a_schedule(tmp_path, station,
+                                                    launcher_line, label):
+    """Refusing on "I could not tell" would be worse than not checking.
+
+    This guard exists to catch one specific mistake. A launcher it cannot
+    parse is not evidence of that mistake, and a station whose acquisition is
+    started some other way must still be configurable.
+    """
+    station = replace(station, launcher=_launcher(tmp_path, launcher_line))
+    assert control.apply_config(
+        station, {"mode": "scheduled", "sounder_timings": _schedule(2)}).ok
+
+
+def test_a_missing_launcher_does_not_block_a_schedule(tmp_path, station):
+    station = replace(station, launcher=tmp_path / "nope" / "dombas.sh")
+    assert control.apply_config(
+        station, {"mode": "scheduled", "sounder_timings": _schedule(2)}).ok
 
 
 def test_a_stop_that_times_out_warns_about_the_radio(station):

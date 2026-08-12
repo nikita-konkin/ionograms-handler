@@ -45,6 +45,14 @@ class StationConfig:
     #: edits it on a parameter change.
     chirp_config: Path = Path("/home/ionouser/chirpsounder2/my_station.ini")
 
+    #: The launcher script, read-only and only to cross-check ``-np`` against
+    #: the schedule -- a mismatch silently stops sounding a transmitter, and
+    #: the ini alone cannot show it. Never edited: this agent changes
+    #: parameters, not how the station is started. A path that does not exist,
+    #: or a launcher that derives ``-np`` at runtime, simply disables the
+    #: check rather than failing the command.
+    launcher: Path = Path("/home/ionouser/chirpsounder2/examples/marieluise/dombas.sh")
+
     #: Where products land. Read from ``chirp_config`` when present; this is
     #: the fallback and the thing disk-free is measured against.
     #:
@@ -120,7 +128,7 @@ class StationConfig:
     @classmethod
     def from_dict(cls, data: dict) -> "StationConfig":
         known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
-        for key in ("chirp_config", "output_dir", "ringbuffer_dir"):
+        for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir"):
             if key in known:
                 known[key] = Path(known[key])
         if "units" in known:
