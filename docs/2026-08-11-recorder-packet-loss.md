@@ -267,6 +267,56 @@ Outside the clone:
   `chirp-archive-sync` and `chirp-archive-prune` must all name the same path
 - `chirp-archive-sync.timer` and `chirp-archive-prune.timer` enabled
 
+### The fix as it will actually run (2026-08-12 17:21)
+
+Everything before this was a hand-held state: the receivers and plotters were
+gone because of a manual `pkill`, and a reboot would have undone it. With
+`patches/0007` applied to `dombas.sh`, `required_processes` trimmed to match,
+and the station relaunched from scratch:
+
+```
+drops: 0
+was RcvbufErrors: 3214729559   now RcvbufErrors: 3214729559
+load average: 8.23, 7.71, 7.54
+```
+
+**`find_timings` marker: 15 entries at 17:06.** Sounding loss from here is
+
+```bash
+grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
+  | awk 'NR>15 {n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
+```
+
+against the 4.28% baseline. Give it a day — `find_timings` produced 592 entries
+over the previous multi-day run, so a short window has no power. Do not use a
+cumulative figure over the whole log: it still contains the damaged period, and
+reads 17.40% for that reason alone.
+
+**The restart itself is a hazard worth writing down.** `pkill -f dombas.sh`
+kills the supervisor and *orphans every child* -- the ringbuffer, both MPI
+jobs, `find_timings`, `station_monitor` and the three utility scripts all keep
+running. Relaunching without clearing them gives you two of everything: four
+`calc_ionograms` ranks and four `detect_chirps` ranks on one ringbuffer, which
+is the `-np 4` configuration that cost 63% of the stream the day before, plus
+two `drf ringbuffer` processes pruning the same tmpfs. It happened here, and
+`RcvbufErrors` moved by 27,154 during the eight minutes it lasted -- the only
+movement in that counter all afternoon, which is a neat confirmation of the
+mechanism.
+
+Order for a clean restart: kill `dombas.sh` first (otherwise its `while true`
+loop revives the recorder five seconds later), then `pkill -INT -f
+rx_uhd_ext_gps` -- **SIGINT only**, TERM or KILL leaves the USRP transmitting
+UDP and needs a physical power cycle -- then kill the orphans explicitly, then
+verify before relaunching:
+
+```bash
+echo "detect: $(pgrep -c -f detect_chirps.py)  calc: $(pgrep -c -f calc_ionograms.py) \
+ drf: $(pgrep -c -f 'drf ringbuffer')  rx: $(pgrep -c -f rx_uhd_ext_gps)"
+```
+
+`detect: 3  calc: 3  drf: 1  rx: 1` is one healthy set -- three because
+`pgrep -f` matches the `mpirun` wrapper alongside its two ranks.
+
 ### The one unambiguous win
 
 The epoch. Patch 0001's current revision is running and correct:
