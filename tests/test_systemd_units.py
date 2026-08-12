@@ -52,6 +52,15 @@ INTRODUCED = {
     "OOMPolicy": 243,
     "ExitType": 249,
     "CoredumpFilter": 246,
+    # The cgroup-v2 spellings of things that already work on 229 by another
+    # name. `AllowedCPUs=` is the trap here: it looks like the modern way to
+    # write `CPUAffinity=`, and on 229 it is a warning and no pinning at all --
+    # which is the fault patch 0008 exists to fix, silently reintroduced.
+    "AllowedCPUs": 244,
+    "AllowedMemoryNodes": 244,
+    "CPUQuotaPeriodSec": 242,
+    "IOReadBandwidthMax": 230,
+    "IOWeight": 230,
 }
 
 #: Values that arrived later than the directive itself.

@@ -294,7 +294,10 @@ an unpredictable hour of the morning. **Patch 0008** puts both lines in the
 script — the shell pinned once so every child inherits it, and `taskset -c 0`
 on the recorder, which works because a process may always widen its own mask.
 The systemd units express the same thing properly, with `CPUAffinity=0` on
-`chirp-rx.service` and `AllowedCPUs=1-7` on the rest.
+`chirp-rx.service` and `CPUAffinity=1-7` on the rest. **Not `AllowedCPUs=`**,
+which is the cgroup-v2 spelling and needs systemd 244 — DOB has 229, where it
+is an unknown key, i.e. a warning and no pinning at all. That would have been
+the third instance of the same trap; see `docs/2026-08-13-systemd-229.md`.
 
 **The first attempt at the 600 s measurement was invalid** and is worth
 recording. The window was three seconds, not six hundred, because the setup
@@ -345,7 +348,8 @@ Changed in the chirpsounder2 clone:
 | file | change | backup |
 |---|---|---|
 | `rx_uhd_ext_gps.cpp` | patch 0001, rebuilt with `-O2` + `setcap cap_sys_nice+ep` | `~/rx_uhd_ext_gps.cpp.old-patch0001.bak` (superseded revision) |
-| `examples/marieluise/dombas.sh` | patch 0004 (`-np 2`), patch 0005 (`recv_buff_size`) | `~/dombas.sh.bak`, `~/dombas.sh.pre-recvbuf.bak` |
+| `examples/marieluise/dombas.sh` | patches 0004 (`-np 2`), 0005 (`recv_buff_size`), 0007 (no digisonde receivers or plotters), 0008 (CPU pinning), 0009 (`-np` derived from the schedule) | `~/dombas.sh.bak`, `~/dombas.sh.pre-recvbuf.bak` |
+| `my_station.ini` | `serendipitous=false`; two `sounder_timings` — SGO `rep=120 chirpt=54`, NIC `rep=600 chirpt=235` | — |
 | `Makefile` | modified — confirm whether `-O2` was made permanent | — |
 
 Outside the clone:
@@ -354,9 +358,22 @@ Outside the clone:
   acquisition machine
 - a live `chrt -r -p 20` on the recorder's working thread, which **does not
   survive a restart**
+- ringbuffer raised **12000MB → 14000MB**, i.e. 119 s → 139 s of buffer. Size
+  buys *time*, not space: `seconds = size / (rate × 4)`, confirmed against the
+  `Buffer extent` log line. It was raised because Cyprus's 250 s sweep exceeded
+  the completable ceiling `r·B/(1−r)` = 231 s at B=119
+- a live `oom_score_adj = -1000` on the recorder, which **lapses at the next
+  24-hour restart** — `dombas.sh` cannot set it (it needs `CAP_SYS_RESOURCE`)
+  and only `chirp-rx.service` can say it permanently
 - products moved: `my_station.ini` `output_dir` → local disk; `agent.json`,
   `chirp-archive-sync` and `chirp-archive-prune` must all name the same path
-- `chirp-archive-sync.timer` and `chirp-archive-prune.timer` enabled
+- `chirp-archive-sync.timer` and `chirp-archive-prune.timer` enabled — but
+  **nothing reached the laptop between 2026-08-10 23:30 and a manual download
+  on 08-12**, so one of them is not doing its job and has not been diagnosed
+- `chirp-drop-watch.timer` enabled and sampling (§6). This is the **only**
+  systemd unit from this repo installed at DOB; acquisition is still
+  `dombas.sh`, and starting `chirp.target` beside it would give the ringbuffer
+  two of everything
 
 ### The fix as it will actually run (2026-08-12 17:21)
 
@@ -428,7 +445,42 @@ build can print.
 
 `epoch_offset_s` still reported −2.2 ms (659 km) before the rebuild. Whether
 that survived has not been measured — it needs several hours of fresh
-`par-*.h5`.
+`par-*.h5`. **Answered since, from the archive rather than from new
+acquisition**: −0.00227 s on 2026-08-09 and −0.00211 s on 2026-08-10, agreeing
+to 0.16 ms. `BACKLOG.md` §16 carries the table and the sign convention, which
+is easy to get backwards and was.
+
+### The fix is visible in the product count (2026-08-13)
+
+Independent of any counter, from the ingested archive:
+
+| day | mode | soundings | picks | soundings/hour, 09–23 UTC |
+|---|---|---:|---:|---|
+| 2026-08-11 | serendipitous, faults live | **44** | 91 | 2–6 |
+| 2026-08-12 | serendipitous → scheduled | **460** | 870 | 15–26 |
+
+Nothing at all before 09:00 on 08-11. The rate roughly doubles at 03:00 on
+08-12 and then holds at 21–26/hour until the 17:21 relaunch. Comparing the same
+UTC hours on consecutive days controls for the diurnal change in how many
+emitters `find_timings` can see, so this is a like-for-like 5–8×.
+
+**One caveat, and it is not small.** 08-11 and 08-12 reached this laptop by a
+manual download, because the archive mirror had delivered nothing since
+2026-08-10 23:30. If that download was partial, some of 08-11's deficit is a
+copy artifact rather than a lost sounding. Settle it on the station before
+quoting the number anywhere that matters:
+
+```bash
+ls /home/ionouser/chirp_data/2026-08-11/ | wc -l
+```
+
+The digisonde products stop dead the same day, and for a known reason: the last
+`Chilton`/`Juliusruh`/`DB049` file is timestamped 16:20–16:28 on 2026-08-12,
+which is patch 0007's relaunch removing the five `receive_digisonde.py`
+instances. 249 such files were ingested from 08-12 and produced **0** picks
+between them; 306 from 08-10 produced 3. They cost the recorder ~969 dropped
+events/s and returned essentially nothing, which is the case for 0007 restated
+from the product side.
 
 ---
 
@@ -442,7 +494,10 @@ that survived has not been measured — it needs several hours of fresh
    load 6 is not evidence about a failure that happens at load 9.4. Note the
    history on this question: isolation was written off twice in this document as
    untested and unnecessary, on the strength of an hour at zero that had simply
-   been measured on a quiet evening.
+   been measured on a quiet evening. **Now sampled unattended every 15 minutes
+   — §6.** A supporting result is already in: the product count for
+   2026-08-12 is **460 soundings against 08-11's 44**, hour for hour a 5–8×
+   recovery over the same UTC hours (§4).
 2. **Did the epoch rebuild move `epoch_offset_s`?** −2.2 ms / 659 km was
    stable across 75 samples beforehand. It cannot change without a recorder
    restart, and one has now happened. **Blocked** — see below.
@@ -465,6 +520,99 @@ this stands: nothing about slot counts or ringbuffer sizing should be decided
 from the numbers now on file. They were measured on a recording with holes in
 it, and the measurement that would replace them is not currently running.
 
-Question 1 is **not** blocked — `~/drop-watch.sh` samples both counters against
-the load average every 15 minutes regardless of mode, and its truncation check
-survives the `thor.log` reset at each `dombas.sh` launch.
+Question 1 is **not** blocked. It was, however, described in this document as
+already answered-in-waiting, which was false — see §6.
+
+---
+
+## 6. The evidence that was not being collected (2026-08-12 23:00)
+
+This document, and `BACKLOG.md` §16, both stated that `~/drop-watch.sh` on the
+station sampled both counters every 15 minutes and that question 1 would answer
+itself. **The file did not exist.** `ls -la ~/drop-watch.sh` returned no such
+file, `pgrep -af drop-watch` returned nothing, and the only log in `$HOME` was
+`dombas-launch.log`.
+
+So patch 0008 — the fix this whole document concludes with — had **no unattended
+evidence at all**: four readings from one evening, every one of them at load
+6–8, against a fault measured at 9.4. The claim was not wrong; it was
+unsupported, and it was recorded in two places as supported.
+
+**The lesson is not "write the script".** It is that a document asserting a
+measurement is running is worth nothing without the two commands that show it
+running, and those cost five seconds:
+
+```bash
+ls -la ~/drop-watch.sh; pgrep -af drop-watch
+```
+
+### What is actually installed now
+
+| piece | path | what it is |
+|---|---|---|
+| sampler | `tools/drop-watch.sh` | stateless, one sample per invocation, read-only |
+| unit | `services/agent/systemd/chirp-drop-watch.service` | `Type=oneshot`, `User=ionouser`, log and state under `/var/lib/chirp-drop-watch` |
+| timer | `services/agent/systemd/chirp-drop-watch.timer` | `OnBootSec=1min`, `OnUnitActiveSec=900`, `Persistent=true` |
+
+Deliberately **not** `PartOf=chirp.target`: it must keep sampling across a
+recorder restart, because a restart is one of the busy moments, and it is the
+only unit here that is useful on a station whose acquisition is run by
+`dombas.sh` rather than by systemd — which is DOB today.
+
+Both counters are sampled because they count different losses. `RcvbufErrors`
+in `/proc/net/snmp` is the kernel discarding datagrams the process did not read
+in time — Fault A, patch 0005's territory. The `D` markers in `thor.log` are
+UHD reporting that the *USRP* discarded samples it could not hand over —
+Fault B, what 0008 fixes. **One can be zero while the other runs**, so a single
+counter cannot distinguish "the fix is holding" from "the other fault is back".
+
+Two details in the script are there because the obvious version is wrong:
+
+- `RcvbufErrors` is located **by name** in the `Udp:` header line. Its column
+  index has moved between kernels, and a hardcoded index silently reports
+  `InErrors` instead — a plausible-looking number for a different thing.
+- Only the *growth* of `thor.log` is read (`tail -c "+$((prev_size + 1))"`), and
+  a file that shrank resets the offset. `dombas.sh` truncates `thor.log` on
+  every launch, so without that check every restart would produce one enormous
+  fake delta.
+
+### Reading the log
+
+```bash
+sudo tail -20 /var/lib/chirp-drop-watch/drop-watch.log
+```
+
+```
+2026-08-12T22:59:37Z load=6.57 window_s=0 drops=0 rcvbuf_delta=0 rcvbuf=3459199336 baseline
+```
+
+`baseline` means no previous sample, so the deltas are placeholders — the first
+real window arrives 900 s later. In a steady window `drops` and `rcvbuf_delta`
+should both be 0. Otherwise:
+
+| `drops` | `rcvbuf_delta` | reading |
+|---|---|---|
+| 0 | 0 | both faults quiet at that load |
+| moves | flat | **Fault B** — the USRP discarding what the host was too slow to collect. Patch 0008 not holding at that load |
+| flat | moves | **Fault A** — the socket queue. Patch 0005's territory, a different fix |
+| moves | moves | the host is behind on both, i.e. worse than the 2026-08-11 state |
+
+The reading is only worth as much as the `load=` beside it. A row of zeroes at
+load 6 says nothing about a fault that appears at 9.4, which is exactly the
+mistake this whole section exists to stop repeating.
+
+### One number already needs explaining
+
+The baseline read `rcvbuf=3459199336`. Patch 0008's validation window had that
+counter **frozen at 3432084131** for 74 minutes. The difference is
+**+27,115,205**.
+
+That is not yet evidence of anything, and should not be reported as such.
+Several restarts fell between the two readings — the ringbuffer resize to
+14000MB, the switch to scheduled mode, adding Cyprus to the schedule — and the
+counter is system-wide UDP, not the recorder's alone. The 2026-08-12 17:21
+restart alone moved it by 27,154 in eight minutes while two of everything ran.
+
+**27 million spread across four or five restarts is unremarkable; 27 million
+accumulating steadily is patch 0008 not holding.** The 15-minute windows are
+what separate those two, and nothing before them can.

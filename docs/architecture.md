@@ -246,6 +246,23 @@ polish; each one cost a day.
   `pam_limits.so` is absent from `common-session` — which it was here. A
   systemd unit sidesteps both: set `LimitRTPRIO=` in the unit and neither PAM
   nor file capabilities are involved.
+- **`CPUAffinity=0` on the recorder, with `CPUAffinity=1-7` on every
+  consumer.** The exclusion is half of the setting and worth nothing without
+  it; unpinned, the recorder lost 358,691 samples per 900 s at load 9.4 with
+  CPU still idle, because the fault is scheduling latency and not throughput.
+- **`OOMScoreAdjust=-1000` on the recorder.** `KillSignal=` protects the USRP
+  from systemd; this protects it from the kernel, which is the same site visit
+  by another route — the OOM killer sends SIGKILL directly and `KillSignal` has
+  no say. The recorder is the largest RSS on a box holding 13 GB of
+  non-reclaimable tmpfs, i.e. exactly what the OOM killer selects. It is a
+  precondition for growing the ringbuffer, not an afterthought to it.
+
+**Write these against the station's systemd version, not the laptop's.** DOB
+runs **systemd 229**; an unknown directive there is only a warning, so the unit
+loads and fails somewhere that looks unrelated, while an unknown *value* or
+prefix stops the unit loading at all. Both had already happened in this
+directory before anything was installed — `docs/2026-08-13-systemd-229.md` has
+the two cases, and `tests/test_systemd_units.py` now pins the floor.
 
 #### Two acquisition modes, and one flag that is independent of both
 

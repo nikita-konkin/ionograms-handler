@@ -159,7 +159,36 @@ solar maximum. The evidence is circumstantial but strong: the discrepancy is
 confined exactly to the hours where IRI exceeds the band, and is near zero
 elsewhere. A GIRO comparison would settle it -- see section 6.
 
----
+**DOB has the same problem 8 MHz lower (2026-08-12).** The chirpsounder2 sweep
+runs 0.525--24.825 MHz, not 32.5, so the ceiling is nearer. Cyprus's first four
+scheduled soundings:
+
+| time UTC | algo | contour | kmeans |
+|---|---:|---:|---:|
+| 21:13:55 | 24.45 | 24.50 | 24.50 |
+| 21:23:55 | 24.40 | 24.45 | 24.50 |
+| 21:33:55 | 21.45 | 22.60 | 24.45 |
+| 21:43:55 | 19.10 | 19.35 | 20.95 |
+
+**7 of 12 picks sit within 0.5 MHz of the sweep top, and `limited` fired on
+none of them.** That is the flag working to specification and the specification
+being too tight: `band_edge = freq_stop - 3 * freq_step`, and with a 0.05 MHz
+step that is 24.675 MHz, so a pick at 24.50 -- six bins down, with all three
+methods piled against the same wall -- is recorded as an ordinary measurement.
+
+Two soundings twenty minutes apart, one reading 24.5 across all methods and the
+next 19.1--20.95, is what a real evening decline looks like *after* it drops
+below the ceiling. The 24.5 readings cannot be distinguished from lower bounds
+with the data on hand.
+
+**What to do about it, in order.** First stop assuming three bins is a
+universal margin -- it was chosen against a 32.5 MHz sweep and is 0.6% of the
+band there, 0.15 MHz here. A fractional or SNR-aware criterion would travel
+better. Second, note that this makes any DOB daily maximum suspect *at night as
+well*, which was not true of the legacy station: 24.8 MHz is reachable on a
+3436 km path in the evening, and midday will be worse. The remedy in this
+section's last bullet applies unchanged -- the top comes from `dur` at the
+configured rate, and raising it costs sweep time.
 
 ## 4. Investigate the 71-second truncations
 
@@ -598,11 +627,18 @@ recover true delay, so a −2.27 ms offset makes an observed 9.27 ms into 11.54 
 Cyprus was briefly dismissed on exactly this error, on the grounds that 9.27 ms
 was too short for a 3436 km path. It is, and that is why the offset exists.
 
-**Not blocked, and worth keeping:** `~/drop-watch.sh` on the station samples
-both recorder loss counters against the load average every 15 minutes and is
-mode-independent. It is the open evidence for patch 0008 (core isolation), whose
-validating windows all fell at load 6-8 while the fault was measured at 9.4 --
-see `docs/2026-08-11-recorder-packet-loss.md` sec. 5.
+**Not blocked, and worth keeping:** the drop sampler is mode-independent, so it
+runs regardless of what `serendipitous` is set to. It is the open evidence for
+patch 0008 (core isolation), whose validating windows all fell at load 6-8 while
+the fault was measured at 9.4 -- see `docs/2026-08-11-recorder-packet-loss.md`
+sec. 5 and sec. 6.
+
+This entry previously claimed `~/drop-watch.sh` was already running on the
+station and sampling every 15 minutes. **It did not exist.** The real thing is
+`tools/drop-watch.sh` plus `chirp-drop-watch.{service,timer}`, installed
+2026-08-12 22:59Z, logging to `/var/lib/chirp-drop-watch/drop-watch.log`. Two
+documents asserted a measurement that nothing was taking; the check that would
+have caught it is `pgrep -af drop-watch`.
 
 **Already paid, do not redo:** the emitter census. Three days of `par-*.h5`
 through `muf detect` gave five rate/phase groups. The schedule that came out of
@@ -627,3 +663,71 @@ chirpt=235`). Findings worth carrying forward:
   transmitters start off the integer second. Whether `chirpt` wants the integer
   slot or the true sweep start including that offset is unresolved, and getting
   it wrong displaces every echo without any process reporting a fault.
+---
+
+## 17. First results from the schedule (2026-08-12)
+
+DOB switched to `serendipitous = false` at ~20:30 UTC on 2026-08-12 with two
+transmitters. The first 78 minutes:
+
+| tx | path | soundings | picks | methods agreeing |
+|---|---|---:|---:|---|
+| NIC (Cyprus) | 3436 km | 4 | **12** | 0.10 MHz at 21:23:55, 1.85 MHz at 21:43:55 |
+| SGO (Sodankylä) | 1013 km | 41 | **0** | -- |
+
+Both entries are working as configured -- 41 and 4 sweeps arrived on schedule,
+all `sweep_complete`. The asymmetry is in what came back, not in what was
+recorded.
+
+**NIC is the strongest thing DOB hears and it behaves like it.** SNR 40.8--52.9
+across all twelve picks, `vrange` 2641--2648 km on every one of them, i.e. a
+group range stable to 7 km over half an hour. Three independent estimators
+converging to 0.10 MHz on a first attempt is a better result than the schedule
+was expected to give. See section 3 for the reason not to trust the top of that
+range.
+
+**SGO returned nothing at all -- not a weak pick, no detections.** 41 sweeps,
+three methods, zero rows. That is plausible for 1013 km at local midnight:
+a short path needs a high-enough critical frequency to reflect at near-vertical
+incidence, and the E and F layers at 22:30--23:50 local do not necessarily
+provide one. It is also what a wrong `chirpt` looks like, and the two are not
+distinguishable from a night of zeros.
+
+**The test is daylight, and it costs nothing but waiting.** If SGO produces
+picks between roughly 08:00 and 16:00 UTC, the entry is sound and the zeros
+were the ionosphere. If a full day produces nothing while NIC keeps working,
+the schedule entry is wrong -- and the first thing to check is the integer-slot
+question at the end of section 16, since SGO came from the 500 kHz/s group.
+Until then it is an open question and not a fault; do not remove the entry on
+the strength of one night.
+
+### Other items opened by this session
+
+- **`calc_ionograms` takes 86.95 s per cycle and nothing explains it.** This
+  was attributed to a ~15 s upload retry inside the rank's budget. **That was
+  wrong**: `calc_ionograms.py` contains no upload code. The uploaders are
+  `ionowebsync.py` (not running) and `station_monitor.py` (running), and what
+  the latter posts is a status JSON, not products. The cycle time is unexplained
+  again, and it matters because it sets how many ranks a schedule can afford.
+- **`station_monitor.py` posts to `http://4.235.86.214/upload.php`** -- plain
+  HTTP, bare IP, no configured destination of ours. It is a status document, not
+  data, but it is an outbound connection from an acquisition host that nobody
+  chose deliberately. Passing `--upload-url ""` on `dombas.sh:152` disables it;
+  the guard at line 354 already treats empty as off. Left running: it is the
+  station owner's call, not a bug to fix unilaterally.
+- **The archive mirror stalled.** Nothing reached the laptop between
+  2026-08-10 23:30 and a manual download on 08-12, across the whole week of
+  this work. `chirp-archive-sync.timer` is enabled. Undiagnosed, and it makes
+  every product count taken here a lower bound.
+- **Digisonde products yield essentially nothing.** 306 files from 08-10 gave 3
+  picks; 249 from 08-12 gave 0. They stopped at 16:20--16:28 on 08-12 when
+  patch 0007 removed the receivers. Worth deciding whether they are ingested at
+  all, rather than leaving several hundred no-pick soundings a day in the
+  database.
+- **`-np` and `len(sounder_timings)` are one number in two files.**
+  `calc_ionograms.py:452` indexes `conf.sounder_timings[rank]` with no guard;
+  too few ranks silently stops sounding a transmitter, too many kills one rank
+  with `IndexError` while the rest look healthy. Patch 0009 derives the number
+  on the station, and `services/agent/control.py` refuses a schedule change that
+  would break the match. Neither helps a station that has not taken 0009 --
+  check by hand there.
