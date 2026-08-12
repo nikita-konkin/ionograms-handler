@@ -22,9 +22,24 @@ That structure only exists because this script is meant to run distributed.
 Line 122 already launches `detect_chirps.py` this way; this is the same change
 for the process that actually needed it.
 
--np 4, not more: measured RSS is 437 MB per rank (~1.7 GB for four, against
-11 GB available), and leaving cores for detect_chirps' two ranks plus the
-recorder matters more than the last increment of throughput.
+**-np 2, and this number was paid for.** The first version of this patch said
+4, from a `ps` snapshot showing detect_chirps at 94+94 and calc_ionograms at
+82 -- about 2.7 of 8 cores, apparently five idle. That reading counted the top
+three processes and ignored the five digisonde receivers, two plotters,
+find_timings and the ringbuffer pruner. Load average was already ~10.
+
+With four ranks the machine ran at load 11.4 and the recorder lost **1155 s of
+signal in 1835 s of uptime -- 63% of the stream**, as 2.2 M drop events and
+2.1 M empty receives in thor.log. Reverting to two: 0.00 s lost.
+
+A late ionogram is recoverable; a dropped sample is gone forever. The producer
+outranks the consumer, and any change here must be checked with `uptime` and
+the drop counters, not with a `ps` snapshot:
+
+    grep -oE 'samp_diff [0-9]+' logs/thor.log | awk '{s+=$2} END {printf "%.2f s lost\n", s/25e6}'
+    ps -o etimes= -p $(pgrep -f rx_uhd_ext_gps)
+
+Memory was never the constraint: 437 MB per rank against 11 GB available.
 
 **This does not fix a slow write path.** The same measurement was taken with
 products going to a 5400 rpm laptop disk over ntfs-3g. Parallelism divides the
@@ -56,10 +71,11 @@ diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
  echo "calc_ionograms.py"
 -python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
 +# Under MPI: this is the process with the ringbuffer deadline, and as a single
-+# process it lost 4.28% of soundings while five of eight cores idled. It reads
++# process it lost 4.28% of soundings. Two ranks, not four -- at four the
++# machine saturated and the RECORDER lost 63% of its stream. It reads
 +# its rank from MPI.COMM_WORLD (calc_ionograms.py:99-101), and `sounder_timings`
 +# is stored one list per rank for exactly this reason.
-+$MPIRUN -np 4 python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
++$MPIRUN -np 2 python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
  
  echo "plot_ionograms.py"
  python3 -u plot_ionograms.py --config "$CONF_FILE" > logs/plot_ionograms.log 2>&1 &

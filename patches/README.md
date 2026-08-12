@@ -14,7 +14,8 @@ Applied against `0d27125`.
 | `0002-calc_ionograms-bounded-digitalrf-bounds-wait.patch` | `calc_ionograms.py`'s `get_valid_bounds` gives up after 30 s instead of polling forever | an empty ringbuffer wedged the reader permanently; two days of soundings with no ionograms |
 | `0003-dombas-start-ringbuffer-and-fix-launch-order.patch` | `examples/marieluise/dombas.sh` starts `drf ringbuffer`, starts the recorder first, runs `find_timings.py` in serendipitous mode, and unbuffers every log | the ram disk was never trimmed, so it sat at 100% and the recording developed holes |
 | `0003-local-dombas-DOB-…patch` | the same change, against **DOB's edited copy** rather than upstream's | DOB's `dombas.sh` has diverged (`$HOME` paths, `.venv38`, `my_station.ini`, quoted variables), so the upstream-based 0003 does not apply there |
-| `0004-dombas-run-calc_ionograms-under-mpi.patch` | `calc_ionograms.py` runs under `$MPIRUN -np 4`, as `detect_chirps.py` already does | it ran as one process on one of eight cores and missed the ringbuffer window for **4.28% of soundings**, lost silently as "missing data - skipping" |
+| `0004-dombas-run-calc_ionograms-under-mpi.patch` | `calc_ionograms.py` runs under `$MPIRUN -np 2`, as `detect_chirps.py` already does | it ran as one process and missed the ringbuffer window for **4.28% of soundings**, lost silently as "missing data - skipping". **Two ranks, not four** — at four the machine saturated and the recorder overflowed |
+| `0005-dombas-set-usrp-recv-buff-size.patch` | the recorder asks UHD for a 500 MB receive socket buffer | the socket queue had discarded **1.86 billion datagrams, ~6% of every recording**, invisible to every counter except `netstat -su` |
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
@@ -25,7 +26,7 @@ differs, the file has moved on again and the patch needs rebasing.
 `0003-local-dombas.sh.result` is the finished file, for when that is simpler
 than a rebase.
 
-All three are independent — different files, different faults — and all three
+0001-0002 and 0003-0005 are independent — different files, different faults — and all three
 are about the same thing: a station that keeps running while producing nothing.
 0002 turns a permanent hang into a logged retry, 0003 removes the condition
 that caused it, and 0001's host-clock fallback is only visible because of them.
@@ -52,6 +53,24 @@ cd ~/chirpsounder2
 git apply --check /path/to/0001-rx_uhd_ext_gps-set-epoch-from-gpsdo.patch  # dry run
 git apply         /path/to/0001-rx_uhd_ext_gps-set-epoch-from-gpsdo.patch
 make rx_uhd_ext_gps        # or whatever the build rule is; it is one .cpp
+```
+
+**Check the build carries `-O2`.** On 2026-08-11 the Makefile rule expanded to
+
+    g++ -std=c++11 `pkg-config --cflags ...` -o rx_uhd_ext_gps rx_uhd_ext_gps.cpp ...
+
+with no optimisation flag at all, which means `-O0`. That was suspected of
+causing a recorder that dropped half its samples; it turned out not to be the
+cause (see `docs/2026-08-11-recorder-packet-loss.md`), but an unoptimised
+25 MS/s receive loop is not something to ship on purpose. Build it explicitly
+if the rule does not:
+
+```bash
+g++ -O2 -std=c++11 $(pkg-config --cflags uhd hdf5 digital_rf) \
+    -o rx_uhd_ext_gps rx_uhd_ext_gps.cpp -pthread \
+    -lboost_program_options -lboost_system -lboost_thread -lboost_date_time \
+    -lboost_regex -lboost_serialization -ldigital_rf \
+    $(pkg-config --libs uhd hdf5 digital_rf)
 ```
 
 The binary needs `cap_sys_nice` re-applied after any rebuild — `setcap` is

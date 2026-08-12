@@ -1,0 +1,99 @@
+Ask UHD for a receive socket buffer, instead of raising a limit nothing uses.
+
+Measured on DOB 2026-08-11:
+
+    netstat -su
+        1859745252 packet receive errors
+        RcvbufErrors: 1859745252
+
+1.86 billion UDP datagrams discarded because the receive socket queue was
+full. At 1472 bytes each that is **2.7 TB against 41 TB received -- about 6% of
+every recording**, continuously, for as long as the machine had been up. After
+this change the counter stopped moving entirely.
+
+Nothing reported it. `ethtool -S` was clean, `ip -s link` showed zero drops,
+the link was 1000Mb/s full duplex, and 27 billion packets had arrived without
+a single CRC or framing error. Socket-queue overflows appear in **none** of
+those places -- only in `netstat -su` / `/proc/net/snmp`, which is why this
+went unnoticed. If you are ever chasing loss between a USRP and an
+application, check that counter before the network.
+
+The station already had the two settings that are usually blamed:
+
+    net.core.rmem_max = 500000000        # set
+    ethtool -g enp0s25 -> RX: 4096       # set
+
+Neither does anything on its own. `rmem_max` is a *ceiling* on what a process
+may request; UHD still has to ask, and it asks via `recv_buff_size` in
+`--usrp_args`. Without it UHD takes its own modest default and the raised
+ceiling is never approached. The ring size governs the NIC's DMA, which was
+never the constraint here -- `rx_missed_errors` totalled 68,666 over five days,
+about one second of samples.
+
+`chirp-rx.service` has always passed this. `dombas.sh` never has, which is why
+the station has been quietly losing 6% while the systemd unit sitting unused
+beside it would not have.
+
+**Verifying.** UHD prints the request at startup and complains loudly if the
+kernel refuses it:
+
+    grep -iE 'recv_buff|could not be resized' logs/thor.log | head
+
+You want `Creating the USRP device with: recv_buff_size=500000000` and *no*
+"The recv buffer could not be resized sufficiently" warning. If that warning
+appears, `net.core.rmem_max` is lower than the request and the sysctl above is
+the missing half.
+
+Then confirm the counter has stopped:
+
+    netstat -su | grep RcvbufErrors; sleep 30; netstat -su | grep RcvbufErrors
+
+Two identical numbers is the result. The absolute value never falls -- it is
+cumulative since boot.
+
+**This does not fix the `D` overflow markers in thor.log.** Those are a
+different mechanism: `ERROR_CODE_OVERFLOW` means the *device* discarded
+samples because the host did not call `recv()` fast enough, so the packets
+were never transmitted and no network counter can see them. That fault was
+still present at ~1500 events/s after this change.
+
+Its cause was established by removing the competition rather than by guessing:
+with `detect_chirps`, `calc_ionograms`, the five digisonde receivers, the
+plotters and `find_timings` all killed, leaving only the recorder and
+`drf ringbuffer`, the rate went to **exactly zero over a 60 s window**. It is
+CPU contention, and it needs core isolation rather than another tuning flag.
+See `docs/2026-08-11-recorder-packet-loss.md`.
+
+Apply on top of 0003 (which this context assumes) and 0004:
+
+    cd ~/chirpsounder2
+    git apply --check /path/to/0005-dombas-set-usrp-recv-buff-size.patch
+    git apply         /path/to/0005-dombas-set-usrp-recv-buff-size.patch
+
+Takes effect on the next recorder start. `dombas.sh` restarts the recorder
+every 24 hours in a loop, so a full relaunch is not strictly required -- but
+the 24-hour boundary is an unpredictable moment to change behaviour, and a
+deliberate relaunch is easier to attribute a measurement to.
+
+`addr0=` is deliberately omitted. `chirp-rx.service` hardcodes
+`addr0=192.168.10.2`; discovery already finds the device without it, and a
+wrong address turns a tuning change into a station that cannot open its radio.
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -74,7 +74,13 @@ echo "rx_uhd_ext_gps (restarting every 24 hours)"
+     while true;
+     do
+         # TBD: change cpp program so that ini file defines USRP setup!
+-        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" > logs/thor.log 2>&1
++        # recv_buff_size is what UHD actually requests; net.core.rmem_max only
++        # permits it. Without this the socket queue overflowed 1.86 billion
++        # times -- 6% of every recording -- while ethtool, ip -s link and the
++        # link status all read perfectly clean. Only netstat -su showed it.
++        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" \
++            --usrp_args=recv_buff_size=500000000 \
++            > logs/thor.log 2>&1
+
+         sleep 5
+
