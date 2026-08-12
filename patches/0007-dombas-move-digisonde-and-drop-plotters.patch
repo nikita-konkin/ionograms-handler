@@ -1,19 +1,16 @@
-Take the non-ringbuffer work off the acquisition host. This is the fix for the
-45% sample loss, and it is a subtraction rather than a tuning flag.
+Stop receiving the digisondes, and stop writing PNGs nobody reads. This is the
+fix for the 45% sample loss, and it is a subtraction rather than a tuning flag.
 
-**The measurement.** On 2026-08-12, killing only the processes that do *not*
-read the ringbuffer -- the five digisonde receivers and the three plotters --
-while `detect_chirps` and `calc_ionograms` kept running:
+**The measurement.** On 2026-08-12, killing the five digisonde receivers and
+the three plotters while `detect_chirps` and `calc_ionograms` kept running:
 
     digisonde: 0  plotters: 0
     load average: 9.15 -> 6.98
     0 -> 0 samp_diff events in 600 s      (was ~1500/s)
 
 Zero, over ten minutes. `tail` on `thor.log` showed an unbroken run of progress
-dots with no `D` markers at all.
-
-Confirmed the same afternoon over a full hour, this time watching the socket
-counter alongside the device one:
+dots with no `D` markers at all. Confirmed the same afternoon over a full hour,
+this time watching the socket counter alongside the device one:
 
     drops: 0
     was RcvbufErrors: 3214702405   now RcvbufErrors: 3214702405
@@ -26,10 +23,15 @@ with 0005 applied) and patch 0006's `-O2` did not stop the device overflow.
 Neither was the cause. The host was behind, and the two counters were reporting
 that in different dialects.
 
-**Why these and not others.** Split the station's processes by one question:
-does it read the DigitalRF ringbuffer? Anything that does is bound to
-`/dev/shm` at 25 MS/s and can never leave this machine -- relocating it would
-mean shipping 100 MB/s, 8.6 TB/day, across the network:
+**Which of the two groups mattered** was then measured separately, by restoring
+only the receivers:
+
+    drops: 872081 in 900 s                 (~969/s)
+    RcvbufErrors 3294919800 -> 3353488759  (~65,000/s)
+    load average: 10.40
+
+The digisonde receivers, essentially entirely. The eight-core budget explains
+it -- the pipeline that cannot be avoided already needs about half the machine:
 
     rx_uhd_ext_gps        0.8 cores
     drf ringbuffer        0.5
@@ -38,26 +40,42 @@ mean shipping 100 MB/s, 8.6 TB/day, across the network:
                         -----
                           4.4 of 8
 
-Anything that does not is free to run anywhere. 4.4 cores of unavoidable work
-on an eight-core host has room to spare; 7.3 does not.
+and five receivers put roughly 3.4 more on top of that.
 
-**The digisonde receivers are the striking case.** They download from GIRO over
-HTTP. They have no connection to the radio at all, yet five of them were eating
-two cores on the one machine in the building that must not miss a packet.
-Because their input arrives over the internet and never touches local data,
-they can run anywhere with network access and write **straight to the NAS**.
-The archive tree ends up identical -- `digisonde_ionogram-*.h5` are real
-products and the MUF pipeline compares them against the chirp ionograms; only
-the machine that writes them changes. No export of the laptop's disk is needed,
-which keeps this host a pure source.
+**`receive_digisonde.py` is not a downloader.** It sounds like one and it is
+not: it receives the transmissions **off air with this station's own USRP**,
+decoding the complementary phase codes a Digisonde emits. `import digital_rf as
+drf`, and the `decimation`, `n_ipp`, `ipp_us`, `freq_start/stop` and
+`use_c_downconvert` keys in each `[digisonde-*]` ini section are its
+demodulator settings. It is a ringbuffer consumer exactly like `detect_chirps`,
+bound to `/dev/shm` at 25 MS/s. It cannot be relocated to a server -- that
+would mean shipping 100 MB/s, 8.6 TB/day, across the network -- and an
+afternoon went into designing a container for it before `README.md` or
+`muf/io_digisonde.py`, both of which say this in their opening lines, were
+read. **A process named `receive_*` in a radio codebase receives on the radio.**
 
-**The plotters are deleted, not moved.** The web UI renders ionograms on
-demand, so `plot_rtf.py`, `plot_detectionfiles.py` and `plot_ionograms.py` have
-no consumer. Writing PNGs here costs ~0.7 cores to produce files nothing reads,
-and a second rendering path is a second thing to keep consistent with the UI.
-This is not a new call: `docs/architecture.md` already lists their PNG output
-as not required, because Tier 2 renders.
+**Why DOB gives them up rather than isolating cores.** The products do not
+serve what this station is for. Each `offset_us` is a *configured* constant --
+7300 for Dourbes, 3900 for Chilton, 2000 for Juliusruh -- not a measured delay,
+so the range zero rests on a hand-set number. `muf/io_digisonde.py` documents
+this at the decision, and the test suite carries a live warning about a
+Juliusruh->DOB product whose stored range falls outside the window that path
+allows. For estimating radio-channel parameters, a named transmitter with an
+untrustworthy range zero is worth less than a serendipitous chirp with a solved
+timing solution. DOB works the chirp circuits.
 
+If the receivers are ever wanted back, core isolation is the first thing to try
+-- pin the recorder and the NIC IRQ to cores nothing else may use, via
+`CPUAffinity`, which is one more thing `dombas.sh` cannot express. It has never
+been tested, and the budget above says ~3.4 cores would have to come from
+somewhere.
+
+**The plotters are deleted for a different reason.** They are cheap; they are
+simply pointless. The web UI renders ionograms on demand, so `plot_rtf.py`,
+`plot_detectionfiles.py` and `plot_ionograms.py` have no consumer, and
+`docs/architecture.md` already lists their PNG output as not required. Note
+that `receive_digisonde.py` writes its own `.png` beside each product, so
+digisonde plots never came from these three anyway.
 **One config edit is required with this patch**, and it is in a different file
 so it is not diffed here. `my_station.ini` carries `required_processes`, which
 is `station_monitor.py`'s watchdog list, and it names four of the six processes
@@ -164,13 +182,13 @@ diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
 -
 -echo "plot_detectionfiles.py"
 -python3 -u plot_detectionfiles.py --config "$CONF_FILE" > logs/plot_detectionfiles.log 2>&1 &
-+# receive_digisonde.py x5 and the plotters used to run here. They cost ~2.7 of
-+# eight cores on a host whose recorder was losing 45% of its samples to the
-+# contention; removing them took the drop rate to zero over 600 s with
-+# detect_chirps and calc_ionograms still running. The digisonde receivers now
-+# run on the server and write to the NAS -- their input comes from GIRO over
-+# HTTP, so nothing about them was ever tied to this machine. The plots are
-+# rendered by the web UI on demand instead of being written as PNGs here.
++# receive_digisonde.py x5 and the plotters used to run here. The receivers are
++# ringbuffer consumers, not downloaders: they demodulate the digisondes off air
++# from /dev/shm, and five of them cost this recorder ~969 dropped sample events
++# and ~65,000 dropped datagrams per second. DOB does not use those products --
++# their range zero is a configured offset_us, not a measured delay. The
++# plotters are gone because the web UI renders on demand. See patches/0007 and
++# docs/2026-08-11-recorder-packet-loss.md.
  
  echo "detect_chirps.py"
  $MPIRUN -np 2 python3 -u detect_chirps.py --config "$CONF_FILE" > logs/detect.log 2>&1 &

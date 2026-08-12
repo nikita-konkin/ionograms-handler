@@ -145,19 +145,12 @@ All NIC interrupts land on **CPU7** alone (single queue, 1.7 billion on that
 core), so whichever process shares CPU7 competes with 68,000 packets/second of
 softirq work.
 
-### What fixes it: move work off the machine, not fence it (2026-08-12)
+### What fixes it: run less on the box (2026-08-12)
 
-Core isolation was the first instinct — pin the recorder and the NIC IRQ to
-cores nothing else may use. It turned out not to be necessary, and the reason
-is worth stating because it generalises.
+The machine has eight cores. The pipeline that cannot be avoided needs about
+half of them:
 
-Split the station's processes by one question: **does it read the ringbuffer?**
-
-Anything that does is bound to `/dev/shm` at 25 MS/s and can never leave the
-laptop — relocating it would mean shipping 100 MB/s, 8.6 TB/day, over the
-network:
-
-| must stay | ~cores |
+| must run here | ~cores |
 |---|---|
 | `rx_uhd_ext_gps` | 0.8 |
 | `drf ringbuffer` | 0.5 |
@@ -165,28 +158,19 @@ network:
 | `calc_ionograms` ×2 ranks | 1.2 |
 | **total** | **~4.4 of 8** |
 
-Anything that does not is free to run anywhere. The five `receive_digisonde.py`
-instances are the striking case: they **download from GIRO over HTTP** and have
-no connection to the radio at all, yet they were eating two cores on the one
-machine in the building that must not miss a packet.
+Everything else was optional, and two groups came off: five
+`receive_digisonde.py` instances, and three plotters (`plot_rtf`,
+`plot_detectionfiles`, `plot_ionograms`) that write PNGs the web UI re-renders
+anyway.
 
-| can move | ~cores |
-|---|---|
-| `receive_digisonde.py` ×5 | 2.0 |
-| `plot_rtf`, `plot_detectionfiles`, `plot_ionograms` | 0.7 |
-| `detections2metadata`, `sync_iono_data`, `iono_housekeeping` | 0.2 |
-| **total** | **~2.9** |
-
-**Measured, 2026-08-12.** Killing only the movable half — nothing that touches
-the ringbuffer, the full pipeline still running:
+**With both groups off:**
 
 ```
-digisonde: 0  plotters: 0
 load average: 9.15 -> 6.98
-0 -> 0 samp_diff events in 600 s      (was ~1500/s)
+0 samp_diff events in 600 s          (was ~1500/s)
 ```
 
-Confirmed over a full hour the same afternoon, both counters together:
+confirmed over a full hour, both counters together:
 
 ```
 drops: 0
@@ -194,25 +178,63 @@ was RcvbufErrors: 3214702405   now RcvbufErrors: 3214702405
 load average: 7.53
 ```
 
-Zero, with `detect_chirps` and `calc_ionograms` untouched.
-4.4 cores of unavoidable work on an 8-core machine has room to spare; 7.3 does
-not. **Relocation is strictly better than isolation** — it removes the
-contention instead of drawing a fence around it, needs no `CPUAffinity`
-tuning, and puts the digisonde receivers on the server where nothing about them
-was ever station-specific.
+**Then with only the digisonde receivers restored**, plotters still off, to
+find out which group actually mattered:
 
-**First attempt at this measurement was invalid** and is worth recording. The
-window was three seconds, not six hundred, because the setup line was run twice
-and the second truncate landed just before the read. The tell was not in
-`thor.log` at all — it was the load average, which sat at 9.15 → 8.84 → 9.18
-across ten minutes in which ~3 cores of work were supposedly gone. `dombas.sh`
-supervises the recorder in a `while true` loop, so `pkill` on a supervised
-child is a five-second pause. **Always read `uptime` beside a drop
+```
+drops: 872081 in 900 s                 (~969/s)
+RcvbufErrors 3294919800 -> 3353488759  (~65,000/s)
+load average: 10.40
+```
+
+It is the digisonde receivers, essentially entirely. The plotters were never
+the problem — they are dropped because nothing reads their output, not because
+they cost anything much.
+
+### Why they cannot simply be moved elsewhere
+
+This was got badly wrong for several hours and the reasoning is worth keeping.
+`receive_digisonde.py` sounds like a downloader. It is not. It **receives the
+transmissions off air with this station's own USRP**, decoding the
+complementary phase codes a Digisonde emits — `import digital_rf as drf`, and
+the `decimation`, `n_ipp`, `ipp_us`, `freq_start/stop` and `use_c_downconvert`
+keys in each `[digisonde-*]` ini section are its demodulator settings. It is a
+ringbuffer consumer exactly like `detect_chirps`, bound to `/dev/shm` at
+25 MS/s, and relocating it would mean shipping 100 MB/s — 8.6 TB/day — across
+the network.
+
+`README.md` and `muf/io_digisonde.py` both say so in their opening lines. An
+afternoon went into designing a server-side container for these processes
+before either was read. **A process named `receive_*` in a radio codebase
+receives on the radio.**
+
+### What DOB decided
+
+Not core isolation, and not fewer receivers: **no digisonde reception at all.**
+
+The products do not serve what this station is for. Each `offset_us` is a
+*configured* constant — 7300 for Dourbes, 3900 for Chilton, 2000 for Juliusruh
+— not a measured delay, so the range zero rests on a hand-set number.
+`muf/io_digisonde.py` documents this at the decision, and the test suite still
+carries a warning about a Juliusruh→DOB product whose stored range falls
+outside the window that path allows. For estimating radio-channel parameters a
+named transmitter with an untrustworthy range zero is worth less than a
+serendipitous chirp with a solved timing solution. DOB works the chirp
+circuits.
+
+Core isolation therefore remains untested, and unnecessary. If the receivers
+are ever wanted back it is the first thing to try — pin the recorder and the
+NIC IRQ to cores nothing else may use — and the budget above says roughly
+3.4 cores would have to come from somewhere.
+
+**The first attempt at the 600 s measurement was invalid** and is worth
+recording. The window was three seconds, not six hundred, because the setup
+line was run twice and the second truncate landed just before the read. The
+tell was not in `thor.log` at all — it was the load average, which sat at
+9.15 → 8.84 → 9.18 across ten minutes in which ~3 cores of work were supposedly
+gone. `dombas.sh` supervises the recorder in a `while true` loop, so `pkill` on
+a supervised child is a five-second pause. **Always read `uptime` beside a drop
 measurement**: if the load did not move, the experiment did not happen.
-
-Implementation: remove the digisonde and plotter launches from `dombas.sh`
-(patch 0007), run them beside the api on the server, writing into the same
-archive tree the api already reads.
 
 ---
 
@@ -343,14 +365,15 @@ that survived has not been measured — it needs several hours of fresh
 
 ## 5. Open questions
 
-1. ~~**Does core isolation fix Fault B?**~~ **Closed 2026-08-12, and the
-   question was the wrong one.** Isolation was never tested because it turned
-   out not to be needed: taking the ~2.7 cores of non-ringbuffer work off the
-   laptop took both counters to zero — drops over ten minutes, then drops *and*
-   `RcvbufErrors` together over a full hour at load 7.5. That closes Fault A
-   with it. The station has been running without the digisonde receivers since
-   12:54 that day, which is not a permanent state: `patches/0007` makes the
-   removal deliberate, and the receivers belong on the server.
+1. ~~**Does core isolation fix Fault B?**~~ **Moot as of 2026-08-12.** Both
+   counters go to zero when the five digisonde receivers are not running —
+   drops over ten minutes, then drops *and* `RcvbufErrors` together over a full
+   hour at load 7.5 — and they come straight back when the receivers return
+   (~969 drops/s, ~65,000 `RcvbufErrors`/s, load 10.4). DOB has decided against
+   digisonde reception on its merits (§2), so the contention is gone and
+   isolation is not needed. It stays **untested**, and is the first thing to
+   try if those receivers are ever wanted back: roughly 3.4 cores would have to
+   come from somewhere on an eight-core host already using 4.4.
 2. **Did the epoch rebuild move `epoch_offset_s`?** −2.2 ms / 659 km was
    stable across 75 samples beforehand. It cannot change without a recorder
    restart, and one has now happened.
