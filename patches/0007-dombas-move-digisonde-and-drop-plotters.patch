@@ -41,19 +41,67 @@ which keeps this host a pure source.
 demand, so `plot_rtf.py`, `plot_detectionfiles.py` and `plot_ionograms.py` have
 no consumer. Writing PNGs here costs ~0.7 cores to produce files nothing reads,
 and a second rendering path is a second thing to keep consistent with the UI.
+This is not a new call: `docs/architecture.md` already lists their PNG output
+as not required, because Tier 2 renders.
+
+**One config edit is required with this patch**, and it is in a different file
+so it is not diffed here. `my_station.ini` carries `required_processes`, which
+is `station_monitor.py`'s watchdog list, and it names four of the six processes
+removed above. Left alone, the monitor reports them missing for ever -- and a
+watchdog that always cries is a watchdog nobody reads, which is worse than not
+having one. Drop these four entries:
+
+    "receive_digisonde=receive_digisonde.py",
+    "plot_ionograms=plot_ionograms.py",
+    "plot_rtf=plot_rtf.py",
+    "plot_detectionfiles=plot_detectionfiles.py",
+
+leaving `recorder`, `detect_chirps`, `find_timings`, `detections2metadata`,
+`calc_ionograms` and `sync_iono_data`. (The commented-out second copy of the
+list further down the file has no `find_timings` entry; it is dead text, but if
+you ever swap to it, note that `find_timings.py` is required in serendipitous
+mode -- and this station has `serendipitous=true`.)
+
+`required_processes` is left out of the diff on purpose. `my_station.ini` is
+per-station and diverges freely, so a context mismatch there would fail the
+whole patch including the `dombas.sh` change that does apply cleanly.
+
+Worth knowing while you are in that list: neither `station_monitor.py` nor
+`iono_housekeeping.py` appears in it. Nothing watches the watchdog, and nothing
+watches the thing that deletes your products.
 
 **Deliberately left alone.** `sync_iono_data.py`, `iono_housekeeping.py` and
-`detections2metadata.py` (lines 99-106) stay for now. Two of them may duplicate
-services this repo already provides -- `sync_iono_data.py` copies to the NAS
-and so does `chirp-archive-sync.service`; anything that deletes on age alone
-would race `chirp-archive-prune.service`, which only unlinks what it has
-verified byte-for-byte on the remote. Two independent deleters on one tree is
-how an archive loses what it cannot get back. Resolve that before moving them.
+`detections2metadata.py` (lines 99-106) stay for now. Two of them overlap
+services this repo already provides, and the overlap needs settling on its own
+terms rather than as a side effect of a CPU fix.
 
-Note that `iono_housekeeping.py` was not present in the station's clone at all
-on 2026-08-12: line 103 launches a missing file, so it has been dying instantly
-into `logs/housekeeping.log`. Harmless, but it means no housekeeping has ever
-run here.
+`iono_housekeeping.py` **deletes from the staging area on age alone.**
+`logs/housekeeping.log` on 2026-08-12:
+
+    cleaning files older than 180 seconds
+    removed old parameter artifact /home/ionouser/ionozond_data2/2026-08-11/par-ch0-1786445094.0000.h5
+
+`chirp-archive-prune.service` also deletes from that tree, but only after
+verifying the same relative path exists on the NAS **with the same size**. Two
+independent deleters on one tree, with different rules, is how an archive loses
+what it cannot get back.
+
+It is benign today for two reasons that are worth naming, because neither is
+guaranteed to hold: the mirror runs `rsync` without `--delete`, so a NAS copy
+survives a local unlink; and the artifacts housekeeping removes are already a
+day old when it takes them, comfortably past the 5-minute mirror interval. Both
+assumptions get thinner as staging gets tighter. `par-*.h5` are timing
+solutions consumed by `calc_ionograms`'s serendipitous branch and are transient
+by design, so trimming them is not obviously wrong -- what is wrong is having
+two things that believe they own the retention policy.
+
+Similarly `sync_iono_data.py` copies to the NAS and so does
+`chirp-archive-sync.service`. Decide which one owns it before moving either.
+
+Note: `dombas.sh` lives in `examples/marieluise/` but `cd`s to the repo root
+before launching anything, which is why the scripts it names are **not** beside
+it and `logs/` is at the top level. Looking for them next to `dombas.sh` finds
+nothing and invites the wrong conclusion.
 
 **What this does not do.** Core isolation was the first instinct -- pin the
 recorder and the NIC IRQ to cores nothing else may use, via `CPUAffinity` in
