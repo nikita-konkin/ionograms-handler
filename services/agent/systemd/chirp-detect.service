@@ -8,7 +8,16 @@ After=chirp-rx.service
 Type=simple
 User=ionouser
 WorkingDirectory=/home/ionouser/chirpsounder2
-ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 detect_chirps.py --config /home/ionouser/chirpsounder2/my_station.ini
+
+# Stay off core 0. See chirp-rx.service: the recorder is pinned there and needs
+# it free the instant a packet arrives, and this unit is one of the processes
+# that was crowding it. `taskset` in a launcher script achieves the same thing
+# by inheritance, but only for children of that one script.
+CPUAffinity=1-7
+
+# Ranks here are plain parallelism -- any count is valid, unlike
+# chirp-ionograms.service, where -np is pinned to the schedule.
+ExecStart=/usr/bin/mpirun -np 2 /home/ionouser/chirpsounder2/.venv38/bin/python3 detect_chirps.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15
 

@@ -20,17 +20,32 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # surfaced downstream as "missing data - skipping" while the recorder, the
 # detector and every plot carried on looking healthy.
 #
-# The size is also how far back a consumer can reach, which is what decides
-# whether a sounding is analysable at all:
+# **The size buys time, not space.** It is how far back a consumer can reach,
+# which is what decides whether a sounding is analysable at all:
 #
 #     seconds of history = size / (sample_rate * 4 bytes)
 #
-# At 25 MS/s that is 100 MB/s, so 12000MB holds 120 s by that arithmetic. A
-# sounding must begin processing within its window of history, and
-# find_timings.py prints the margin for each as "N s left" -- which is the
-# number to trust, because the arithmetic above does not match it: most margins
-# on DOB exceed 120 s outright, so either the effective window is larger than
-# size/(rate*4) suggests, or "s left" is not measured from it.
+# At 25 MS/s that is 100 MB/s, so 12000MB holds 120 s and 14000MB holds 140 s.
+# That arithmetic is now confirmed rather than assumed: calc_ionograms prints a
+# `Buffer extent ...` line whose width measured 119 s at 12000MB and 139 s at
+# 14000MB (DOB, 2026-08-12). An earlier version of this comment doubted it,
+# because find_timings.py margins routinely exceed 120 s -- so it is "N s left"
+# that is not measured from this window, and the formula that is right.
+#
+# The consequence is a hard ceiling on sweep length. A consumer running at
+# fraction r of realtime is losing history at (1-r) per second, so the longest
+# sweep it can finish is
+#
+#     max sweep = r * B / (1 - r)
+#
+# At DOB's r = 0.66 and B = 119 s that is 231 s -- which is why Cyprus, whose
+# sweep is 250 s, wrote nothing at 12000MB and completes at 14000MB. Reach for
+# this formula before reaching for RAM: raising r is usually cheaper, and at
+# r = 0.68 the same 12000MB would have carried Cyprus.
+#
+# Watch swap after any increase. The tmpfs pages are not reclaimable, so the
+# size comes straight out of what the OOM killer sees as free; if swap grows,
+# the buffer cost more than it bought. See OOMScoreAdjust in chirp-rx.service.
 #
 # **Match the minus sign, and read the whole log.** Two ways to get this wrong,
 # both of which happened on DOB 2026-08-11:
@@ -72,7 +87,7 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 #     grep -oE '\-?[0-9.]+ s left' logs/find_timings.log | awk '$1<=0' \
 #       | awk '{n++; if($1>-120) s++} END {printf "%d of %d saved by +120s\n", s+0, n}'
 ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/drf ringbuffer \
-    -z 12000MB /dev/shm/hf25 -p 2
+    -z 14000MB /dev/shm/hf25 -p 2
 
 Restart=on-failure
 RestartSec=10

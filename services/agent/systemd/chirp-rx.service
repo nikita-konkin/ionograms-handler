@@ -43,6 +43,19 @@ ExecStopPost=-/bin/rm -rf /dev/shm/hf25
 LimitRTPRIO=99
 LimitMEMLOCK=infinity
 
+# Core 0 is the recorder's, and nobody else's. The consumers are held off it by
+# CPUAffinity=1-7 in chirp-detect.service and chirp-ionograms.service; that
+# exclusion is half of this setting and is worth nothing without it.
+#
+# The recorder was one of twelve processes queueing for eight cores and lost up
+# to 45% of its samples to the wait -- at load 9.4, with CPU still idle, because
+# the fault is scheduling latency and not throughput. It needs about 0.8 of a
+# core, but it needs it the instant a packet arrives. Measured on 2026-08-12:
+# 358,691 drops per 900 s unpinned, 0 drops and a frozen RcvbufErrors counter
+# pinned. Core 7 is deliberately left in the consumers' pool -- every NIC
+# interrupt lands there, so isolating it would move the softirq, not protect it.
+CPUAffinity=0
+
 ExecStart=/home/ionouser/chirpsounder2/rx_uhd_ext_gps \
     --outdir=/dev/shm/hf25 \
     --usrp_args=addr0=192.168.10.2,recv_buff_size=500000000
@@ -54,6 +67,23 @@ ExecStart=/home/ionouser/chirpsounder2/rx_uhd_ext_gps \
 KillSignal=SIGINT
 KillMode=mixed
 TimeoutStopSec=30
+
+# The line above protects the USRP from systemd. This one protects it from the
+# kernel, which is the same site visit by a different route: the OOM killer
+# sends SIGKILL directly and KillSignal has no say in it, so the radio is left
+# transmitting exactly as if someone had run `kill -9`.
+#
+# That is not hypothetical here. The ringbuffer is 13 G of tmpfs, and tmpfs
+# pages are shared, not reclaimable -- Linux excludes them from `available`,
+# which on 2026-08-12 read 1.6 G of 31 G with 5.4 G already swapped. The
+# recorder is also the fattest RSS on the box, i.e. exactly what the OOM killer
+# looks for. Growing the ringbuffer makes both facts worse, so this setting is
+# a precondition for raising the size, not an afterthought to it.
+#
+# -1000 requires CAP_SYS_RESOURCE, which is why `dombas.sh` cannot set it and
+# why doing it by hand lapses at the recorder's next 24-hour restart. Prefer
+# losing an ionogram consumer to losing the radio.
+OOMScoreAdjust=-1000
 
 Restart=on-failure
 RestartSec=10

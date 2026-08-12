@@ -22,7 +22,25 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # chirp-archive-sync.service mirrors them to the NAS afterwards, where being
 # slow is free. (Not chirp-sync.service -- that only uploads dashboard PNGs.)
 Nice=-5
-ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
+
+# Stay off core 0 -- see chirp-rx.service. Nice=-5 above and this line pull in
+# opposite directions on purpose: this unit gets priority over its peers, but
+# never over the recorder, which it cannot reach at all.
+CPUAffinity=1-7
+
+# **-np must equal len(sounder_timings).** In scheduled mode each rank takes
+# its own transmitter -- calc_ionograms.py:452 does `st =
+# conf.sounder_timings[rank]` with no guard -- so -np greater than the outer
+# list length kills that rank with an IndexError while the others carry on, and
+# -np smaller silently stops sounding the transmitters past the cut. Neither
+# announces itself: the log looks normal because the surviving ranks are fine.
+# Today that means 2, for SGO and NIC. Changing the schedule means changing
+# this number in the same commit.
+#
+# (In serendipitous mode timings come from find_timings.py instead and any -np
+# is valid, which is why this constraint only appeared when DOB switched modes
+# on 2026-08-12.)
+ExecStart=/usr/bin/mpirun -np 2 /home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15
 

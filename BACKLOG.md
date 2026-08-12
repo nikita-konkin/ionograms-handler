@@ -544,11 +544,16 @@ measured one.
 
 DOB went to `serendipitous = false` on 2026-08-12 without first spending a clean
 day in search mode. That was a deliberate call -- the emitter census was already
-in hand and the schedule was the thing wanted -- but it left three measurements
+in hand and the schedule was the thing wanted -- but it left two measurements
 unpaid, and **scheduled mode is what blocks them**: `dombas.sh` only starts
 `find_timings.py` when `serendipitous` is true (patch 0003's branch), so neither
-`find_timings.log` nor `par-*.h5` exists any more. Reopening all three costs one
-day back in search mode, and they should be reopened together.
+`find_timings.log` nor `par-*.h5` exists any more. Reopening both costs one day
+back in search mode, and they should be reopened together.
+
+A third item was listed here and is now **answered from data already on disk** --
+see "`epoch_offset_s`, resolved" below. It is worth reading before paying for a
+day in search mode for anything else: the archived `par-*.h5` outlived the mode
+switch, and the question turned out not to need new acquisition at all.
 
 **1. The sounding-loss figure, against a 4.28% baseline.** `find_timings.log`'s
 `s left` margins are the only measurement of how many soundings the pipeline
@@ -567,19 +572,31 @@ count only entries past marker 15 (2026-08-12 17:06), which is where the stream
 became clean. Everything before that was measured on a recording missing 6% at
 the socket and up to 45% at the device.
 
-**2. `epoch_offset_s`, which is still unverified.** −2.2 ms (659 km), stable
-across 75 samples, measured *before* the epoch rebuild. It cannot change without
-a recorder restart and several have now happened, so the number on file is
-merely old rather than wrong -- but it is computed from `par-*.h5`, which
-scheduled mode does not write. This matters more in scheduled mode than in
-search mode, not less: `t0` is **imposed** from `rep`/`chirpt` rather than
-measured, so a receiver epoch error lands raw in every range instead of being
-partly absorbed into a fitted solution.
-
-**3. Capacity numbers that rest on a damaged stream.** Ringbuffer sizing, cycle
+**2. Capacity numbers that rest on a damaged stream.** Ringbuffer sizing, cycle
 counts, consumer throughput and schedule margins were all derived before
 2026-08-12. Nothing about slot counts or `/dev/shm` sizing should be decided
 from them.
+
+**`epoch_offset_s`, resolved (2026-08-12) -- no serendipitous day needed.**
+Solved independently on two archived days and agreeing to 0.16 ms:
+
+| day | slots | samples | offset | scatter |
+|-----|------:|--------:|-------:|--------:|
+| 2026-08-09 | 2 | 152 | −0.00227 s | ±0.01 ms |
+| 2026-08-10 | 3 | 252 | −0.00211 s | ±0.10 ms |
+
+Both confirm the −2.2 ms already on file, which was the thing in doubt. The
+reasoning that made this look blocked was wrong in a way worth naming: scheduled
+mode stops `par-*.h5` from being *written*, but the archive of what was already
+written is untouched, and two days of it was plenty. **Check the archive before
+booking acquisition time.**
+
+Getting the sign right is the whole difficulty, and it is easy to get backwards
+-- it was, here. The offset is applied to the *measured* arrival phase to
+recover true delay, so a −2.27 ms offset makes an observed 9.27 ms into 11.54 ms
+(3459 km), not 7.0 ms. Read the wrong way it rules out the correct transmitter:
+Cyprus was briefly dismissed on exactly this error, on the grounds that 9.27 ms
+was too short for a 3436 km path. It is, and that is why the offset exists.
 
 **Not blocked, and worth keeping:** `~/drop-watch.sh` on the station samples
 both recorder loss counters against the load average every 15 minutes and is
@@ -588,14 +605,22 @@ validating windows all fell at load 6-8 while the fault was measured at 9.4 --
 see `docs/2026-08-11-recorder-packet-loss.md` sec. 5.
 
 **Already paid, do not redo:** the emitter census. Three days of `par-*.h5`
-through `muf detect` gave five rate/phase groups, of which the two with
-sub-millisecond phase scatter (500 kHz/s at `rep=60, chirpt=54`, ±0.74 ms; and
-125 kHz/s at `rep=30, chirpt=15`, ±0.96 ms) became the first schedule. Two
-findings from it are worth carrying forward:
+through `muf detect` gave five rate/phase groups. The schedule that came out of
+it is SGO (500 kHz/s, `rep=120, chirpt=54`) and NIC (100 kHz/s, `rep=600,
+chirpt=235`). Findings worth carrying forward:
 
-- The 100 kHz/s group at ±3.50 ms is **several emitters merged**, not one. It
-  has the most detections by far (2466) and is the least usable as a schedule
-  entry. Splitting it needs a finer phase clustering than `muf detect` does now.
+- The 100 kHz/s group at ±3.50 ms was **several emitters merged**, and
+  `muf detect --tolerance-ms 1.0` splits it -- the default 5 ms tolerance was
+  doing the merging. Cyprus fell out of it: slots 0/235/240/280, 3459 km
+  against a 3436 km ground path, and SNR 61.9, the strongest emitter DOB hears.
+  The largest group in a census deserves a second pass at a finer tolerance
+  before being written off as unusable.
+- **Phase scatter is not the selection criterion; range is.** The 125 kHz/s
+  group (±0.96 ms) looked like the obvious second schedule entry on scatter
+  alone and was recommended as one. It resolves to 14,232--14,348 km -- a
+  many-hop path and a poor MUF circuit. Tight scatter means the group is one
+  emitter, which says nothing about whether it is a useful one. Resolve the
+  geometry before scheduling.
 - Two emitters have arrival phases that **cannot be propagation delays**:
   415.28 ms is 124,000 km and 863.37 ms is 259,000 km. The receiver epoch is
   shared and the other groups give sane ranges (5.46 ms -> 1640 km), so these
