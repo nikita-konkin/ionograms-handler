@@ -12,6 +12,20 @@ while `detect_chirps` and `calc_ionograms` kept running:
 Zero, over ten minutes. `tail` on `thor.log` showed an unbroken run of progress
 dots with no `D` markers at all.
 
+Confirmed the same afternoon over a full hour, this time watching the socket
+counter alongside the device one:
+
+    drops: 0
+    was RcvbufErrors: 3214702405   now RcvbufErrors: 3214702405
+    load average: 7.53
+
+Not one dropped sample and not one dropped datagram in 3600 s. **This closes
+both faults**, which had been chased separately for a night: patch 0005's
+socket buffer did not stop `RcvbufErrors` (it grew by ~1.17 billion overnight
+with 0005 applied) and patch 0006's `-O2` did not stop the device overflow.
+Neither was the cause. The host was behind, and the two counters were reporting
+that in different dialects.
+
 **Why these and not others.** Split the station's processes by one question:
 does it read the DigitalRF ringbuffer? Anything that does is bound to
 `/dev/shm` at 25 MS/s and can never leave this machine -- relocating it would

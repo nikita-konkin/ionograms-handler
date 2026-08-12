@@ -8,7 +8,18 @@ by reading `logs/thor.log` for an unrelated reason.
 They looked like two independent problems and were treated as such for most of
 a night. They are not. **Both are the same host failing to keep up with its own
 radio**, and on 2026-08-12 both went to zero by removing work from the machine
-rather than by tuning anything.
+rather than by tuning anything:
+
+```
+drops: 0                                           over 3600 s   (was ~1500/s)
+was RcvbufErrors: 3214702405                                     (was ~1.17e9 overnight)
+now RcvbufErrors: 3214702405
+load average: 7.53
+```
+
+Not one dropped sample and not one dropped datagram in an hour. The change was
+subtraction: five digisonde receivers and three plotters, ~2.7 of eight cores,
+none of which ever touched the radio.
 
 This is the working record: what was measured, what was established, what was
 guessed and turned out wrong, and what is still open. The wrong guesses are
@@ -17,7 +28,7 @@ an hour.
 
 ---
 
-## 1. Fault A — socket receive queue overflow (mitigated, not fixed)
+## 1. Fault A — socket receive queue overflow (fixed, but not by the obvious patch)
 
 ```
 netstat -su
@@ -59,8 +70,21 @@ What a bigger buffer actually buys is tolerance for a *transient* stall. It
 cannot help when the host is behind continuously, which is what it was. Fault A
 and Fault B are one root cause reported by two different counters: the socket
 queue overflows when the host is too slow to drain it, and the device
-overflows when the host is too slow to ask. Remove the load and both stop —
-see §2.
+overflows when the host is too slow to ask.
+
+**What actually stopped it** was taking 2.7 cores of unrelated work off the
+machine (§2). Measured over a full hour on 2026-08-12, with the digisonde
+receivers and plotters gone:
+
+```
+was RcvbufErrors: 3214702405
+now RcvbufErrors: 3214702405
+```
+
+Identical. The counter had grown by ~1.17 billion overnight *with* patch 0005
+applied, and by zero in an hour without the load. Keep 0005 — a socket buffer
+UHD never asked to enlarge is a real defect and the fix is correct — but it is
+a guardrail, not the cure.
 
 ---
 
@@ -162,7 +186,15 @@ load average: 9.15 -> 6.98
 0 -> 0 samp_diff events in 600 s      (was ~1500/s)
 ```
 
-Zero, over ten minutes, with `detect_chirps` and `calc_ionograms` untouched.
+Confirmed over a full hour the same afternoon, both counters together:
+
+```
+drops: 0
+was RcvbufErrors: 3214702405   now RcvbufErrors: 3214702405
+load average: 7.53
+```
+
+Zero, with `detect_chirps` and `calc_ionograms` untouched.
 4.4 cores of unavoidable work on an 8-core machine has room to spare; 7.3 does
 not. **Relocation is strictly better than isolation** — it removes the
 contention instead of drawing a fence around it, needs no `CPUAffinity`
@@ -261,13 +293,14 @@ that survived has not been measured — it needs several hours of fresh
 
 ## 5. Open questions
 
-1. ~~**Does core isolation fix Fault B?**~~ **Answered 2026-08-12, and the
+1. ~~**Does core isolation fix Fault B?**~~ **Closed 2026-08-12, and the
    question was the wrong one.** Isolation was never tested because it turned
-   out not to be needed: moving the ~2.9 cores of non-ringbuffer work off the
-   laptop took drops to zero on its own (§2). What remains open is whether that
-   holds over a longer window — `calc_ionograms` is bursty, and the result so
-   far is one ten-minute sample. Re-measure across a few hours, and confirm
-   `RcvbufErrors` has stopped growing too, which would settle Fault A as well.
+   out not to be needed: taking the ~2.7 cores of non-ringbuffer work off the
+   laptop took both counters to zero — drops over ten minutes, then drops *and*
+   `RcvbufErrors` together over a full hour at load 7.5. That closes Fault A
+   with it. The station has been running without the digisonde receivers since
+   12:54 that day, which is not a permanent state: `patches/0007` makes the
+   removal deliberate, and the receivers belong on the server.
 2. **Did the epoch rebuild move `epoch_offset_s`?** −2.2 ms / 659 km was
    stable across 75 samples beforehand. It cannot change without a recorder
    restart, and one has now happened.

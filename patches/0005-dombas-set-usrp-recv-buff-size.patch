@@ -10,14 +10,22 @@ Measured on DOB 2026-08-11:
 full. At 1472 bytes each that is **2.7 TB against 41 TB received -- about 6% of
 every recording**, continuously, for as long as the machine had been up.
 
-**This patch is correct but it is a mitigation, not a cure.** An early note
+**This patch is correct but it is a guardrail, not the cure.** An early note
 here claimed the counter stopped moving; that rested on a single 20-second
-window, and overnight it grew by a further 1.17 billion. A larger queue buys
-tolerance for a *transient* stall. It cannot help a host that is behind
-continuously -- which this one was, because it was running five digisonde
-receivers and three plotters beside the recorder. Keep the flag: a socket
-buffer UHD never asked to enlarge is a genuine defect. Do not expect it to fix
-the loss by itself. See `docs/2026-08-11-recorder-packet-loss.md` §1.
+window, and overnight it grew by a further 1.17 billion *with this patch
+applied*. A larger queue buys tolerance for a *transient* stall. It cannot help
+a host that is behind continuously -- which this one was, because it was
+running five digisonde receivers and three plotters beside the recorder.
+
+What actually stopped the counter was patch 0007, which takes that work off the
+machine. Measured over a full hour on 2026-08-12:
+
+    was RcvbufErrors: 3214702405   now RcvbufErrors: 3214702405
+
+Keep this flag anyway: a socket buffer UHD never asked to enlarge is a genuine
+defect, and it is the difference between surviving a transient stall and losing
+samples to one. Just do not expect it to fix the loss by itself. See
+`docs/2026-08-11-recorder-packet-loss.md` §1.
 
 Nothing reported it. `ethtool -S` was clean, `ip -s link` showed zero drops,
 the link was 1000Mb/s full duplex, and 27 billion packets had arrived without
