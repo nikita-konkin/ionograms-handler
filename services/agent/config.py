@@ -47,7 +47,11 @@ class StationConfig:
 
     #: Where products land. Read from ``chirp_config`` when present; this is
     #: the fallback and the thing disk-free is measured against.
-    output_dir: Path = Path("/media/ionouser/DATA3/ionozond_data2")
+    #:
+    #: The boot SSD rather than DATA3: the latter is USB NTFS behind a
+    #: ``mount.ntfs`` FUSE daemon that competes with the recorder for CPU. The
+    #: archive-sync and archive-prune units must name this same path.
+    output_dir: Path = Path("/home/ionouser/ionozond_data2")
 
     #: The DigitalRF ringbuffer, usually tmpfs. Separate from ``output_dir``
     #: because filling it is a different failure with a different remedy.

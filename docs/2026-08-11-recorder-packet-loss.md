@@ -1,9 +1,14 @@
-# DOB is losing samples: two faults, one fixed
+# DOB is losing samples: two faults, one cause
 
 **2026-08-11, station DOB.** The recorder was discarding roughly **43% of its
 samples**, and separately the receive socket had been dropping **6% of every
 recording for five days**. Neither was reported by anything. Both were found
 by reading `logs/thor.log` for an unrelated reason.
+
+They looked like two independent problems and were treated as such for most of
+a night. They are not. **Both are the same host failing to keep up with its own
+radio**, and on 2026-08-12 both went to zero by removing work from the machine
+rather than by tuning anything.
 
 This is the working record: what was measured, what was established, what was
 guessed and turned out wrong, and what is still open. The wrong guesses are
@@ -12,7 +17,7 @@ an hour.
 
 ---
 
-## 1. Fault A — socket receive queue overflow (fixed)
+## 1. Fault A — socket receive queue overflow (mitigated, not fixed)
 
 ```
 netstat -su
@@ -40,12 +45,26 @@ continuously since boot.
 `recv_buff_size` in `--usrp_args`. `dombas.sh` never passed it.
 `chirp-rx.service` always has, and has never been used.
 
-**Fix.** `patches/0005-dombas-set-usrp-recv-buff-size.patch`. The counter
-stopped moving immediately and completely.
+**Partial fix.** `patches/0005-dombas-set-usrp-recv-buff-size.patch`. Keep it —
+a socket queue UHD never asked to enlarge is a real defect, and the patch is
+correct on its own terms.
+
+**But it does not fix Fault A**, and this document said it did for a day. That
+claim rested on a single 20-second window in which `RcvbufErrors` did not move.
+Overnight the counter grew by **1.17 billion**. A 20-second sample of a
+bursty fault is not a result — the same mistake as the buffering trap in §3,
+made a second time on a different counter.
+
+What a bigger buffer actually buys is tolerance for a *transient* stall. It
+cannot help when the host is behind continuously, which is what it was. Fault A
+and Fault B are one root cause reported by two different counters: the socket
+queue overflows when the host is too slow to drain it, and the device
+overflows when the host is too slow to ask. Remove the load and both stop —
+see §2.
 
 ---
 
-## 2. Fault B — device-side overflow from host CPU contention (open)
+## 2. Fault B — device-side overflow from host CPU contention (cause found, fix chosen)
 
 `thor.log` fills with `D` markers and `samp_diff` gaps:
 
@@ -102,15 +121,66 @@ All NIC interrupts land on **CPU7** alone (single queue, 1.7 billion on that
 core), so whichever process shares CPU7 competes with 68,000 packets/second of
 softirq work.
 
-### What would fix it
+### What fixes it: move work off the machine, not fence it (2026-08-12)
 
-Core isolation, not another tuning flag. The recorder and the NIC IRQ need
-cores that nothing else may use — `CPUAffinity` / `AllowedCPUs` in the systemd
-units, which is one more thing `dombas.sh` cannot express. Reducing the
-station's process count would also help: five digisonde receivers and three
-plotters on an eight-core laptop is the underlying problem.
+Core isolation was the first instinct — pin the recorder and the NIC IRQ to
+cores nothing else may use. It turned out not to be necessary, and the reason
+is worth stating because it generalises.
 
-**Not yet attempted.** Everything above is measurement.
+Split the station's processes by one question: **does it read the ringbuffer?**
+
+Anything that does is bound to `/dev/shm` at 25 MS/s and can never leave the
+laptop — relocating it would mean shipping 100 MB/s, 8.6 TB/day, over the
+network:
+
+| must stay | ~cores |
+|---|---|
+| `rx_uhd_ext_gps` | 0.8 |
+| `drf ringbuffer` | 0.5 |
+| `detect_chirps` ×2 ranks | 1.9 |
+| `calc_ionograms` ×2 ranks | 1.2 |
+| **total** | **~4.4 of 8** |
+
+Anything that does not is free to run anywhere. The five `receive_digisonde.py`
+instances are the striking case: they **download from GIRO over HTTP** and have
+no connection to the radio at all, yet they were eating two cores on the one
+machine in the building that must not miss a packet.
+
+| can move | ~cores |
+|---|---|
+| `receive_digisonde.py` ×5 | 2.0 |
+| `plot_rtf`, `plot_detectionfiles`, `plot_ionograms` | 0.7 |
+| `detections2metadata`, `sync_iono_data`, `iono_housekeeping` | 0.2 |
+| **total** | **~2.9** |
+
+**Measured, 2026-08-12.** Killing only the movable half — nothing that touches
+the ringbuffer, the full pipeline still running:
+
+```
+digisonde: 0  plotters: 0
+load average: 9.15 -> 6.98
+0 -> 0 samp_diff events in 600 s      (was ~1500/s)
+```
+
+Zero, over ten minutes, with `detect_chirps` and `calc_ionograms` untouched.
+4.4 cores of unavoidable work on an 8-core machine has room to spare; 7.3 does
+not. **Relocation is strictly better than isolation** — it removes the
+contention instead of drawing a fence around it, needs no `CPUAffinity`
+tuning, and puts the digisonde receivers on the server where nothing about them
+was ever station-specific.
+
+**First attempt at this measurement was invalid** and is worth recording. The
+window was three seconds, not six hundred, because the setup line was run twice
+and the second truncate landed just before the read. The tell was not in
+`thor.log` at all — it was the load average, which sat at 9.15 → 8.84 → 9.18
+across ten minutes in which ~3 cores of work were supposedly gone. `dombas.sh`
+supervises the recorder in a `while true` loop, so `pkill` on a supervised
+child is a five-second pause. **Always read `uptime` beside a drop
+measurement**: if the load did not move, the experiment did not happen.
+
+Implementation: remove the digisonde and plotter launches from `dombas.sh`
+(patch 0007), run them beside the api on the server, writing into the same
+archive tree the api already reads.
 
 ---
 
@@ -123,7 +193,7 @@ are recorded so nobody spends the evening on them again.
 |---|---|---|
 | **MPI ranks (`-np 4`)** | drops appeared after the change; load hit 11.4 | 63% → "6%" was a **buffering artifact** — see below. `-np 2` still lost 45% |
 | **Build flags (`-O0`)** | the rebuild command carried no `-O`, and `-O0` is genuinely slow | `-O2` rebuild: 52% → 42%. No real change |
-| **Socket buffer** | correct diagnosis of Fault A | fixed Fault A entirely, did nothing for Fault B |
+| **Socket buffer** | correct diagnosis of Fault A | a real defect, but only a mitigation — `RcvbufErrors` grew 1.17 billion overnight *after* it. Did nothing for Fault B |
 | **Link speed** | 100Mb/s would explain everything | `1000Mb/s Full` |
 | **Wrong interface** | two NICs are up, one is USB | `ip route get 192.168.10.2` → `enp0s25`, the one already tuned |
 
@@ -191,9 +261,13 @@ that survived has not been measured — it needs several hours of fresh
 
 ## 5. Open questions
 
-1. **Does core isolation fix Fault B?** The zero-drop measurement says CPU
-   contention is sufficient to explain it; nothing has tested whether pinning
-   is sufficient to cure it.
+1. ~~**Does core isolation fix Fault B?**~~ **Answered 2026-08-12, and the
+   question was the wrong one.** Isolation was never tested because it turned
+   out not to be needed: moving the ~2.9 cores of non-ringbuffer work off the
+   laptop took drops to zero on its own (§2). What remains open is whether that
+   holds over a longer window — `calc_ionograms` is bursty, and the result so
+   far is one ten-minute sample. Re-measure across a few hours, and confirm
+   `RcvbufErrors` has stopped growing too, which would settle Fault A as well.
 2. **Did the epoch rebuild move `epoch_offset_s`?** −2.2 ms / 659 km was
    stable across 75 samples beforehand. It cannot change without a recorder
    restart, and one has now happened.

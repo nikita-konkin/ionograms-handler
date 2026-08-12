@@ -37,7 +37,13 @@ User=ionouser
 Nice=19
 IOSchedulingClass=idle
 
-Environment=ARCHIVE_LOCAL=/media/ionouser/DATA3/ionozond_data2
+# Staging is on the boot SSD, not DATA3. DATA3 is a USB-attached NTFS volume
+# served by a `mount.ntfs` FUSE daemon that was measured at 8.2% CPU on a host
+# that could not spare it -- writing products there costs the recorder samples.
+# The trade is 256 GB of headroom instead of 928 GB, which is why the prune job
+# beside this one exists. Keep this identical to `output_dir` in agent.json and
+# to ARCHIVE_LOCAL in chirp-archive-prune.service: three places, one path.
+Environment=ARCHIVE_LOCAL=/home/ionouser/ionozond_data2
 Environment=ARCHIVE_REMOTE=/mnt/ionozond_16tb/ionozond_data2
 
 # Trailing slash on the source: copy the *contents*, not the directory itself.

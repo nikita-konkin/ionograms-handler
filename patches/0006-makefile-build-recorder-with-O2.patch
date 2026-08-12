@@ -1,0 +1,55 @@
+Build the recorder with optimisation. The rule has never had any.
+
+    rx_uhd_ext_gps: rx_uhd_ext_gps.cpp
+    	g++ -std=c++11 `pkg-config --cflags ...` -o rx_uhd_ext_gps ...
+
+No `-O` flag anywhere, which means **`-O0`**: no inlining, every local spilled
+to the stack, no vectorisation. That is a debug build, and this program moves
+100 MB/s off a USRP against a hard deadline.
+
+It is not the cause of DOB's packet loss -- an `-O2` rebuild on 2026-08-11
+moved the drop rate from 52% to 42%, i.e. nowhere, and the real cause was CPU
+contention (`docs/2026-08-11-recorder-packet-loss.md` §2). This patch is here
+for a duller reason: **the fix does not survive `make`.**
+
+DOB is currently running an optimised binary built by hand:
+
+    g++ -O2 -std=c++11 $(pkg-config --cflags uhd hdf5 digital_rf) \
+        -o rx_uhd_ext_gps rx_uhd_ext_gps.cpp -pthread ...
+
+The next person to follow `patches/README.md`'s instruction -- `make
+rx_uhd_ext_gps`, which is what applying patch 0001 tells you to do -- silently
+replaces it with an `-O0` build. Nothing warns. The binary compiles, starts,
+locks the GPSDO and records; it is simply slower, and on a machine that is
+already contended that matters at exactly the wrong moment.
+
+`-O2`, not `-O3` or `-march=native`. `-O2` is the boring, portable choice, and
+the binary is copied between machines by `scp` often enough that baking in the
+host's instruction set would be a trap of its own. If you want more, measure it
+-- and measure it against the drop counters, not a stopwatch.
+
+Only `rx_uhd_ext_gps` is changed. `rx_uhd` and `libdownconvert.so` have the
+same omission and could take the same flag, but neither has a deadline, and a
+patch that edits three rules is a patch that fails to apply for three reasons.
+
+    cd ~/chirpsounder2
+    git apply --check /path/to/0006-makefile-build-recorder-with-O2.patch
+    git apply         /path/to/0006-makefile-build-recorder-with-O2.patch
+    make rx_uhd_ext_gps
+    sudo setcap cap_sys_nice+ep rx_uhd_ext_gps    # inode changed; caps are gone
+
+That last line is not optional. `setcap` attaches to the inode, so every
+rebuild drops it, and under `dombas.sh` there is no `LimitRTPRIO` to make up
+for it.
+
+Verify the flag actually reached the compiler rather than trusting the diff:
+
+    make -n rx_uhd_ext_gps | grep -o '\-O[0-9s]*'
+
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -12,2 +12,2 @@ rx_uhd_ext_gps: rx_uhd_ext_gps.cpp
+ rx_uhd_ext_gps: rx_uhd_ext_gps.cpp
+-	g++ -std=c++11 `pkg-config --cflags uhd hdf5 digital_rf` -o rx_uhd_ext_gps rx_uhd_ext_gps.cpp -pthread  -lboost_program_options -lboost_system -lboost_thread -lboost_date_time -lboost_regex -lboost_serialization -ldigital_rf `pkg-config --libs uhd hdf5 digital_rf`
++	g++ -O2 -std=c++11 `pkg-config --cflags uhd hdf5 digital_rf` -o rx_uhd_ext_gps rx_uhd_ext_gps.cpp -pthread  -lboost_program_options -lboost_system -lboost_thread -lboost_date_time -lboost_regex -lboost_serialization -ldigital_rf `pkg-config --libs uhd hdf5 digital_rf`

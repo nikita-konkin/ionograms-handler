@@ -1,0 +1,122 @@
+Take the non-ringbuffer work off the acquisition host. This is the fix for the
+45% sample loss, and it is a subtraction rather than a tuning flag.
+
+**The measurement.** On 2026-08-12, killing only the processes that do *not*
+read the ringbuffer -- the five digisonde receivers and the three plotters --
+while `detect_chirps` and `calc_ionograms` kept running:
+
+    digisonde: 0  plotters: 0
+    load average: 9.15 -> 6.98
+    0 -> 0 samp_diff events in 600 s      (was ~1500/s)
+
+Zero, over ten minutes. `tail` on `thor.log` showed an unbroken run of progress
+dots with no `D` markers at all.
+
+**Why these and not others.** Split the station's processes by one question:
+does it read the DigitalRF ringbuffer? Anything that does is bound to
+`/dev/shm` at 25 MS/s and can never leave this machine -- relocating it would
+mean shipping 100 MB/s, 8.6 TB/day, across the network:
+
+    rx_uhd_ext_gps        0.8 cores
+    drf ringbuffer        0.5
+    detect_chirps  x2     1.9
+    calc_ionograms x2     1.2
+                        -----
+                          4.4 of 8
+
+Anything that does not is free to run anywhere. 4.4 cores of unavoidable work
+on an eight-core host has room to spare; 7.3 does not.
+
+**The digisonde receivers are the striking case.** They download from GIRO over
+HTTP. They have no connection to the radio at all, yet five of them were eating
+two cores on the one machine in the building that must not miss a packet.
+Because their input arrives over the internet and never touches local data,
+they can run anywhere with network access and write **straight to the NAS**.
+The archive tree ends up identical -- `digisonde_ionogram-*.h5` are real
+products and the MUF pipeline compares them against the chirp ionograms; only
+the machine that writes them changes. No export of the laptop's disk is needed,
+which keeps this host a pure source.
+
+**The plotters are deleted, not moved.** The web UI renders ionograms on
+demand, so `plot_rtf.py`, `plot_detectionfiles.py` and `plot_ionograms.py` have
+no consumer. Writing PNGs here costs ~0.7 cores to produce files nothing reads,
+and a second rendering path is a second thing to keep consistent with the UI.
+
+**Deliberately left alone.** `sync_iono_data.py`, `iono_housekeeping.py` and
+`detections2metadata.py` (lines 99-106) stay for now. Two of them may duplicate
+services this repo already provides -- `sync_iono_data.py` copies to the NAS
+and so does `chirp-archive-sync.service`; anything that deletes on age alone
+would race `chirp-archive-prune.service`, which only unlinks what it has
+verified byte-for-byte on the remote. Two independent deleters on one tree is
+how an archive loses what it cannot get back. Resolve that before moving them.
+
+Note that `iono_housekeeping.py` was not present in the station's clone at all
+on 2026-08-12: line 103 launches a missing file, so it has been dying instantly
+into `logs/housekeeping.log`. Harmless, but it means no housekeeping has ever
+run here.
+
+**What this does not do.** Core isolation was the first instinct -- pin the
+recorder and the NIC IRQ to cores nothing else may use, via `CPUAffinity` in
+the systemd units. It was never needed. Relocation removes the contention
+instead of drawing a fence around it, and needs no tuning to maintain. If drops
+return after this, revisit isolation; do not add it pre-emptively.
+
+**Verifying.** Wait at least ten minutes -- `thor.log` is block-buffered and an
+early reading shows an unflushed buffer, not a healthy recorder. Use the rate
+between two late samples, never a cumulative figure, and always print `uptime`
+beside it:
+
+    A=$(grep -c samp_diff logs/thor.log); sleep 600
+    B=$(grep -c samp_diff logs/thor.log); echo "$(( (B-A)/600 )) events/s"; uptime
+
+If the load average has not moved, the change did not take effect and the drop
+figure means nothing -- that mistake has been made twice on this station.
+
+Apply on top of 0004 and 0005:
+
+    cd ~/chirpsounder2
+    git apply --check /path/to/0007-dombas-move-digisonde-and-drop-plotters.patch
+    git apply         /path/to/0007-dombas-move-digisonde-and-drop-plotters.patch
+
+Takes effect on the next full `dombas.sh` launch, not on the recorder's 24-hour
+restart -- that loop only relaunches `rx_uhd_ext_gps`. The processes removed
+here are started once at script start, so a running station keeps them until
+`dombas.sh` itself is restarted.
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -105,18 +105,13 @@
+ echo "detections2metadata.py"
+ python3 -u detections2metadata.py --config "$CONF_FILE" > logs/detections2metadata.log 2>&1 &
+ 
+-echo "receive_digisonde.py"
+-python3 -u receive_digisonde.py --config "$CONF_FILE" > logs/digisonde.log 2>&1 &
+-python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder Juliusruh > logs/digisonde_julius_day.log 2>&1 &
+-python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder JuliusruhN > logs/digisonde_julius_night.log 2>&1 &
+-python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder Chilton > logs/digisonde_chilton.log 2>&1 &
+-python3 -u receive_digisonde.py --config "$CONF_FILE" --sounder Dourbes > logs/digisonde_dourbes.log 2>&1 &
+-
+-echo "plot_rtf.py"
+-python3 -u plot_rtf.py --config "$CONF_FILE" > logs/plot_rtf.log 2>&1 &
+-
+-echo "plot_detectionfiles.py"
+-python3 -u plot_detectionfiles.py --config "$CONF_FILE" > logs/plot_detectionfiles.log 2>&1 &
++# receive_digisonde.py x5 and the plotters used to run here. They cost ~2.7 of
++# eight cores on a host whose recorder was losing 45% of its samples to the
++# contention; removing them took the drop rate to zero over 600 s with
++# detect_chirps and calc_ionograms still running. The digisonde receivers now
++# run on the server and write to the NAS -- their input comes from GIRO over
++# HTTP, so nothing about them was ever tied to this machine. The plots are
++# rendered by the web UI on demand instead of being written as PNGs here.
+ 
+ echo "detect_chirps.py"
+ $MPIRUN -np 2 python3 -u detect_chirps.py --config "$CONF_FILE" > logs/detect.log 2>&1 &
+@@ -144,7 +139,4 @@
+ $MPIRUN -np 2 python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
+ 
+-echo "plot_ionograms.py"
+-python3 -u plot_ionograms.py --config "$CONF_FILE" > logs/plot_ionograms.log 2>&1 &
+-
+ echo "station_monitor.py"
+ python3 -u station_monitor.py --config "$CONF_FILE" > logs/station_monitor.log 2>&1 &

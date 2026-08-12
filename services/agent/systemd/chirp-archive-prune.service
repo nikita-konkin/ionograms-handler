@@ -31,11 +31,14 @@ WorkingDirectory=/home/ionouser/ionograms-handler
 Nice=19
 IOSchedulingClass=idle
 
-Environment=ARCHIVE_LOCAL=/media/ionouser/DATA3/ionozond_data2
+Environment=ARCHIVE_LOCAL=/home/ionouser/ionozond_data2
 Environment=ARCHIVE_REMOTE=/mnt/ionozond_16tb/ionozond_data2
 
-# Three days of local history at ~3 GB/day is ~9 GB -- a weekend-long NAS
-# outage stays invisible, and it fits a boot-SSD budget. Raise it if the
-# staging volume has room; the cost of keeping more is only space.
+# Two days of local history at ~3 GB/day is ~6 GB. That rides out an overnight
+# or weekend-morning NAS outage without intervention, and fits the boot SSD:
+# staging lives on the 256 GB root here, not on DATA3, and the root has been
+# down to 9 GB free once already. Raise it if staging moves to a bigger volume;
+# the cost of keeping more is only space, and the cost of keeping less is
+# needing the NAS back before the next window closes.
 ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python -m services.agent.prune \
-    ${ARCHIVE_LOCAL} ${ARCHIVE_REMOTE} --min-age-days 3
+    ${ARCHIVE_LOCAL} ${ARCHIVE_REMOTE} --min-age-days 2

@@ -16,6 +16,8 @@ Applied against `0d27125`.
 | `0003-local-dombas-DOB-…patch` | the same change, against **DOB's edited copy** rather than upstream's | DOB's `dombas.sh` has diverged (`$HOME` paths, `.venv38`, `my_station.ini`, quoted variables), so the upstream-based 0003 does not apply there |
 | `0004-dombas-run-calc_ionograms-under-mpi.patch` | `calc_ionograms.py` runs under `$MPIRUN -np 2`, as `detect_chirps.py` already does | it ran as one process and missed the ringbuffer window for **4.28% of soundings**, lost silently as "missing data - skipping". **Two ranks, not four** — at four the machine saturated and the recorder overflowed |
 | `0005-dombas-set-usrp-recv-buff-size.patch` | the recorder asks UHD for a 500 MB receive socket buffer | the socket queue had discarded **1.86 billion datagrams, ~6% of every recording**, invisible to every counter except `netstat -su` |
+| `0006-makefile-build-recorder-with-O2.patch` | the `rx_uhd_ext_gps` rule builds with `-O2` | the rule had no `-O` flag at all, so `make` produced a **debug build** of a program moving 100 MB/s against a deadline |
+| `0007-dombas-move-digisonde-and-drop-plotters.patch` | `dombas.sh` no longer starts the five `receive_digisonde.py` instances (they move to the server) or the three plotters (deleted; the web UI renders on demand) | ~2.7 of eight cores went to work that never touches the radio, and the recorder was losing **45% of its samples** to the contention. Removing them took the drop rate to **zero over 600 s** |
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
@@ -43,6 +45,16 @@ grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
 after a day. Baseline to beat is 4.28%. Note the `-?` — without it the sign is
 dropped and every failure counts as a comfortable pass.
 
+**0005, 0006 and 0007 are all one fault seen from three angles**, and only 0007
+fixed it. The host could not keep up with its own radio, so the socket queue
+overflowed (0005), the device overflowed, and both counters were blamed on
+things that were merely suboptimal. A bigger socket buffer and a `-O2` build
+are both real improvements and neither moved the loss: 0005 was followed by
+1.17 billion more `RcvbufErrors` overnight, and 0006 took the drop rate from
+52% to 42%. Taking 2.7 cores of unrelated work off the machine took it to zero.
+**Prefer removing load over tuning for it** — and when a counter is still
+moving, no amount of buffer is the answer.
+
 **Apply 0003 first if you are applying several.** It fixes the environment the
 other two run in; without a trimmed ringbuffer the rest is treating symptoms.
 
@@ -55,7 +67,8 @@ git apply         /path/to/0001-rx_uhd_ext_gps-set-epoch-from-gpsdo.patch
 make rx_uhd_ext_gps        # or whatever the build rule is; it is one .cpp
 ```
 
-**Check the build carries `-O2`.** On 2026-08-11 the Makefile rule expanded to
+**Check the build carries `-O2`** -- patch 0006 fixes the rule, but a clone
+that has not taken it still builds unoptimised. On 2026-08-11 the rule expanded to
 
     g++ -std=c++11 `pkg-config --cflags ...` -o rx_uhd_ext_gps rx_uhd_ext_gps.cpp ...
 

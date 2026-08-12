@@ -8,8 +8,16 @@ Measured on DOB 2026-08-11:
 
 1.86 billion UDP datagrams discarded because the receive socket queue was
 full. At 1472 bytes each that is **2.7 TB against 41 TB received -- about 6% of
-every recording**, continuously, for as long as the machine had been up. After
-this change the counter stopped moving entirely.
+every recording**, continuously, for as long as the machine had been up.
+
+**This patch is correct but it is a mitigation, not a cure.** An early note
+here claimed the counter stopped moving; that rested on a single 20-second
+window, and overnight it grew by a further 1.17 billion. A larger queue buys
+tolerance for a *transient* stall. It cannot help a host that is behind
+continuously -- which this one was, because it was running five digisonde
+receivers and three plotters beside the recorder. Keep the flag: a socket
+buffer UHD never asked to enlarge is a genuine defect. Do not expect it to fix
+the loss by itself. See `docs/2026-08-11-recorder-packet-loss.md` §1.
 
 Nothing reported it. `ethtool -S` was clean, `ip -s link` showed zero drops,
 the link was 1000Mb/s full duplex, and 27 billion packets had arrived without
@@ -44,12 +52,15 @@ You want `Creating the USRP device with: recv_buff_size=500000000` and *no*
 appears, `net.core.rmem_max` is lower than the request and the sysctl above is
 the missing half.
 
-Then confirm the counter has stopped:
+Then watch the counter -- over hours, not seconds:
 
-    netstat -su | grep RcvbufErrors; sleep 30; netstat -su | grep RcvbufErrors
+    netstat -su | grep RcvbufErrors; sleep 3600; netstat -su | grep RcvbufErrors
 
-Two identical numbers is the result. The absolute value never falls -- it is
-cumulative since boot.
+The absolute value never falls; it is cumulative since boot, so only the
+difference means anything. Thirty seconds is not long enough to conclude
+anything about a bursty fault, which is exactly the error made here the first
+time. Two identical numbers an hour apart is a result; two identical numbers
+half a minute apart is a coin flip.
 
 **This does not fix the `D` overflow markers in thor.log.** Those are a
 different mechanism: `ERROR_CODE_OVERFLOW` means the *device* discarded
@@ -61,8 +72,15 @@ Its cause was established by removing the competition rather than by guessing:
 with `detect_chirps`, `calc_ionograms`, the five digisonde receivers, the
 plotters and `find_timings` all killed, leaving only the recorder and
 `drf ringbuffer`, the rate went to **exactly zero over a 60 s window**. It is
-CPU contention, and it needs core isolation rather than another tuning flag.
-See `docs/2026-08-11-recorder-packet-loss.md`.
+CPU contention.
+
+A narrower test the next day showed core isolation is not needed. Killing only
+the processes that *do not* read the ringbuffer -- the five digisonde
+receivers and the three plotters, ~2.9 cores, while `detect_chirps` and
+`calc_ionograms` kept running -- dropped the load from 9.15 to 6.98 and took
+the rate to **zero over 600 s**. The fix is to run those on the server
+(patch 0007), not to pin cores here. See
+`docs/2026-08-11-recorder-packet-loss.md` §2.
 
 Apply on top of 0003 (which this context assumes) and 0004:
 
@@ -75,6 +93,10 @@ every 24 hours in a loop, so a full relaunch is not strictly required -- but
 the 24-hour boundary is an unpredictable moment to change behaviour, and a
 deliberate relaunch is easier to attribute a measurement to.
 
+One line, no inline comment: this reproduces exactly what is on DOB, which is
+what a patch file is for. The reasoning lives in this header instead, per this
+directory's convention.
+
 `addr0=` is deliberately omitted. `chirp-rx.service` hardcodes
 `addr0=192.168.10.2`; discovery already finds the device without it, and a
 wrong address turns a tuning change into a station that cannot open its radio.
@@ -82,18 +104,12 @@ wrong address turns a tuning change into a station that cannot open its radio.
 diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
 --- a/examples/marieluise/dombas.sh
 +++ b/examples/marieluise/dombas.sh
-@@ -74,7 +74,13 @@ echo "rx_uhd_ext_gps (restarting every 24 hours)"
+@@ -74,7 +74,7 @@ echo "rx_uhd_ext_gps (restarting every 24 hours)"
      while true;
      do
          # TBD: change cpp program so that ini file defines USRP setup!
 -        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" > logs/thor.log 2>&1
-+        # recv_buff_size is what UHD actually requests; net.core.rmem_max only
-+        # permits it. Without this the socket queue overflowed 1.86 billion
-+        # times -- 6% of every recording -- while ethtool, ip -s link and the
-+        # link status all read perfectly clean. Only netstat -su showed it.
-+        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" \
-+            --usrp_args=recv_buff_size=500000000 \
-+            > logs/thor.log 2>&1
++        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" --usrp_args=recv_buff_size=500000000 > logs/thor.log 2>&1
 
          sleep 5
 
