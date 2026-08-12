@@ -697,6 +697,7 @@ def cmd_detect(args) -> int:
             records = io_detect.load_cdetections(target)
             kind = "consolidated detection"
         emitters = io_detect.census(records, cycle_s=args.cycle,
+                                    tolerance_s=args.tolerance_ms / 1e3,
                                     min_count=args.min_count)
 
         print(f"{target}")
@@ -1011,6 +1012,16 @@ def build_parser() -> argparse.ArgumentParser:
     det.add_argument("target", type=Path, nargs="+")
     det.add_argument("--cycle", type=float, default=io_detect.DEFAULT_CYCLE_S,
                      help="schedule cycle in seconds (default: %(default)s)")
+    det.add_argument("--tolerance-ms", type=float,
+                     default=io_detect.PHASE_TOLERANCE_S * 1e3,
+                     help="how close in arrival phase two sightings must be to "
+                          "count as one transmitter, in ms (default: "
+                          "%(default)s). The default is deliberately loose so "
+                          "a whole schedule lands in one row; tighten it to "
+                          "~1 to separate transmitters that share a chirp rate "
+                          "but sit at different ranges. A group whose sd is a "
+                          "large fraction of this value is several emitters, "
+                          "not one")
     det.add_argument("--min-count", type=int, default=3,
                      help="how many sightings make an emitter, rather than a "
                           "false alarm (default: %(default)s)")
