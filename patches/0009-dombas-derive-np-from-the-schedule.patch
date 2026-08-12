@@ -43,28 +43,37 @@ what this patch makes it. See `tests/test_agent.py::test_np_must_match_the_sched
 set earlier in the script; pasted at a prompt they expand to nothing, and a
 second `calc_ionograms` beside the running one competes for the same ringbuffer.
 
-Anchored at line 141 (`fi`), which assumes 0003 through 0008 are already
-applied: `echo "calc_ionograms.py"` at 143, the invocation at 149, and
-`echo "station_monitor.py"` at 151. That is DOB's layout as of 2026-08-13.
-`git apply` locates by context and will report an offset if it has moved, but
+Generated against **DOB's actual file** as of 2026-08-13, not against upstream
+and not against a reconstruction: `sleep 10` at 141, `fi` at 142,
+`echo "calc_ionograms.py"` at 144, the invocation at 149, and
+`echo "station_monitor.py"` at 151, with 0003 through 0008 already applied.
+
+That distinction is the whole reason this took three attempts. The removed
+comment here is **four lines**, and `patches/0004` shows five -- 0004's prose
+was edited in this repo after it was applied at the station, so the repo's copy
+of that comment is not the text on disk in Norway. Reconstructing context from
+a patch file is guessing; read the file.
+
+`git apply` locates by context and reports an offset if things have moved, but
 check first:
 
     git apply --check 0009-dombas-derive-np-from-the-schedule.patch
 
 The derivation itself was exercised against every config shape it can meet:
 two ranks -> 2, one rank -> 1, a flat (non-nested) list -> 1, search mode -> 2,
-and an unreadable config -> 2.
+and an unreadable config -> 2. Applying it to a copy of the real file leaves
+`bash -n` clean.
 
 diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
 --- a/examples/marieluise/dombas.sh
 +++ b/examples/marieluise/dombas.sh
-@@ -141,12 +141,43 @@ fi
+@@ -141,12 +141,47 @@ if [ "$SERENDIPITOUS" = "True" ]; then
+     sleep 10
  fi
  
 -echo "calc_ionograms.py"
 -# Under MPI: this is the process with the ringbuffer deadline, and as a single
--# process it lost 4.28% of soundings. Two ranks, not four -- at four the
--# machine saturated and the RECORDER lost 63% of its stream. It reads
+-# process it lost 4.28% of soundings while five of eight cores idled. It reads
 -# its rank from MPI.COMM_WORLD (calc_ionograms.py:99-101), and `sounder_timings`
 -# is stored one list per rank for exactly this reason.
 -$MPIRUN -np 2 python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &
@@ -77,7 +86,9 @@ diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
 +# because for the ranks that survive it is.
 +#
 +# In search mode the timings come from find_timings.py and the ranks are free
-+# parallelism, so the answer there is patch 0004's measured 2.
++# parallelism, so the answer there stays 2: as a single process this lost 4.28%
++# of soundings, and at four ranks the machine saturated badly enough that the
++# RECORDER lost 63% of its stream.
 +NP_IONO=$(python3 - "$CONF_FILE" <<'PY'
 +import configparser, json, sys
 +
@@ -102,7 +113,8 @@ diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
 +# than a silent drop to one rank.
 +[ -n "$NP_IONO" ] || NP_IONO=2
 +
-+# The one parameter whose wrongness is invisible in the log, so it goes in the
++# It reads its rank from MPI.COMM_WORLD (calc_ionograms.py:99-101). -np is the
++# one parameter here whose wrongness is invisible in the log, so it goes in the
 +# log.
 +echo "calc_ionograms.py -np $NP_IONO"
 +$MPIRUN -np "$NP_IONO" python3 -u calc_ionograms.py --config "$CONF_FILE" > logs/ionograms.log 2>&1 &

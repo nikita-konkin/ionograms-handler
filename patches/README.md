@@ -73,6 +73,16 @@ and print `uptime` next to every number.
 **Apply 0003 first if you are applying several.** It fixes the environment the
 other two run in; without a trimmed ringbuffer the rest is treating symptoms.
 
+**An applied patch is not a record of the file.** These are prose first, and the
+prose keeps getting edited after the diff has landed in Norway — which means the
+context lines in an old patch describe a file that no longer exists anywhere.
+0004's comment is five lines here and four on the station; 0009 was rejected
+twice for trusting the former. The `@@` header being self-consistent
+(`tests/test_patches.py`) says nothing about whether it *locates*. Read the
+target with `awk 'NR>=A && NR<=B {printf "%d\t%s\n", NR, $0}'`, generate the
+diff from that, and `git apply --check` before sending it. Editing a hunk by
+hand to make it fit is how 0004 became corrupt in the first place.
+
 ## Applying
 
 ```bash
