@@ -1,0 +1,36 @@
+# Evidence for patch 0008, collected while nobody is watching.
+[Unit]
+Description=Sample the recorder's packet-loss counters against load
+# Deliberately NOT PartOf=chirp.target. This must keep sampling across a
+# recorder restart, because the interesting question is what the counters do
+# when the machine is busy -- and a restart is one of the busy moments. It is
+# also the only unit here that is useful on a station whose acquisition is run
+# by dombas.sh rather than by systemd, which is DOB today.
+
+[Service]
+Type=oneshot
+User=ionouser
+ExecStart=/home/ionouser/ionograms-handler/tools/drop-watch.sh
+
+# /var/lib/chirp-drop-watch, created and chowned by systemd. The log lives here
+# rather than in $HOME so the unit needs no write access to the home directory
+# at all -- it only ever reads thor.log.
+StateDirectory=chirp-drop-watch
+Environment=DROP_WATCH_LOG=/var/lib/chirp-drop-watch/drop-watch.log
+Environment=DROP_WATCH_STATE=/var/lib/chirp-drop-watch/state
+Environment=DROP_WATCH_THOR=/home/ionouser/chirpsounder2/logs/thor.log
+
+# Read-only by construction, and constrained so it stays that way: this runs
+# unattended next to a radio that needs a hand-delivered power cycle if a
+# process kills it. ProtectHome=read-only is the load-bearing line -- it can
+# read thor.log and can touch nothing else the station owns.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# It samples the load; it is never the reason for it.
+Nice=19
+IOSchedulingClass=idle

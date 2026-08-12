@@ -1,0 +1,16 @@
+[Unit]
+Description=Sample recorder packet loss every 15 minutes
+
+[Timer]
+# One minute after boot, then every 900 s. The interval matches how the fault
+# was originally measured (358,691 drops per 900 s at load 9.40), so the
+# numbers in docs/2026-08-11-recorder-packet-loss.md stay directly comparable.
+OnBootSec=1min
+OnUnitActiveSec=900
+# Fire the missed sample after a suspend or a late boot rather than skipping to
+# the next slot: a gap in this log is indistinguishable from a quiet period.
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
