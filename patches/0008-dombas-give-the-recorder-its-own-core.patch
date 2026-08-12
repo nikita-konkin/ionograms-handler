@@ -1,0 +1,93 @@
+Give the recorder a core nothing else may use.
+
+**The fault is latency, not throughput.** DOB has eight cores and the pipeline
+uses about six of them, so there is CPU to spare -- and the recorder still lost
+up to 45% of its samples. `vmstat` explains why:
+
+    r  b   swpd   free   ...  us sy id wa
+    6  0  7987916  3832140   53  8 38  0
+    8  0  7987912  3688344   77 14  8  0
+    12 0  7987912  3863152   75 14 10  0
+
+A run queue of 6-12 on eight cores, with `b` at zero and `wa` at zero -- not
+blocked on I/O, not swapping, simply *queueing*. `rx_uhd_ext_gps` needs 0.8 of
+a core but it needs it **the moment a packet arrives**. Scheduled late, it does
+not call `recv()` in time, and the USRP discards what it cannot hand over
+(`ERROR_CODE_OVERFLOW`, the `D` markers in `thor.log`). Adding cores would not
+have helped; being twelfth in a queue is the whole fault.
+
+**Measured, 2026-08-12.** Same process set, same evening, forty minutes apart:
+
+    19:47  no pinning     drops 358691 / 900 s   RcvbufErrors +10,886,218   load 9.40
+    20:25  recorder on 0  drops      0 / 900 s   RcvbufErrors +0            load 8.04
+    21:39  recorder on 0  RcvbufErrors unmoved for 74 minutes across load 6-8
+
+The 20:25 window is not a perfectly controlled comparison -- activity fell
+during it, so the load average dropped too. The 74-minute frozen counter is the
+stronger evidence. Confirm it again through a busy period before treating this
+as settled; the conditions that produced 358,691 events are what it has to
+survive.
+
+**Why pin the shell rather than every launch.** One line covers every child
+`dombas.sh` starts, now and in future, instead of a prefix on each of ten
+launches that the next person to add a process will forget. The recorder then
+overrides it explicitly. A process may always widen its own affinity mask
+(there is no cpuset cgroup here), so `taskset -c 0` works from a shell confined
+to 1-7 -- this was verified live before the patch was written.
+
+**Core 7 is deliberately left in the general pool.** Every NIC interrupt lands
+there -- a single queue, 1.7 billion on that core over five days -- so the
+softirq work is already concentrated away from core 0. Excluding it as well
+would cost the pipeline a core to protect against a load it does not carry.
+
+**This is what a live `taskset` cannot do.** Affinity dies with the process, and
+`dombas.sh` relaunches the recorder every 24 hours, so a hand-applied pinning
+silently lapses at an unpredictable hour. That is also the argument for the
+systemd units: `CPUAffinity=0` on `chirp-rx.service` and `AllowedCPUs=1-7` on
+the rest expresses this properly, and `dombas.sh` cannot express it at all.
+
+**What this does not fix.** The station is still at ~89% CPU with a run queue
+of 6-12. Isolation protects the recorder; it does nothing for `calc_ionograms`
+missing its ringbuffer window, which is measured separately as sounding loss in
+`find_timings.log`. See `docs/2026-08-11-recorder-packet-loss.md`.
+
+Apply on top of 0005 and 0007:
+
+    cd ~/chirpsounder2
+    git apply --check /path/to/0008-dombas-give-the-recorder-its-own-core.patch
+    git apply         /path/to/0008-dombas-give-the-recorder-its-own-core.patch
+
+Takes effect on the next full `dombas.sh` launch. **Do not run either changed
+line by hand.** The second hunk is the recorder's launch: executed in an
+interactive shell it starts a *second* recorder against a USRP the live one
+owns, and its `>` truncates `thor.log`. `$RINGBUFFER_DIR` is unset outside the
+script, which is the only reason doing so on 2026-08-12 was survivable.
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -12,6 +12,16 @@
+ # Python virtual environment
+ source "$INSTALL_PATH/.venv38/bin/activate"
+ 
++# Cores 1-7 for everything this script starts. Core 0 belongs to the recorder.
++#
++# The recorder was one of twelve processes queueing for eight cores and lost up
++# to 45% of its samples to the wait -- with CPU to spare, because the fault is
++# latency, not throughput. It needs 0.8 of a core, but it needs it the instant a
++# packet arrives. Pinning the shell is inherited by every child; the recorder
++# widens its own mask back to core 0 below, which a process is always allowed
++# to do. Core 7 stays in this pool on purpose: every NIC interrupt lands there.
++taskset -cp 1-7 $$ > /dev/null
++
+ # Make sure this is the right mpirun command
+ # (you might need mpirun instead of mpirun.mpich)
+ MPIRUN=mpirun
+@@ -74,6 +84,6 @@
+     while true;
+     do
+         # TBD: change cpp program so that ini file defines USRP setup!
+-        ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" --usrp_args=recv_buff_size=500000000 > logs/thor.log 2>&1
++        taskset -c 0 ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" --usrp_args=recv_buff_size=500000000 > logs/thor.log 2>&1
+ 
+         sleep 5

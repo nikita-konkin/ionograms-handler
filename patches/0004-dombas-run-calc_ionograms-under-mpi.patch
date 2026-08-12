@@ -65,7 +65,7 @@ products, is worse than the fault this fixes.
 diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
 --- a/examples/marieluise/dombas.sh
 +++ b/examples/marieluise/dombas.sh
-@@ -137,7 +137,11 @@ if [ "$SERENDIPITOUS" = "True" ]; then
+@@ -137,7 +137,12 @@ if [ "$SERENDIPITOUS" = "True" ]; then
  fi
  
  echo "calc_ionograms.py"

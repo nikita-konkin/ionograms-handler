@@ -7,19 +7,31 @@ by reading `logs/thor.log` for an unrelated reason.
 
 They looked like two independent problems and were treated as such for most of
 a night. They are not. **Both are the same host failing to keep up with its own
-radio**, and on 2026-08-12 both went to zero by removing work from the machine
-rather than by tuning anything:
+radio** — and specifically, failing on *latency*, not throughput. DOB has eight
+cores, the pipeline needs about six, and the recorder was still losing 45% of
+its stream, because it needs its 0.8 of a core **the instant a packet arrives**
+and a run queue of 6–12 does not give it that.
+
+Two changes on 2026-08-12, in this order:
+
+1. **Stop receiving the digisondes** (patch 0007) — ~2.7 of eight cores, none
+   of it touching the radio. Both counters went to zero for an hour at load
+   7.5. This was believed to be the fix. It was not: at load 9.4 the next
+   evening the same six processes lost 358,691 samples in 900 s.
+2. **Give the recorder a core nothing else may use** (patch 0008) — same six
+   processes, recorder pinned to CPU 0:
 
 ```
-drops: 0                                           over 3600 s   (was ~1500/s)
-was RcvbufErrors: 3214702405                                     (was ~1.17e9 overnight)
-now RcvbufErrors: 3214702405
-load average: 7.53
+drops: 0                                           over 900 s    (was ~399/s)
+was RcvbufErrors: 3432084131                                     (was ~12,000/s)
+now RcvbufErrors: 3432084131        — unmoved 74 min later
+load average: 8.04
 ```
 
-Not one dropped sample and not one dropped datagram in an hour. The change was
-subtraction: five digisonde receivers and three plotters, ~2.7 of eight cores,
-none of which ever touched the radio.
+Removing load was necessary and not sufficient. **A machine with no headroom
+does not fail when you average it; it fails when it is busy** — which is why
+the first fix looked complete on a quiet evening and came apart on a busy one.
+The isolation result still needs confirming at load 9.4; see §5.
 
 This is the working record: what was measured, what was established, what was
 guessed and turned out wrong, and what is still open. The wrong guesses are
@@ -210,7 +222,9 @@ receives on the radio.**
 
 ### What DOB decided
 
-Not core isolation, and not fewer receivers: **no digisonde reception at all.**
+Not fewer receivers: **no digisonde reception at all.** (This was decided on the
+products' merits, below, not as the CPU fix — at the time it was believed to be
+the CPU fix as well, and the next two sections are how that turned out.)
 
 The products do not serve what this station is for. Each `offset_us` is a
 *configured* constant — 7300 for Dourbes, 3900 for Chilton, 2000 for Juliusruh
@@ -222,10 +236,65 @@ named transmitter with an untrustworthy range zero is worth less than a
 serendipitous chirp with a solved timing solution. DOB works the chirp
 circuits.
 
-Core isolation therefore remains untested, and unnecessary. If the receivers
-are ever wanted back it is the first thing to try — pin the recorder and the
-NIC IRQ to cores nothing else may use — and the budget above says roughly
-3.4 cores would have to come from somewhere.
+### Removing the receivers was necessary and not sufficient (2026-08-12 19:47)
+
+The hour at zero was measured on a quiet evening. With the receivers gone for
+good and nothing else changed, a busier one put the drops straight back:
+
+    drops: 358694 in 900 s        (~399/s)
+    RcvbufErrors +10,886,218
+    load average: 9.17 → 9.40
+
+Six processes, eight cores, and still losing samples. The digisonde receivers
+were the largest single load on the machine but they were never the mechanism —
+they were the load that pushed a marginal host past its margin, and the host is
+still marginal without them. `vmstat` says why, and says it is not what it
+looks like:
+
+    r  b   swpd    free    us sy id wa   si so
+    6  0  7987916  3832140 53  8 38  0    0  0
+    8  0  7987912  3688344 77 14  8  0    0  0
+    12 0  7987912  3863152 75 14 10  0    0  0
+
+`b` zero, `wa` zero, `si`/`so` zero: nothing is blocked on disk and nothing is
+paging, despite 7.6 GB sitting in swap and RAM reported at 90%. A run queue of
+6–12 on eight cores is the entire fault. **The recorder needs 0.8 of a core,
+but it needs it the instant a packet arrives** — scheduled late, it does not
+call `recv()` in time and the USRP discards what it cannot hand over. This is a
+latency failure on a box with CPU to spare, which is why every throughput
+remedy (bigger buffer, `-O2`, fewer ranks) moved the number a little and none
+of them fixed it.
+
+### Core isolation: the actual fix (2026-08-12 20:25)
+
+Recorder pinned to CPU 0, everything else confined to CPU 1–7:
+
+| condition | drops / 900 s | `RcvbufErrors` | load |
+|---|---|---|---|
+| six processes, no pinning | 358,691 | +10,886,218 | 9.40 |
+| six processes, recorder on CPU 0 | **0** | **+0** | 8.04 |
+| same, 74 min later | — | **still +0** | 6–8 |
+
+Zero, and the socket counter frozen at 3432084131 across 74 minutes. **The
+900 s window is not a clean comparison** — activity fell during it and the load
+average with it, so on its own it proves less than it appears. The frozen
+counter over 74 minutes spanning load 6 to 8 is the stronger evidence. What it
+has not yet seen is load 9.4, the condition that produced 358,691 events, and
+that is the reading that settles it.
+
+CPU 7 is deliberately left in the general pool: every NIC interrupt lands there
+— one queue, 1.7 billion interrupts on that core over five days — so the
+softirq work is already concentrated away from the recorder's core. Fencing it
+off as well would cost the pipeline a core to guard against a load it does not
+carry.
+
+`taskset` applied by hand does not survive: affinity dies with the process, and
+`dombas.sh` relaunches the recorder every 24 hours, so a live pinning lapses at
+an unpredictable hour of the morning. **Patch 0008** puts both lines in the
+script — the shell pinned once so every child inherits it, and `taskset -c 0`
+on the recorder, which works because a process may always widen its own mask.
+The systemd units express the same thing properly, with `CPUAffinity=0` on
+`chirp-rx.service` and `AllowedCPUs=1-7` on the rest.
 
 **The first attempt at the 600 s measurement was invalid** and is worth
 recording. The window was three seconds, not six hundred, because the setup
@@ -365,15 +434,15 @@ that survived has not been measured — it needs several hours of fresh
 
 ## 5. Open questions
 
-1. ~~**Does core isolation fix Fault B?**~~ **Moot as of 2026-08-12.** Both
-   counters go to zero when the five digisonde receivers are not running —
-   drops over ten minutes, then drops *and* `RcvbufErrors` together over a full
-   hour at load 7.5 — and they come straight back when the receivers return
-   (~969 drops/s, ~65,000 `RcvbufErrors`/s, load 10.4). DOB has decided against
-   digisonde reception on its merits (§2), so the contention is gone and
-   isolation is not needed. It stays **untested**, and is the first thing to
-   try if those receivers are ever wanted back: roughly 3.4 cores would have to
-   come from somewhere on an eight-core host already using 4.4.
+1. **Does core isolation hold at load 9+?** Answered in part on 2026-08-12:
+   pinning the recorder to CPU 0 took 358,691 drops per 900 s to zero and froze
+   `RcvbufErrors` for 74 minutes (§2). But the validating window ran at load
+   6–8, and the fault was measured at 9.4. **Repeat the 900 s measurement
+   during tomorrow's activity peak**, reading `uptime` beside it — a zero at
+   load 6 is not evidence about a failure that happens at load 9.4. Note the
+   history on this question: isolation was written off twice in this document as
+   untested and unnecessary, on the strength of an hour at zero that had simply
+   been measured on a quiet evening.
 2. **Did the epoch rebuild move `epoch_offset_s`?** −2.2 ms / 659 km was
    stable across 75 samples beforehand. It cannot change without a recorder
    restart, and one has now happened.

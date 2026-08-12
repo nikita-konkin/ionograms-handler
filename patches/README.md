@@ -17,7 +17,8 @@ Applied against `0d27125`.
 | `0004-dombas-run-calc_ionograms-under-mpi.patch` | `calc_ionograms.py` runs under `$MPIRUN -np 2`, as `detect_chirps.py` already does | it ran as one process and missed the ringbuffer window for **4.28% of soundings**, lost silently as "missing data - skipping". **Two ranks, not four** — at four the machine saturated and the recorder overflowed |
 | `0005-dombas-set-usrp-recv-buff-size.patch` | the recorder asks UHD for a 500 MB receive socket buffer | the socket queue had discarded **1.86 billion datagrams, ~6% of every recording**, invisible to every counter except `netstat -su` |
 | `0006-makefile-build-recorder-with-O2.patch` | the `rx_uhd_ext_gps` rule builds with `-O2` | the rule had no `-O` flag at all, so `make` produced a **debug build** of a program moving 100 MB/s against a deadline |
-| `0007-dombas-move-digisonde-and-drop-plotters.patch` | `dombas.sh` no longer starts the five `receive_digisonde.py` instances or the three plotters | the receivers demodulate digisondes **off air from the ringbuffer** — they are not downloaders — and five of them cost the recorder **~969 dropped events/s**. DOB does not use those products: their range zero is a configured `offset_us`, not a measured delay. Removing them took the drop rate to **zero over an hour** |
+| `0007-dombas-move-digisonde-and-drop-plotters.patch` | `dombas.sh` no longer starts the five `receive_digisonde.py` instances or the three plotters | the receivers demodulate digisondes **off air from the ringbuffer** — they are not downloaders — and five of them cost the recorder **~969 dropped events/s**. DOB does not use those products: their range zero is a configured `offset_us`, not a measured delay. Removing them took the drop rate to **zero over an hour** — necessary, but not sufficient: see 0008 |
+| `0008-dombas-give-the-recorder-its-own-core.patch` | `dombas.sh` pins itself to CPU 1–7 so every child inherits it, and launches the recorder with `taskset -c 0` | with the receivers gone the recorder *still* lost 358,691 samples per 900 s at load 9.4. The fault is **latency, not throughput** — it needs 0.8 of a core the instant a packet arrives, and a run queue of 6–12 does not give it that. Pinned: **zero drops, `RcvbufErrors` frozen for 74 minutes** |
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
@@ -45,15 +46,28 @@ grep -oE '\-?[0-9.]+ s left' logs/find_timings.log \
 after a day. Baseline to beat is 4.28%. Note the `-?` — without it the sign is
 dropped and every failure counts as a comfortable pass.
 
-**0005, 0006 and 0007 are all one fault seen from three angles**, and only 0007
-fixed it. The host could not keep up with its own radio, so the socket queue
-overflowed (0005), the device overflowed, and both counters were blamed on
-things that were merely suboptimal. A bigger socket buffer and a `-O2` build
+**0005 through 0008 are all one fault seen from four angles**, and it took two
+of them to fix it. The host could not keep up with its own radio, so the socket
+queue overflowed (0005), the device overflowed, and both counters were blamed
+on things that were merely suboptimal. A bigger socket buffer and a `-O2` build
 are both real improvements and neither moved the loss: 0005 was followed by
 1.17 billion more `RcvbufErrors` overnight, and 0006 took the drop rate from
-52% to 42%. Taking 2.7 cores of unrelated work off the machine took it to zero.
-**Prefer removing load over tuning for it** — and when a counter is still
-moving, no amount of buffer is the answer.
+52% to 42%.
+
+Taking 2.7 cores of unrelated work off the machine (0007) took it to zero — for
+an hour, on a quiet evening. At load 9.4 the next evening the same six
+processes lost 358,691 samples in 900 s. **0008 is what actually fixed it**:
+the failure is *latency*, not throughput. There was CPU to spare the whole
+time; the recorder simply was not scheduled the moment a packet arrived, and
+the USRP discards what it cannot hand over. Giving it a core nothing else may
+touch took the drops to zero and froze `RcvbufErrors` for 74 minutes.
+
+Two lessons, and the second is the expensive one. **Prefer removing load over
+tuning for it** — when a counter is still moving, no amount of buffer is the
+answer. And **an average is not a margin**: 0007 was written up as the fix on
+the strength of one hour at load 7.5, and the conditions that break this
+recorder are at load 9.4. Measure a fix under the load that produced the fault,
+and print `uptime` next to every number.
 
 **Apply 0003 first if you are applying several.** It fixes the environment the
 other two run in; without a trimmed ringbuffer the rest is treating symptoms.
