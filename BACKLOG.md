@@ -159,35 +159,53 @@ solar maximum. The evidence is circumstantial but strong: the discrepancy is
 confined exactly to the hours where IRI exceeds the band, and is near zero
 elsewhere. A GIRO comparison would settle it -- see section 6.
 
-**DOB has the same problem 8 MHz lower (2026-08-12).** The chirpsounder2 sweep
-runs 0.525--24.825 MHz, not 32.5, so the ceiling is nearer. Cyprus's first four
-scheduled soundings:
+**DOB has the same problem 8 MHz lower, and the flag never fires
+(2026-08-12/13).** The chirpsounder2 sweep runs 0.525--24.825 MHz, not 32.5, so
+the ceiling is much nearer. Cyprus (NIC, 3436 km) picked on **216 of 216**
+method-soundings over two days -- a perfect yield, and the cleanest diurnal
+curve this station has produced:
 
-| time UTC | algo | contour | kmeans |
+| hour UTC | mean MUF | max | mean SNR |
 |---|---:|---:|---:|
-| 21:13:55 | 24.45 | 24.50 | 24.50 |
-| 21:23:55 | 24.40 | 24.45 | 24.50 |
-| 21:33:55 | 21.45 | 22.60 | 24.45 |
-| 21:43:55 | 19.10 | 19.35 | 20.95 |
+| 01 | 10.51 | 10.60 | 50.7 |
+| 03 | 15.04 | 16.10 | 48.1 |
+| 04 | 18.73 | 21.50 | 48.9 |
+| **05** | **24.45** | 24.55 | 50.8 |
+| **06** | **24.46** | 24.55 | 52.6 |
+| 07 | 23.99 | 24.50 | 49.5 |
+| 08 | 22.89 | 24.25 | 49.0 |
 
-**7 of 12 picks sit within 0.5 MHz of the sweep top, and `limited` fired on
-none of them.** That is the flag working to specification and the specification
-being too tight: `band_edge = freq_stop - 3 * freq_step`, and with a 0.05 MHz
-step that is 24.675 MHz, so a pick at 24.50 -- six bins down, with all three
-methods piled against the same wall -- is recorded as an ordinary measurement.
+**A curve moving 3--5 MHz per hour does not sit at 24.45 and then 24.46.** The
+pick distribution says the same thing: 40 of 216 picks fall in the two bins
+24.45/24.50, and **nothing in the whole dataset exceeds 24.55**. That is a
+ceiling, and the mid-morning Cyprus MUF is a lower bound.
 
-Two soundings twenty minutes apart, one reading 24.5 across all methods and the
-next 19.1--20.95, is what a real evening decline looks like *after* it drops
-below the ceiling. The 24.5 readings cannot be distinguished from lower bounds
-with the data on hand.
+**`limited` fired on 0 of 216.** `band_edge = freq_stop - 3 * freq_step` is
+24.675 MHz here, and the observed ceiling is ~24.55 -- roughly six bins below
+nominal, so every clipped pick is recorded as an ordinary measurement. Two
+separate faults in that:
 
-**What to do about it, in order.** First stop assuming three bins is a
-universal margin -- it was chosen against a 32.5 MHz sweep and is 0.6% of the
-band there, 0.15 MHz here. A fractional or SNR-aware criterion would travel
-better. Second, note that this makes any DOB daily maximum suspect *at night as
-well*, which was not true of the legacy station: 24.8 MHz is reachable on a
-3436 km path in the evening, and midday will be worse. The remedy in this
-section's last bullet applies unchanged -- the top comes from `dur` at the
+- **Three bins is not a portable margin.** It was chosen against a 32.5 MHz
+  sweep, where it is 0.6% of the band; here it is 0.15 MHz. A fractional
+  criterion would travel between instruments.
+- **`freq_stop` is the wrong anchor.** The nominal top is 24.825 but NIC's
+  trace stops at ~24.55 while other emitters in the same archive reach 24.80,
+  so the *usable* top is emitter-dependent -- a function of where that
+  transmitter's signal falls below the detection level, not of the header. A
+  flag anchored to the header cannot see it. Anchoring to the highest frequency
+  with any detected energy in the sounding would.
+
+Rendering `lfm_ionogram-NIC-DOB-ch0-002-1786601035.00.h5` (2026-08-13 06:03:55Z,
+picks 24.40/24.45/24.45) shows why: the trace is a flat line at 2650 km running
+from 11.5 MHz to its cutoff with no nose at all. On a 3436 km path the group
+delay stays near-constant until close to the MUF, so a trace that ends flat has
+ended for a reason other than the MUF -- and the plot has ~0.3 MHz of empty
+band to the right of the pick.
+
+**Consequences for DOB specifically.** Unlike the legacy station this is not a
+midday-only bias -- 24.8 MHz is reachable on this path from 05:00, and midday
+will be worse. Any Cyprus daily maximum is currently a lower bound. The remedy
+in this section's last bullet applies unchanged: the top comes from `dur` at the
 configured rate, and raising it costs sweep time.
 
 ## 4. Investigate the 71-second truncations
@@ -686,20 +704,35 @@ converging to 0.10 MHz on a first attempt is a better result than the schedule
 was expected to give. See section 3 for the reason not to trust the top of that
 range.
 
-**SGO returned nothing at all -- not a weak pick, no detections.** 41 sweeps,
-three methods, zero rows. That is plausible for 1013 km at local midnight:
-a short path needs a high-enough critical frequency to reflect at near-vertical
-incidence, and the E and F layers at 22:30--23:50 local do not necessarily
-provide one. It is also what a wrong `chirpt` looks like, and the two are not
-distinguishable from a night of zeros.
+**SGO returned nothing at all on the first night** -- not a weak pick, no
+detections across 41 sweeps and three methods. **Answered the next morning: the
+entry is sound and the zeros were the ionosphere.** 2026-08-13, SGO by hour:
 
-**The test is daylight, and it costs nothing but waiting.** If SGO produces
-picks between roughly 08:00 and 16:00 UTC, the entry is sound and the zeros
-were the ionosphere. If a full day produces nothing while NIC keeps working,
-the schedule entry is wrong -- and the first thing to check is the integer-slot
-question at the end of section 16, since SGO came from the 500 kHz/s group.
-Until then it is an open question and not a fault; do not remove the entry on
-the strength of one night.
+| hour UTC | soundings | picks | mean MUF | mean SNR | mean vrange |
+|---|---:|---:|---:|---:|---:|
+| 00--02 | 90 | **0** | -- | -- | -- |
+| 03 | 30 | 8 | 9.74 | 45.6 | 1716 km |
+| 05 | 30 | 8 | 12.47 | 42.9 | 1643 km |
+| 07 | 30 | 14 | 13.58 | 42.8 | 1719 km |
+| 08 | 30 | 14 | 13.75 | 43.5 | 1718 km |
+
+Nothing until 03:00 UTC, then a clean sunrise rise from 9.7 to 14.6 MHz at a
+group range of 1640--1720 km against a 1013 km ground path -- a one-hop F
+echo, which is what this circuit should give. `chirpt` is right, the slot is
+right, and the night zeros are a 1013 km path with no layer high enough to
+return 24 MHz at that incidence. **Do not remove the entry.**
+
+**But it is a marginal circuit, and that is the finding to carry.** 52 picks
+from a possible 828 is a **6.3% yield**, peaking at 15.6% in the best hour --
+against NIC's 100%. Mean SNR is 39.6--45.6 dB against a 43 dB detection level:
+SGO is sitting on the threshold, so it picks when the path happens to be a
+decibel or two up and not otherwise. Two consequences worth deciding on:
+
+- A 6.3% yield still costs a full MPI rank and a 120 s slot every cycle. That
+  is the same cost as NIC, which returns 16x more.
+- If the threshold is what is gating it rather than the propagation, a lower
+  detection level recovers most of those 776 soundings. Check whether it also
+  recovers 776 noise picks before changing anything.
 
 ### Other items opened by this session
 
