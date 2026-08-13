@@ -7,14 +7,17 @@ by reading `logs/thor.log` for an unrelated reason.
 
 They looked like two independent problems and were treated as such for most of
 a night. They are not. **Both are the same host failing to keep up with its own
-radio** — and specifically, failing on *latency*, not throughput. DOB has eight
-cores, the pipeline needs about six, and the recorder was still losing 45% of
-its stream, because it needs its 0.8 of a core **the instant a packet arrives**
-and a run queue of 6–12 does not give it that.
+radio** — and specifically, failing on *latency*, not throughput. DOB has
+**four** cores, the pipeline needs about 4.4, and the recorder was still losing
+45% of its stream, because it needs its 0.8 of a core **the instant a packet
+arrives** and a run queue of 6–12 does not give it that.
+
+*(This document said "eight cores" for most of its life. It is an i7-4930MX:
+four cores, eight threads. §7 has what that error cost.)*
 
 Two changes on 2026-08-12, in this order:
 
-1. **Stop receiving the digisondes** (patch 0007) — ~2.7 of eight cores, none
+1. **Stop receiving the digisondes** (patch 0007) — ~2.7 of four cores, none
    of it touching the radio. Both counters went to zero for an hour at load
    7.5. This was believed to be the fix. It was not: at load 9.4 the next
    evening the same six processes lost 358,691 samples in 900 s.
@@ -132,7 +135,7 @@ This is CPU contention and nothing else.
 
 ### Why the machine loses
 
-Eight cores, and at the time of measurement a load average of **8–11**:
+Four cores — eight threads — and a load average of **8–11**:
 
 | | |
 |---|---|
@@ -159,8 +162,9 @@ softirq work.
 
 ### What fixes it: run less on the box (2026-08-12)
 
-The machine has eight cores. The pipeline that cannot be avoided needs about
-half of them:
+The machine has **four cores** (i7-4930MX, eight threads — see §7; this
+document said eight for most of its life). The pipeline that cannot be avoided
+needs most of them:
 
 | must run here | ~cores |
 |---|---|
@@ -168,7 +172,12 @@ half of them:
 | `drf ringbuffer` | 0.5 |
 | `detect_chirps` ×2 ranks | 1.9 |
 | `calc_ionograms` ×2 ranks | 1.2 |
-| **total** | **~4.4 of 8** |
+| **total** | **~4.4 of 4** |
+
+That total is the fact this document took two days to see straight. The
+irreducible pipeline needs more of this machine than the machine has. Nothing
+below is a fix in the sense of restoring headroom; it is a series of decisions
+about who loses when there is none.
 
 Everything else was optional, and two groups came off: five
 `receive_digisonde.py` instances, and three plotters (`plot_rtf`,
@@ -245,7 +254,7 @@ good and nothing else changed, a busier one put the drops straight back:
     RcvbufErrors +10,886,218
     load average: 9.17 → 9.40
 
-Six processes, eight cores, and still losing samples. The digisonde receivers
+Six processes, four cores, and still losing samples. The digisonde receivers
 were the largest single load on the machine but they were never the mechanism —
 they were the load that pushed a marginal host past its margin, and the host is
 still marginal without them. `vmstat` says why, and says it is not what it
@@ -258,7 +267,7 @@ looks like:
 
 `b` zero, `wa` zero, `si`/`so` zero: nothing is blocked on disk and nothing is
 paging, despite 7.6 GB sitting in swap and RAM reported at 90%. A run queue of
-6–12 on eight cores is the entire fault. **The recorder needs 0.8 of a core,
+6–12 on four cores is the entire fault. **The recorder needs 0.8 of a core,
 but it needs it the instant a packet arrives** — scheduled late, it does not
 call `recv()` in time and the USRP discards what it cannot hand over. This is a
 latency failure on a box with CPU to spare, which is why every throughput
@@ -616,3 +625,96 @@ restart alone moved it by 27,154 in eight minutes while two of everything ran.
 **27 million spread across four or five restarts is unremarkable; 27 million
 accumulating steadily is patch 0008 not holding.** The 15-minute windows are
 what separate those two, and nothing before them can.
+
+---
+
+## 7. Patch 0008 pinned a hyperthread, not a core (2026-08-13)
+
+The unattended sampler from §6 produced its first full day, and it took four
+eliminations to read it. All of them are worth keeping, because each one is the
+answer somebody would otherwise reach for.
+
+### What the log shows
+
+10.3 hours, 41 windows of 900 s. **Eleven consecutive windows at exactly zero**
+— counter frozen at 3467205964 from 00:30 to 02:45 UTC — then 90 drops at
+03:00, 5 at 03:30, and a monotone climb through the morning to 65,551 in the
+last window before this was written.
+
+| | drops/s | `RcvbufErrors`/s |
+|---|---:|---:|
+| unfixed (2026-08-12, load 9.40) | 399 | 12,096 |
+| after 0008, 10.3 h mean | 14.4 (−96%) | 2,280 (−81%) |
+| after 0008, worst window | 73 | 9,811 |
+| after 0008, best 11 windows | **0** | **0** |
+
+So 0008 is real — hard zeros are something the unpinned station never produced
+— and incomplete.
+
+### Four things it is not
+
+| candidate | measurement | verdict |
+|---|---|---|
+| **Load** | zero windows load 5.01–6.60; lossy windows 4.90–8.52. `corr(load, drops)` = +0.37, mostly one point | the distributions overlap almost entirely — **not load** |
+| **Memory reclaim** | during a lossy window: `allocstall +0`, `pgscan_direct +0`, `pgsteal_direct +0`, `pswpin +7` pages in 60 s | **out.** The 7.3 GB in swap is history from the twelve-process era, not pressure |
+| **Thermal** | `package_throttle_count` = 451,688 lifetime but **+0 in 60 s** during a lossy window; all cores at 2.75–2.81 GHz | **out**, and it was a real candidate: everything on this box tracks sunrise, including the room |
+| **Socket buffer** | `rmem_max = 500000000`, UHD logged `recv_buff_size=500000000`, no resize warning | the 500 MB is real |
+
+That last one matters more than it looks. 500 MB is **five seconds** of stream
+at 100 MB/s, so the buffer must be *full* for `RcvbufErrors` to move at all —
+and 2,280/s is 3.36 MB/s of 100 MB/s, i.e. **3.4%**. A latency spike drops
+everything for its duration and nothing either side. A steady 3.4% with the
+buffer pinned near full is a *throughput* deficit: the recorder running at
+96.6% of line rate, all morning.
+
+### What it is
+
+```
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list  ->  0-1
+model name : Intel(R) Core(TM) i7-4930MX CPU @ 3.00GHz
+```
+
+**Four physical cores, eight threads. `cpu1` is `cpu0`'s sibling.** Patch 0008
+pinned the recorder to `cpu0` and every consumer to `1-7` — which put an MPI
+rank on the other half of the recorder's physical core, sharing its execution
+units, its L1 and its L2.
+
+The recorder never had a dedicated core. It had a dedicated *hyperthread*, on a
+core it shared with a consumer. Everything follows:
+
+- **Clean at night**, when the sibling has almost nothing to do — the recorder
+  gets the whole physical core and keeps up exactly.
+- **A few percent short by day**, when the sibling is busy — a sustained
+  throughput deficit, not jitter, which is what 3.4% with a full 500 MB buffer
+  means.
+- **No correlation with load average**, because the run queue cannot see the
+  difference between a busy sibling and an idle one.
+- **Onset at 03:45 UTC**, tracking the band opening and the consumers' work
+  with it. `cdetections` volume per window correlates at +0.60 against load's
+  +0.37, and the two populations barely overlap.
+
+### The fix, and the honest caveat
+
+Consumers to `2-7`, recorder to `0-1` — the whole physical core, both siblings,
+which costs nothing extra because they share L1 and L2. Patch 0010; the units
+carry the same change.
+
+**One day of data cannot fully separate "the consumers got busy" from "the sun
+came up."** Thermal was eliminated by direct measurement, which removes the
+main rival, and the topology is not in doubt. But the *mechanism* rests on a
+correlation across a single diurnal cycle. What settles it is the log after
+0010: if the sibling was the cause, the morning windows go to zero at the same
+detection volumes that cost 20,000 drops today.
+
+### What this says about the rest of the document
+
+Every capacity figure here was computed against eight cores. The irreducible
+pipeline needs ~4.4 and the machine has 4 — it is oversubscribed before a
+single optional process starts, and it always was. That does not change which
+patches were right; 0005, 0007 and 0008 each removed a real defect. It does
+change what they were ever going to achieve, and it is the reason each one
+looked like a fix and then came apart on a busier day.
+
+**Read the hardware before profiling it.** `lscpu`, `thread_siblings_list` and
+`/proc/interrupts` are three commands, they cost nothing, and not running them
+put "eight cores" in the premise of every measurement for three days.

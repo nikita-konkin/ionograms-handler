@@ -49,18 +49,36 @@ ExecStopPost=-/bin/rm -rf /dev/shm/hf25
 LimitRTPRIO=99
 LimitMEMLOCK=infinity
 
-# Core 0 is the recorder's, and nobody else's. The consumers are held off it by
-# CPUAffinity=1-7 in chirp-detect.service and chirp-ionograms.service; that
-# exclusion is half of this setting and is worth nothing without it.
+# Physical core 0 is the recorder's, and nobody else's. **That is CPUs 0 and 1,
+# not CPU 0.** DOB is an i7-4930MX -- four cores, eight threads -- and
+# /sys/devices/system/cpu/cpu0/topology/thread_siblings_list reads `0-1`. The
+# consumers are held off both by CPUAffinity=2-7 in chirp-detect.service and
+# chirp-ionograms.service; that exclusion is half of this setting and is worth
+# nothing without it.
 #
-# The recorder was one of twelve processes queueing for eight cores and lost up
+# The recorder was one of twelve processes queueing for four cores and lost up
 # to 45% of its samples to the wait -- at load 9.4, with CPU still idle, because
 # the fault is scheduling latency and not throughput. It needs about 0.8 of a
 # core, but it needs it the instant a packet arrives. Measured on 2026-08-12:
 # 358,691 drops per 900 s unpinned, 0 drops and a frozen RcvbufErrors counter
-# pinned. Core 7 is deliberately left in the consumers' pool -- every NIC
-# interrupt lands there, so isolating it would move the softirq, not protect it.
-CPUAffinity=0
+# pinned.
+#
+# **The first version of this said CPUAffinity=0 with the consumers on 1-7, and
+# that is half a fix.** An MPI rank on cpu1 shares this core's execution units,
+# L1 and L2; the recorder had a dedicated hyperthread, not a dedicated core.
+# What it cost is in docs/2026-08-11-recorder-packet-loss.md sec. 7: clean at
+# night when the sibling idles, ~3.4% of the stream lost through the morning
+# when it does not, and no correlation with load average either way.
+#
+# Both siblings rather than cpu0 alone: they share L1 and L2, so a thread
+# moving between them costs nothing, and leaving cpu1 empty would only deny the
+# recorder's own helper threads a place to run.
+CPUAffinity=0-1
+
+# CPU 7 stays in the consumers' pool. Every NIC interrupt lands there -- one
+# queue, 2.2 billion on that thread over six days -- and on a four-core part
+# fencing off a whole physical core for a softirq doing ~3,750 interrupts/s is
+# not affordable. Revisit only if the counters implicate it directly.
 
 ExecStart=/home/ionouser/chirpsounder2/rx_uhd_ext_gps \
     --outdir=/dev/shm/hf25 \

@@ -23,10 +23,13 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # slow is free. (Not chirp-sync.service -- that only uploads dashboard PNGs.)
 Nice=-5
 
-# Stay off core 0 -- see chirp-rx.service. Nice=-5 above and this line pull in
-# opposite directions on purpose: this unit gets priority over its peers, but
-# never over the recorder, which it cannot reach at all.
-CPUAffinity=1-7
+# Stay off physical core 0 -- see chirp-rx.service. Nice=-5 above and this line
+# pull in opposite directions on purpose: this unit gets priority over its
+# peers, but never over the recorder, which it cannot reach at all.
+#
+# 2-7 because cpu1 is cpu0's hyperthread sibling on this four-core part, so a
+# rank there is on the recorder's core however the mask reads.
+CPUAffinity=2-7
 
 # **-np must equal len(sounder_timings).** In scheduled mode each rank takes
 # its own transmitter -- calc_ionograms.py:452 does `st =

@@ -9,11 +9,18 @@ Type=simple
 User=ionouser
 WorkingDirectory=/home/ionouser/chirpsounder2
 
-# Stay off core 0. See chirp-rx.service: the recorder is pinned there and needs
-# it free the instant a packet arrives, and this unit is one of the processes
-# that was crowding it. `taskset` in a launcher script achieves the same thing
-# by inheritance, but only for children of that one script.
-CPUAffinity=1-7
+# Stay off physical core 0, which is CPUs 0 AND 1. See chirp-rx.service: the
+# recorder owns that core and needs it the instant a packet arrives, and this
+# unit is one of the processes that was crowding it. `taskset` in a launcher
+# script achieves the same thing by inheritance, but only for children of that
+# one script.
+#
+# 2-7, not 1-7. DOB is an i7-4930MX: four physical cores, eight threads, with
+# `cpu0`'s sibling being `cpu1` (thread_siblings_list = 0-1). A rank on cpu1
+# shares the recorder's execution units, L1 and L2 -- it is the same core. The
+# first version of this said 1-7 and left the recorder with half a core it
+# believed it owned outright.
+CPUAffinity=2-7
 
 # Ranks here are plain parallelism -- any count is valid, unlike
 # chirp-ionograms.service, where -np is pinned to the schedule.
