@@ -11,6 +11,7 @@ different.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 
 import pytest
@@ -873,7 +874,8 @@ def test_an_archive_with_no_detections_is_empty_not_an_error(tmp_path):
 
     got = sources.census(tmp_path)
     assert got == {"count": 0, "kind": "none", "cycle_s": got["cycle_s"],
-                   "emitters": []}
+                   "emitters": [], "cost": got["cost"]}
+    assert got["cost"]["files"] == 0
 
 
 def test_the_sources_page_and_endpoint_agree(client, tmp_path, make_detection_h5):
@@ -886,6 +888,119 @@ def test_the_sources_page_and_endpoint_agree(client, tmp_path, make_detection_h5
     page = client.get("/ui/sources?min_count=2")
     assert page.status_code == 200
     assert f"{api['count']} emitter(s)" in page.text
+
+
+# --------------------------------------------------------------------------
+# What made the page take minutes
+# --------------------------------------------------------------------------
+#
+# One HDF5 open per detection file, on every page load, with nothing cached.
+# ~1850 opens for three days of DOB: 0.6 s on a local SSD and two to three
+# minutes on the network archive the server reads. These files are written
+# once and never touched, so the fix is to stop re-reading them -- and the
+# risk a cache introduces is a page that is fast and wrong, which is what
+# these tests are about.
+
+@pytest.fixture
+def cold_census():
+    """A census with an empty cache, restored afterwards."""
+    from services.api import sources
+
+    sources._MEMO.clear()
+    sources._LAST.clear()
+    yield sources
+    sources._MEMO.clear()
+    sources._LAST.clear()
+
+
+def test_an_unchanged_archive_is_not_read_twice(cold_census, tmp_path,
+                                                make_detection_h5):
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    first = cold_census.census(tmp_path, min_count=2)
+    assert first["cost"]["opened"] == first["cost"]["files"] > 0
+
+    second = cold_census.census(tmp_path, min_count=2)
+    assert second["cost"]["opened"] == 0
+    assert second["cost"]["unchanged"] is True
+    assert second["emitters"] == first["emitters"]
+
+
+def test_a_new_detection_file_is_picked_up(cold_census, tmp_path,
+                                           make_detection_h5):
+    """The whole point of a page called "transmitters heard" is that it
+    changes when the station hears something new."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    cold_census.census(tmp_path, min_count=2)
+
+    grown = day / "chirp-ch0-100-44664265260000000-1999999999.h5"
+    shutil.copy(next(day.glob("chirp-*.h5")), grown)
+
+    after = cold_census.census(tmp_path, min_count=2)
+    assert after["cost"]["unchanged"] is False
+    assert after["cost"]["opened"] == 1, "re-read the whole archive for one file"
+    assert after["cost"]["cached"] == after["cost"]["files"] - 1
+
+
+def test_a_deleted_file_leaves_the_census(cold_census, tmp_path,
+                                          make_detection_h5):
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    before = cold_census.census(tmp_path, min_count=2)
+
+    for path in list(day.glob("chirp-*.h5")):
+        path.unlink()
+    after = cold_census.census(tmp_path, min_count=2)
+
+    assert before["emitters"], "nothing to lose, so nothing was proven"
+    assert after["emitters"] == []
+    assert after["cost"]["files"] == 0
+
+
+def test_the_tuning_parameters_are_part_of_the_key(cold_census, tmp_path,
+                                                   make_detection_h5):
+    """`?min_count=` on the URL must not be answered from a run that used a
+    different one -- the same archive has several right answers."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    strict = cold_census.census(tmp_path, min_count=2, max_slot_fraction=0.0)
+    loose = cold_census.census(tmp_path, min_count=2)
+    assert strict["emitters"] == []
+    assert loose["emitters"], "answered from the stricter run's cache"
+
+
+def test_a_file_caught_mid_write_is_retried_when_it_grows(cold_census,
+                                                          tmp_path,
+                                                          make_detection_h5):
+    """The one case where a path's content really does change.
+
+    Detection files are written by a running detector, so a scan will
+    occasionally catch one truncated. Skipping it is right; remembering the
+    skip forever is not, because the completed file has the same name.
+    """
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    good = next(day.glob("chirp-*.h5"))
+    body = good.read_bytes()
+
+    truncated = day / "chirp-ch0-100-44664265260000000-1999999999.h5"
+    truncated.write_bytes(body[:len(body) // 3])
+    with pytest.warns(UserWarning, match="unreadable"):
+        first = cold_census.census(tmp_path, min_count=2)
+    n_first = first["cost"]["records"]
+
+    truncated.write_bytes(body)                    # the writer finished
+    after = cold_census.census(tmp_path, min_count=2)
+    assert after["cost"]["opened"] == 1
+    assert after["cost"]["records"] == n_first + 1, "still skipping a good file"
 
 
 def test_a_census_row_with_a_missing_column_is_still_json():

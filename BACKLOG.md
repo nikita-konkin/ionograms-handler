@@ -867,3 +867,32 @@ Not addressed: an identification is per receiver, so a second station means
 identifying the same transmitter again. That is correct (the slot second
 differs per circuit) but the evidence and the name are not shared, and they
 could be.
+
+### The sources page took minutes, and it was the file opens
+
+Reported from the deployed server: `/ui/sources` "always takes a long time,
+about a few minutes". The census reads one HDF5 file per detection and cached
+nothing, so **every page load re-opened every file**. Three days of DOB is
+~1850 opens: 0.6 s against a local SSD, and at 50--100 ms per open on a network
+archive, 1.5--3 minutes. Nothing about the grouping arithmetic was slow.
+
+Fixed by not re-reading immutable files. A chirpsounder2 detection product is
+written once and its name carries the second it belongs to, so the path is a
+sound cache key; the scan is fingerprinted on the file *names*, which the
+directory listing already yields, so an unchanged archive answers without a
+single `stat`. Measured on the real archive: 0.63 s cold, 0.045 s warm, and one
+new file costs exactly one open.
+
+Two things worth keeping in mind:
+
+- **The cheap files are the wrong files.** `cdetections-*.h5` holds the same
+  span in 96 files instead of 1500 and loads 7x faster, which looks like the
+  obvious fix. It is not: those are the detector's raw candidates, not its
+  conclusions. On 2026-08-09 they yield a 100 kHz/s "emitter" with 26,137
+  detections spread across nearly every second of the cycle, which the
+  occupancy filter then rejects -- reading them first would lose NIC. The
+  preference order is about quality and the cost is paid by caching instead.
+- **One file in the DOB archive will not parse** (1846 matched, 1845 read).
+  Harmless -- a detector caught mid-write -- but the count is now on the page,
+  and a *steady* count is not the same thing as a transient one. Worth a look
+  if it does not go away.

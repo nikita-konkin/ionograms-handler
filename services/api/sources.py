@@ -27,6 +27,10 @@ from __future__ import annotations
 import math
 import os
 import re
+import threading
+import time
+import warnings
+from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 
@@ -97,6 +101,104 @@ def _day_directories(root: Path, max_days: int) -> list[Path]:
     return [path for _, path in dated[:max_days]]
 
 
+#: Parsed records per detection file, keyed by path. **A chirpsounder2
+#: detection product is written once and never touched again** -- its name
+#: carries the unix second it belongs to -- so the path names one immutable
+#: set of records and re-opening it cannot tell us anything new.
+#:
+#: This exists because the census was costing one HDF5 open per file on every
+#: page load. On DOB that is ~1850 opens for three days -- 0.6 s on a local
+#: SSD, and **two to three minutes** on the network archive the server reads,
+#: which is what a page taking "a few minutes" was. Nothing about the
+#: arithmetic was slow; it was opening the same files over and over.
+#:
+#: Values are ``(identity, records)``, where identity is the ``stat`` taken
+#: when the file was read -- kept only for the retry path below, and never
+#: consulted on a hit, so a warm census performs no ``stat`` calls either.
+_MEMO: "OrderedDict[str, tuple]" = OrderedDict()
+
+#: Entries kept, oldest evicted first. A day is ~1500 detection files and each
+#: entry holds a handful of floats, so this covers a fortnight of archive in a
+#: few MB. Bounded because the process is long-lived and an archive is not.
+_MEMO_MAX = 40_000
+
+#: One census at a time. Two operators opening the page on a cold cache would
+#: otherwise each pay the full read, competing for the same disk -- the second
+#: one waits and then finds the answer already in hand.
+_CENSUS_LOCK = threading.Lock()
+
+#: Last result, with the fingerprint of the files it was computed from.
+_LAST: dict = {}
+
+
+def _identity(path: Path) -> tuple | None:
+    """`(mtime, size)`, or None if the file went away mid-scan."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _read_cached(paths, reader, expand=None) -> tuple[list, dict]:
+    """Records for ``paths``, opening only the files not already read.
+
+    Returns ``(records, counts)`` with ``opened``, ``cached`` and
+    ``unreadable``.
+
+    A file that will not parse is remembered as **empty**. A detector caught
+    mid-write is normal and one truncated file must not lose the census, but
+    neither should it be re-opened on every page load for the rest of the
+    archive's life. That is the one case where a path's content does change,
+    so it is also the only case that pays for a ``stat``: an entry that parsed
+    to nothing is re-checked, and re-read if the file has grown since.
+
+    Unreadable files are counted and warned about, as the ``io_detect``
+    loaders this replaces did. A census that quietly drops a third of the
+    archive looks exactly like a quiet one.
+    """
+    records = []
+    counts = {"opened": 0, "cached": 0, "unreadable": 0}
+    for path in paths:
+        key = str(path)
+        entry = _MEMO.get(key)
+        if entry is not None:
+            was, got = entry
+            if got:                       # parsed once, immutable: trust it
+                _MEMO.move_to_end(key)
+                counts["cached"] += 1
+                records.extend(got)
+                continue
+            if was is not None and was == _identity(path):
+                counts["cached"] += 1     # still the same broken file
+                counts["unreadable"] += 1
+                continue
+        try:
+            parsed = reader(path)
+            got = list(expand(path, parsed)) if expand else [parsed]
+        except Exception:
+            got = []
+        if not got:
+            counts["unreadable"] += 1
+        _MEMO[key] = (_identity(path) if not got else None, got)
+        _MEMO.move_to_end(key)
+        counts["opened"] += 1
+        while len(_MEMO) > _MEMO_MAX:
+            _MEMO.popitem(last=False)
+        records.extend(got)
+    return records, counts
+
+
+def _cdetection_rows(path, rows):
+    """One `cdetections-*.h5` array as `Detection` records. See io_detect."""
+    from muf.io_detect import Detection
+
+    for chirp_time, _i0_seconds, f0, rate, snr in rows:
+        yield Detection(path=path, channel="", chirp_time=float(chirp_time),
+                        rate=float(rate), f0=float(f0), snr=float(snr),
+                        i0=-1, n_samples=-1, sample_rate=float("nan"))
+
+
 def census(archive_root: str | os.PathLike, *,
            max_days: int = DEFAULT_MAX_DAYS,
            cycle_s: float | None = None,
@@ -110,48 +212,127 @@ def census(archive_root: str | os.PathLike, *,
     ``muf detect`` does: timing solutions first, then raw detections, then the
     consolidated summaries -- which are often the only ones left on a synced
     archive, because ``chirp-*.h5`` lived in the ringbuffer and rotated away.
+
+    **The preference order is about quality, not cost.** The consolidated files
+    are by far the cheapest to read -- 96 of them hold what 1500 ``chirp-*.h5``
+    do -- but they are the detector's raw candidates, not its conclusions. On
+    one real day they produced a 100 kHz/s "emitter" with 26,137 detections
+    spread across nearly every second of the cycle, which the occupancy filter
+    then rejects as interference: reading the cheap files first would lose the
+    transmitter the page exists to find. So the expensive files stay first and
+    the cost is paid by caching instead.
+
+    Every file read is remembered, and the scan is fingerprinted on the names
+    the directory listing already yields, so a second call over an archive that
+    has not changed opens nothing and stats nothing. The returned ``cost``
+    block reports what it did, because a page that is slow for a reason the
+    operator cannot see is a page that gets guessed about.
     """
     from muf import io_detect
 
     cycle = cycle_s or io_detect.DEFAULT_CYCLE_S
     root = Path(archive_root)
+    started = time.perf_counter()
 
-    records, kind = [], "none"
+    # Scan first, read second. A directory listing is one round trip per
+    # directory; an HDF5 open is several per *file*. Doing the cheap half
+    # first is what lets an unchanged archive answer without opening anything.
+    scans, matched = [], 0
     for day in _day_directories(root, max_days):
-        for loader, name in ((io_detect.load_timings, "timing solution"),
-                             (io_detect.load_detections, "detection"),
-                             (io_detect.load_cdetections,
-                              "consolidated detection")):
+        for finder, reader, expand, name in (
+                (io_detect.find_timings, io_detect.read_timing, None,
+                 "timing solution"),
+                (io_detect.find_detections, io_detect.read_detection, None,
+                 "detection"),
+                (io_detect.find_cdetections, io_detect.read_cdetections,
+                 _cdetection_rows, "consolidated detection")):
             try:
-                found = loader(day)
+                paths = finder(day)
             except Exception:
-                found = []
-            if found:
-                records.extend(found)
-                kind = name
+                paths = []
+            if paths:
+                scans.append((paths, reader, expand, name))
+                matched += len(paths)
                 break
 
-    if not records:
-        return {"count": 0, "kind": "none", "cycle_s": cycle, "emitters": []}
+    # Fingerprinted on the file *names*, which the scan above already has for
+    # free -- not on their contents, and not on a `stat` per file. Every one
+    # of these names carries the second it belongs to, so a name that was
+    # there last time refers to the same recording. Stat-ing 1846 files to
+    # prove that would cost a round trip each on the archive this is slow on,
+    # which is most of what we are trying to avoid.
+    fingerprint = (str(root), max_days, cycle, min_count, max_scatter_s,
+                   max_slot_fraction, min_repeats,
+                   tuple(sorted(str(p) for paths, *_ in scans for p in paths)))
 
-    emitters = io_detect.census(records, cycle_s=cycle, min_count=min_count)
-    kept, rejected = [], []
-    for emitter in emitters:
-        why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction,
-                         min_repeats)
-        (rejected if why else kept).append(
-            (emitter, why) if why else emitter)
-    return {
-        "count": len(kept),
-        "kind": kind,
-        "cycle_s": cycle,
-        "emitters": [_as_row(e) for e in kept],
-        # Kept, not silently dropped. A schedule page that hides its rejects
-        # cannot be checked, and the operator is the one who knows whether the
-        # thing it threw away was the transmitter they came for.
-        "rejected": [dict(_as_row(e), rejected_because=why)
-                     for e, why in rejected],
-    }
+    with _CENSUS_LOCK:
+        # The names matching is only proof that nothing changed if every file
+        # behind them was read. A detector caught mid-write keeps its name
+        # when it finishes, so an archive with a skipped file goes down the
+        # read path again -- which is nearly free, since every good file is a
+        # cache hit and only the skipped ones are looked at.
+        settled = not _LAST.get("census", {}).get("cost", {}).get("unreadable")
+        if settled and _LAST.get("fingerprint") == fingerprint:
+            out = dict(_LAST["census"])
+            # This call's cost, not the cost of the call that filled the
+            # cache. Reporting the earlier one would make the page claim it
+            # had just opened 1846 files when it opened none.
+            out["cost"] = dict(out["cost"], unchanged=True,
+                               opened=0, cached=matched,
+                               seconds=round(time.perf_counter() - started, 2))
+            return out
+
+        records, kind = [], "none"
+        totals = {"opened": 0, "cached": 0, "unreadable": 0}
+        for paths, reader, expand, name in scans:
+            got, counts = _read_cached(paths, reader, expand)
+            for field, n in counts.items():
+                totals[field] += n
+            if got:
+                records.extend(got)
+                kind = name
+        if totals["unreadable"]:
+            warnings.warn(
+                f"skipped {totals['unreadable']} unreadable detection file(s) "
+                f"under {root}", stacklevel=2)
+
+        cost = dict(
+            totals,
+            days=[d.name for d in _day_directories(root, max_days)],
+            files=matched, records=len(records), unchanged=False,
+            seconds=round(time.perf_counter() - started, 2),
+        )
+
+        if not records:
+            out = {"count": 0, "kind": "none", "cycle_s": cycle,
+                   "emitters": [], "cost": cost}
+            _LAST.update(fingerprint=fingerprint, census=out)
+            return out
+
+        emitters = io_detect.census(records, cycle_s=cycle,
+                                    min_count=min_count)
+        kept, rejected = [], []
+        for emitter in emitters:
+            why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction,
+                             min_repeats)
+            (rejected if why else kept).append(
+                (emitter, why) if why else emitter)
+        cost["seconds"] = round(time.perf_counter() - started, 2)
+        out = {
+            "count": len(kept),
+            "kind": kind,
+            "cycle_s": cycle,
+            "emitters": [_as_row(e) for e in kept],
+            # Kept, not silently dropped. A schedule page that hides its
+            # rejects cannot be checked, and the operator is the one who knows
+            # whether the thing it threw away was the transmitter they came
+            # for.
+            "rejected": [dict(_as_row(e), rejected_because=why)
+                         for e, why in rejected],
+            "cost": cost,
+        }
+        _LAST.update(fingerprint=fingerprint, census=out)
+        return out
 
 
 def _repeats_per_slot(emitter) -> float:

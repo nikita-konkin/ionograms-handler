@@ -36,6 +36,29 @@
     row is a candidate to be identified and then sounded on purpose.
   </p>
 
+  {% set c = census.cost %}
+  <p class="note">
+    {% if c.unchanged %}<span class="pill ok">cached</span>{% endif %}
+    Read {{ c.files }} file(s) from {{ c.days|join(', ') if c.days else 'the
+    archive root' }} in {{ '%.2f'|format(c.seconds) }} s
+    {%- if c.opened %} &mdash; opened {{ c.opened }}, {{ c.cached }} already
+    known{% else %} &mdash; nothing re-opened{% endif %}.
+    {% if c.unreadable %}<b>{{ c.unreadable }} file(s) could not be read</b>
+    and were skipped; a detector caught mid-write is normal, a steady count is
+    not.{% endif %}
+    <a href="?max_days=1&amp;min_count={{ min_count }}">1 day</a> &middot;
+    <a href="?max_days=3&amp;min_count={{ min_count }}">3</a> &middot;
+    <a href="?max_days=7&amp;min_count={{ min_count }}">7</a>
+  </p>
+  {% if c.seconds > 10 %}
+  <p class="note"><b>That is slow, and it is the archive, not the arithmetic.</b>
+  A census opens one HDF5 file per detection, and each open costs a round trip
+  on a network archive. Every file read here is remembered &mdash; these
+  products are written once and never change &mdash; so the next load should
+  open only what has arrived since. If it stays slow, the process was restarted
+  or the archive is being rewritten under it.</p>
+  {% endif %}
+
   {% if census.emitters %}
   <div class="scroll"><table>
     <tr><th></th><th>rate</th><th>heard at (s into cycle)</th><th>n</th>

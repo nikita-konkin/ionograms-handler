@@ -1830,6 +1830,18 @@ higher median SNR than cyprus1 and was pure noise:
 Rejects are **listed with their reason**, not dropped silently: if the row you
 came for is among them, the thresholds are wrong, not the transmitter.
 
+**The page reads the archive, and that is what it costs.** A census opens one
+HDF5 file per detection — ~1850 of them for three days on DOB. That is 0.6 s
+on a local SSD and **two to three minutes** on a network archive, where every
+open is a round trip; it is the whole reason the page once took minutes. These
+products are written once and never touched again, so every file read is
+remembered and the next load opens only what has arrived since. The page says
+which days it scanned, how many files it read, how many it had to open, and
+how long it took, so a slow load can be attributed instead of guessed at. If
+it stays slow, either the process restarted or the archive root has no dated
+subdirectories — in which case `_day_directories` falls back to the root and
+the scan walks the whole tree.
+
 Two things the page cannot do for you, both settled in the identify form. Rows
 are grouped by chirp rate and arrival phase, so several transmitters that all
 start near the second boundary merge into one row — identify it as one of them
