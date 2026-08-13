@@ -556,7 +556,7 @@ def test_render_needs_no_lfs(real_file, tmp_path):
 # reachable as though it were a measurement.
 
 IRI = saoxml.ModelValues(name="IRI", muf_mhz=9.904, fof2_mhz=3.355,
-                         hmf2_km=331.8, options="control point 45.88N 39.45E")
+                         hmf2_km=331.8, options="control point 45.99N 39.09E")
 
 
 def _with_model(ion, tmp_path, model=IRI, method="algo"):

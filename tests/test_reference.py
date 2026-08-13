@@ -19,7 +19,7 @@ from muf import reference
 from muf.geometry import Point
 from muf.reference import chapman, giro, indices, iri, minimuf
 
-CYPRUS = Point(35.00, 34.00)
+CYPRUS = Point(35.18557, 33.38228)   # the registry's Nicosia
 YOSHKAR_OLA = Point(56.38, 47.53)
 
 
@@ -101,8 +101,8 @@ def test_chapman_fits_its_amplitude_to_observations(day_times):
 
 
 def test_solar_zenith_is_negative_at_local_midnight():
-    point = Point(45.88, 39.45)
-    # Local midnight at 39.45E is about 21:20 UT.
+    point = Point(45.99, 39.09)          # the path's control point
+    # Local midnight at 39.09E is about 21:24 UT.
     assert chapman.solar_zenith_cos(dt.datetime(2026, 2, 4, 21, 20), point) < 0
     assert chapman.solar_zenith_cos(dt.datetime(2026, 2, 4, 9, 20), point) > 0
 

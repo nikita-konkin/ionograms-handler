@@ -516,12 +516,20 @@ lo = max(lo, rmin)
 
 with `GROUND_RANGE_MARGIN = 0.90` and `FALLBACK_MIN_RANGE_KM = 1500.0`.
 
-`cyprus1` → `yoshkar-ola`, great-circle 2588.4 km:
+`cyprus1` → `yoshkar-ola`, great-circle 2587.8 km:
 
 ```
-lo = 2588.4 × 0.90 = 2329.59 km      [measured: 2329.5877]
+lo = 2587.8 × 0.90 = 2329.04 km      [measured: 2329.0436]
 hi = 5000.0 km                        [measured: 5000.0]
 ```
+
+**The transmitter position is the registry's, not the file's.** `cyprus1` in
+this header and `NIC` in `stations.py` are one Nicosia site recorded 59.9 km
+apart, and the loader now resolves `.lfs` headers against the table for the
+same reason v2 products go through it — one site cannot have two positions
+depending on which receiver logged the sweep. Read verbatim the header gives
+35.00N 34.00E, 2588.4 km and `lo = 2329.5877`; the gate it produces is
+identical, 3755–3936, because 0.54 km is a thirtieth of a bin.
 
 The range axis **descends** — bin 0 is the largest virtual range. Established
 empirically, not assumed; see the `muf/calibrate.py` module docstring for the
@@ -531,7 +539,7 @@ Gate width in bins:
 
 ```
 i_lo = ceil((60 000 − 5000) / 14.65)     = 3755
-i_hi = floor((60 000 − 2329.59) / 14.65) = 3936
+i_hi = floor((60 000 − 2329.04) / 14.65) = 3936
 bins = i_hi − i_lo + 1                    = 182
 ```
 
@@ -661,9 +669,9 @@ whether `BACKLOG.md` §3's proposed `dur = 305` for `cyprus1` is achievable at
 | Quantity | Value | Source |
 |---|---|---|
 | Path | cyprus1 → yoshkar-ola, oblique | header |
-| Transmitter | 35.00N 34.00E | header |
-| Receiver | 56.38N 47.53E | header |
-| Great-circle distance | 2588.4 km | `ground_range_km()` |
+| Transmitter | 35.18557N 33.38228E | registry (`NIC`; header says 35.00/34.00) |
+| Receiver | 56.38N 47.53E | registry (`yoshkar-ola`, taken from this header) |
+| Great-circle distance | 2587.8 km | `ground_range_km()` |
 | `sample_rate` / `dec` / `fd` | 25 MHz / 625 / 40 kHz | header |
 | `cf` | 20 MHz | header |
 | `rate` | 100 kHz/s | header |
@@ -676,7 +684,7 @@ whether `BACKLOG.md` §3's proposed `dur = 305` for `cyprus1` is achievable at
 | Range step | 14.65 km | §4.5 |
 | Frequency step | 20.48 kHz | §4.6 |
 | Ungated shape | 1220 × 8192 | §4.6 |
-| Gate | 2329.59 – 5000.0 km | §5.3 |
+| Gate | 2329.04 – 5000.0 km | §5.3 |
 | Gated shape | **1220 × 182** | measured |
 | Product size | 888 KB (float32) | §5.4 |
 | Noise floor | 30 dB | §5.2 |

@@ -10,12 +10,15 @@ from muf.geometry import (EARTH_RADIUS_KM, Point, control_points, fof2_to_muf,
                           great_circle_km, intermediate, m_factor, midpoint,
                           muf_to_fof2)
 
-CYPRUS = Point(35.00, 34.00)
+# The registry's Nicosia, which is what the loader now hands to this module
+# for a `cyprus1` sounding; the header's own round 35.00/34.00 is 59.9 km away
+# and 0.6 km longer. See `muf.stations.CYPRUS1_LFS_COORDINATES`.
+CYPRUS = Point(35.18557, 33.38228)
 YOSHKAR_OLA = Point(56.38, 47.53)
-PATH_KM = 2588.0
+PATH_KM = 2587.8
 
 
-def test_great_circle_matches_header_geometry():
+def test_great_circle_matches_the_circuit():
     assert great_circle_km(CYPRUS, YOSHKAR_OLA) == pytest.approx(PATH_KM, abs=5)
 
 
@@ -39,8 +42,8 @@ def test_midpoint_is_equidistant():
 def test_control_point_location():
     """Pins the control point -- it decides which ionosonde is relevant."""
     mid = midpoint(CYPRUS, YOSHKAR_OLA)
-    assert mid.lat == pytest.approx(45.88, abs=0.05)
-    assert mid.lon == pytest.approx(39.45, abs=0.05)
+    assert mid.lat == pytest.approx(45.99, abs=0.05)
+    assert mid.lon == pytest.approx(39.09, abs=0.05)
 
 
 def test_single_hop_uses_one_control_point():

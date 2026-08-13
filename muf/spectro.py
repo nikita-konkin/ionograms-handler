@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 
@@ -152,10 +153,17 @@ def compute(
     zero_periods: int = DEFAULT_ZERO_PERIODS,
     gate_km: tuple[float, float] | None = None,
     header: LfsHeader | None = None,
+    stations: Mapping[str, tuple[float, float]] | None = None,
 ) -> Ionogram:
-    """Read an ``.lfs`` file and form its range-gated ionogram."""
+    """Read an ``.lfs`` file and form its range-gated ionogram.
+
+    ``stations`` supersedes the coordinates in the file header for any end the
+    registry knows -- see :func:`muf.io_lfs.read_header`. ``None`` is no
+    registry, the file verbatim; `muf.loader.resolve_stations` is what turns
+    that into the built-in table.
+    """
     path = Path(path)
-    header = header or read_header(path)
+    header = header or read_header(path, stations)
     iq = read_iq(path)
 
     n_freq = len(iq) // window
@@ -199,15 +207,22 @@ def cache_key(path: Path, window: int, zero_periods: int,
     return f"{path.stem}_w{window}_z{zero_periods}_g{gate}"
 
 
-def load_cached(cache_dir: Path, key: str) -> Ionogram | None:
-    """Return a cached ionogram, or None if absent or unreadable."""
+def load_cached(cache_dir: Path, key: str,
+                stations: Mapping[str, tuple[float, float]] | None = None
+                ) -> Ionogram | None:
+    """Return a cached ionogram, or None if absent or unreadable.
+
+    The cache holds the gated tile, not the geometry: the header is re-read
+    from the source file every time, so a registry correction reaches a cached
+    sounding without invalidating anything.
+    """
     npz_path = cache_dir / f"{key}.npz"
     if not npz_path.exists():
         return None
     try:
         with np.load(npz_path, allow_pickle=False) as blob:
             source = Path(str(blob["source"]))
-            header = read_header(source)
+            header = read_header(source, stations)
             cal = calibrate.build(
                 header,
                 n_freq=int(blob["n_freq"]),
@@ -244,18 +259,19 @@ def compute_cached(
     zero_periods: int = DEFAULT_ZERO_PERIODS,
     gate_km: tuple[float, float] | None = None,
     cache_dir: str | Path | None = None,
+    stations: Mapping[str, tuple[float, float]] | None = None,
 ) -> Ionogram:
     """``compute`` with an optional on-disk cache of the gated tile."""
     path = Path(path)
     if cache_dir is None:
-        return compute(path, window, zero_periods, gate_km)
+        return compute(path, window, zero_periods, gate_km, stations=stations)
 
     cache_dir = Path(cache_dir)
     key = cache_key(path, window, zero_periods, gate_km)
-    cached = load_cached(cache_dir, key)
+    cached = load_cached(cache_dir, key, stations)
     if cached is not None:
         return cached
 
-    ion = compute(path, window, zero_periods, gate_km)
+    ion = compute(path, window, zero_periods, gate_km, stations=stations)
     save_cached(cache_dir, key, ion)
     return ion

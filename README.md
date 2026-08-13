@@ -572,8 +572,8 @@ muf compare out --ref-model all
 | `chapman` | transparent solar-zenith model; **shape only**, amplitude fitted | nothing |
 | `minimuf` | not implemented -- see `muf/reference/minimuf.py` | verified coefficients |
 
-For Cyprus -> Yoshkar-Ola the control point is 45.88N 39.45E and **RV149 Rostov**
-sits 148 km away, well inside the F2 correlation scale.
+For Cyprus -> Yoshkar-Ola the control point is 45.99N 39.09E and **RV149 Rostov**
+sits 146 km away, well inside the F2 correlation scale.
 
 **What IRI showed.** Where IRI puts the MUF inside the 32.5 MHz sweep, the
 pipeline agrees to **+0.55 MHz** (n=204). Where IRI puts it *above* the sweep --
@@ -649,7 +649,7 @@ is for. The record then carries both, each labelled with where it came from:
 <Modeled Name="foF2" Units="MHz" Val="3.879" ModelName="secant-law"
          ModelOptions="hmF2=300km,D=2588km"/>
 <Modeled Name="MUF"  Units="MHz" Val="9.904" ModelName="IRI"
-         ModelOptions="control point 45.88N 39.45E, D=2588km"/>
+         ModelOptions="control point 45.99N 39.09E, D=2588km"/>
 <Modeled Name="foF2" Units="MHz" Val="3.355" ModelName="IRI" …/>
 <Modeled Name="hmF2" Units="km"  Val="331.8" ModelName="IRI" …/>
 ```
@@ -727,11 +727,11 @@ What comes out, trimmed:
              PathType="oblique">
     <SystemInfo>
       <AutoScaler>muf 0.1.0 (algo)</AutoScaler>
-      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.0000"
+      <ObliquePath TransmitterName="cyprus1" TransmitterLatitude="35.1856"
                    ReceiverName="yoshkar-ola" ReceiverLatitude="56.3800"
-                   GreatCircleDistance="2588.4" Units="km"/>
+                   GreatCircleDistance="2587.8" Units="km"/>
       <Sweep StartFrequency="7.5000" StopFrequency="32.4856" FrequencyStep="0.020480"
-             RangeGateLow="2329.6" RangeGateHigh="5000.0" Complete="true"/>
+             RangeGateLow="2329.0" RangeGateHigh="5000.0" Complete="true"/>
       <Acquisition Format="chirp2" ChirpRate="100000.0000" ChirpRateUnits="Hz/s"
                    SampleRate="40000.0" Decimation="1" Channel="ch0"
                    SweepStartEpoch="1785888234.055033" NoiseFloorMedian="3.590">
@@ -1428,10 +1428,26 @@ cyprus1 -> yoshkar-ola   2588.4 -> 2587.8 km    (-0.6 km)
 cyprus1 -> DOB           3476.3 -> 3435.9 km   (-40.3 km, 20 range bins)
 ```
 
-**`.lfs` soundings are unaffected either way.** `io_lfs` reads coordinates from
-each file's own 512-byte header and never consults this registry, so the
-2588.4 km path `signal-chain.md` records as measured is untouched. The table
-governs v2 products, which carry a name and nothing else.
+**`.lfs` soundings follow the table too**, as of 2026-08-14. An `.lfs` header
+carries its own lat/lon, so there the registry is a *correction* rather than a
+lookup — without one the file's numbers are used verbatim, and `stations={}`
+still means no table — but the correction is applied, and the path
+`signal-chain.md` records went from 2588.4 km to 2587.8 km with it. The
+alternative was one Nicosia transmitter existing as two objects to anything
+keying on `(tx, rx)`, which the 0.6 km was never the point of.
+
+Which end a coordinate came from is answerable after the fact:
+`LfsHeader.from_registry` names the corrected ends, `()` when the file was read
+as written. It says `("tx", "rx")` for the archive's soundings even though
+`yoshkar-ola` does not move — that entry was transcribed into the table *from*
+an `.lfs` header, and the provenance of the value in play is still the table.
+
+A database ingested before the change keeps the old numbers in
+`sounding.tx_lat/tx_lon/path_km`: those columns are written at ingest, not read
+from the file per request. Re-running `ingest` over the same archive corrects
+them in place — it upserts on `file`. The cached spectrogram tiles need no such
+treatment; they hold the tile, not the geometry, and the header is re-read on
+every load.
 
 v2's marker for an unidentified transmitter — `unkown`, upstream's spelling —
 never resolves. Every unidentified emitter in an archive shares that string, so
@@ -1663,7 +1679,7 @@ services/
     static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  779 tests; `python -m pytest tests -q`
+tests/                  819 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it

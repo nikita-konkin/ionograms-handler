@@ -2,7 +2,7 @@
 
 The strongest reference available: an independent instrument measuring the same
 ionosphere the oblique path reflects off. For Cyprus -> Yoshkar-Ola the control
-point is 45.88N 39.45E and station **RV149 ROSTOV** sits 148 km away, comfortably
+point is 45.99N 39.09E and station **RV149 ROSTOV** sits 146 km away, comfortably
 inside the scale over which the F2 layer stays correlated.
 
 Two ways to get an oblique MUF out of it:

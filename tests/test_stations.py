@@ -96,20 +96,30 @@ def test_the_superseded_cyprus1_position_is_kept_not_deleted():
     assert stations.CYPRUS1_LFS_COORDINATES == (35.0, 34.0)
 
 
-def test_lfs_soundings_are_unaffected_by_the_registry(make_lfs):
-    """`io_lfs` reads coordinates from each file's own header, never from here.
+def test_lfs_soundings_follow_the_registry_too(make_lfs):
+    """The table wins over the header, for .lfs as much as for v2.
 
-    So a .lfs sounding of cyprus1 keeps reporting 35.0/34.0 and the 2588.4 km
-    path that `signal-chain.md` records as measured. Choosing NIC's position
-    moves that path by 0.6 km and this pipeline never applies it anyway; it is
-    v2 products, which carry a name and nothing else, that the table governs.
+    An .lfs header carries its own lat/lon, so here the table is a correction
+    rather than a lookup -- but a correction it is: one site cannot have two
+    positions depending on which receiver logged it, and a `cyprus1` at
+    35.0/34.0 beside a `NIC` at 35.18557/33.38228 makes the Nicosia
+    transmitter two objects to anything keying on `(tx, rx)`. The path
+    `signal-chain.md` records moves from 2588.4 km to 2587.8 km with it.
     """
     rng = np.random.default_rng(0)
     iq = (rng.normal(size=8192 * 4) + 1j * rng.normal(size=8192 * 4)).astype("complex64")
-    header = loader.read_header(make_lfs(iq, name="c.lfs"))
+    path = make_lfs(iq, name="c.lfs", tx_name="cyprus1")
 
-    assert header.tx_latitude == pytest.approx(35.0)
-    assert header.tx_longitude == pytest.approx(34.0)
+    header = loader.read_header(path)
+    assert header.tx_latitude == pytest.approx(35.18557, abs=1e-5)
+    assert header.tx_longitude == pytest.approx(33.38228, abs=1e-5)
+    assert header.from_registry == ("tx",)
+
+    # And an explicit empty table still means "no table", not "the default
+    # one" -- the distinction `resolve_stations` exists to keep.
+    verbatim = loader.read_header(path, stations={})
+    assert (verbatim.tx_latitude, verbatim.tx_longitude) == stations.CYPRUS1_LFS_COORDINATES
+    assert verbatim.from_registry == ()
 
 
 def test_aliases_resolve_without_being_counted_twice():

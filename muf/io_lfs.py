@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import datetime as _dt
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 
@@ -103,6 +104,15 @@ class LfsHeader:
     whiten_len: int
     whiten_n: int
 
+    #: Which ends took their coordinates from the station registry instead of
+    #: from this file: ``()``, ``("tx",)``, ``("rx",)`` or both.
+    #:
+    #: A silent correction is the one thing this must not be. A wrong
+    #: coordinate does not raise -- it yields a plausible path length and a
+    #: wrong virtual height -- so whether the numbers in play are the file's or
+    #: the table's has to be answerable after the fact.
+    from_registry: tuple[str, ...] = ()
+
     @property
     def datetime(self) -> _dt.datetime:
         return _dt.datetime(
@@ -136,8 +146,26 @@ class LfsHeader:
         )
 
 
-def read_header(path: str | Path) -> LfsHeader:
-    """Parse the 512-byte header of an ``.lfs`` file."""
+def read_header(path: str | Path,
+                stations: Mapping[str, tuple[float, float]] | None = None
+                ) -> LfsHeader:
+    """Parse the 512-byte header of an ``.lfs`` file.
+
+    ``stations`` is a registry that **supersedes** the coordinates in the file
+    for any end whose name it knows. Unlike :func:`muf.io_chirp.read_header`,
+    where the registry is the only source of geometry, here it is a
+    correction: an ``.lfs`` header always carries lat/lon, and without a
+    registry those are used verbatim.
+
+    ``None`` means no registry, as it does in every reader in this package;
+    :func:`muf.loader.resolve_stations` is the one place that turns that into
+    the built-in table.
+
+    The correction exists because the archive's ``cyprus1`` and v2's ``NIC``
+    are one Nicosia transmitter recorded 59.9 km apart -- 35.0/34.0 in the
+    header against 35.18557/33.38228 in ``server.ini`` -- and one site cannot
+    have two positions depending on which receiver logged it.
+    """
     path = Path(path)
     with open(path, "rb") as fh:
         blob = fh.read(HEADER_SIZE)
@@ -152,7 +180,33 @@ def read_header(path: str | Path) -> LfsHeader:
     header = LfsHeader(**values)  # type: ignore[arg-type]
     if header.format != "LFSG":
         raise ValueError(f"{path}: not an LFS file (magic {header.format!r})")
-    return header
+    return _with_registry_coordinates(header, stations)
+
+
+def _with_registry_coordinates(
+        header: LfsHeader,
+        stations: Mapping[str, tuple[float, float]] | None) -> LfsHeader:
+    """Replace each end's coordinates with the registry's, where it has them."""
+    if stations is None:
+        return header
+
+    changed: dict[str, object] = {}
+    corrected: list[str] = []
+    for end, name in (("tx", header.tx_name), ("rx", header.rx_name)):
+        entry = stations.get(name) if name else None
+        if entry is None:
+            continue
+        lat, lon = float(entry[0]), float(entry[1])
+        # Recorded even when the numbers agree to the last decimal: the
+        # provenance is "the table said so", and that stays true on the day
+        # the table is corrected and the file is not.
+        corrected.append(end)
+        changed[f"{end}_latitude"] = lat
+        changed[f"{end}_longitude"] = lon
+
+    if not corrected:
+        return header
+    return replace(header, from_registry=tuple(corrected), **changed)
 
 
 def read_iq(path: str | Path, max_samples: int | None = None) -> np.ndarray:

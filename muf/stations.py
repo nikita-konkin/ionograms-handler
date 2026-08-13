@@ -4,8 +4,9 @@
 and ``station_name`` as bare strings -- ``NIC``, ``DOB``, ``unkown`` -- and no
 coordinates at all, so without a table ``geometry.path_of`` has nothing to work
 with and ``calibrate.default_gate`` falls back to the stored range extent.
-``.lfs`` files are unaffected: their 512-byte header carries lat/lon directly,
-which is why this did not exist before v2.
+``.lfs`` files carry lat/lon in their 512-byte header, which is why this did
+not exist before v2 -- but they consult the table as well, and it wins. See
+:data:`CYPRUS1_LFS_COORDINATES` for the one site where the two disagree.
 
 **The numbers are copied, not read from the clone.** chirpsounder2 ships a
 table at ``examples/marieluise/server.ini`` under ``[stations] station_info``,
@@ -167,12 +168,20 @@ CYPRUS1_LFS_COORDINATES = (35.0, 34.0)
 #:     cyprus1 -> yoshkar-ola   2588.4 -> 2587.8 km   (-0.6 km)
 #:     cyprus1 -> DOB           3476.3 -> 3435.9 km   (-40.3 km)
 #:
-#: **The ``.lfs`` path is unaffected in practice**, and not only because 0.6 km
-#: is nothing: ``io_lfs`` reads coordinates from each file's own 512-byte
-#: header and never consults this registry. A ``.lfs`` sounding of cyprus1 will
-#: keep reporting 35.0/34.0 and a 2588.4 km path, which is what
-#: ``signal-chain.md`` records as measured. This table governs v2 products,
-#: where the file carries a name and nothing else.
+#: **The ``.lfs`` path follows this table too**, as of 2026-08-14.
+#: :func:`muf.io_lfs.read_header` takes a registry and lets it supersede the
+#: coordinates in the header, so a cyprus1 sounding reports 2587.8 km whichever
+#: format it arrived in. It was left on the header's numbers until then, on the
+#: grounds that 0.6 km is nothing -- but the size of the error was never the
+#: point. One site with two positions depending on which receiver logged it
+#: makes ``(tx, rx)`` two circuits where there is one, which is what groups an
+#: IRI evaluation, a census row and a band ceiling.
+#:
+#: The registry is a *correction* here, not a lookup: an ``.lfs`` header always
+#: carries lat/lon, so passing no registry still yields a usable path.
+#: ``LfsHeader.from_registry`` names the ends that were overridden, because a
+#: silent coordinate substitution is exactly the failure this module warns
+#: about at the top.
 
 #: v2's marker for a transmitter it could not identify
 #: (``calc_ionograms.py:189``, upstream's typo). It must never resolve to

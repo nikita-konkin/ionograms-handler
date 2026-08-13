@@ -153,7 +153,7 @@ def read_header(path: str | Path, *, format: str | None = None,
         return io_chirp.read_header(path, resolve_stations(stations))
     if fmt == DIGISONDE:
         return io_digisonde.read_header(path, resolve_stations(stations))
-    return _read_lfs_header(path)
+    return _read_lfs_header(path, resolve_stations(stations))
 
 
 def cache_key(path: Path, window: int, zero_periods: int,
@@ -197,8 +197,13 @@ def load(path: str | Path,
     fmt = format_of(path, format)
 
     if fmt == LFS:
+        # The registry reaches .lfs too. Its header carries coordinates, so
+        # this is a correction rather than a lookup -- one site cannot have
+        # two positions depending on which receiver logged it, and `cyprus1`
+        # in the archive is `NIC` in the table, 59.9 km apart.
         return spectro.compute_cached(path, window, zero_periods, gate_km,
-                                      cache_dir)
+                                      cache_dir,
+                                      stations=resolve_stations(stations))
 
     if fmt == DIGISONDE:
         # No `window`/`zero_periods` warning: a digisonde product is pulse

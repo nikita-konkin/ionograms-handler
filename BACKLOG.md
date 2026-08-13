@@ -296,8 +296,8 @@ correctly either way (`sweep_complete`, `sweep_fraction`).
 
 ## 6. Reference models -- status
 
-- **GIRO / DIDBase.** Viable: the path's control point is 45.88N 39.45E and
-  station **RV149 ROSTOV** sits **148 km** away, well within the ionospheric
+- **GIRO / DIDBase.** Viable: the path's control point is 45.99N 39.09E and
+  station **RV149 ROSTOV** sits **146 km** away, well within the ionospheric
   correlation scale. The `lgdc.uml.edu/common/DIDBGetValues` endpoint was
   returning 404 / connection failures while this was written; the adapter is
   built against the documented URL pattern and degrades with a clear message.
