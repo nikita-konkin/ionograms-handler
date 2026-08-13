@@ -48,4 +48,13 @@ RUN useradd --create-home --uid 10002 station \
  && chown -R station:station /var/lib/station /etc/agent /app
 USER station
 
+# Same stamp as Dockerfile.api, for the same reason and from the same CI
+# build-args: `docker exec ... printenv API_BUILD_SHA` answers "which build is
+# this?" without inferring it from behaviour. Declared here too because a
+# build-arg no Dockerfile consumes is a warning nobody reads.
+ARG API_BUILD_SHA=unknown
+ARG API_BUILD_TIME=unknown
+ENV API_BUILD_SHA=$API_BUILD_SHA \
+    API_BUILD_TIME=$API_BUILD_TIME
+
 CMD ["python", "-m", "services.agent", "run"]

@@ -1660,7 +1660,7 @@ services/
     acquisition.py      which slot is being sounded, and when the next is due
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  748 tests; `python -m pytest tests -q`
+tests/                  752 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1865,6 +1865,32 @@ how long it took, so a slow load can be attributed instead of guessed at. If
 it stays slow, either the process restarted or the archive root has no dated
 subdirectories — in which case `_day_directories` falls back to the root and
 the scan walks the whole tree.
+
+That cache lives in the process, so **every restart hands the cold read to
+whoever opens the page first** — 234 s on the work server, which looks exactly
+like a broken page and was read as one. The api therefore does that read itself
+at startup, in a background thread, with the parameters the page defaults to;
+`CENSUS_WARM=0` turns it off where the archive is huge or absent. The startup
+log says what it cost:
+
+```console
+api 0.1.0 3097398  db=/data/ionograms.sqlite3  archive=/archive
+  census warm: 1846 file(s), 5 emitter(s) in 0.6s
+```
+
+That line's `3097398` is the commit the image was built from, stamped in by
+`deploy/Dockerfile.api` and served at `/healthz` as `build`. `version` is a
+hand-edited string and has read `0.1.0` through every deploy; this one moves on
+its own, which is the difference between asking a server what it is running and
+inferring it from whether the last fix appears to work:
+
+```console
+$ curl -s http://server:8002/healthz
+{"ok":true,"version":"0.1.0","build":"3097398","built_at":"2026-08-13T18:41:02Z"}
+```
+
+It reads `"source"` from a checkout and `"unknown"` from an image built without
+the build arg — neither pretends to be a commit.
 
 Two things the page cannot do for you, both settled in the identify form. Rows
 are grouped by chirp rate and arrival phase, so several transmitters that all

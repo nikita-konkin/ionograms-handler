@@ -149,6 +149,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - id: stamp
+        if: steps.creds.outputs.ready == 'true'
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         if: steps.creds.outputs.ready == 'true'
         with:
@@ -156,6 +160,13 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
+          # Stamped into the image and served at `/healthz`, so "which build is
+          # on the server?" is one curl. Without it the only evidence is the
+          # behaviour of the code you are trying to confirm is deployed --
+          # which cost two four-minute page loads to establish once already.
+          build-args: |
+            API_BUILD_SHA=${{ github.sha }}
+            API_BUILD_TIME=${{ steps.stamp.outputs.at }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}

@@ -13,26 +13,65 @@ environment variable with a loud banner, not a default.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
-from . import agent_routes, auth, control_routes, db, read_routes, web_routes
+from . import agent_routes, auth, control_routes, db, read_routes, sources
+from . import web_routes
 
 VERSION = "0.1.0"
+
+#: The commit this image was built from, stamped in by `deploy/Dockerfile.api`.
+#:
+#: `VERSION` is a hand-edited string and has read 0.1.0 through every deploy so
+#: far, which made "is the fix on the server?" a question two four-minute page
+#: loads could not answer. This one changes on its own. Empty outside a build,
+#: where the answer is whatever the checkout says.
+BUILD_SHA = os.environ.get("API_BUILD_SHA", "")
+BUILD_TIME = os.environ.get("API_BUILD_TIME", "")
+
+#: Read the archive once at startup instead of making the first visitor do it.
+#: Set to 0 where the archive is huge or absent and the census is not wanted.
+WARM_CENSUS = os.environ.get("CENSUS_WARM", "1") not in ("0", "", "false")
+
+
+def _warm(app: FastAPI) -> None:
+    """The cold census, off the request path. Runs in a daemon thread."""
+    started = time.perf_counter()
+    got = sources.warm(app.state.archive_root)
+    if got is None:
+        return
+    cost = got.get("cost", {})
+    print(f"  census warm: {cost.get('files', 0)} file(s), "
+          f"{got.get('count', 0)} emitter(s) in "
+          f"{time.perf_counter() - started:.1f}s")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = db.init(db.connect())
     app.state.archive_root = Path(os.environ.get("ARCHIVE_ROOT", "."))
-    print(f"api {VERSION}  db={db.DEFAULT_DB}  archive={app.state.archive_root}")
+    print(f"api {VERSION}{' ' + BUILD_SHA if BUILD_SHA else ''}  "
+          f"db={db.DEFAULT_DB}  archive={app.state.archive_root}")
     print(f"  {auth.describe()}")
     if not auth.READ_TOKEN:
         print("  READ_TOKEN is unset: reads are open. Correct for a rig on "
               "127.0.0.1, wrong anywhere a station can reach.")
+    app.state.census_warm = None
+    if WARM_CENSUS:
+        # Daemon, so a slow archive cannot hold up a shutdown: this thread
+        # owns nothing but a cache, and losing it costs the next reader one
+        # cold read rather than leaving anything half-written. Kept on
+        # `app.state` so it can be waited on -- a fire-and-forget thread is
+        # one a test can only observe by sleeping and hoping.
+        app.state.census_warm = threading.Thread(
+            target=_warm, args=(app,), daemon=True, name="census-warm")
+        app.state.census_warm.start()
     yield
     app.state.db.close()
 
@@ -53,8 +92,14 @@ def healthz() -> dict:
     Unauthenticated on purpose, and it deliberately reports nothing about any
     station -- it answers "is this process up", which is the only question a
     restart policy should be asking.
+
+    It does answer one more: *which build* is up. That is not station data and
+    it is already visible to anyone who can reach the port, but without it the
+    only way to tell a deployed fix from an undeployed one is to look for its
+    effects.
     """
-    return {"ok": True, "version": VERSION}
+    return {"ok": True, "version": VERSION,
+            "build": BUILD_SHA or "source", "built_at": BUILD_TIME or None}
 
 
 @app.get("/", include_in_schema=False)

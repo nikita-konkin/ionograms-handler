@@ -34,6 +34,18 @@ RUN useradd --create-home --uid 10001 api \
  && mkdir -p /data && chown -R api:api /data /app
 USER api
 
+# What this image was built from, readable at `/healthz`. Last, so a rebuild
+# with a new SHA reuses every layer above it.
+#
+# The default matters: an image built by hand without `--build-arg` says
+# "unknown" rather than inheriting a stale value and claiming to be a commit
+# it is not. `/healthz` reports "source" when the variable is absent entirely,
+# which is what a checkout run by uvicorn looks like.
+ARG API_BUILD_SHA=unknown
+ARG API_BUILD_TIME=unknown
+ENV API_BUILD_SHA=$API_BUILD_SHA \
+    API_BUILD_TIME=$API_BUILD_TIME
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

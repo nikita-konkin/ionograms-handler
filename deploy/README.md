@@ -265,6 +265,25 @@ Tags:
 | `latest` | default branch only | what `watchtower` follows |
 | `v1.2.3`, `1.2` | on a `v*` git tag | releases |
 
+**Ask the server what it is running; do not infer it.** Every image carries the
+commit it was built from, passed in as a build arg and served at `/healthz`:
+
+```console
+$ curl -s http://server:8002/healthz
+{"ok":true,"version":"0.1.0","build":"3097398","built_at":"2026-08-13T18:41:02Z"}
+```
+
+`version` is hand-edited in `services/api/main.py` and has read `0.1.0` through
+every deploy so far, so it answers nothing. `build` is the thing to compare
+against `git log`. It reads `"source"` from a checkout run by uvicorn and
+`"unknown"` from an image built without the arg.
+
+This matters most when a fix appears not to have worked. A green CI run is
+**not** proof of a new image: if `DOCKERHUB_USERNAME` or `DOCKERHUB_TOKEN` is
+missing the publish step is skipped, the workflow stays green, and the only
+trace is an "Images not published" notice in the run summary. Check `build`
+first, then the run summary, then pull.
+
 Two repository secrets are needed, under Settings → Secrets and variables →
 Actions:
 
@@ -456,7 +475,7 @@ where 8000 belongs to `tec-backend`.
 
 | check | expected |
 |---|---|
-| `curl localhost:$PORT/healthz` | `{"ok":true,...}` |
+| `curl localhost:$PORT/healthz` | `{"ok":true,...}`, and `build` naming the commit that is running |
 | `/ui` after one push interval | `SIM` appears, `HEALTHY`, most metrics grey |
 | Queue `restart`, then watch the sim's log | `FAKE systemctl restart chirp.target` |
 | `/ui` again | the command shows `acked` |

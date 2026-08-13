@@ -926,3 +926,33 @@ already warns about. They still show FAIL in the metrics table.
 When the station is not acquiring, the schedule pills say `SLOT DUE` rather
 than `SOUNDING` and the table says `due` rather than `sounding`, with the
 distinction spelled out in the panel. Same arithmetic, different claim.
+
+### It was not deployed, and that took two four-minute page loads to establish
+
+The census fix was on `develope` and not on the server. The work server runs
+`docker-compose.hub.yml`, which pulls images and never builds, so a push moves
+nothing on its own -- and `watchtower` is an opt-in profile, so on a host that
+never enabled it nothing pulls either. The other silent path is CI: with
+`DOCKERHUB_USERNAME` or `DOCKERHUB_TOKEN` unset the publish step is skipped and
+the run still goes green, leaving only a notice in the run summary.
+
+None of that was diagnosable from outside, because `/healthz` reported
+`version: "0.1.0"` -- a hand-edited constant that has read the same thing
+through every deploy. The only available evidence was whether the fix's effects
+were visible, on a page that takes four minutes to answer. Two loads, ten
+minutes, to learn that the code was not there.
+
+Both images now carry `API_BUILD_SHA` from CI and `/healthz` serves it as
+`build`, alongside `built_at`. It reads `source` from a checkout and `unknown`
+from an unstamped build; neither pretends to be a commit.
+
+The second half: the census cache is in-process, so every container start
+handed the cold read -- 234 s on the work server -- to whoever opened the page
+first. That is indistinguishable from a broken page, and was read as one. The
+api now does that read at startup in a daemon thread, with the parameters the
+page defaults to, and prints what it cost. `CENSUS_WARM=0` opts out.
+
+Worth noting for later: the warm-up and the page must ask the *same* question
+or the warm pass is wasted -- the short-circuit is keyed on `max_days` and
+`min_count`, so both now take them from `DEFAULT_MAX_DAYS`/`DEFAULT_MIN_COUNT`
+rather than from two literals that happened to agree.

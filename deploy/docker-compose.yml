@@ -16,6 +16,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
+      args:
+        # An image built here is a working copy, not a commit, and `/healthz`
+        # should say so rather than name a SHA whose tree it may not match.
+        # Override deliberately: API_BUILD_SHA=$(git rev-parse --short HEAD).
+        API_BUILD_SHA: "${API_BUILD_SHA:-local build}"
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
     environment:

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.templating import Jinja2Templates
 
 from . import acquisition, db
+from . import sources as sources_mod
 from .auth import require_read
 from .read_routes import _age_seconds, _command, _tri
 
@@ -159,15 +160,15 @@ def series(request: Request, method: str = "algo",
 
 
 @router.get("/ui/sources")
-def sources_page(request: Request, max_days: int = 3, min_count: int = 3):
+def sources_page(request: Request,
+                 max_days: int = sources_mod.DEFAULT_MAX_DAYS,
+                 min_count: int = sources_mod.DEFAULT_MIN_COUNT):
     """Transmitters heard, and the schedule they would become.
 
     The page exists because `control.py` refuses to leave search mode without
     a `sounder_timings` list, and until now the only way to get one was to run
     `muf detect` on the station and transcribe the numbers.
     """
-    from . import sources as sources_mod
-
     conn = request.app.state.db
     census = sources_mod.census(request.app.state.archive_root,
                                 max_days=max_days, min_count=min_count)

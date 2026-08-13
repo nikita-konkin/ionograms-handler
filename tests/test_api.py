@@ -20,7 +20,7 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient          # noqa: E402
 
 from services.api import acquisition as acq        # noqa: E402
-from services.api import auth, db                  # noqa: E402
+from services.api import auth, db, main            # noqa: E402
 
 
 @pytest.fixture
@@ -36,7 +36,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
     monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
 
-    from services.api import main
+    # The startup warm-up reads an archive in a background thread and writes
+    # to the census cache, which is module state every test shares -- left on,
+    # its result lands in whichever test happens to be running when it
+    # finishes. The test that owns it turns it back on deliberately.
+    monkeypatch.setattr(main, "WARM_CENSUS", False)
 
     with TestClient(main.app) as c:
         yield c
@@ -1001,6 +1005,86 @@ def test_a_file_caught_mid_write_is_retried_when_it_grows(cold_census,
     after = cold_census.census(tmp_path, min_count=2)
     assert after["cost"]["opened"] == 1
     assert after["cost"]["records"] == n_first + 1, "still skipping a good file"
+
+
+def test_the_warm_up_answers_the_question_the_page_asks(cold_census, tmp_path,
+                                                        make_detection_h5):
+    """A warm-up keyed differently from the page is a warm-up for nothing.
+
+    The short-circuit is fingerprinted on the tuning parameters, so warming
+    with `max_days=7` would fill the per-file memo and still leave the first
+    visitor doing the grouping. `sources.warm` and the route both take their
+    defaults from the same constants for that reason.
+    """
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    warmed = cold_census.warm(tmp_path)
+    assert warmed["cost"]["opened"] > 0
+
+    served = cold_census.census(tmp_path)
+    assert served["cost"]["unchanged"] is True
+    assert served["cost"]["opened"] == 0
+    assert served["emitters"] == warmed["emitters"]
+
+
+def test_the_archive_is_read_at_startup_not_by_the_first_visitor(
+        cold_census, tmp_path, monkeypatch, make_detection_h5):
+    """234 seconds, once, is the whole cost of this cache being in memory.
+
+    It is paid on every container start, and left to the request path it is
+    paid by a person looking at a blank tab -- which is indistinguishable from
+    the page being broken, and was read as exactly that.
+    """
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    monkeypatch.setattr(auth, "READ_TOKEN", "")
+    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
+    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
+    monkeypatch.setenv("ARCHIVE_ROOT", str(tmp_path))
+    monkeypatch.setattr(main, "WARM_CENSUS", True)
+
+    with TestClient(main.app) as c:
+        c.app.state.census_warm.join(timeout=60)
+        assert not c.app.state.census_warm.is_alive(), "warm-up never finished"
+        served = c.get("/ui/sources")
+
+    assert served.status_code == 200
+    assert cold_census._LAST["census"]["cost"]["opened"] > 0, "read nothing"
+    assert "nothing re-opened" in served.text
+
+
+def test_a_missing_archive_does_not_stop_the_api_starting(cold_census,
+                                                          tmp_path):
+    """The warm-up runs at boot, so anything it raises takes the server down.
+
+    An unreadable archive is a page that cannot be rendered; it is not a
+    reason for the health views and the command queue to be unreachable too.
+    """
+    got = cold_census.warm(tmp_path / "not-here")
+    assert got["cost"]["files"] == 0 and got["emitters"] == []
+
+
+def test_the_build_is_reported_so_a_deploy_can_be_checked(client,
+                                                          monkeypatch):
+    """`version` is hand-edited and has read 0.1.0 through every deploy.
+
+    Without a stamp that moves on its own, "is the fix on the server?" can
+    only be answered by looking for the fix's effects -- which on a slow page
+    is two four-minute page loads.
+    """
+    got = client.get("/healthz").json()
+    assert got["ok"] is True
+    assert got["build"] == "source", "an unstamped checkout is not a build"
+
+    monkeypatch.setattr(main, "BUILD_SHA", "3097398")
+    monkeypatch.setattr(main, "BUILD_TIME", "2026-08-13T18:40:00Z")
+    stamped = client.get("/healthz").json()
+    assert stamped["build"] == "3097398"
+    assert stamped["built_at"] == "2026-08-13T18:40:00Z"
 
 
 def test_a_census_row_with_a_missing_column_is_still_json():

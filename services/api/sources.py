@@ -39,6 +39,12 @@ from pathlib import Path
 #: for "what is on air today", not for a survey.
 DEFAULT_MAX_DAYS = 3
 
+#: Detections a group needs before it is reported at all. Named rather than
+#: written twice, because it is half of the cache key: the page's default and
+#: the startup warm-up have to ask the *same* question or the warm pass leaves
+#: the first visitor paying for the archive anyway.
+DEFAULT_MIN_COUNT = 3
+
 #: Scatter of the fractional-second offset, past which a group is not one
 #: transmitter. A real chirp starts at the same point within its second every
 #: time -- the tight groups on DOB sit at +/-0.9 and +/-1.6 ms across hundreds
@@ -202,7 +208,7 @@ def _cdetection_rows(path, rows):
 def census(archive_root: str | os.PathLike, *,
            max_days: int = DEFAULT_MAX_DAYS,
            cycle_s: float | None = None,
-           min_count: int = 3,
+           min_count: int = DEFAULT_MIN_COUNT,
            max_scatter_s: float = DEFAULT_MAX_SCATTER_S,
            max_slot_fraction: float = DEFAULT_MAX_SLOT_FRACTION,
            min_repeats: float = DEFAULT_MIN_REPEATS) -> dict:
@@ -333,6 +339,31 @@ def census(archive_root: str | os.PathLike, *,
         }
         _LAST.update(fingerprint=fingerprint, census=out)
         return out
+
+
+def warm(archive_root, *, max_days: int = DEFAULT_MAX_DAYS,
+         min_count: int = DEFAULT_MIN_COUNT) -> dict | None:
+    """Pay the cold read here, so the first visitor does not.
+
+    The cache lives in this process's memory, so every container start hands
+    the whole archive to whoever opens the page first -- 234 s on the work
+    server, which is indistinguishable from the page being broken. Started in
+    the background at boot, the same read happens while nothing is waiting on
+    it.
+
+    Called with the parameters the page defaults to, because the short-circuit
+    is keyed on them: warming a *different* question fills the per-file memo
+    but still leaves the first request doing the grouping.
+
+    Never raises. A missing or unreadable archive must not stop the api from
+    starting -- the console's other pages work without it, and a census that
+    cannot run will report its own failure on the page that needs it.
+    """
+    try:
+        return census(archive_root, max_days=max_days, min_count=min_count)
+    except Exception as exc:                                  # noqa: BLE001
+        warnings.warn(f"census warm-up failed: {exc!r}", stacklevel=2)
+        return None
 
 
 def _repeats_per_slot(emitter) -> float:
