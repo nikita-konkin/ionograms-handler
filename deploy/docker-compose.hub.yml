@@ -24,6 +24,10 @@ services:
     environment:
       API_DB: /data/ionograms.sqlite3
       ARCHIVE_ROOT: /archive
+      # Solar indices for IRI cache here, on the volume rather than in the
+      # image: `$HOME` is a container layer, so without this every `pull`
+      # discards ~5 MB of index files and the next model run re-downloads them.
+      MUF_INDEX_CACHE: /data/indices
       READ_TOKEN: "${READ_TOKEN:-}"
       CONTROL_TOKEN: "${CONTROL_TOKEN:?set CONTROL_TOKEN in deploy/.env}"
     volumes:
@@ -54,6 +58,10 @@ services:
     environment:
       API_DB: /data/ionograms.sqlite3
       ARCHIVE_ROOT: /archive
+      # Solar indices for IRI cache here, on the volume rather than in the
+      # image: `$HOME` is a container layer, so without this every `pull`
+      # discards ~5 MB of index files and the next model run re-downloads them.
+      MUF_INDEX_CACHE: /data/indices
     # The image's healthcheck curls the api's own /healthz, and this container
     # runs no server -- inherited, it would sit permanently unhealthy and teach
     # everyone to ignore the column. Its liveness is the log line it prints

@@ -18,7 +18,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.templating import Jinja2Templates
 
+from muf.reference import indices
+
 from . import acquisition, db
+from . import net as net_mod
 from . import sources as sources_mod
 from .auth import require_read
 from .read_routes import _age_seconds, _command, _tri
@@ -85,6 +88,11 @@ def console(request: Request):
     return templates.TemplateResponse(request, "console.html", {
         "stations": stations, "n_soundings": counts["n"], "methods": methods,
         "stale_after": STALE_AFTER_S,
+        # Read, never probed: `current` returns the last background reading
+        # without blocking, so a page load costs nothing even with every index
+        # host unreachable.
+        "net": net_mod.current(),
+        "sources": {s.key: s for s in indices.SOURCES},
     })
 
 

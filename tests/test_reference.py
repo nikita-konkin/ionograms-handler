@@ -215,6 +215,127 @@ def test_parse_silso_daily_skips_missing():
     assert dt.date(2026, 2, 5) not in parsed        # -1 means not determined
 
 
+def test_parse_apf107_reads_by_column_not_by_whitespace():
+    """``ap`` reaches 400 in a severe storm and the fields are three wide.
+
+    Three digits in a three-wide field leave no space between columns, so a
+    split on whitespace merges them -- and the line that proves it is a
+    storm day, which is exactly when the index matters.
+    """
+    text = (" 14  4 15  5  9  5  3  3  3  5  4  5-11163.0144.0143.1\n"
+            " 03 10 29400300207236179132 94 67236-11274.8180.6135.9\n")
+    parsed = indices._parse_apf107(text)
+
+    assert parsed[dt.date(2014, 4, 15)]["f107"] == pytest.approx(163.0)
+    assert parsed[dt.date(2014, 4, 15)]["f107_81"] == pytest.approx(144.0)
+    assert parsed[dt.date(2014, 4, 15)]["ap"] == pytest.approx(5)
+    # 2003-10-29, the Halloween storm: Ap 236, and every three-hourly value
+    # runs into its neighbour.
+    assert parsed[dt.date(2003, 10, 29)]["ap"] == pytest.approx(236)
+    assert parsed[dt.date(2003, 10, 29)]["f107"] == pytest.approx(274.8)
+
+
+def test_apf107_two_digit_years_split_at_1958():
+    """The file starts 1958-01-01, so ``58`` cannot mean 2058."""
+    assert indices._apf107_year(58) == 1958
+    assert indices._apf107_year(99) == 1999
+    assert indices._apf107_year(0) == 2000
+    assert indices._apf107_year(26) == 2026
+
+
+def test_swpc_daily_f107_prefers_the_noon_reading():
+    """Three readings a day; only the 20:00 UT one is the quoted daily value.
+
+    Taking the newest instead would mix a morning reading into a series of
+    noon ones -- and today only *has* a morning reading, which is why the
+    fallback exists rather than the day being dropped.
+    """
+    text = json.dumps([
+        {"time_tag": "2026-08-12T17:00:00", "flux": 99.0},
+        {"time_tag": "2026-08-12T20:00:00", "flux": 100.0},
+        {"time_tag": "2026-08-12T22:00:00", "flux": 101.0},
+        {"time_tag": "2026-08-13T17:00:00", "flux": 91.0},
+    ])
+    parsed = indices._parse_swpc_f107_daily(text)
+
+    assert parsed[dt.date(2026, 8, 12)] == pytest.approx(100.0)
+    assert parsed[dt.date(2026, 8, 13)] == pytest.approx(91.0)
+
+
+def test_eisn_parses_the_current_month():
+    text = ("2026, 08, 01, 2026.582, 111,  12.9,  35,  42,\n"
+            "2026, 08, 02, 2026.585,  -1,   0.0,   0,   0,\n")
+    parsed = indices._parse_silso_eisn(text)
+
+    assert parsed[dt.date(2026, 8, 1)] == pytest.approx(111.0)
+    assert dt.date(2026, 8, 2) not in parsed        # -1 means not determined
+
+
+def test_daily_window_mean_needs_most_of_its_window():
+    """A trailing mean over ten days is not an 81-day mean and must not pose
+    as one -- it would swing with a single active region."""
+    sparse = {dt.date(2026, 8, 1) + dt.timedelta(days=d): 100.0
+              for d in range(10)}
+    assert indices._daily_window_mean(sparse, dt.date(2026, 8, 5)) is None
+
+    full = {dt.date(2026, 7, 1) + dt.timedelta(days=d): 100.0
+            for d in range(81)}
+    assert indices._daily_window_mean(
+        full, dt.date(2026, 8, 10)) == pytest.approx(100.0)
+
+
+def test_the_model_driver_is_smoothed_not_daily():
+    """The CCIR maps were fitted on a smoothed index; the daily flux is not it.
+
+    `f107` is what an operator reads and `f107_driver` is what a model is
+    given, and this is the whole reason they are separate fields.
+    """
+    si = indices.SolarIndices(date=dt.date(2026, 8, 13), f107=91.0,
+                              f107_81=121.3, f107_monthly=118.0)
+    assert si.f107_driver == pytest.approx(121.3)
+
+    # Falls back in order, and never silently returns nothing when it has
+    # something: monthly beats a bare daily value.
+    assert indices.SolarIndices(date=dt.date(2026, 8, 13), f107=91.0,
+                                f107_monthly=118.0).f107_driver == 118.0
+    assert indices.SolarIndices(date=dt.date(2026, 8, 13),
+                                f107=91.0).f107_driver == 91.0
+    assert indices.SolarIndices(date=dt.date(2026, 8, 13)).f107_driver is None
+
+
+def test_one_unreachable_source_does_not_sink_the_rest(tmp_path, monkeypatch):
+    """The redundancy is the point of having six files on three hosts.
+
+    Before they were added, a SILSO outage raised and IRI lost its driver.
+    Now only a total outage does.
+    """
+    reachable = {indices.BY_KEY["iri_apf107"].url:
+                 " 26  2  4  8  8  8  8  8  8  8  8  8-11162.5140.3132.0\n"}
+
+    def selective(url, cache_dir, name, offline=False):
+        if url in reachable:
+            return reachable[url]
+        raise indices.IndexUnavailable(f"blocked: {url}")
+
+    monkeypatch.setattr(indices, "_fetch", selective)
+    si = indices.solar_indices(dt.date(2026, 2, 4), cache_dir=tmp_path)
+
+    assert si.used == ("iri_apf107",)
+    assert si.f107 == pytest.approx(162.5)
+    assert si.f107_driver == pytest.approx(140.3)
+    assert si.ssn_daily is None                 # SILSO was blocked; say so
+    assert "5 source(s) unavailable" in si.source
+
+
+def test_every_source_blocked_still_raises(tmp_path, monkeypatch):
+    def blocked(url, cache_dir, name, offline=False):
+        raise indices.IndexUnavailable(f"blocked: {url}")
+
+    monkeypatch.setattr(indices, "_fetch", blocked)
+    with pytest.raises(indices.IndexUnavailable):
+        indices.solar_indices(dt.date(2026, 2, 4), cache_dir=tmp_path)
+
+
 @pytest.mark.network
 def test_indices_fetch_live():
     """Live check; skips when the network or the source is unavailable."""
@@ -226,6 +347,38 @@ def test_indices_fetch_live():
     assert si.ssn_daily is not None
     assert si.is_smoothed          # 2022 is old enough to have a real R12
     assert 0 < si.r12 < 400
+
+
+@pytest.mark.network
+def test_every_source_is_reachable_and_parses():
+    """Each file in `SOURCES` answers, and answers with what we think it is.
+
+    A source that 404s or starts serving an error page still caches, and a
+    parser that finds nothing in it returns an empty dict rather than
+    complaining -- so the failure would show up months later as a model
+    running on a stale driver. This is the check that makes it show up now.
+
+    irimodel.org is the one to watch: it runs mod_security and refuses
+    urllib's default User-Agent with a 406.
+    """
+    for source in indices.SOURCES:
+        try:
+            text = indices._fetch(source.url, indices.DEFAULT_CACHE,
+                                  source.filename)
+        except indices.IndexUnavailable as exc:
+            pytest.skip(f"{source.key} unreachable: {exc}")
+        assert text.strip(), f"{source.key} served an empty body"
+
+    si = indices.solar_indices(dt.date(2014, 4, 15))
+    # Every source but EISN, which is only consulted for dates the definitive
+    # daily series does not yet reach. A set, because `used` records the order
+    # they were read in and that is an implementation detail.
+    assert set(si.used) == {s.key for s in indices.SOURCES
+                            if s.key != "silso_eisn"}
+    assert si.f107 == pytest.approx(163.0)      # apf107.dat, that exact day
+    assert si.f107_81 == pytest.approx(144.0)
+    assert si.ap == pytest.approx(5)
+    assert si.ssn_smoothed == pytest.approx(116.4, abs=1.0)
 
 
 # --------------------------------------------------------------------------

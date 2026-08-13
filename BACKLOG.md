@@ -956,3 +956,77 @@ Worth noting for later: the warm-up and the page must ask the *same* question
 or the warm pass is wasted -- the short-circuit is keyed on `max_days` and
 `min_count`, so both now take them from `DEFAULT_MAX_DAYS`/`DEFAULT_MIN_COUNT`
 rather than from two literals that happened to agree.
+
+---
+
+## 19. Solar indices: three more sources, and something that says whether they can be reached (2026-08-13)
+
+**Why now.** The plan for IRI values on the sounding page rests on a
+dependency the page cannot show: with no route out,
+`muf.reference.indices` falls back to its cache and keeps answering, and a
+driver from six months ago renders exactly like a fresh one.
+
+**What the driver actually was.** F10.7 came from SWPC's *monthly*
+`observed-solar-cycle-indices.json` and nothing else. Three files were added,
+all verified reachable and parsed against a known value:
+
+| source | carries | size | lag |
+|---|---|---|---|
+| `irimodel.org/indices/apf107.dat` | daily F10.7, 81-day mean, `ap`, since 1958 | 1.4 MB | ~16 d |
+| `services.swpc.noaa.gov/json/f107_cm_flux.json` | daily F10.7, rolling 42 days | 23 KB | same day |
+| `sidc.be/SILSO/DATA/EISN/EISN_current.csv` | estimated SSN, current month | 600 B | same day |
+
+The two daily series are merged, newest source winning on the overlap, so the
+81-day mean can be computed for dates past `apf107.dat`'s end. On 2026-08-13
+that mattered: `apf107.dat` ended 2026-07-28 and `SN_d_tot` 2026-07-31.
+
+`SolarIndices.f107` is now the observed daily flux and `f107_driver` is what a
+model is handed -- 81-day mean, then monthly, then daily. They are separate
+because the CCIR and URSI maps IRI interpolates were fitted on a smoothed
+index; the day's flux moves 50 SFU across a rotation and the maps cannot
+represent that.
+
+**Two traps, both pinned by a test.** `ap` reaches 400 in a severe storm and
+`apf107.dat`'s fields are three columns wide, so a whitespace split merges them
+-- 2003-10-29 reads `400300207236179132 94 67236`. And irimodel.org runs
+mod_security: it refuses urllib's default `User-Agent` with a 406, and
+`curl/8.7.1` as well. `ionograms-handler/0.1` passes and
+`ionograms-handler/0.1 (+solar index fetch; python-urllib)` does not, so the
+constant carries a warning not to make it more informative without re-testing.
+
+**Not added, with reasons**, so nobody re-derives them:
+
+- `irimodel.org/indices/ig_rz.dat` (IG12 and Rz12, with predictions to 2028).
+  Its header says last updated 2025-08-19, a year stale. Worse, the parse could
+  not be verified: split at IRI's own `3 - imst + (iyend-iyst)*12 + imend`
+  = 853, the 1958 values read as sunspot v1.0 and the cycle-24 peak (116.4 at
+  2014-04) reads as v2.0. And PyIRI's `IRI_density_1day` takes F10.7, not IG12
+  or Rz12, so none of it would reach the model.
+- GFZ `Kp_ap_Ap_SN_F107_since_1932.txt` -- 5.5 MB for an `ap` that
+  `apf107.dat` already carries.
+- DRAO `fluxtable.txt` -- 2.2 MB, redundant with the two F10.7 sources above.
+
+**The indicator.** `services/api/net.py`, the **upstream** panel on `/ui`, and
+`GET /net`. It probes the hosts in `indices.SOURCES`, not the internet: a ping
+to a resolver stays green behind a proxy that blocks `sidc.be` and goes red on
+a host using a mirror. One `HEAD` per *host* -- three, concurrently, 4 s
+timeout, daemon thread every 600 s. `/net` and `/ui` both serve the last
+reading in ~1.5 ms and neither ever probes; a reading older than two intervals
+decays to `unknown`, because a dead daemon thread must not leave a green light.
+
+Reachability and cache age are separate columns. Unreachable with a fresh cache
+is a model still answering correctly; reachable with `never` is a model that
+has never had a driver.
+
+### Still open
+
+- **PyIRI is not installed anywhere** -- not in `deploy/requirements-api.txt`,
+  not in the local venv. `iri.available()` is False, so the IRI panel has a
+  driver and no model. It is pure Python; one line.
+- **Nothing in `services/` calls `solar_indices` yet.** The indicator is
+  currently insurance for CLI users of `muf compare --ref-model` and
+  `muf export --iri`; it becomes load-bearing when the panel lands.
+- **Cost per sounding is 0.42 s unless batched.** `IRI_density_1day` takes an
+  array of hours, so a 288-sounding day is one call at 0.16 s. The panel wants
+  a per-circuit-day batch or a cache keyed on circuit and hour, not a call per
+  page load.

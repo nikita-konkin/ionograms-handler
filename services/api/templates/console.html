@@ -13,6 +13,63 @@
     run <code>python -m services.api.ingest &lt;archive&gt;</code></span>{% endif %}
 </div>
 
+<div class="panel">
+  <h2>
+    upstream
+    {% if net.state == 'online' %}
+      <span class="pill ok">INTERNET OK</span>
+    {% elif net.state == 'degraded' %}
+      <span class="pill fail">PARTIAL</span>
+    {% elif net.state == 'offline' %}
+      <span class="pill fail">NO INTERNET</span>
+    {% else %}
+      <span class="pill unk">INTERNET?</span>
+    {% endif %}
+    <span class="muted" style="font-weight:normal">
+      {% if net.age_s is not none %}checked {{ net.age_s|duration }} ago{% endif %}
+    </span>
+  </h2>
+
+  <p class="note">{{ net.detail }}. These are the servers the solar indices
+  come from, not the internet at large &mdash; a host that reaches them through
+  a mirror is green here and a host behind a proxy that blocks
+  <code>sidc.be</code> is not, which is the distinction that decides whether
+  the IRI values on a sounding page can be refreshed.</p>
+
+  {% if net.probes %}
+  <div class="scroll"><table>
+    <tr><th></th><th>host</th><th>rtt</th><th>provides</th>
+        <th>cached</th><th>detail</th></tr>
+    {% for p in net.probes %}
+    <tr>
+      <td>{% if p.ok is none %}<span class="pill unk">?</span>
+          {% elif p.ok %}<span class="pill ok">ok</span>
+          {% else %}<span class="pill fail">FAIL</span>{% endif %}</td>
+      <td>{{ p.host }}</td>
+      <td class="muted">{% if p.ms is not none %}{{ '%.0f'|format(p.ms) }} ms{% endif %}</td>
+      {# One line per file rather than a comma list: sidc.be alone serves
+         three, and side by side the two columns become two long strings the
+         reader has to align by counting commas. #}
+      <td class="muted">{% for key in p.provides %}
+        <div>{{ sources[key].what }}</div>{% endfor %}</td>
+      <td class="muted">{% for key in p.provides %}
+        {%- set age = net.cache.get(key) %}
+        <div>{% if age is none %}<span class="pill unk">never</span>
+             {% else %}{{ age|duration }}{% endif %}</div>{% endfor %}</td>
+      <td class="wrap">{{ p.detail }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+
+  <p class="note"><b>Reachable and cached are different questions.</b>
+  Unreachable with a fresh cache is a model still answering correctly;
+  reachable with <span class="pill unk">never</span> is a model that has never
+  had a driver. A cached file older than seven days is re-fetched on the next
+  use, and a stale one is served anyway if the fetch fails &mdash; so an index
+  can be months old without anything else on this console saying so.</p>
+  {% endif %}
+</div>
+
 {% if not stations %}
 <div class="panel">
   <h2>no stations</h2>

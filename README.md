@@ -1660,7 +1660,7 @@ services/
     acquisition.py      which slot is being sounded, and when the next is due
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  752 tests; `python -m pytest tests -q`
+tests/                  768 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1892,7 +1892,74 @@ $ curl -s http://server:8002/healthz
 It reads `"source"` from a checkout and `"unknown"` from an image built without
 the build arg — neither pretends to be a commit.
 
-Two things the page cannot do for you, both settled in the identify form. Rows
+### Can this host still reach its upstream?
+
+Everything above is about the station. The **upstream** panel is about the
+server itself: whether it can still fetch the solar indices the reference
+models run on. That dependency is otherwise invisible in the output — with no
+route out, `muf.reference.indices` falls back to its cache and keeps answering,
+and a driver from six months ago renders exactly like a fresh one.
+
+| pill | means |
+|---|---|
+| `INTERNET OK` | every index host answered |
+| `PARTIAL` | some answered; the panel names the ones that did not |
+| `NO INTERNET` | none answered — models run on cache, or not at all |
+| `INTERNET?` | no reading current enough to answer with |
+
+**It probes those hosts, not the internet.** A ping to a public resolver
+answers a question nobody asked: it stays green behind a proxy that blocks
+HTTPS to `sidc.be`, and it goes red on a host reaching every source it needs
+through a mirror. The list is `indices.SOURCES`, so a source added there is
+probed without anyone remembering to.
+
+**Reachability and freshness are separate columns**, because they fail
+independently and mean opposite things: unreachable with a fresh cache is a
+model still answering correctly, and reachable with `never` is a model that has
+never had a driver. Lightweight is a constraint rather than an aspiration — one
+`HEAD` per *host*, three of them, concurrently, on a 4 s timeout, in a daemon
+thread every 600 s. No request path ever waits on one: `/net` and `/ui` both
+serve the last reading in about 1.5 ms, and the pill goes grey rather than
+green if the checker itself stops running. `NET_CHECK=0` switches it off on a
+deliberately isolated host; `NET_CHECK_INTERVAL_S` and `NET_TIMEOUT_S` tune it.
+
+Six files on three hosts, and the redundancy is the point — any one of them can
+be down or firewalled without a model losing its driver, because
+`solar_indices` raises only when *nothing* answered and nothing is cached:
+
+| source | file | carries |
+|---|---|---|
+| SILSO | `SN_d_tot_V2.0.csv` | daily international sunspot number |
+| SILSO | `EISN_current.csv` | estimated SSN for the current month |
+| SILSO | `SN_ms_tot_V2.0.csv` | 13-month smoothed R12 |
+| NOAA SWPC | `observed-solar-cycle-indices.json` | monthly SSN and F10.7 |
+| NOAA SWPC | `f107_cm_flux.json` | daily 10.7 cm flux, last 42 days |
+| irimodel.org | `apf107.dat` | daily F10.7, its 81-day mean, and `ap`, since 1958 |
+
+The last three are what IRI actually wanted. Before them the only flux
+available was SWPC's **monthly** figure; `apf107.dat` is the driver file IRI
+itself reads, and SWPC's rolling 42 days closes the fortnight it runs behind —
+on 2026-08-13 `apf107.dat` ended at 2026-07-28 and `SN_d_tot` at 2026-07-31,
+which is why the estimated series is there too. Two traps in that file: `ap`
+reaches 400 in a severe storm and the fields are three columns wide, so a split
+on whitespace merges them (2003-10-29 reads `400300207236...`), and
+irimodel.org runs mod_security, which refuses urllib's default `User-Agent`
+with a 406 — and `curl`'s as well.
+
+`SolarIndices.f107` is the observed daily flux and **`f107_driver` is what a
+model is given**. They are separate fields on purpose: the CCIR and URSI maps
+IRI interpolates were fitted against a smoothed index, so `f107_driver` prefers
+the 81-day mean and falls back through monthly to daily. Feeding a map the
+day's flux would swing foF2 across a solar rotation in a way the climatology
+never claimed to predict.
+
+Roughly 5 MB lands in the cache, at `$HOME/.cache/muf/indices` by default. In a
+container `$HOME` is an image layer, so `MUF_INDEX_CACHE` points it at
+`/data/indices` — the volume the database already uses — and a `docker compose
+pull` stops throwing it away.
+
+Two things the `/ui/sources` page cannot do for you, both settled in the
+identify form. Rows
 are grouped by chirp rate and arrival phase, so several transmitters that all
 start near the second boundary merge into one row — identify it as one of them
 and tick only its slots. And `rep` is filled in as the assumed cycle, so an

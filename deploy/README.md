@@ -482,6 +482,25 @@ where 8000 belongs to `tec-backend`.
 | Stop the sim container, wait 3 min | `SIM` turns `STALE` |
 | `/ui/series?method=kmeans` | a MUF curve, hollow markers for lower bounds |
 | `/ui/sounding/1` | an ionogram, auto-gated |
+| `curl localhost:$PORT/net` | `"state":"online"` if this host can reach the solar index servers |
+
+**`/net` is the answer to "does the server have internet?"** — asked of the
+three hosts that matter rather than of the internet at large, since a proxy
+that blocks `sidc.be` and a working mirror both look identical to a ping. It
+reports the last background pass and never probes on request, so it costs
+about a millisecond and is safe to poll. The same reading is the **upstream**
+panel at the top of `/ui`, with each file's cache age beside its host.
+
+`state` is `unknown` for the first second after startup, and again if the
+checker thread ever stops — a dead checker must not leave a green light. Three
+knobs, all optional: `NET_CHECK=0` to switch it off on a deliberately isolated
+host, `NET_CHECK_INTERVAL_S` (default 600) and `NET_TIMEOUT_S` (default 4).
+
+The indices themselves cache to `MUF_INDEX_CACHE`, set to `/data/indices` in
+both compose files. It has to be on the volume: `$HOME` is an image layer, so
+without it every `docker compose pull` discards ~5 MB of index files and the
+next model run re-downloads them — on a host with no route out, that is the
+only copy gone.
 
 Most metrics being **grey** in the sim is correct, not a fault: a container has
 no systemd and no journald, so unit states and logs are genuinely unmeasurable.

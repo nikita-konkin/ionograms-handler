@@ -513,6 +513,8 @@ GET /series/muf?method=&from=&to=&smoothed=
 GET /ionogram/{id}.png            → renderer
 GET /sao/{id}.xml                 → renderer
 GET /forecast?horizon=&from=
+GET /net                          index-host reachability, last background
+                                  pass only -- this route never probes
 
 GET  /stations                         latest status per station, with age
 GET  /stations/{id}/health             latest report and recent commands

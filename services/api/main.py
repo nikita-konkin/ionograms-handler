@@ -21,7 +21,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
-from . import agent_routes, auth, control_routes, db, read_routes, sources
+from . import agent_routes, auth, control_routes, db, net, read_routes, sources
 from . import web_routes
 
 VERSION = "0.1.0"
@@ -62,6 +62,12 @@ async def lifespan(app: FastAPI):
     if not auth.READ_TOKEN:
         print("  READ_TOKEN is unset: reads are open. Correct for a rig on "
               "127.0.0.1, wrong anywhere a station can reach.")
+    # Whether this host can still refresh the solar indices IRI runs on. Off
+    # the request path for the same reason the census is, but on a loop rather
+    # than once: a census of write-once files cannot go stale and a route to a
+    # third party can.
+    app.state.net_check = net.start()
+
     app.state.census_warm = None
     if WARM_CENSUS:
         # Daemon, so a slow archive cannot hold up a shutdown: this thread

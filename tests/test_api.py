@@ -19,8 +19,9 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient          # noqa: E402
 
+from muf.reference import indices                  # noqa: E402
 from services.api import acquisition as acq        # noqa: E402
-from services.api import auth, db, main            # noqa: E402
+from services.api import auth, db, main, net       # noqa: E402
 
 
 @pytest.fixture
@@ -41,6 +42,12 @@ def client(tmp_path, monkeypatch):
     # its result lands in whichever test happens to be running when it
     # finishes. The test that owns it turns it back on deliberately.
     monkeypatch.setattr(main, "WARM_CENSUS", False)
+
+    # Same hazard, worse: the reachability checker makes real HEAD requests to
+    # three third-party hosts. A unit suite that reaches the internet is slow,
+    # fails on a train, and quietly tests somebody else's uptime.
+    monkeypatch.setattr(net, "ENABLED", False)
+    net.reset()
 
     with TestClient(main.app) as c:
         yield c
@@ -1496,3 +1503,133 @@ def test_the_console_shows_what_is_sounding_and_what_arrived(client, tmp_path,
     assert page.status_code == 200
     assert "acquisition" in page.text
     assert "NIC" in page.text
+
+
+# --------------------------------------------------------------------------
+# Reachability: can this host still refresh the solar indices IRI runs on?
+# --------------------------------------------------------------------------
+
+def _reachable(*hosts_ok):
+    """A probe stub. ``_reachable(True, False)`` reaches the first host only."""
+    answers = list(hosts_ok)
+
+    def probe(url, *, timeout=0.0):
+        ok = answers.pop(0)
+        return (True, 12.0, "HTTP 200") if ok else (False, 0.0, "refused")
+
+    return probe
+
+
+def test_reachability_is_all_or_some_or_none(tmp_path):
+    n = len(net.hosts())
+    assert n >= 2, "the fold between online and degraded needs two hosts"
+
+    assert net.check(probe_fn=_reachable(*[True] * n),
+                     cache_dir=tmp_path).state == "online"
+    assert net.check(probe_fn=_reachable(*[False] * n),
+                     cache_dir=tmp_path).state == "offline"
+
+    partial = net.check(probe_fn=_reachable(True, *[False] * (n - 1)),
+                        cache_dir=tmp_path)
+    assert partial.state == "degraded"
+    # A partial outage has to name what is down: "degraded" alone does not
+    # tell an operator whether the missing host is the one carrying F10.7.
+    assert any(p.host in partial.detail for p in partial.probes if not p.ok)
+
+
+def test_a_probe_never_raises_whatever_the_host_does():
+    """The connectivity light must not be able to take the page down."""
+    ok, ms, detail = net.probe("http://127.0.0.1:1/nothing", timeout=0.5)
+
+    assert ok is False
+    assert ms is not None
+    assert detail                      # it says *why*, not just "failed"
+
+
+def test_an_http_error_still_means_reachable(monkeypatch):
+    """404 is the server answering. The route is open; the file moved.
+
+    Reporting that as offline would send an operator to the network team over
+    a renamed file, which is the wrong half of the system.
+    """
+    import urllib.error
+
+    def refuse(*a, **k):                        # noqa: ANN002, ANN003
+        raise urllib.error.HTTPError("https://example.invalid/x", 404,
+                                     "Not Found", {}, None)
+
+    monkeypatch.setattr(net.urllib.request, "urlopen", refuse)
+    ok, _, detail = net.probe("https://example.invalid/x")
+
+    assert ok is True
+    assert "404" in detail and "reachable" in detail
+
+
+def test_cache_age_is_reported_beside_reachability(tmp_path):
+    """Unreachable-with-a-cache and reachable-without-one are opposite faults."""
+    key = indices.SOURCES[0]
+    (tmp_path / key.filename).write_text("cached")
+
+    got = net.check(probe_fn=_reachable(*[False] * len(net.hosts())),
+                    cache_dir=tmp_path)
+
+    assert got.state == "offline"
+    assert got.cache[key.key] is not None and got.cache[key.key] < 60
+    assert got.cache[indices.SOURCES[-1].key] is None      # never fetched
+
+
+def test_a_reading_nobody_refreshed_decays_to_unknown(monkeypatch):
+    """A dead checker must not leave a permanently green light.
+
+    The thread is a daemon and daemons die. Showing its last reading for ever
+    would turn "nothing is checking" into "everything is fine", which is the
+    exact failure this module was written to make visible.
+    """
+    net.reset()
+    try:
+        net.refresh(probe_fn=_reachable(*[True] * len(net.hosts())))
+        assert net.current().state == "online"
+
+        monkeypatch.setattr(net, "STALE_AFTER_S", -1.0)
+        assert net.current().state == "unknown"
+        assert "no reading" in net.current().detail
+    finally:
+        net.reset()
+
+
+def test_the_net_route_never_probes(client, monkeypatch):
+    """`/net` reports the last pass. It must not issue outbound requests.
+
+    Otherwise anyone who can reach this port can make the server call three
+    third parties, and every caller pays the timeout.
+    """
+    def explode(*a, **k):                       # noqa: ANN002, ANN003
+        raise AssertionError("the route probed the network")
+
+    monkeypatch.setattr(net, "probe", explode)
+    net.reset()
+
+    body = client.get("/net").json()
+    assert body["state"] == "unknown"           # nothing has run in this test
+    assert len(body["hosts"]) == 0
+    assert body["age_s"] is None
+
+
+def test_the_console_says_whether_the_indices_can_be_refreshed(client):
+    """The point of the panel: the IRI numbers have an upstream, and it shows."""
+    net.refresh(probe_fn=_reachable(*[True] * len(net.hosts())))
+    try:
+        page = client.get("/ui").text
+        assert "INTERNET OK" in page
+        for host, _, _ in net.hosts():
+            assert host in page
+
+        net.refresh(probe_fn=_reachable(*[False] * len(net.hosts())))
+        page = client.get("/ui").text
+        assert "NO INTERNET" in page
+    finally:
+        net.reset()
+
+    # With no reading at all the pill is grey, not red: "we have not asked" is
+    # not "the answer is no", the same tri-state the metrics table uses.
+    assert "INTERNET?" in client.get("/ui").text

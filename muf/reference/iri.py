@@ -141,7 +141,13 @@ def predict(
     if f107 is None:
         try:
             si = solar_indices(index[0].date(), cache_dir=cache_dir, offline=offline)
-            f107 = si.f107 or si.f107_smoothed
+            # `f107_driver`, not `f107`: the CCIR and URSI maps PyIRI
+            # interpolates were fitted against a smoothed index, so the 81-day
+            # mean is the number they were built for. The daily flux is a
+            # better description of *today* and a worse input to *these maps* --
+            # it would swing foF2 across a solar rotation in a way the
+            # climatology never claimed to predict.
+            f107 = si.f107_driver
             driver_note = f"; driver {si.source}"
             if f107 is None and si.ssn_daily is not None:
                 # Rough SSN -> F10.7 (Holland & Vaughn); only a fallback.

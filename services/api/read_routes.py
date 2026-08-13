@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from . import db
+from . import net as net_mod
 from . import sources as sources_mod
 from .auth import require_read
 
@@ -215,6 +216,23 @@ def sources(request: Request,
     return sources_mod.census(request.app.state.archive_root,
                               max_days=max_days, cycle_s=cycle_s,
                               min_count=min_count)
+
+
+@router.get("/net")
+def net_state() -> dict:
+    """Whether this host can still reach the solar index servers.
+
+    Read scope. It reports three public hostnames, a round-trip time and the
+    age of each cached file -- nothing about the station, and nothing a caller
+    could not learn by trying the same HEADs itself.
+
+    Always the *last* reading, never a fresh probe: a route that probed on
+    demand would be a way for anyone who can reach this port to make the
+    server issue outbound requests, and would put a four-second timeout on the
+    request path. ``state`` is ``unknown`` until the first background pass
+    finishes, a second or so after startup.
+    """
+    return net_mod.current().as_dict()
 
 
 @router.get("/methods")
