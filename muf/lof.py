@@ -51,6 +51,13 @@ reverse, and it earns the URSI qualifying letter ``E``. Because the floor is a
 property of the circuit and not of the sweep header, it has to be supplied:
 ``band_floor_mhz`` defaults to the sweep start, and :func:`measure_band_floor`
 recovers it from a day of recordings.
+
+**And the MUF band-edge problem itself is here too**, in
+:func:`measure_band_ceiling`, because it is the same measurement read off the
+other end of :func:`presence_above`. The censoring at the top had the same
+defect for longer: ``pipeline.BAND_EDGE_BINS`` was anchored on the sweep's
+declared stop rather than on the frequency the circuit actually returns, so on
+a path whose usable top is below the sweep's, nothing was ever flagged.
 """
 
 from __future__ import annotations
@@ -263,3 +270,49 @@ def measure_band_floor(ions, threshold_db: float = DEFAULT_LADDER[0],
     if not lowest:
         return float("nan")
     return float(np.quantile(lowest, quantile))
+
+
+def measure_band_ceiling(ions, threshold_db: float = DEFAULT_LADDER[0],
+                         quantile: float = 0.98,
+                         min_run: int = DEFAULT_MIN_RUN) -> float:
+    """Estimate the highest frequency a circuit's echoes actually reach.
+
+    The counterpart of :func:`measure_band_floor`, and it lives here for that
+    reason: same threshold, same argument shape, opposite end of the axis.
+    (``muf.pick`` is the other candidate home, but this module already imports
+    from it and the dependency cannot run both ways.)
+
+    **It is not a mirror image, in two ways, and both were found by running the
+    mirror image against real recordings.**
+
+    First, the statistic is a *high* quantile where the floor's is a low one.
+    Absorption only ever pushes the LOF up away from the hardware floor, so a
+    minimum over a day recovers that floor. The ionosphere only ever pushes the
+    MOF down from whatever the circuit could support, so the ceiling is the
+    best it ever managed -- a maximum, softened to a quantile so one unusual
+    sounding cannot set it.
+
+    Second, and less obvious: this reads the top of the last **run**, not the
+    last lit bin. :func:`measure_band_floor` can use a bare
+    :func:`presence_above` because the bottom of the band really is dead --
+    that is what makes it measurable. The top is not. Narrowband interferers
+    sit above the detection level right up to the sweep stop, and a single-bin
+    rule returns 24.80 MHz on DOB's Cyprus archive: the interference, not the
+    circuit. The continuity rule that defends ``pick_muf`` from exactly this is
+    the whole difference between 24.80 and the real answer.
+
+    **Measure it over a span that includes the band's best hours.** Given only
+    a night it reads back the ionosphere instead of the circuit, and every
+    daytime pick afterwards is flagged as band-limited. The ceiling is a
+    property of the path and the equipment, so measure it once and keep it in
+    configuration; re-deriving it per run makes the flag mean something
+    different every day, which is worse than the fault it fixes.
+    """
+    highest = []
+    for ion in ions:
+        runs = find_runs(presence_above(ion, threshold_db), min_run)
+        if runs:
+            highest.append(float(ion.freq[runs[-1][1]]))
+    if not highest:
+        return float("nan")
+    return float(np.quantile(highest, quantile))

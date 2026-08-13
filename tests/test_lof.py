@@ -124,6 +124,57 @@ def test_measure_band_floor_with_nothing_to_measure():
     assert np.isnan(lof.measure_band_floor([], 43.0))
 
 
+# --- the band ceiling ---------------------------------------------------------
+
+@pytest.fixture
+def closed_band(make_lfs):
+    """A worse hour on the same circuit: the echo gives out 50 bins lower."""
+    iq = synth_iq(n_freq=N_FREQ, window=WINDOW, echo_range_km=ECHO_RANGE,
+                  half_span_km=HALF_SPAN, echo_first_bin=FIRST_BIN,
+                  echo_last_bin=LAST_BIN - 50)
+    path = make_lfs(iq, name="closed.lfs", dur=2)
+    return spectro.compute(path, window=WINDOW, gate_km=(2000.0, 5000.0))
+
+
+def test_measure_band_ceiling_recovers_the_highest_returned_frequency(sounding):
+    """The echo stops at bin 150 of 200. The sweep does not, and that is the bug."""
+    ceiling = lof.measure_band_ceiling([sounding, sounding, sounding], 43.0)
+
+    assert ceiling == pytest.approx(sounding.freq[LAST_BIN],
+                                    abs=2 * sounding.cal.freq_step_mhz)
+    # Far enough below the declared stop that BAND_EDGE_BINS cannot bridge the
+    # gap -- the DOB Cyprus case, where anchoring on the header put the band
+    # edge above anything the receiver ever saw. In bins, because this fixture
+    # sweeps 0.26 MHz where DOB sweeps 17.
+    assert ceiling < (sounding.cal.freq_stop
+                      - 20 * sounding.cal.freq_step_mhz)
+
+
+def test_measure_band_ceiling_with_nothing_to_measure():
+    assert np.isnan(lof.measure_band_ceiling([], 43.0))
+
+
+def test_a_mostly_closed_band_does_not_drag_the_ceiling_down(sounding, closed_band):
+    """A high quantile, because the ionosphere only censors the top downwards.
+
+    Three bad hours and one good one describe a circuit that reaches the good
+    hour's top; the same statistic the floor uses would report the bad one and
+    censor every daytime pick thereafter.
+    """
+    ions = [closed_band, closed_band, closed_band, sounding]
+    ceiling = lof.measure_band_ceiling(ions, 43.0)
+
+    reached = float(sounding.freq[LAST_BIN])
+    closed = float(closed_band.freq[LAST_BIN - 50])
+    assert abs(ceiling - reached) < abs(ceiling - closed)
+
+    # The floor over the same set is the mirror image and stays at the bottom:
+    # both echoes start at FIRST_BIN, so nothing here moves it.
+    floor = lof.measure_band_floor(ions, 43.0)
+    assert floor == pytest.approx(sounding.freq[FIRST_BIN],
+                                  abs=2 * sounding.cal.freq_step_mhz)
+
+
 # --- LUF ---------------------------------------------------------------------
 
 def test_luf_is_lof_at_the_offset_level(sounding):

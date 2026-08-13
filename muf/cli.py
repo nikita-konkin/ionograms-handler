@@ -95,6 +95,12 @@ def _common(parser: argparse.ArgumentParser) -> None:
                              "radiates, for flagging LOF that ran off the "
                              "bottom of the band (default: the sweep start, "
                              "which `muf lof` will tell you is often wrong)")
+    parser.add_argument("--band-ceiling", type=float, default=None,
+                        metavar="MHZ",
+                        help="highest frequency the circuit actually returns "
+                             "echoes at, for flagging MUF picks that ran off "
+                             "the top of the band (default: the sweep stop, "
+                             "which `muf lof` will tell you is often wrong)")
 
 
 def _load_registry(path):
@@ -145,6 +151,7 @@ def _options(args) -> Options:
         cache_dir=args.cache_dir,
         method_options=method_options or None,
         band_floor_mhz=getattr(args, "band_floor", None),
+        band_ceiling_mhz=getattr(args, "band_ceiling", None),
         format=getattr(args, "input_format", None),
         stations=_load_registry(getattr(args, "stations", None)),
         reject_interference=getattr(args, "reject_interference", False),
@@ -570,7 +577,12 @@ def _find_xml(targets) -> list[Path]:
 
 
 def cmd_lof(args) -> int:
-    """Measure the band floor, and summarise LOF over a set of soundings."""
+    """Measure both band edges, and summarise LOF over a set of soundings.
+
+    The ceiling belongs here despite the name: it is the same measurement over
+    the same presence array, read off the other end, and this is the only
+    command that already loads a day at once.
+    """
     from . import lof as lof_module
 
     options = _options(args)
@@ -590,20 +602,36 @@ def cmd_lof(args) -> int:
     if not ions:
         raise SystemExit("no soundings could be read")
 
-    # A hardware edge is constant while absorption swings through the day, so
-    # the floor only shows up across many soundings -- which is the whole
-    # reason this is a command rather than a per-file column.
+    # Both edges are constant properties of the circuit while the ionosphere
+    # swings through the day, so neither shows up in one sounding -- which is
+    # the whole reason this is a command rather than a per-file column.
     level = args.level if args.level is not None else lof_module.DEFAULT_LADDER[0]
     floor = lof_module.measure_band_floor(ions, level)
-    declared = ions[0].cal.freq_start
+    ceiling = lof_module.measure_band_ceiling(ions, level)
+    declared_lo = ions[0].cal.freq_start
+    declared_hi = ions[0].cal.freq_stop
     print("", file=sys.stderr)
-    print(f"sweep declares      {declared:6.2f} MHz", file=sys.stderr)
-    print(f"measured band floor {floor:6.2f} MHz   "
-          f"({'matches' if abs(floor - declared) < 0.2 else 'DIFFERS'})",
+    print(f"sweep declares        {declared_lo:6.2f} - {declared_hi:.2f} MHz",
           file=sys.stderr)
-    if abs(floor - declared) >= 0.2:
+    print(f"measured band floor   {floor:6.2f} MHz   "
+          f"({'matches' if abs(floor - declared_lo) < 0.2 else 'DIFFERS'})",
+          file=sys.stderr)
+    if abs(floor - declared_lo) >= 0.2:
         print(f"  pass --band-floor {floor:.2f} so a LOF down there is flagged "
               f"as an upper bound rather than reported as a measurement",
+              file=sys.stderr)
+    print(f"measured band ceiling {ceiling:6.2f} MHz   "
+          f"({'matches' if abs(ceiling - declared_hi) < 0.2 else 'DIFFERS'})",
+          file=sys.stderr)
+    if abs(ceiling - declared_hi) >= 0.2:
+        print(f"  pass --band-ceiling {ceiling:.2f} so a MUF up there is "
+              f"flagged as a lower bound rather than reported as a measurement",
+              file=sys.stderr)
+        # A ceiling measured over hours when the band never opened is the
+        # ionosphere, not the circuit, and adopting it would censor every good
+        # daytime pick. Say so rather than let the number look authoritative.
+        print(f"  measured over {len(ions)} sounding(s) -- check they span the "
+              f"band's best hours before adopting this",
               file=sys.stderr)
 
     rows = []
@@ -979,10 +1007,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # lof
     low = sub.add_parser("lof",
-                         help="measure the band floor and summarise LOF")
+                         help="measure the band edges and summarise LOF")
     low.add_argument("target", type=Path, nargs="+")
     low.add_argument("--level", type=float, default=None,
-                     help="detection level for the floor measurement, dB "
+                     help="detection level for the band-edge measurements, dB "
                           "(default: the first ladder rung)")
     low.add_argument("--out", type=Path, default=None,
                      help="write the per-sounding ladder to this CSV")

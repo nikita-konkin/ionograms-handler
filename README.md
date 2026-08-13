@@ -341,13 +341,18 @@ sun. `muf lof` measures it:
 $ muf lof F:/MyData/ND/lfs/2026.02.04
 288 sounding(s)
 
-sweep declares        7.50 MHz
-measured band floor   8.00 MHz   (DIFFERS)
+sweep declares          7.50 - 32.49 MHz
+measured band floor     8.00 MHz   (DIFFERS)
   pass --band-floor 8.00 so a LOF down there is flagged as an upper bound rather than reported as a measurement
+measured band ceiling  32.48 MHz   (matches)
   43 dB:  266/288 scaled   8.00-28.42 MHz  102 at the floor
   50 dB:  260/288 scaled   8.00-29.08 MHz  52 at the floor
   57 dB:  183/288 scaled   8.02-30.63 MHz  4 at the floor
 ```
+
+(The floor and ladder figures are from the full-day archive; a 133-sounding
+subset covering 00:00–11:00 UTC gives 8.01 and 32.48, so neither edge is an
+artefact of which hours you feed it.)
 
 **102 of 266** LOF values at 43 dB are therefore upper bounds, not measurements —
 the mirror image of the band-limited MUF problem, and it earns the mirror-image
@@ -355,6 +360,20 @@ URSI qualifying letter **E** ("less than") to the `D` already used at the top of
 the band. Worth checking against the transmitter schedule, and it means the
 `<Sweep StartFrequency="7.5000">` published in SAO.XML is the nominal sweep
 rather than the radiated band.
+
+**The ceiling is the same measurement at the other end**, and on this circuit it
+reports `matches` — 32.48 against a declared 32.49, so this path really does
+reach the top of its sweep and the midday censoring here is the sweep's fault,
+not the path's. That is not universal, which is the point of measuring it: DOB's
+Cyprus circuit declares 24.825 MHz and returns nothing above **24.53**, so its
+band edge sat above anything the receiver could see and `limited_` fired on 0 of
+216 picks. Pass `--band-ceiling` when the two differ.
+
+Note it is read off the end of the last qualifying *run*, not the highest lit
+bin. The floor can use a bare threshold because the bottom of the band is
+genuinely dead; the top never is — narrowband interferers reach the sweep stop —
+and a single-bin rule returns 24.80 on that DOB archive, measuring the
+interference instead of the circuit.
 
 **IRI cannot supply a reference LOF.** See "External references" below.
 
@@ -1240,6 +1259,15 @@ a live `server.ini`.
 lowest frequency the transmitter actually radiates, which is **not** the sweep
 start, and without which a LOF that ran off the bottom of the band is
 indistinguishable from a real one.
+
+`--band-ceiling MHZ` is its counterpart at the top, shared by the same commands:
+the highest frequency the circuit actually returns echoes at, which is **not**
+the sweep stop wherever the path gives out first. It is what the `limited_`
+columns and the SAO `D` letter are measured against, and the run records the
+value it used in a `band_ceiling` column — two runs over the same files with
+different ceilings produce identical MUF values and different censoring, so the
+column is the only thing that says which one you are holding. `muf lof` measures
+both edges and prints the flag to pass.
 
 ### Per-command flags
 

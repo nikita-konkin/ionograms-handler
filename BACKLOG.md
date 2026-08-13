@@ -192,8 +192,7 @@ separate faults in that:
   trace stops at ~24.55 while other emitters in the same archive reach 24.80,
   so the *usable* top is emitter-dependent -- a function of where that
   transmitter's signal falls below the detection level, not of the header. A
-  flag anchored to the header cannot see it. Anchoring to the highest frequency
-  with any detected energy in the sounding would.
+  flag anchored to the header cannot see it.
 
 Rendering `lfm_ionogram-NIC-DOB-ch0-002-1786601035.00.h5` (2026-08-13 06:03:55Z,
 picks 24.40/24.45/24.45) shows why: the trace is a flat line at 2650 km running
@@ -207,6 +206,53 @@ midday-only bias -- 24.8 MHz is reachable on this path from 05:00, and midday
 will be worse. Any Cyprus daily maximum is currently a lower bound. The remedy
 in this section's last bullet applies unchanged: the top comes from `dur` at the
 configured rate, and raising it costs sweep time.
+
+### The anchor is fixed (2026-08-13)
+
+`Options.band_ceiling_mhz` supplies the frequency the circuit actually returns
+echoes at, `muf.lof.measure_band_ceiling` recovers it from a set of recordings,
+and `pipeline.band_edge_mhz` is now the single definition shared by the
+`limited_` columns and the SAO `D` letter -- which had a second, independent
+copy of the arithmetic in `saoxml.qualifying_letter`. The run records which
+ceiling it used in a `band_ceiling` column, because two runs over the same files
+with different ceilings produce identical MUF values and different censoring,
+and nothing else in the row distinguishes them.
+
+Measured over the 72 NIC soundings of 2026-08-12/13:
+
+    measured band ceiling  24.53 MHz   (DIFFERS from the declared 24.83)
+
+    limited_ per method     header anchor      --band-ceiling 24.53
+      algo                       0/72                  15/72
+      kmeans                     0/72                  18/72
+      contour                    0/72                  17/72
+
+24.53 against the ~24.55 read off the pick distribution independently, and a
+fifth to a quarter of every method's picks move from "measurement" to "lower
+bound".
+
+**The measurement needs the continuity rule, and this is the interesting part.**
+The first implementation was a straight mirror of `measure_band_floor`: the
+highest bin above the detection level, high quantile instead of low. On this
+archive it returns **24.80 MHz** and declares the header correct. The floor can
+use a bare threshold because the bottom of the band really is dead -- that
+deadness is what makes it measurable -- whereas narrowband interferers sit above
+43 dB right up to the sweep stop, so at the top a single-bin rule measures the
+interference. Reading the end of the last qualifying *run* instead is the whole
+difference between 24.80 and 24.53. (The earlier draft of this section proposed
+"the highest frequency with any detected energy", which is precisely the version
+that fails.)
+
+**Still open: three bins is not a portable margin.** The anchor fix defuses most
+of it -- the ceiling is now measured at the same resolution as the picks -- but
+`BAND_EDGE_BINS = 3` is still an absolute count chosen against a 32.5 MHz sweep.
+A fractional criterion would travel between instruments, and changing it moves
+every result already published, so it wants its own pass.
+
+**Still open: the ceiling is per circuit and nothing stores it.** It has to be
+passed as `--band-ceiling` per run today. It belongs next to the station's
+coordinates, and until it lives there the flag is only as good as whoever
+remembers the flag.
 
 ## 4. Investigate the 71-second truncations
 

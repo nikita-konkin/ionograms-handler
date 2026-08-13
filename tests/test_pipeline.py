@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -100,6 +102,38 @@ def test_band_limited_is_flagged(make_lfs, options):
 def test_not_band_limited_when_trace_stops_early(synthetic_path, options):
     row = pipeline.process_file(synthetic_path, options)
     assert row["limited_algo"] is False
+
+
+def test_the_limited_flag_is_anchored_on_the_circuit_not_the_header(
+        synthetic_path, options):
+    """`freq_stop` is a claim; the usable top is a property of the path.
+
+    On DOB's Cyprus circuit the sweep declares 24.825 MHz and no echo was ever
+    returned above 24.55, so anchored on the header the threshold sat above
+    anything the receiver could see and `limited_` fired on 0 of 216 picks --
+    40 of which were stacked in the top two bins.
+    """
+    row = pipeline.process_file(synthetic_path, options)
+    assert row["limited_algo"] is False
+    assert row["band_ceiling"] == row["freq_stop"]
+
+    # The same recording, told where this circuit actually gives out. The pick
+    # has not moved; what it means has.
+    told = replace(options, band_ceiling_mhz=row["muf_algo"])
+    lowered = pipeline.process_file(synthetic_path, told)
+
+    assert lowered["muf_algo"] == row["muf_algo"]
+    assert lowered["limited_algo"] is True
+    assert lowered["band_ceiling"] == pytest.approx(row["muf_algo"], abs=1e-4)
+
+
+def test_a_ceiling_above_the_pick_leaves_it_a_measurement(
+        synthetic_path, options):
+    """Guards the sign: a higher ceiling must never flag more, only less."""
+    row = pipeline.process_file(synthetic_path, options)
+    raised = replace(options, band_ceiling_mhz=row["freq_stop"] + 5.0)
+
+    assert pipeline.process_file(synthetic_path, raised)["limited_algo"] is False
 
 
 def test_process_many(tmp_path, make_lfs, options):

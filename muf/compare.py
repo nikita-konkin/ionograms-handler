@@ -263,14 +263,24 @@ def band_limited_by_reference(
     """Soundings where a reference puts the MUF above what the sounder can see.
 
     The pipeline's own ``limited_`` flag only fires when a pick lands at the top
-    of the sweep. A trace that fades below the top for signal-strength reasons
+    of the band. A trace that fades below the top for signal-strength reasons
     looks like a valid measurement even when the true MUF is out of band; only
     an external reference can tell the difference.
+
+    "Out of band" means above what the *circuit* returns, so this prefers the
+    ``band_ceiling`` column the pipeline records and falls back to ``freq_stop``
+    only for frames written before that column existed. The header value can sit
+    well above anything the receiver ever saw -- 24.825 against 24.55 on DOB's
+    Cyprus path -- and using it understates how often a reference is out of
+    reach.
     """
     column = f"muf_{model}"
-    if column not in frame or "freq_stop" not in frame:
+    if column not in frame:
         return pd.Series(False, index=frame.index)
-    return frame[column] > (frame["freq_stop"] + margin_mhz)
+    for anchor in ("band_ceiling", "freq_stop"):
+        if anchor in frame:
+            return frame[column] > (frame[anchor] + margin_mhz)
+    return pd.Series(False, index=frame.index)
 
 
 def report(

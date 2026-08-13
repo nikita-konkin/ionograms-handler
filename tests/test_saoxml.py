@@ -224,6 +224,21 @@ def test_band_limited_pick_earns_the_greater_than_letter(sounding):
     assert saoxml.qualifying_letter(sounding, result) == saoxml.QL_GREATER_THAN
 
 
+def test_the_letter_follows_the_circuit_ceiling_not_the_header(sounding):
+    """The SAO letter and the CSV `limited_` column share one definition.
+
+    They were computed separately until 2026-08-13, which is how an anchor bug
+    could be fixed in the pipeline and left standing in the export. A pick that
+    the pipeline calls band-limited must earn D here, and for the same reason.
+    """
+    result = extractors.get("algo")(sounding)
+    assert saoxml.qualifying_letter(sounding, result) == ""
+
+    ceiling = float(result.pick.muf_mhz)
+    assert saoxml.qualifying_letter(
+        sounding, result, band_ceiling_mhz=ceiling) == saoxml.QL_GREATER_THAN
+
+
 def test_incomplete_sweep_earns_the_greater_than_letter(make_lfs):
     """A truncated recording caps the MUF just as the band edge does.
 

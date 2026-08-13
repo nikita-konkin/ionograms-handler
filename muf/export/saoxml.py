@@ -105,7 +105,7 @@ import numpy as np
 
 from .. import (__version__, extractors, fit as fit_module, geometry,
                 lof as lof_module, spectro, trace)
-from ..pipeline import BAND_EDGE_BINS, Options
+from ..pipeline import Options, band_edge_mhz
 
 #: Value of the ``FormatVersion`` attribute this module writes.
 FORMAT_VERSION = "5.0"
@@ -178,18 +178,25 @@ def _attrs(**kwargs) -> dict[str, str]:
 
 # --- quality -----------------------------------------------------------------
 
-def qualifying_letter(ion, result, primary=None) -> str:
+def qualifying_letter(ion, result, primary=None,
+                      band_ceiling_mhz: float | None = None) -> str:
     """The UAG-23A section 3.1 letter this pick has earned, or ``""``.
 
     ``D`` takes precedence over ``U``: a value known only as a lower bound is a
     limiting value first and an uncertain one second.
+
+    ``band_ceiling_mhz`` is the highest frequency the circuit actually returns;
+    the default of the declared sweep stop withholds ``D`` from every clipped
+    pick on a path that gives out below it. Shares
+    :func:`muf.pipeline.band_edge_mhz` with the ``limited_`` columns so the two
+    cannot drift apart -- they did, and the anchor bug outlived being noticed.
     """
     if not result.ok:
         return ""
 
     cal = ion.cal
-    band_edge = cal.freq_stop - BAND_EDGE_BINS * cal.freq_step_mhz
-    if result.pick.muf_mhz >= band_edge or not cal.sweep_complete:
+    if result.pick.muf_mhz >= band_edge_mhz(cal, band_ceiling_mhz) \
+            or not cal.sweep_complete:
         return QL_GREATER_THAN
 
     if np.isfinite(result.pick.snr_db) and result.pick.snr_db < UNCERTAIN_SNR_DB:
@@ -544,12 +551,13 @@ def build_record(
     model: ModelValues | None = None,
     lof=None,
     lof_ladder=None,
+    band_ceiling_mhz: float | None = None,
 ) -> ET.Element:
     """One ``<SAORecord>`` for one estimator's reading of one sounding."""
     header = ion.header
     _, rx, _ = geometry.path_of(header)
     primary = trace.primary_segment(segments) if segments else None
-    letter = qualifying_letter(ion, result, primary)
+    letter = qualifying_letter(ion, result, primary, band_ceiling_mhz)
 
     record = ET.Element("SAORecord", {
         "FormatVersion": FORMAT_VERSION,
@@ -588,6 +596,8 @@ def records_for(ion, options: Options | None = None, **kwargs) -> list[ET.Elemen
     """One record per estimator, following the spec's separate-storage rule."""
     options = options or Options()
     results = extractors.run(ion, methods=options.methods, **options.per_method())
+    # setdefault, not assignment: an explicit kwarg from the caller wins.
+    kwargs.setdefault("band_ceiling_mhz", options.band_ceiling_mhz)
 
     # The ladder is estimator-independent, so it is computed once and shared:
     # every record in the file gets the same rungs, which is the point of it.

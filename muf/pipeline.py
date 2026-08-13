@@ -28,7 +28,38 @@ from .loader import find_soundings, read_header
 #: bin or two short of the edge -- the algorithmic one anchors on the middle of
 #: a three-bin run, so it can never reach the final bin -- and a fixed MHz
 #: tolerance would mean different things at different window lengths.
+#:
+#: **Three bins below where the sweep says it stops is not three bins below
+#: where the circuit stops.** ``freq_stop`` is a header field. The usable top is
+#: set by the transmitter, the antennas and the path, and when it sits lower the
+#: threshold lands above anything the receiver can see, so the flag never fires
+#: and every clipped pick is recorded as an ordinary measurement. Supply the
+#: real one through ``Options.band_ceiling_mhz``.
 BAND_EDGE_BINS = 3
+
+
+def sounded_ceiling(cal, band_ceiling_mhz: float | None = None) -> float:
+    """The highest frequency this circuit actually returns echoes at.
+
+    Defaults to the sweep's declared ``freq_stop``, which is right only when the
+    transmitter, the antennas and the path all reach it. See
+    :func:`muf.lof.measure_band_ceiling` for recovering it from recordings.
+    """
+    if band_ceiling_mhz is None:
+        return float(cal.freq_stop)
+    return float(band_ceiling_mhz)
+
+
+def band_edge_mhz(cal, band_ceiling_mhz: float | None = None) -> float:
+    """At or above this frequency a pick is a lower bound, not a measurement.
+
+    One definition, shared by the ``limited_`` columns and by the SAO ``D``
+    qualifying letter, so the CSV and the export cannot disagree about which
+    picks are censored. They were computed separately until 2026-08-13 and the
+    duplicate is how the anchor bug survived being fixed in one place.
+    """
+    ceiling = sounded_ceiling(cal, band_ceiling_mhz)
+    return ceiling - BAND_EDGE_BINS * cal.freq_step_mhz
 
 
 @dataclass
@@ -56,6 +87,13 @@ class Options:
     #: start, which is right only when the transmitter really does reach it --
     #: see muf.lof.measure_band_floor.
     band_floor_mhz: float | None = None
+    #: Highest frequency the circuit actually returns echoes at, which is what
+    #: the `limited_` flags are measured against. None means the sweep stop, and
+    #: that default is wrong wherever the path gives out first: DOB's Cyprus
+    #: circuit declares 24.825 MHz and nothing was ever seen above 24.55, so
+    #: over 216 picks -- 40 of them stacked in the top two bins -- `limited_`
+    #: fired exactly zero times. See muf.lof.measure_band_ceiling.
+    band_ceiling_mhz: float | None = None
     #: Override extension-based format selection. None means dispatch on the
     #: suffix, which is right unless a recording was renamed.
     format: str | None = None
@@ -154,6 +192,12 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         window=ion.window,
         freq_start=round(ion.cal.freq_start, 4),
         freq_stop=round(ion.cal.freq_stop, 4),
+        # What the `limited_` flags below were actually measured against.
+        # Recorded because it is an *input*, not a property of the file: a run
+        # given the real ceiling and a run trusting the header produce the same
+        # MUF column and different censoring, and nothing else in the row says
+        # which one you are holding.
+        band_ceiling=round(sounded_ceiling(ion.cal, options.band_ceiling_mhz), 4),
         gate_lo=round(ion.cal.gate_km[0], 1),
         gate_hi=round(ion.cal.gate_km[1], 1),
         # A recording cut short still declares the full sweep in its header.
@@ -176,7 +220,7 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
             opts.setdefault("max_range_slope", pick_module.DEFAULT_MAX_RANGE_SLOPE)
 
     results = extractors.run(ion, methods=options.methods, **per_method)
-    band_edge = ion.cal.freq_stop - BAND_EDGE_BINS * ion.cal.freq_step_mhz
+    band_edge = band_edge_mhz(ion.cal, options.band_ceiling_mhz)
 
     for name, result in results.items():
         pick = result.pick
