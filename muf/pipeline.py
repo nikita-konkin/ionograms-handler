@@ -50,6 +50,28 @@ def sounded_ceiling(cal, band_ceiling_mhz: float | None = None) -> float:
     return float(band_ceiling_mhz)
 
 
+def circuit_ceiling(header, options: "Options") -> float | None:
+    """The ceiling to use for one sounding, or None to fall back to the sweep.
+
+    Order is explicit-flag, then registry, then nothing. The flag wins because
+    it is the one an operator typed for this run -- typically while measuring a
+    circuit that is not in the registry yet, which is exactly when a stale
+    registry entry must not override them.
+
+    The registry lookup is keyed on both ends. An archive holding several
+    transmitters into one receiver gets a different ceiling per transmitter
+    from a single run, which is the case that made a per-run flag inadequate:
+    DOB records NIC and SGO in the same directory and they do not give out at
+    the same frequency.
+    """
+    if options.band_ceiling_mhz is not None:
+        return float(options.band_ceiling_mhz)
+    if options.stations is None:
+        return None
+    return options.stations.band_ceiling(
+        getattr(header, "tx_name", ""), getattr(header, "rx_name", ""))
+
+
 def band_edge_mhz(cal, band_ceiling_mhz: float | None = None) -> float:
     """At or above this frequency a pick is a lower bound, not a measurement.
 
@@ -183,6 +205,8 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
     if rejected is not None and rejected.any:
         row["interference_rows"] = rejected.n_rows
 
+    ceiling = circuit_ceiling(header, options)
+
     row.update(
         # The window the ionogram was actually formed at, which for .h5 is what
         # `io_chirp` reconstructed from the stored axes rather than what
@@ -196,8 +220,9 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         # Recorded because it is an *input*, not a property of the file: a run
         # given the real ceiling and a run trusting the header produce the same
         # MUF column and different censoring, and nothing else in the row says
-        # which one you are holding.
-        band_ceiling=round(sounded_ceiling(ion.cal, options.band_ceiling_mhz), 4),
+        # which one you are holding. With the registry supplying it per circuit,
+        # one run can now carry several values in this column.
+        band_ceiling=round(sounded_ceiling(ion.cal, ceiling), 4),
         gate_lo=round(ion.cal.gate_km[0], 1),
         gate_hi=round(ion.cal.gate_km[1], 1),
         # A recording cut short still declares the full sweep in its header.
@@ -220,7 +245,7 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
             opts.setdefault("max_range_slope", pick_module.DEFAULT_MAX_RANGE_SLOPE)
 
     results = extractors.run(ion, methods=options.methods, **per_method)
-    band_edge = band_edge_mhz(ion.cal, options.band_ceiling_mhz)
+    band_edge = band_edge_mhz(ion.cal, ceiling)
 
     for name, result in results.items():
         pick = result.pick

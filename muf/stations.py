@@ -56,10 +56,37 @@ class Station:
     source: str
     aliases: tuple[str, ...] = ()
     note: str = ""
+    #: Highest frequency this transmitter's echoes actually reach, **keyed by
+    #: receiving station**: ``(("DOB", 24.53),)``. See :meth:`ceiling_for`.
+    band_ceiling_mhz: tuple[tuple[str, float], ...] = ()
 
     @property
     def coordinates(self) -> tuple[float, float]:
         return (self.latitude, self.longitude)
+
+    def ceiling_for(self, receiver: str | None) -> float | None:
+        """The band ceiling on this transmitter's circuit to ``receiver``.
+
+        ``None`` when nothing has been measured for that pair, which means "use
+        the sweep stop" -- see ``muf.pipeline.sounded_ceiling``. Never guesses
+        from another receiver's entry.
+
+        **Keyed by receiver because a ceiling is a property of the circuit, not
+        of the transmitter.** It is where this path's signal drops below the
+        detection level, which depends on the receiver's antenna, its noise
+        environment, the path length and the sweep the receiver is running.
+        Nicosia reaches 24.53 MHz into Dombas on a 24.825 MHz sweep; the same
+        site as ``cyprus1`` reaches the top of a 32.5 MHz sweep into
+        Yoshkar-Ola. One number on the transmitter would have to be wrong for
+        one of them.
+        """
+        if not receiver:
+            return None
+        key = str(receiver).strip().lower()
+        for code, mhz in self.band_ceiling_mhz:
+            if str(code).strip().lower() == key:
+                return float(mhz)
+        return None
 
     def __str__(self) -> str:
         return (f"{self.code:14} {self.latitude:10.5f} {self.longitude:11.5f}  "
@@ -83,10 +110,19 @@ _V2_STATIONS = (
     # is v2's. Treating them as one site is an operator judgement (2026-08-05),
     # not a measurement -- see CYPRUS1_LFS_COORDINATES for what was given up
     # and why the data could not decide it.
+    # The ceiling into DOB is measured, not declared: `muf lof` over the 72
+    # NIC->DOB soundings of 2026-08-12/13 returns 24.53 MHz against a sweep
+    # that declares 24.825, and the pick distribution says ~24.55 independently
+    # (nothing in 216 picks above it, 40 of them in the top two bins). Without
+    # it `limited_` fired on none of those 216. Nothing is recorded for
+    # yoshkar-ola: on that circuit the same measurement returns 32.48 against a
+    # declared 32.49, i.e. the sweep really is the limit there, and the default
+    # is already right.
     Station("NIC", "Nicosia, Cyprus", 35.18557, 33.38228, V2,
             aliases=("cyprus1",),
             note="also the .lfs archive's 'cyprus1'; its header says "
-                 "35.0/34.0, 59.9 km away, superseded by these five decimals"),
+                 "35.0/34.0, 59.9 km away, superseded by these five decimals",
+            band_ceiling_mhz=(("DOB", 24.53),)),
     Station("Ramfjordmoen", "Ramfjordmoen",
             69.58187184247221, 19.220853348827067, V2),
     Station("ROTHR1", "ROTHR Chesapeake Bay",
@@ -179,6 +215,17 @@ class Registry(Mapping):
             return None
         return self._by_code.get(self._key(name))
 
+    def band_ceiling(self, transmitter: str, receiver: str) -> float | None:
+        """Measured band ceiling for one circuit, or None if there is no entry.
+
+        None means "no measurement", never "no limit": the caller falls back to
+        the sweep stop. Returning a default here would make an unmeasured
+        circuit indistinguishable from one measured at the sweep top, and those
+        are the two cases the `limited_` flag exists to tell apart.
+        """
+        station = self.station(transmitter)
+        return None if station is None else station.ceiling_for(receiver)
+
     def __getitem__(self, name: str) -> tuple[float, float]:
         station = self.station(name)
         if station is None:
@@ -267,7 +314,28 @@ def _station_from(code: str, entry: Mapping, source: str) -> Station:
         source=source,
         aliases=tuple(str(a) for a in entry.get("aliases", ())),
         note=str(entry.get("note", "")),
+        band_ceiling_mhz=_ceilings_from(code, entry, source),
     )
+
+
+def _ceilings_from(code: str, entry: Mapping, source: str
+                   ) -> tuple[tuple[str, float], ...]:
+    """``{"band_ceiling_mhz": {"DOB": 24.53}}``, absent in ``server.ini``.
+
+    A bare number is rejected rather than applied to every receiver. It reads
+    like the obvious spelling and would silently censor picks on circuits where
+    nobody measured anything -- and the flag it feeds is the one that decides
+    whether a MUF is published as a measurement.
+    """
+    raw = entry.get("band_ceiling_mhz", entry.get("band_ceiling"))
+    if raw is None:
+        return ()
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            f"station {code!r} in {source}: band_ceiling_mhz must map receiver "
+            f"code to MHz, e.g. {{\"DOB\": 24.53}} -- got {raw!r}. A ceiling "
+            f"belongs to a circuit, not to a transmitter.")
+    return tuple((str(rx), float(mhz)) for rx, mhz in raw.items())
 
 
 def describe(registry: Registry | None = None) -> str:
@@ -279,4 +347,6 @@ def describe(registry: Registry | None = None) -> str:
         lines.append(f"{station}")
         if station.note:
             lines.append(f"{'':14} note: {station.note}")
+        for rx, mhz in station.band_ceiling_mhz:
+            lines.append(f"{'':14} band ceiling into {rx}: {mhz:.2f} MHz")
     return "\n".join(lines)

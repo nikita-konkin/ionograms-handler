@@ -249,10 +249,23 @@ of it -- the ceiling is now measured at the same resolution as the picks -- but
 A fractional criterion would travel between instruments, and changing it moves
 every result already published, so it wants its own pass.
 
-**Still open: the ceiling is per circuit and nothing stores it.** It has to be
-passed as `--band-ceiling` per run today. It belongs next to the station's
-coordinates, and until it lives there the flag is only as good as whoever
-remembers the flag.
+**The ceiling is now stored per circuit.** `Station.band_ceiling_mhz` keys it by
+*receiver* -- `NIC` carries `(("DOB", 24.53),)` -- and `pipeline.circuit_ceiling`
+resolves flag, then registry, then the sweep stop. The 72 NIC soundings now pick
+up 24.53 with no flag at all.
+
+Keyed by receiver rather than held as one number per transmitter because a
+ceiling is a property of the circuit: it is where *this path's* signal drops
+below the detection level, which depends on the receiving antenna, its noise
+environment, the path length and the sweep that receiver runs. The same Nicosia
+site measures 24.53 into DOB and 32.48 into Yoshkar-Ola, where it matches the
+declared stop. A JSON registry may supply the same mapping; a bare number is
+rejected rather than applied to every receiver, since the flag it feeds is the
+one deciding whether a MUF is published as a measurement.
+
+**Still open: only NIC->DOB is measured.** SGO->DOB has no entry and falls back
+to the sweep stop. It needs a day of SGO data through local noon, which
+section 17 wants anyway.
 
 ## 4. Investigate the 71-second truncations
 

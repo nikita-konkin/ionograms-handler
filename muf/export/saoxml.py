@@ -105,7 +105,7 @@ import numpy as np
 
 from .. import (__version__, extractors, fit as fit_module, geometry,
                 lof as lof_module, spectro, trace)
-from ..pipeline import Options, band_edge_mhz
+from ..pipeline import Options, band_edge_mhz, circuit_ceiling
 
 #: Value of the ``FormatVersion`` attribute this module writes.
 FORMAT_VERSION = "5.0"
@@ -597,7 +597,9 @@ def records_for(ion, options: Options | None = None, **kwargs) -> list[ET.Elemen
     options = options or Options()
     results = extractors.run(ion, methods=options.methods, **options.per_method())
     # setdefault, not assignment: an explicit kwarg from the caller wins.
-    kwargs.setdefault("band_ceiling_mhz", options.band_ceiling_mhz)
+    # `circuit_ceiling` resolves the flag against the registry, so the SAO `D`
+    # letter and the CSV `limited_` column see the same number for this circuit.
+    kwargs.setdefault("band_ceiling_mhz", circuit_ceiling(ion.header, options))
 
     # The ladder is estimator-independent, so it is computed once and shared:
     # every record in the file gets the same rungs, which is the point of it.

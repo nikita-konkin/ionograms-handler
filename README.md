@@ -1269,6 +1269,27 @@ different ceilings produce identical MUF values and different censoring, so the
 column is the only thing that says which one you are holding. `muf lof` measures
 both edges and prints the flag to pass.
 
+**Usually you should not need the flag.** The ceiling lives in the station
+registry, keyed by receiver, and `NIC` already carries 24.53 MHz into `DOB`, so
+a DOB archive is censored correctly with no arguments. Resolution order is
+flag, then registry, then the sweep stop — the flag wins because it is what an
+operator types while working out a circuit that is not registered yet, and a
+stale entry must not override that. In a JSON registry:
+
+```json
+{"NIC": {"lat": 35.18557, "lon": 33.38228,
+         "band_ceiling_mhz": {"DOB": 24.53}}}
+```
+
+Keyed by receiver because a ceiling belongs to a **circuit**, not a
+transmitter: it is where this path's signal drops below the detection level,
+which depends on the receiving antenna, its noise environment, the path length
+and the sweep that receiver runs. Nicosia measures 24.53 into Dombås and 32.48
+into Yoshkar-Ola, where it matches the declared stop. A bare number instead of
+a mapping is rejected rather than applied to every receiver — it reads like the
+obvious spelling, and it would silently censor picks on circuits nobody has
+measured.
+
 ### Per-command flags
 
 **`run`** — extract MUF and LOF; writes `out/<date>.csv`

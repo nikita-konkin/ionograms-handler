@@ -127,6 +127,57 @@ def test_the_limited_flag_is_anchored_on_the_circuit_not_the_header(
     assert lowered["band_ceiling"] == pytest.approx(row["muf_algo"], abs=1e-4)
 
 
+def test_the_flag_beats_the_registry(synthetic_path, options):
+    """An operator measuring a circuit must not be overruled by a stale entry.
+
+    Which is the normal case for `--band-ceiling`: you reach for it while
+    working out what a circuit's ceiling is, before anything is recorded.
+    """
+    from muf.stations import Registry, Station
+
+    row = pipeline.process_file(synthetic_path, options)
+    registry = Registry([Station(row["tx"], "synthetic", 0.0, 0.0, "test",
+                                 band_ceiling_mhz=((row["rx"], 999.0),))])
+
+    told = replace(options, stations=registry,
+                   band_ceiling_mhz=row["muf_algo"])
+    both = pipeline.process_file(synthetic_path, told)
+
+    assert both["band_ceiling"] == pytest.approx(row["muf_algo"], abs=1e-4)
+    assert both["limited_algo"] is True
+
+
+def test_the_registry_supplies_the_ceiling_per_circuit(synthetic_path, options):
+    """No flag, and the right number -- keyed on both ends of the path.
+
+    DOB records NIC and SGO into the same directory and they do not give out at
+    the same frequency, so a single per-run flag cannot express one run over
+    both. Verified against the real archive: the 72 NIC->DOB soundings of
+    2026-08-12/13 pick up 24.53 MHz from the built-in table with no flag, and
+    `limited_` goes from 0/72 to 15, 18 and 17 of 72 across the three methods.
+    """
+    from muf.stations import Registry, Station
+
+    row = pipeline.process_file(synthetic_path, options)
+    assert row["limited_algo"] is False
+
+    registry = Registry([Station(row["tx"], "synthetic", 0.0, 0.0, "test",
+                                 band_ceiling_mhz=((row["rx"], row["muf_algo"]),))])
+    listed = pipeline.process_file(synthetic_path,
+                                   replace(options, stations=registry))
+
+    assert listed["band_ceiling"] == pytest.approx(row["muf_algo"], abs=1e-4)
+    assert listed["limited_algo"] is True
+
+    # A ceiling recorded for a *different* receiver must not apply here.
+    elsewhere = Registry([Station(row["tx"], "synthetic", 0.0, 0.0, "test",
+                                  band_ceiling_mhz=(("somewhere-else",
+                                                     row["muf_algo"]),))])
+    unrelated = pipeline.process_file(synthetic_path,
+                                      replace(options, stations=elsewhere))
+    assert unrelated["limited_algo"] is False
+
+
 def test_a_ceiling_above_the_pick_leaves_it_a_measurement(
         synthetic_path, options):
     """Guards the sign: a higher ceiling must never flag more, only less."""

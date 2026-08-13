@@ -627,6 +627,10 @@ def cmd_lof(args) -> int:
         print(f"  pass --band-ceiling {ceiling:.2f} so a MUF up there is "
               f"flagged as a lower bound rather than reported as a measurement",
               file=sys.stderr)
+        print(f"  better, record it against the circuit: "
+              f'band_ceiling_mhz={{"<receiver>": {ceiling:.2f}}} on the '
+              f"transmitter's registry entry, and no flag is needed again",
+              file=sys.stderr)
         # A ceiling measured over hours when the band never opened is the
         # ionosphere, not the circuit, and adopting it would censor every good
         # daytime pick. Say so rather than let the number look authoritative.

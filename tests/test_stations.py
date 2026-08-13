@@ -153,6 +153,69 @@ def test_reads_a_json_registry(tmp_path):
     assert registry.station("XYZ").source == "stations.json"
 
 
+# --- the band ceiling, which belongs to a circuit ---------------------------
+
+def test_the_band_ceiling_is_keyed_by_receiver():
+    """One transmitter, two receivers, two ceilings -- and no default.
+
+    NIC reaches 24.53 MHz into DOB on a 24.825 MHz sweep. The same site as
+    `cyprus1` reaches the top of a 32.5 MHz sweep into Yoshkar-Ola, where the
+    measured ceiling matches the declared stop. A single number on the
+    transmitter would have to be wrong for one of them.
+    """
+    registry = stations.default_registry()
+
+    assert registry.band_ceiling("NIC", "DOB") == pytest.approx(24.53)
+    assert registry.band_ceiling("nic", "dob") == pytest.approx(24.53)
+    # The alias is the same circuit.
+    assert registry.band_ceiling("cyprus1", "DOB") == pytest.approx(24.53)
+
+    # Nothing measured for these, and None means "use the sweep stop" rather
+    # than "no limit" -- the caller must be able to tell the two apart.
+    assert registry.band_ceiling("NIC", "yoshkar-ola") is None
+    assert registry.band_ceiling("SGO", "DOB") is None
+    assert registry.band_ceiling("unkown", "DOB") is None
+    assert registry.band_ceiling("no-such-station", "DOB") is None
+
+
+def test_a_station_with_no_ceiling_measured_returns_none():
+    station = Station("XYZ", "Test", 0.0, 0.0, V2)
+    assert station.ceiling_for("DOB") is None
+    assert station.ceiling_for("") is None
+    assert station.ceiling_for(None) is None
+
+
+def test_reads_band_ceilings_from_json(tmp_path):
+    path = tmp_path / "stations.json"
+    path.write_text(json.dumps({
+        "XYZ": {"lat": 10.5, "lon": -20.25,
+                "band_ceiling_mhz": {"DOB": 24.53, "SGO": 18.0}},
+    }), encoding="utf-8")
+
+    station = stations.from_json(path).station("XYZ")
+    assert station.ceiling_for("DOB") == pytest.approx(24.53)
+    assert station.ceiling_for("SGO") == pytest.approx(18.0)
+    assert station.ceiling_for("TGO") is None
+
+
+def test_a_bare_band_ceiling_is_rejected(tmp_path):
+    """It reads like the obvious spelling and would censor unmeasured circuits.
+
+    The flag this feeds decides whether a MUF is published as a measurement, so
+    a value that silently applies to every receiver is worse than no value.
+    """
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps({"XYZ": {"lat": 1.0, "lon": 2.0,
+                                        "band_ceiling_mhz": 24.53}}),
+                    encoding="utf-8")
+    with pytest.raises(ValueError, match="receiver code to MHz"):
+        stations.from_json(path)
+
+
+def test_describe_shows_the_ceiling():
+    assert "band ceiling into DOB: 24.53 MHz" in stations.describe()
+
+
 def test_a_registry_entry_without_coordinates_is_an_error(tmp_path):
     path = tmp_path / "bad.json"
     path.write_text(json.dumps({"XYZ": {"name": "no position"}}), encoding="utf-8")
