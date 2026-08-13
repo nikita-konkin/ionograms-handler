@@ -1658,9 +1658,12 @@ services/
     watch.py            incremental ingest on a timer
     sources.py          emitters heard -> candidates for a schedule
     acquisition.py      which slot is being sounded, and when the next is due
+    sao.py              one scaling per sounding: XML, panel, interactive plot
+    net.py              can this host still reach the solar index servers?
+    static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  768 tests; `python -m pytest tests -q`
+tests/                  779 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1891,6 +1894,46 @@ $ curl -s http://server:8002/healthz
 
 It reads `"source"` from a checkout and `"unknown"` from an image built without
 the build arg — neither pretends to be a commit.
+
+### Reading one sounding
+
+`/ui/sounding/{id}` draws the scaled trace over the ionogram and lets you turn
+parts of it off. Circles are per-trace: click a legend entry to hide one
+segment, double-click to isolate it, or use the **scaled points**, **raster**
+and **MUF / LOF** boxes to strip the picture down to whichever layer you are
+arguing about. The `scaling:` pills switch between `algo`, `kmeans` and
+`contour`; **download SAO.XML** gives you all three at once.
+
+**The raster stays a PNG, and only the points are data.** 486 × 3999 cells is
+1.9 million numbers — about 11 MB as JSON against 164 KB as an image — while
+the trace is a few hundred points. So the image is served bare
+(`/ionogram/{id}.png?bare=true`: no axes, no title, no colourbar, no overlay)
+and placed *in data coordinates* beneath scatter traces that carry their own
+hover readout. Its extent runs half a cell past the first and last sample,
+because `pcolormesh(shading="nearest")` centres a cell on each one; half a bin
+out and every circle sits beside its echo instead of on it, which is invisible
+until someone zooms in.
+
+**plotly.js is vendored, not fetched.** `services/api/static/plotly.min.js` is
+the 1.0 MB `plotly-basic` build, served from the image at `/static/`. DOB has
+been off the internet for a week at a time, and a plot that needs a CDN to draw
+a file already on disk fails exactly when someone needs it. There is still no
+build step.
+
+The panel beside it is the record itself, read back out of the XML rather than
+recomputed — measured characteristics with their UAG-23A qualifying letters,
+then `<Modeled>` rows labelled with the model that asserted them. On NIC→DOB
+the measured MUF is 24.450 `D` (censored by the recorder's band ceiling, so a
+lower bound) against IRI's 22.275; the two are written side by side and neither
+corrects the other.
+
+Scaling costs about a second cold and nothing after: detection products are
+write-once, so path plus mtime identifies a scaling for good and the last 24
+are kept. Stepping through a day with ← and → therefore stays instant. If the
+build fails the page still renders — the row, the neighbours and the stored
+extractions are worth reading, and the failure is named rather than turned into
+a 500. `SAO_MODEL=0` drops the IRI column on a host that should not be making
+outbound requests at all.
 
 ### Can this host still reach its upstream?
 

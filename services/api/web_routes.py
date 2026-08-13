@@ -22,6 +22,7 @@ from muf.reference import indices
 
 from . import acquisition, db
 from . import net as net_mod
+from . import sao as sao_mod
 from . import sources as sources_mod
 from .auth import require_read
 from .read_routes import _age_seconds, _command, _tri
@@ -286,7 +287,8 @@ def soundings(request: Request, limit: int = 200, offset: int = 0,
 
 
 @router.get("/ui/sounding/{sounding_id}")
-def sounding(request: Request, sounding_id: int, gate: str = "auto"):
+def sounding(request: Request, sounding_id: int, gate: str = "auto",
+             method: str = "algo", plot: str = "interactive"):
     conn = request.app.state.db
     row = db.one(conn, "SELECT * FROM sounding WHERE id = ?", (sounding_id,))
     extractions = db.rows(conn, "SELECT * FROM extraction WHERE sounding_id = ?"
@@ -308,7 +310,34 @@ def sounding(request: Request, sounding_id: int, gate: str = "auto"):
                 (row["datetime"], row["datetime"], sounding_id))
             neighbours[name] = found
 
+    # Scaled here rather than fetched by the page. It costs about a second
+    # cold and nothing warm, and the alternative -- render the frame, then
+    # fill it in -- means an operator stepping through a day sees a page that
+    # is briefly wrong rather than briefly empty.
+    scaling = frame = None
+    sao_error = ""
+    if row is not None and plot == "interactive":
+        try:
+            scaling = sao_mod.build(_product_path(request, row), gate=gate)
+            frame = sao_mod.plot_data(scaling, method)
+        except Exception as exc:                                  # noqa: BLE001
+            # A missing file, an unreadable product, a detector that threw.
+            # Named on the page: the rest of it -- the row, the neighbours,
+            # the stored extractions -- is still worth reading, and a page
+            # that 500s because one panel could not be drawn hides all of it.
+            sao_error = f"{type(exc).__name__}: {exc}"
+
     return templates.TemplateResponse(request, "sounding.html", {
         "sounding": row, "extractions": extractions, "gate": gate,
         "prev": neighbours["prev"], "next": neighbours["next"],
+        "scaling": scaling, "frame": frame, "sao_error": sao_error,
+        "method": method, "methods": sao_mod.METHODS, "plot": plot,
     })
+
+
+def _product_path(request: Request, row) -> Path:
+    """Where a sounding row's file actually is. Relative paths are archive-root."""
+    path = Path(row["path"])
+    if not path.is_absolute():
+        path = Path(request.app.state.archive_root) / path
+    return path

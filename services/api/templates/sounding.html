@@ -11,12 +11,12 @@
    you step through a day. #}
 <div class="panel" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
   {% if prev %}
-  <a class="pill" href="/ui/sounding/{{ prev.id }}?gate={{ gate }}"
+  <a class="pill" href="/ui/sounding/{{ prev.id }}?gate={{ gate }}&method={{ method }}&plot={{ plot }}"
      title="{{ prev.datetime }}  (left arrow)">&larr; previous</a>
   {% else %}<span class="pill muted" title="earliest sounding">&larr; previous</span>{% endif %}
   <a class="pill" href="/ui/soundings">all soundings</a>
   {% if next %}
-  <a class="pill" href="/ui/sounding/{{ next.id }}?gate={{ gate }}"
+  <a class="pill" href="/ui/sounding/{{ next.id }}?gate={{ gate }}&method={{ method }}&plot={{ plot }}"
      title="{{ next.datetime }}  (right arrow)">next &rarr;</a>
   {% else %}<span class="pill muted" title="latest sounding">next &rarr;</span>{% endif %}
   <span class="note">&larr; and &rarr; step through soundings in time order.</span>
@@ -41,21 +41,188 @@
 
 <div class="panel">
   <h2>ionogram</h2>
-  <span class="note">range gate:</span>
-  <a class="pill {% if gate == 'auto' %}ok{% endif %}"
-     href="/ui/sounding/{{ sounding.id }}?gate=auto">auto</a>
-  <a class="pill {% if gate != 'auto' %}ok{% endif %}"
-     href="/ui/sounding/{{ sounding.id }}?gate=full">full</a>
-  <span class="note">&mdash; <b>auto</b> fits the window to where the echo is.
-  A search-mode v2 product stores &plusmn;3998 km while the trace occupies a few
-  hundred, so at full extent it is a hairline in an empty field.</span>
 
+  <div style="display:flex;gap:1.4rem;flex-wrap:wrap;align-items:center">
+    <span><span class="note">range gate:</span>
+      <a class="pill {% if gate == 'auto' %}ok{% endif %}"
+         href="/ui/sounding/{{ sounding.id }}?gate=auto&method={{ method }}&plot={{ plot }}">auto</a>
+      <a class="pill {% if gate != 'auto' %}ok{% endif %}"
+         href="/ui/sounding/{{ sounding.id }}?gate=full&method={{ method }}&plot={{ plot }}">full</a></span>
+
+    <span><span class="note">plot:</span>
+      <a class="pill {% if plot == 'interactive' %}ok{% endif %}"
+         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ method }}&plot=interactive">interactive</a>
+      <a class="pill {% if plot != 'interactive' %}ok{% endif %}"
+         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ method }}&plot=rendered">rendered</a></span>
+
+    {% if plot == 'interactive' %}
+    <span><span class="note">scaling:</span>
+      {% for m in methods %}
+      <a class="pill {% if m == method %}ok{% endif %}"
+         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ m }}&plot=interactive"
+         title="which estimator's trace is drawn">{{ m }}</a>
+      {% endfor %}</span>
+    <a class="pill" href="/soundings/{{ sounding.id }}/sao.xml?gate={{ gate }}"
+       title="all three records, SAO.XML 5.0">download SAO.XML</a>
+    {% endif %}
+  </div>
+  <p class="note" style="margin:.6rem 0 0"><b>auto</b> fits the window to where
+  the echo is. A search-mode v2 product stores &plusmn;3998 km while the trace
+  occupies a few hundred, so at full extent it is a hairline in an empty field.</p>
+
+{% if plot != 'interactive' %}
   <p style="margin-top:.8rem">
     <img class="iono" loading="lazy" alt="ionogram"
          src="/ionogram/{{ sounding.id }}.png?trace=true{% if gate == 'auto' %}&gate=auto{% endif %}">
   </p>
   <p class="note">Rendered on request, not precomputed &mdash; 288 images a day
   precomputed is 105k files a year that mostly nobody opens.</p>
+
+{% elif sao_error %}
+  <p class="note" style="margin-top:.8rem">
+    <span class="pill fail">no scaling</span> {{ sao_error }}
+  </p>
+  <p class="note">The stored extractions below are unaffected &mdash; they were
+  written at ingest. Try <a href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&plot=rendered">rendered</a>,
+  which needs no SAO record.</p>
+
+{% else %}
+  {# The raster is a PNG behind the traces, not a heatmap trace. 486 x 3999
+     cells is 1.9 million numbers -- about 11 MB of JSON against 164 KB as an
+     image the browser decodes natively. Only the scaled points, a few hundred
+     of them, actually need to be data. #}
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start;margin-top:.8rem">
+    <div style="flex:3 1 620px;min-width:300px">
+      <div style="display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;
+                  margin-bottom:.4rem" class="note">
+        <label><input type="checkbox" id="show-points" checked> scaled points</label>
+        <label><input type="checkbox" id="show-raster" checked> raster</label>
+        <label><input type="checkbox" id="show-marks" checked> MUF / LOF</label>
+        <span>&mdash; click a legend entry to toggle one trace, double-click to
+        isolate it.</span>
+      </div>
+      <div id="sao-plot" style="height:560px"></div>
+      {% if frame.relative %}
+      <p class="note"><span class="pill unk">relative range</span> This record's
+      range zero is not trustworthy: differences along the trace are right, the
+      origin is not. Do not read the axis as group range.</p>
+      {% endif %}
+    </div>
+
+    <div style="flex:1 1 300px;min-width:280px">
+      {% set record = scaling.record(method) %}
+      <div class="scroll"><table>
+        <tr><th colspan="4">{{ method }} &mdash;
+            {{ record.traces|length if record else 0 }} trace(s),
+            {{ frame.traces|map(attribute='points')|sum }} point(s)</th></tr>
+        {% for c in (record.characteristics if record else []) %}
+        <tr title="{{ c.description }}">
+          <td>{{ c.name }}</td>
+          <td style="text-align:right">{{ c.text or '%.3f'|format(c.value) }}{%
+              if c.bound is not none %} &plusmn;{{ '%.3f'|format(c.bound) }}{% endif %}</td>
+          <td class="muted">{{ c.units }}</td>
+          <td>{% if c.letter %}<span class="pill unk"
+                title="UAG-23A qualifying letter {{ c.letter }}">{{ c.letter }}</span>{% endif %}
+              {% if c.model %}<span class="note">{{ c.model }}</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">this estimator declined &mdash; no pick</td></tr>
+        {% endfor %}
+      </table></div>
+
+      <p class="note" style="margin:.7rem 0 .2rem">
+      {% if scaling.model.get('error') %}
+        <span class="pill unk">IRI</span> {{ scaling.model.error }}
+      {% elif scaling.model %}
+        <span class="pill ok">IRI</span> {{ scaling.model.source }}<br>
+        control point {{ scaling.model.control }},
+        D={{ '%.0f'|format(scaling.model.path_km or 0) }} km.
+      {% endif %}
+      </p>
+      <p class="note">Modelled rows are marked with the model that asserted
+      them and are never used to correct the measurement. IRI and the measured
+      MUF disagree by several MHz at times, and writing them side by side does
+      not settle which is right.</p>
+      <p class="note">Scaled in {{ '%.2f'|format(scaling.cost_s) }}s.</p>
+    </div>
+  </div>
+
+  <script id="sao-frame" type="application/json">{{ frame|tojson }}</script>
+  <script src="/static/plotly.min.js"></script>
+  <script>
+  (function () {
+    const frame = JSON.parse(document.getElementById('sao-frame').textContent);
+    const e = frame.extent;
+    const div = document.getElementById('sao-plot');
+    const ink = getComputedStyle(document.body).color;
+
+    // The background is placed in *data* coordinates, and the extent it is
+    // given runs half a cell past the first and last sample -- which is where
+    // `pcolormesh(shading="nearest")` actually draws to. Half a bin out and
+    // every circle sits beside its echo instead of on it.
+    const raster = {
+      source: {{ ('/ionogram/%d.png?bare=true&dpi=150%s'|format(
+                    sounding.id, '&gate=auto' if gate == 'auto' else ''))|tojson }},
+      xref: 'x', yref: 'y', x: e.f_lo, y: e.r_hi,
+      sizex: e.f_hi - e.f_lo, sizey: e.r_hi - e.r_lo,
+      xanchor: 'left', yanchor: 'top', sizing: 'stretch', layer: 'below',
+    };
+
+    const traces = frame.traces.map(t => ({
+      x: t.freq, y: t.vrange, name: t.name, type: 'scatter', mode: 'markers',
+      marker: {symbol: 'circle-open', size: 8, color: t.colour,
+               line: {width: 1.6, color: t.colour}},
+      customdata: t.amplitude,
+      hovertemplate: '%{x:.3f} MHz<br>%{y:.1f} km'
+        + (t.amplitude ? '<br>%{customdata:.1f} dB' : '')
+        + '<extra>' + t.name + (t.hops ? ' · ' + t.hops + ' hop' : '') + '</extra>',
+    }));
+
+    // MUF and LOF as verticals, not as points: they are characteristics of
+    // the whole record and have no value on the range axis to be read off.
+    const shapes = frame.marks.map(m => ({
+      type: 'line', x0: m.value, x1: m.value, yref: 'paper', y0: 0, y1: 1,
+      line: {color: m.colour, width: 1.4, dash: 'dash'},
+    }));
+    // Anchored towards the middle of the band. The MUF sits within a few
+    // hundred kHz of the sweep top on a ceiling-limited circuit, and a
+    // centred label there is half outside the frame.
+    const middle = (e.f_lo + e.f_hi) / 2;
+    const notes = frame.marks.map(m => ({
+      x: m.value, y: 1, yref: 'paper', yanchor: 'bottom', showarrow: false,
+      xanchor: m.value > middle ? 'right' : 'left',
+      text: m.name + ' ' + m.text + (m.letter ? ' ' + m.letter : ''),
+      font: {color: m.colour, size: 10},
+    }));
+
+    Plotly.newPlot(div, traces, {
+      margin: {l: 62, r: 12, t: 26, b: 46},
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#0b0d10',
+      font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
+      xaxis: {title: {text: 'Frequency (MHz)'}, range: [e.f_lo, e.f_hi],
+              gridcolor: 'rgba(255,255,255,.12)', zeroline: false},
+      yaxis: {title: {text: 'Virtual range (km)'}, range: [e.r_lo, e.r_hi],
+              gridcolor: 'rgba(255,255,255,.12)', zeroline: false},
+      images: [raster], shapes: shapes, annotations: notes,
+      hovermode: 'closest', dragmode: 'zoom',
+      legend: {orientation: 'h', y: -0.16, x: 0, font: {size: 10}},
+    }, {responsive: true, displaylogo: false,
+        modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+        toImageButtonOptions: {filename: {{ sounding.file|tojson }}, scale: 2}});
+
+    const bind = (id, apply) => {
+      const box = document.getElementById(id);
+      box.addEventListener('change', () => apply(box.checked));
+    };
+    bind('show-points', on => Plotly.restyle(
+      div, {visible: on ? true : 'legendonly'}, traces.map((_, i) => i)));
+    bind('show-raster', on => Plotly.relayout(
+      div, {images: on ? [raster] : []}));
+    bind('show-marks', on => Plotly.relayout(
+      div, {shapes: on ? shapes : [], annotations: on ? notes : []}));
+  })();
+  </script>
+{% endif %}
 </div>
 
 <div class="panel">
@@ -81,8 +248,10 @@
     </tr>
     {% endfor %}
   </table></div>
-  <p class="note">Quality columns travel with the value, never separately. A
-  <b>limited</b> MUF is a lower bound, not a measurement.</p>
+  <p class="note">Stored at ingest. Quality columns travel with the value,
+  never separately &mdash; a <b>limited</b> MUF is a lower bound, not a
+  measurement. The panel above is scaled live from the product, so it can
+  differ from these if the detectors have changed since.</p>
 </div>
 
 <script>
@@ -92,8 +261,9 @@ document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const t = e.target.tagName;
   if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || e.target.isContentEditable) return;
-  {% if prev %}if (e.key === 'ArrowLeft')  location.href = '/ui/sounding/{{ prev.id }}?gate={{ gate }}';{% endif %}
-  {% if next %}if (e.key === 'ArrowRight') location.href = '/ui/sounding/{{ next.id }}?gate={{ gate }}';{% endif %}
+  const tail = '?gate={{ gate }}&method={{ method }}&plot={{ plot }}';
+  {% if prev %}if (e.key === 'ArrowLeft')  location.href = '/ui/sounding/{{ prev.id }}' + tail;{% endif %}
+  {% if next %}if (e.key === 'ArrowRight') location.href = '/ui/sounding/{{ next.id }}' + tail;{% endif %}
 });
 </script>
 {% endif %}

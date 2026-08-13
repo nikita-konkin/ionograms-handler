@@ -1020,13 +1020,74 @@ has never had a driver.
 
 ### Still open
 
-- **PyIRI is not installed anywhere** -- not in `deploy/requirements-api.txt`,
-  not in the local venv. `iri.available()` is False, so the IRI panel has a
-  driver and no model. It is pure Python; one line.
-- **Nothing in `services/` calls `solar_indices` yet.** The indicator is
-  currently insurance for CLI users of `muf compare --ref-model` and
-  `muf export --iri`; it becomes load-bearing when the panel lands.
 - **Cost per sounding is 0.42 s unless batched.** `IRI_density_1day` takes an
-  array of hours, so a 288-sounding day is one call at 0.16 s. The panel wants
-  a per-circuit-day batch or a cache keyed on circuit and hour, not a call per
-  page load.
+  array of hours, so a 288-sounding day is one call at 0.16 s. `services/api/sao.py`
+  calls it once per sounding and memoises the whole scaling, which makes a
+  revisit free and a first visit slow. A cache keyed on circuit and hour, or a
+  per-circuit-day batch warmed alongside the census, would fix the cold case.
+
+Two entries here are now closed. PyIRI **is** installed -- in the local venv
+and in `deploy/requirements-api.txt` -- and the note above that it is "pure
+Python; one line" was wrong: it pulls netCDF4, cftime, fortranformat and
+opt_einsum, about 30 MB. And `services/` does call `solar_indices` now, through
+`sao.py`'s IRI panel, so the indicator is load-bearing rather than insurance.
+
+
+## 20. The sounding page: one scaling, three views (2026-08-13)
+
+`muf export` had written SAO.XML 5.0 since long before this, and nothing in
+`services/` knew about it. `/ui/sounding/{id}` showed a matplotlib PNG and the
+extractions table, and there was no way to get the XML out of the server at
+all. Now `services/api/sao.py` scales a sounding once and three surfaces read
+it: `GET /soundings/{id}/sao.xml`, the characteristics panel, and an
+interactive plot.
+
+**What is data and what is a picture.** 486 x 3999 cells is 1.94 M numbers,
+~11 MB as JSON against 164 KB as a PNG; the trace is 165-620 points. So the
+raster is served bare (`?bare=true`: axes off, `bbox_inches="tight"`, no
+overlay) and placed in *data* coordinates under scatter traces. Its extent runs
+half a cell past the first and last sample -- `pcolormesh(shading="nearest")`
+centres a cell on each -- and getting that wrong offsets every circle by half a
+bin, which nobody sees until they zoom.
+
+**plotly-basic 3.0.1 is vendored** at `services/api/static/plotly.min.js`,
+1,032,507 bytes, served by a `StaticFiles` mount outside `require_read`. Not a
+CDN: DOB has been off the internet for a week at a time. Still no build step,
+which was the condition in `web_routes.py`'s docstring.
+
+**`pipeline.circuit_ceiling` reads `Options.stations is None` as "no registry"
+rather than "the default one",** so a bare `Options()` finds no band ceiling
+for NIC -> DOB and the `D` qualifying letter never appears. `sao.py` works
+around it by passing `loader.resolve_stations(None)` explicitly, which is what
+makes the served XML agree with `muf export`'s (MUF 24.450 `D`, censored by the
+recorder's band edge). **The CLI still has the bug** -- fix it in
+`pipeline.circuit_ceiling` and drop the workaround.
+
+Smaller things settled along the way:
+
+- `gate=full` is a word the page's own toggle sends. `load_ion` used to read it
+  as a range pair and raise `ValueError` -- a 500 on a link the interface
+  offers.
+- `Branch` comes back empty for most traces on an oblique circuit, so the
+  legend falls back to segment colours and the frequency span. `contour` labels
+  two of nine on this circuit; without the span both read "low".
+- IRI goes *into* the record as `<Modeled>`, not beside it, so the panel and
+  the download cannot disagree.
+- `SAO_MODEL=0` turns the model off. The unit suite sets it, for the same
+  reason it disables the reachability checker: a solar driver on a cold cache
+  is a network fetch.
+
+### Still open
+
+- **The page is server-rendered, so a cold sounding costs ~1.2 s to first
+  byte** (1.19 s scaling + 0.42 s IRI, memoised after). Fine for stepping
+  through a day, wrong for a first visit on a slow box. Fetching the frame
+  asynchronously would show a correct-but-empty plot instead of a slow correct
+  one; the batching item in section 19 is the better fix.
+- **Nothing draws the reconstruction or the nose fit** on the interactive plot,
+  though `render.plot_sao` does. The polyline and the parabola are the two
+  things an operator would most want to toggle against the points.
+- **No test drives the JavaScript.** The tests check that the frame JSON is
+  embedded, that every trace has a distinct legend name and that the bare PNG
+  really is bare; whether Plotly then places the image correctly was verified
+  by eye and by reading back `layout.images` in the browser.

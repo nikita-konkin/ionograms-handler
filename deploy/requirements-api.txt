@@ -36,6 +36,23 @@ opencv-python-headless>=4.10,<5.0
 # An archive that loads 514 soundings on the host loaded 133 in the container.
 h5py>=3.11,<4.0
 
+# --- reference model --------------------------------------------------------
+# IRI, for the `<Modeled>` values beside every measured one on the sounding
+# page. Optional in the code -- `muf.reference.iri.available()` is checked and
+# the panel says "not installed" rather than showing a blank -- but a
+# comparison the operator cannot see is not a comparison, so the image carries
+# it.
+#
+# Not a light dependency, whatever it looks like: it pulls netCDF4, cftime,
+# fortranformat and opt_einsum, about 30 MB into the image. Verified to
+# resolve on linux/py3.12 alongside the numpy<2 pin above (numpy 1.26.4,
+# scipy 1.17.1, netCDF4 1.7.4) before it was added.
+#
+# It also needs a solar driver, which is a network fetch on a cold cache --
+# see `MUF_INDEX_CACHE` in deploy/README.md, and the upstream panel on /ui for
+# whether this host can still reach the servers that provide it.
+PyIRI>=0.1.7
+
 # --- service ----------------------------------------------------------------
 # fastapi and starlette are version-coupled and break loudly when mismatched:
 # fastapi 0.111.0 against starlette 1.0.0 makes a bare `FastAPI()` raise

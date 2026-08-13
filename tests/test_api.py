@@ -1633,3 +1633,224 @@ def test_the_console_says_whether_the_indices_can_be_refreshed(client):
     # With no reading at all the pill is grey, not red: "we have not asked" is
     # not "the answer is no", the same tri-state the metrics table uses.
     assert "INTERNET?" in client.get("/ui").text
+
+
+# --------------------------------------------------------------------------
+# SAO: the scaling behind the download, the panel and the interactive plot
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def scaled(client, tmp_path, monkeypatch, make_chirp_h5):
+    """One synthetic product, ingested, with a sounding id. Returns (id, path).
+
+    IRI is off. It is the one part of a scaling that can reach the internet --
+    PyIRI needs a solar driver, and an unwarmed index cache means a fetch --
+    and a unit suite must not depend on somebody else's uptime, exactly as it
+    must not for the reachability checker.
+    """
+    import numpy as np
+
+    from services.api import ingest, sao
+
+    monkeypatch.setattr(sao, "MODEL", False)
+    sao.clear()
+
+    # A ridge at one range across the band: the simplest thing the detectors
+    # can scale, and enough to give the trace list something in it.
+    power = np.full((48, 96), 100.0)
+    power[:, 40] = 4000.0
+    path = make_chirp_h5(power)
+
+    conn = client.app.state.db
+    monkeypatch.setattr(client.app.state, "archive_root", tmp_path)
+    row = {"file": path.name, "datetime": "2026-02-04T00:00:10",
+           "tx": "synthtx", "rx": "synthrx"}
+    sounding_id = ingest.ingest_row(conn, row, path, tmp_path, ("algo",))
+    conn.commit()
+    yield sounding_id, path
+    sao.clear()
+
+
+def test_the_raster_extent_runs_half_a_cell_past_the_samples(scaled):
+    """`pcolormesh(shading="nearest")` centres a cell on each sample.
+
+    So the image covers half a cell more than the axis at each end. Half a bin
+    out and every overlaid circle sits beside its echo instead of on it --
+    invisible at full extent, obvious the moment anyone zooms in, which is the
+    whole reason the plot is interactive.
+    """
+    from services.api import sao
+
+    _, path = scaled
+    ion = sao.load_ion(path, gate=None)
+    f_lo, f_hi, r_lo, r_hi = sao.raster_extent(ion)
+
+    df = float(ion.freq[1] - ion.freq[0])
+    assert f_lo == pytest.approx(float(ion.freq[0]) - df / 2)
+    assert f_hi == pytest.approx(float(ion.freq[-1]) + df / 2)
+    assert r_lo < float(min(ion.vrange)) and r_hi > float(max(ion.vrange))
+
+
+def test_full_is_a_word_the_gate_understands(scaled):
+    """The page's own toggle sends `gate=full`, meaning "do not gate".
+
+    Read as a range pair it raises ValueError -- a 500 on a link the interface
+    offers, which is the worst kind because nothing else has to go wrong.
+    """
+    from services.api import sao
+
+    _, path = scaled
+    full = sao.load_ion(path, gate="full")
+    plain = sao.load_ion(path, gate=None)
+    assert full.vrange.size == plain.vrange.size
+
+
+def test_a_scaling_is_reused_until_the_file_changes(scaled):
+    """Detection products are write-once, so path plus mtime identifies one."""
+    from services.api import sao
+
+    _, path = scaled
+    first = sao.build(path, gate=None)
+    assert sao.build(path, gate=None) is first
+
+    path.touch()
+    assert sao.build(path, gate=None) is not first
+
+
+def test_every_trace_gets_its_own_legend_entry(scaled):
+    """A legend of five entries reading "unlabelled" in one colour is not one.
+
+    `Branch` comes back empty for most traces on an oblique circuit -- the hop
+    identification labels some and not others -- so the fallback has to
+    distinguish them, and the frequency span is what does it.
+    """
+    from services.api import sao
+
+    _, path = scaled
+    frame = sao.plot_data(sao.build(path, gate=None), "algo")
+    names = [t["name"] for t in frame["traces"]]
+    assert len(names) == len(set(names)), names
+    assert all("MHz" in name for name in names)
+
+
+def test_the_plot_frame_carries_points_not_the_raster(scaled):
+    """486 x 3999 cells is about 11 MB of JSON against 164 KB as a PNG.
+
+    Only the scaled points cross the wire; the image is placed behind them in
+    data coordinates. If a heatmap ever creeps back in, this catches it.
+    """
+    from services.api import sao
+
+    _, path = scaled
+    frame = sao.plot_data(sao.build(path, gate=None), "algo")
+    assert set(frame) == {"extent", "traces", "marks", "relative"}
+    for trace in frame["traces"]:
+        assert len(trace["freq"]) == len(trace["vrange"])
+        assert len(trace["freq"]) < 5000
+
+
+def test_the_sao_download_holds_one_record_per_estimator(client, scaled):
+    """The spec keeps independent scalings apart (sec. 1.3.4).
+
+    Three estimators disagreeing on one trace is the closest thing this
+    pipeline has to an error bar; merging them into one record throws it away.
+    """
+    import xml.etree.ElementTree as ET
+
+    sounding_id, _ = scaled
+    got = client.get(f"/soundings/{sounding_id}/sao.xml?gate=full")
+    assert got.status_code == 200
+    assert got.headers["content-type"].startswith("application/xml")
+
+    root = ET.fromstring(got.text)
+    assert root.tag == "SAORecordList"
+    methods = [r.findtext("SystemInfo/AutoScaler", "") for r in root]
+    assert len(methods) == 3
+    for method in ("algo", "kmeans", "contour"):
+        assert any(f"({method})" in text for text in methods)
+
+
+def test_a_sounding_whose_file_is_gone_says_so(client, scaled):
+    """410, naming the path and ARCHIVE_ROOT. A 500 here reads as a bug in the
+    server when it is a mismatch between the database and the disk."""
+    sounding_id, path = scaled
+    path.unlink()
+
+    for url in (f"/soundings/{sounding_id}/sao.xml",
+                f"/ionogram/{sounding_id}.png"):
+        got = client.get(url)
+        assert got.status_code == 410, url
+        assert "ARCHIVE_ROOT" in got.json()["detail"]
+
+    assert client.get("/soundings/99999/sao.xml").status_code == 404
+
+
+def test_the_bare_raster_is_the_backing_image_not_a_styling_option(client, scaled):
+    """`bare=true` must drop the axes, not merely hide them.
+
+    The interactive plot places this in data coordinates and draws its own
+    axes over it. Any margin matplotlib leaves is a shift between the picture
+    and the numbers.
+    """
+    import io as io_module
+
+    from PIL import Image
+
+    sounding_id, _ = scaled
+    bare = client.get(f"/ionogram/{sounding_id}.png?bare=true&dpi=60")
+    full = client.get(f"/ionogram/{sounding_id}.png?dpi=60&muf=false")
+    assert bare.status_code == full.status_code == 200
+    assert bare.headers["content-type"] == "image/png"
+
+    def corners(body):
+        image = Image.open(io_module.BytesIO(body)).convert("RGB")
+        w, h = image.size
+        return [image.getpixel(xy) for xy in
+                ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+
+    # Not the pixel dimensions: `figsize` is fixed, so both come back 960
+    # wide and only the *content* differs. Every corner of the bare one is
+    # raster; the axed one has the figure's white paper under its title and
+    # its colourbar.
+    assert all(pixel != (255, 255, 255) for pixel in corners(bare.content))
+    assert any(pixel == (255, 255, 255) for pixel in corners(full.content))
+
+
+def test_the_sounding_page_draws_the_scaling_itself(client, scaled):
+    """The page ships the points and the library, and asks for the raster.
+
+    Not a CDN: the station this serves has been off the internet for a week at
+    a time, and a plot that cannot draw a local file without a third party is
+    one that fails exactly when someone needs it.
+    """
+    sounding_id, _ = scaled
+    page = client.get(f"/ui/sounding/{sounding_id}?gate=full").text
+
+    assert '<script src="/static/plotly.min.js">' in page
+    assert 'id="sao-frame"' in page
+    assert f"/ionogram/{sounding_id}.png?bare=true" in page
+    assert "cdn" not in page.lower()
+
+    body = json.loads(page.split('type="application/json">')[1].split("</script>")[0])
+    assert body["extent"]["f_hi"] > body["extent"]["f_lo"]
+
+    assert client.get("/static/plotly.min.js").status_code == 200
+
+
+def test_a_scaling_that_fails_does_not_take_the_page_with_it(client, scaled,
+                                                             monkeypatch):
+    """The row, the neighbours and the stored extractions are still worth
+    reading. A page that 500s because one panel could not be drawn hides all
+    of them, and hides the reason too."""
+    from services.api import sao
+
+    def refuse(*a, **k):                        # noqa: ANN002, ANN003
+        raise OSError("truncated product")
+
+    monkeypatch.setattr(sao, "build", refuse)
+    sounding_id, _ = scaled
+    got = client.get(f"/ui/sounding/{sounding_id}")
+
+    assert got.status_code == 200
+    assert "truncated product" in got.text
+    assert "extractions" in got.text

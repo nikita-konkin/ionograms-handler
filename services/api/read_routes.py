@@ -249,13 +249,57 @@ def ionogram(sounding_id: int, request: Request,
              gate: str | None = None,
              trace: bool = False,
              muf: bool = True,
+             bare: bool = False,
              dpi: int = Query(110, ge=40, le=300)) -> Response:
     """Render one sounding on demand.
 
     ``gate=auto`` fits the range window to where the echo is, which is what
     makes a search-mode v2 product legible at all -- its stored axis is
     +/-3998 km and the trace occupies a few hundred.
+
+    ``bare=true`` drops the axes, title, colourbar and every overlay, leaving
+    the raster alone. That is not a styling option: it is the backing image
+    for the interactive plot, which supplies its own axes and draws the traces
+    itself, and it only lines up because the pixels stop exactly where the
+    data does.
     """
+    path = _sounding_path(request, sounding_id)
+    png = _render(path, gate=gate, trace=trace, muf=muf, dpi=dpi, bare=bare)
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/soundings/{sounding_id}/sao.xml")
+def sounding_sao(sounding_id: int, request: Request,
+                 gate: str = "auto") -> Response:
+    """This sounding as SAO.XML 5.0, one ``<SAORecord>`` per estimator.
+
+    The same document ``muf export`` writes, from the same code -- so an
+    archive scaled on the station and one pulled from here are the same file,
+    which is the only reason it is worth serving at all.
+
+    Separate records rather than one merged scaling: the spec keeps
+    independent scalings apart (sec. 1.3.4), and the disagreement between
+    three estimators on one trace is the closest thing this pipeline has to an
+    error bar. Merging them would throw it away.
+    """
+    from muf.export import saoxml
+
+    from . import sao as sao_mod
+
+    path = _sounding_path(request, sounding_id)
+    scaling = sao_mod.build(path, gate=gate)
+    body = saoxml.to_string(scaling.root)
+    name = Path(path).stem
+    return Response(
+        body, media_type="application/xml",
+        headers={"Cache-Control": "public, max-age=3600",
+                 "Content-Disposition":
+                     f'inline; filename="{name}.SAO.XML"'})
+
+
+def _sounding_path(request: Request, sounding_id: int) -> Path:
+    """The product behind one sounding row, or the reason it cannot be served."""
     row = db.one(request.app.state.db,
                  "SELECT * FROM sounding WHERE id = ?", (sounding_id,))
     if row is None:
@@ -269,26 +313,29 @@ def ionogram(sounding_id: int, request: Request,
             status.HTTP_410_GONE,
             f"{row['file']} is in the database but not on disk at {path}. "
             f"Check ARCHIVE_ROOT matches the root it was ingested with.")
-
-    png = _render(path, gate=gate, trace=trace, muf=muf, dpi=dpi)
-    return Response(png, media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=3600"})
+    return path
 
 
-def _render(path: Path, *, gate, trace, muf, dpi) -> bytes:
+def _render(path: Path, *, gate, trace, muf, dpi, bare: bool = False) -> bytes:
     import matplotlib
     matplotlib.use("Agg")                      # no display in a container
 
-    from muf import calibrate, extractors, loader, render
+    from muf import extractors, render
 
-    ion = loader.load(path)
-    if gate == "auto":
-        found = calibrate.auto_gate(ion.power, ion.cal.vrange)
-        if found is not None:
-            ion = ion.regated(*found)
-    elif gate:
-        lo, hi = (float(part) for part in gate.split(","))
-        ion = ion.regated(lo, hi)
+    from . import sao as sao_mod
+
+    # Gated by the same function the plot frame uses. If these two ever gate
+    # differently the raster and the axes drawn over it describe different
+    # range windows, and the picture is quietly wrong rather than broken.
+    ion = sao_mod.load_ion(path, gate=gate)
+
+    if bare:
+        # No extractors, no trace fit: nothing is drawn on this image, and
+        # running the estimators to throw the answer away would triple what
+        # the page waits for.
+        buffer = io.BytesIO()
+        render.plot(ion, buffer, None, axes=False, dpi=dpi)
+        return buffer.getvalue()
 
     results = extractors.run(ion) if muf else None
     segments = reconstruction = None

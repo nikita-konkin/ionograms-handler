@@ -503,6 +503,17 @@ Ionogram PNGs and SAO.XML, generated **on request** rather than precomputed.
 288 images/day precomputed is 105 k files/year that mostly nobody opens;
 rendering from a cached gated product is ~0.2 s.
 
+One scaling serves three surfaces — the XML download, the numbers panel and
+the interactive plot — built once in `services/api/sao.py` and memoised on
+path plus mtime, which identifies a write-once detection product for good.
+
+**The raster stays a PNG.** 486 × 3999 cells is 1.9 M numbers, ~11 MB as JSON
+against 164 KB as an image; only the few hundred scaled points cross the wire
+as data. The image is placed in *data* coordinates under the traces, and its
+extent runs half a cell past the first and last sample because
+`pcolormesh(shading="nearest")` draws a cell centred on each one. Half a bin
+out and every circle sits beside its echo instead of on it.
+
 ### 4.3 api **[proposed]**
 
 The only network-facing surface.
@@ -510,8 +521,10 @@ The only network-facing surface.
 ```
 GET /soundings?tx=&rx=&from=&to=
 GET /series/muf?method=&from=&to=&smoothed=
-GET /ionogram/{id}.png            → renderer
-GET /sao/{id}.xml                 → renderer
+GET /ionogram/{id}.png            → renderer; bare=true drops the axes and
+                                  every overlay, for the interactive plot
+                                  to place behind its own
+GET /soundings/{id}/sao.xml       → SAO.XML 5.0, one record per estimator
 GET /forecast?horizon=&from=
 GET /net                          index-host reachability, last background
                                   pass only -- this route never probes

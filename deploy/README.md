@@ -481,7 +481,10 @@ where 8000 belongs to `tec-backend`.
 | `/ui` again | the command shows `acked` |
 | Stop the sim container, wait 3 min | `SIM` turns `STALE` |
 | `/ui/series?method=kmeans` | a MUF curve, hollow markers for lower bounds |
-| `/ui/sounding/1` | an ionogram, auto-gated |
+| `/ui/sounding/1` | an ionogram, auto-gated, with the scaled trace drawn over it |
+| `/ui/sounding/1`, untick **raster** | the circles alone on an empty field — the overlay is real data, not part of the image |
+| `curl -I localhost:$PORT/static/plotly.min.js` | `200`, ~1.0 MB — the plot library ships in the image |
+| `curl localhost:$PORT/soundings/1/sao.xml` | `<SAORecordList>` with three `<SAORecord>`, one per estimator |
 | `curl localhost:$PORT/net` | `"state":"online"` if this host can reach the solar index servers |
 
 **`/net` is the answer to "does the server have internet?"** — asked of the
@@ -495,6 +498,20 @@ panel at the top of `/ui`, with each file's cache age beside its host.
 checker thread ever stops — a dead checker must not leave a green light. Three
 knobs, all optional: `NET_CHECK=0` to switch it off on a deliberately isolated
 host, `NET_CHECK_INTERVAL_S` (default 600) and `NET_TIMEOUT_S` (default 4).
+
+**The sounding page draws the trace itself.** The raster is served bare
+(`/ionogram/{id}.png?bare=true` — no axes, no colourbar, no overlay) and placed
+under scatter traces in data coordinates, so only a few hundred scaled points
+cross the wire instead of 1.9 million raster cells. If the circles look offset
+from the echo by a hair, that is the extent, not the detector: the image covers
+half a cell more than the axis at each end.
+
+The panel beside the plot needs **PyIRI**, which the image now installs. It is
+not a light dependency — netCDF4, cftime, fortranformat and opt_einsum, about
+30 MB — and it needs a solar driver, so on a host with no route out and a cold
+`MUF_INDEX_CACHE` the panel says so instead of showing numbers. `SAO_MODEL=0`
+turns the whole IRI column off on a host that should make no outbound requests
+at all.
 
 The indices themselves cache to `MUF_INDEX_CACHE`, set to `/data/indices` in
 both compose files. It has to be on the volume: `$HOME` is an image layer, so

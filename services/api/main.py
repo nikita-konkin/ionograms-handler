@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import agent_routes, auth, control_routes, db, net, read_routes, sources
 from . import web_routes
@@ -89,6 +90,16 @@ app.include_router(agent_routes.router)
 app.include_router(control_routes.router)
 app.include_router(read_routes.router)
 app.include_router(web_routes.router)
+
+# The one vendored asset: plotly.min.js, served from the image. Not a CDN,
+# because the station this serves is on a link that has already been down for
+# a week at a time, and a plot that needs the internet to draw a file already
+# on disk is a plot that stops working exactly when someone needs it. It is
+# also mounted *outside* `require_read`, like any other static asset -- there
+# is nothing about this archive in a plotting library.
+app.mount("/static",
+          StaticFiles(directory=str(Path(__file__).parent / "static")),
+          name="static")
 
 
 @app.get("/healthz", include_in_schema=False)
