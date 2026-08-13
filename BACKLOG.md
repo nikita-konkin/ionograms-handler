@@ -896,3 +896,33 @@ Two things worth keeping in mind:
   Harmless -- a detector caught mid-write -- but the count is now on the page,
   and a *steady* count is not the same thing as a transient one. Worth a look
   if it does not go away.
+
+### The console could not say whether it was recording anything
+
+Also reported from the deployed server: the panel needed an indicator for
+whether sounding is actually *running*. Everything on it was arithmetic on the
+ini against a clock -- `SOUNDING NIC` is true the second the schedule says a
+chirp is due, and it stays true with the recorder dead.
+
+The indicator is `newest_product_age_s` first, unit states second. That order
+is forced by DOB: it reports `units: []`, because `dombas.sh` supervises it
+rather than systemd, so anything built on unit states would read unknown
+forever on the one station being watched. A definitely-dead unit still wins
+when there is one -- it is a fact about now, while a fresh product age can be
+fifteen minutes old.
+
+Four states, not three. `NO PRODUCTS` (nothing arriving, nothing reporting
+itself dead) is separate from `NOT ACQUIRING` because it is what the real
+outage looked like: every unit green for two days with `/dev/shm` at 100%. And
+a stale report reads `ACQUIRING?`, never red -- silence is the alert, but it is
+the absence of evidence, and giving it the failure colour teaches the operator
+to discount the failure colour.
+
+Only `chirp-rx` and `chirp-ionograms` are consulted. `chirp-sync` and
+`chirp-archive-sync` can fail for a week while the station sounds perfectly;
+reporting every listed unit is the "eleven false reds" the station config
+already warns about. They still show FAIL in the metrics table.
+
+When the station is not acquiring, the schedule pills say `SLOT DUE` rather
+than `SOUNDING` and the table says `due` rather than `sounding`, with the
+distinction spelled out in the panel. Same arithmetic, different claim.

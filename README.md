@@ -1660,7 +1660,7 @@ services/
     acquisition.py      which slot is being sounded, and when the next is due
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  736 tests; `python -m pytest tests -q`
+tests/                  748 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1816,6 +1816,30 @@ are still exact and no slot is claimed to be in progress. The panel also flags
 **rank oversubscription** — two slots of one rank whose sweeps overlap. A rank
 is one process, so it takes the nearer slot and the other is skipped that cycle
 with nothing in the log to say so.
+
+That schedule is arithmetic on the ini, and **it stays true with the recorder
+dead** — so the panel leads with a separate indicator for whether anything is
+actually being recorded, and refuses to call a slot a sounding unless it is:
+
+| pill | means |
+|---|---|
+| `ACQUIRING` | products are arriving, or the supervisor says the recorder is up |
+| `NOT ACQUIRING` | a process acquisition needs is definitely down |
+| `NO PRODUCTS` | nothing is being produced while nothing reports itself dead |
+| `ACQUIRING?` | no report current enough to answer with |
+
+`newest_product_age_s` leads, because it measures the acquisition rather than
+the supervisor and because DOB reports **no unit states at all** — `dombas.sh`
+supervises it, not systemd, so a unit-based indicator would read unknown
+forever on the one station being watched. A definitely-dead unit still outranks
+it: that is a fact about now, while a product age inside its threshold can be
+fifteen minutes old. Only `chirp-rx` and `chirp-ionograms` count — a failed
+`chirp-sync` upload is a red row in the metrics table, not a stopped station.
+`NO PRODUCTS` is its own state rather than a shade of red because it is what
+the real outage looked like: every unit green for two days with `/dev/shm` at
+100%, the ringbuffer never trimmed and the recording full of holes. A stale
+report is `ACQUIRING?`, never `NOT ACQUIRING` — silence is the alert, but it is
+the absence of evidence, and the two must not share a colour.
 
 A search-mode archive is mostly interference, so three filters run first, all
 on **shape rather than strength** — the loudest group in one real archive had a

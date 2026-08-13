@@ -1276,6 +1276,106 @@ def test_a_station_with_no_epoch_says_so_rather_than_reporting_empty(client):
     assert "no schedule recorded" in live["unknown"]
 
 
+# --------------------------------------------------------------------------
+# Is it acquiring, which the schedule cannot say
+# --------------------------------------------------------------------------
+#
+# The slot arithmetic is the ini read against a clock: it stays true with the
+# recorder dead. These tests pin the separate question -- whether anything is
+# actually being recorded -- and the order in which the evidence is weighed.
+
+def _unit(name, ok):
+    return {"name": f"unit:{name}", "value": "active" if ok else "failed",
+            "ok": ok, "detail": ""}
+
+
+def _age(seconds, ok):
+    return {"name": "newest_product_age_s", "value": seconds, "ok": ok,
+            "detail": "threshold 900s"}
+
+
+def _state(metrics, age_s=30.0):
+    return acq.running_state(metrics, age_s=age_s,
+                             stale_after=acq.STALE_AFTER_S)["state"]
+
+
+def test_products_arriving_is_what_acquiring_means():
+    """DOB has no unit states at all -- `dombas.sh` supervises it, not systemd.
+
+    An indicator built on unit states would read "unknown" forever on the one
+    station being watched, so the product age has to be able to answer alone.
+    """
+    assert _state([_age(45.0, True)]) == "running"
+
+
+def test_a_dead_recorder_outranks_a_product_that_is_still_fresh():
+    """A product age inside its threshold can be fifteen minutes old.
+
+    The unit state is a fact about now, so it wins: the last sweep landing
+    recently is not evidence that the next one will.
+    """
+    assert _state([_unit("chirp-rx.service", False), _age(45.0, True)]) == "stopped"
+
+
+def test_green_units_with_nothing_arriving_are_silent_not_running():
+    """This is what the real outage looked like.
+
+    Every unit active for two days with `/dev/shm` at 100%: the ringbuffer was
+    never trimmed and the recording was full of holes, while systemd was
+    perfectly happy. "Silent" is its own state so that it cannot be read as a
+    milder shade of either green or red.
+    """
+    assert _state([_unit("chirp-rx.service", True),
+                   _unit("chirp-ionograms.service", True),
+                   _age(9000.0, False)]) == "silent"
+
+
+def test_a_failed_upload_is_not_a_stopped_station():
+    """`chirp-sync` pushes dashboard images; the station sounds without it.
+
+    Reporting every listed unit would give eleven false reds, which is how an
+    indicator gets ignored. It still shows FAIL in the metrics table.
+    """
+    assert _state([_unit("chirp-sync.service", False),
+                   _unit("chirp-archive-sync.service", False),
+                   _age(45.0, True)]) == "running"
+
+
+def test_a_stale_report_is_unknown_not_stopped():
+    """Absence of evidence. Silence is the alert, but it is not a diagnosis --
+    the two must not share a colour."""
+    assert _state([_age(45.0, True)], age_s=4000.0) == "unknown"
+    assert _state([_age(45.0, True)], age_s=None) == "unknown"
+
+
+def test_a_report_that_measured_nothing_says_so():
+    assert _state([{"name": "disk_free_fraction", "value": 0.42, "ok": True,
+                    "detail": ""}]) == "unknown"
+
+
+def test_the_console_will_not_call_a_slot_a_sounding_when_nothing_arrives(client):
+    """The default report is 9000 s since the last product: silent.
+
+    The schedule still says a chirp is due this second, and the page has to
+    show both without the arithmetic being mistaken for an observation.
+    """
+    client.post("/stations/health", headers=CTL, json=report(station="DOB"))
+    _identify(client, station="DOB", code="NIC")
+    command_id = client.post("/stations/DOB/schedule", headers=CTL,
+                             json={"codes": ["NIC"]}).json()["id"]
+    timings = json.dumps([[{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
+                            "id": 1, "transmit_name": "NIC"}]])
+    client.post(f"/stations/DOB/commands/{command_id}/ack", headers=CTL,
+                json={"results": [_journal(timings=timings)]})
+
+    live = client.get("/stations/DOB/schedule").json()
+    assert live["running"]["state"] == "silent"
+
+    page = client.get("/ui").text
+    assert "NO PRODUCTS" in page
+    assert "SOUNDING" not in page
+
+
 def test_the_console_shows_what_is_sounding_and_what_arrived(client, tmp_path,
                                                              monkeypatch):
     """The panel exists because unit states cannot answer it: every process can

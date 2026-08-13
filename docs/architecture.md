@@ -524,7 +524,8 @@ POST /stations/{id}/commands/{cid}/ack ← agent reports what it did
 
 POST /stations/{id}/commands           authed, queue start | stop | restart
 GET  /stations/{id}/schedule           live acquisition state: mode, slots,
-                                       which one is sounding now, arrivals
+                                       which one is sounding now, arrivals,
+                                       and whether it is acquiring at all
 POST /stations/{id}/schedule           authed, compose by transmitter name and
                                        queue it; a config_epoch row opens when
                                        the station acknowledges
@@ -547,6 +548,16 @@ POST /stations/{id}/transfer           authed, trigger sync
 > `transmit_name` with no default, and a detection is anonymous. The identity
 > is supplied once, by an operator, through `/transmitters` — and the schedule
 > is composed from those records, one MPI rank group per transmitter.
+
+> **The schedule is not an observation, and `GET /schedule` says both.** Its
+> `slots` are the journalled ini read against a clock: `in_progress` stays true
+> with the recorder dead. The `running` object beside them is the measurement —
+> `running`, `stopped`, `silent` or `unknown` — led by `newest_product_age_s`
+> because DOB reports no unit states at all (`dombas.sh` supervises it, not
+> systemd), and overridden by a dead `chirp-rx` or `chirp-ionograms` when there
+> is one. `silent` is distinct from `stopped` because the 2026-08-05 fault was
+> every unit green with nothing being produced; `unknown` is distinct from
+> `stopped` because a stale report is the absence of evidence.
 
 One surface across acquisition, extraction and forecasting — but **separate
 auth scopes**. Public read of soundings and forecasts must not share a scope

@@ -270,6 +270,126 @@ def name_for(entry: dict, verified: list[dict]) -> str | None:
     return None
 
 
+# --------------------------------------------------------------------------
+# Is it acquiring at all
+# --------------------------------------------------------------------------
+#
+# Separate from everything above, and it has to be. The slots are arithmetic
+# on the station's ini: "second 235 of a 300 s cycle is now, and a sweep lasts
+# 248 s, so a sounding is in progress." That statement stays true with the
+# recorder dead, the USRP unplugged and the laptop off. It is what the station
+# is *meant* to be doing.
+#
+# Whether it is doing it is a different question with different evidence, and
+# the answer here is only as good as the last health report.
+
+#: Age past which a health report is too old to conclude anything from. Three
+#: push intervals at the agent's 60 s default: one missed push is a hiccup,
+#: three is a story. The console shows the station as stale at the same point,
+#: which is the same judgement.
+STALE_AFTER_S = 180.0
+
+#: Units whose death stops acquisition, by the distinctive part of the name.
+#:
+#: Deliberately not "every unit the operator listed". `chirp-sync` uploads
+#: dashboard images and `chirp-archive-sync` mirrors to the NAS; both can fail
+#: for a week while the station sounds perfectly. Reporting those as NOT
+#: ACQUIRING is the "eleven false reds" failure the station config warns
+#: about -- they still show as FAIL in the metrics table, which is where a
+#: failed upload belongs.
+#:
+#: The recorder is acquisition. `calc_ionograms` is what turns the recording
+#: into products, so its death is equally the end of soundings arriving.
+ACQUISITION_UNITS = ("chirp-rx", "chirp-ionograms")
+
+
+def _acquisition_units(metrics) -> list[dict]:
+    return [m for m in metrics or []
+            if str(m.get("name", "")).startswith("unit:")
+            and any(u in str(m["name"]) for u in ACQUISITION_UNITS)]
+
+
+def running_state(metrics, *, age_s: float | None,
+                  stale_after: float) -> dict:
+    """Is this station acquiring, as far as its last report can say.
+
+    Four answers, and the fourth is not a softer version of the others:
+
+    ``running``
+        Products are arriving, or the supervisor says the recorder is up.
+    ``stopped``
+        A process that acquisition needs is definitely not running.
+    ``silent``
+        Nothing is being produced while nothing reports itself dead. This is
+        its own state because it is what the real outage looked like: every
+        unit green for two days with `/dev/shm` at 100%, the ringbuffer never
+        trimmed and the recording full of holes.
+    ``unknown``
+        Nothing current enough to answer with. A stale report is *not*
+        evidence of a stopped station -- it is the absence of evidence, and
+        the two must not share a colour.
+
+    ``newest_product_age_s`` leads because it measures the acquisition rather
+    than the supervisor, and because DOB runs under ``dombas.sh`` with an
+    empty ``units`` list: an indicator built on unit states would read
+    "unknown" forever on the one station being watched. A definitely-dead unit
+    still outranks it, though -- that is a fact about now, while a product age
+    inside its threshold can be up to fifteen minutes old.
+    """
+    if age_s is None:
+        return {"state": "unknown", "detail":
+                "no health report from this station yet"}
+    if age_s > stale_after:
+        return {"state": "unknown", "detail":
+                f"last report was {age_s:.0f}s ago, so nothing here is "
+                f"current -- silence is the alert, but it is not evidence "
+                f"that acquisition stopped"}
+
+    units = _acquisition_units(metrics)
+    down = [m for m in units if m.get("ok") is False]
+    if down:
+        return {"state": "stopped", "detail": "; ".join(
+            f"{m['name'].split(':', 1)[1]} is {m.get('value') or 'not active'}"
+            for m in down)}
+
+    age = next((m for m in metrics or []
+                if m.get("name") == "newest_product_age_s"), None)
+    if age is not None and age.get("ok") is True:
+        return {"state": "running", "detail":
+                f"newest product {_duration(age.get('value'))} old"
+                f"{' -- ' + age['detail'] if age.get('detail') else ''}"}
+    if age is not None and age.get("ok") is False:
+        return {"state": "silent", "detail":
+                f"no recent product ({age.get('detail') or 'past threshold'})"
+                + ("; every acquisition unit reports active"
+                   if units and all(m.get("ok") for m in units) else "")}
+
+    if units and all(m.get("ok") for m in units):
+        return {"state": "running", "detail":
+                "the supervisor reports every acquisition unit active; "
+                "product age could not be measured"}
+    return {"state": "unknown", "detail":
+            "no unit states and no measurable product age -- nothing in this "
+            "report says whether the station is acquiring"}
+
+
+def _duration(seconds) -> str:
+    """Seconds for a `detail` string, which is JSON before it is HTML.
+
+    Deliberately not the template filter of the same name in `web_routes`: that
+    one is for a table cell and prints an em dash for "not known", which is
+    wrong inside a sentence an API client may read.
+    """
+    if seconds is None:
+        return "?"
+    seconds = float(seconds)
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    if seconds < 5400:
+        return f"{int(seconds) // 60}m{int(seconds) % 60:02d}s"
+    return f"{seconds / 3600:.1f}h"
+
+
 @dataclass
 class Acquisition:
     """The whole answer for one station at one instant."""
@@ -285,9 +405,24 @@ class Acquisition:
     #: unrecorded one are different situations: the first records nothing, the
     #: second is a station this server has simply never seen configured.
     unknown: str | None = None
+    #: Whether the station is acquiring, from its last health report. See
+    #: :func:`running_state`. Defaults to unknown so a caller that does not
+    #: supply health cannot accidentally claim the station is up.
+    running: dict = field(default_factory=lambda: {
+        "state": "unknown", "detail": "health was not consulted"})
+
+    @property
+    def is_running(self) -> bool:
+        return self.running.get("state") == "running"
 
     @property
     def sounding_now(self) -> list[Slot]:
+        """Slots whose sweep is under way *according to the schedule*.
+
+        Not an observation. This is the ini against a clock, and it says the
+        same thing whether or not the recorder is alive -- which is why the
+        console shows it beside :attr:`running` and never instead of it.
+        """
         return [s for s in self.slots if s.in_progress]
 
     @property
@@ -319,6 +454,7 @@ class Acquisition:
         return {
             "station": self.station, "now_utc": _iso(self.now),
             "mode": self.mode, "unknown": self.unknown,
+            "running": self.running,
             "span_mhz": self.span_mhz,
             "epoch": self.epoch,
             "slots": [s.as_dict() for s in self.slots],
@@ -332,12 +468,15 @@ class Acquisition:
 def describe(station: str, *, timings, mode: str | None = None,
              epoch: dict | None = None, verified: list[dict] | None = None,
              span_mhz: float | None = None, arrivals: list[dict] | None = None,
+             running: dict | None = None,
              now: float | None = None) -> Acquisition:
     """Put a schedule, a band and some arrivals against a clock."""
     now = time_now() if now is None else now
     verified = verified or []
     state = Acquisition(station=station, now=now, mode=mode, epoch=epoch,
                         span_mhz=span_mhz, arrivals=list(arrivals or []))
+    if running is not None:
+        state.running = running
 
     groups = rank_groups(timings)
     if not groups or not any(groups):
@@ -428,9 +567,20 @@ def observed_span_mhz(conn, station: str, limit: int = 50) -> float | None:
 
 
 def current(conn, station: str, *, now: float | None = None,
-            limit: int = 6) -> Acquisition:
+            limit: int = 6, stale_after: float = STALE_AFTER_S) -> Acquisition:
     """Everything the console panel needs for one station."""
     from . import db
+    from .read_routes import _age_seconds, _tri
+
+    # Health is read here rather than passed in so that every caller gets the
+    # indicator -- the JSON route and the console page ask the same question
+    # and must not be able to answer it differently.
+    report = db.latest_health(conn, station)
+    metrics = db.metrics_for(conn, int(report["id"])) if report else []
+    running = running_state(
+        [{**m, "ok": _tri(m["ok"])} for m in metrics],
+        age_s=_age_seconds(report["received_at"]) if report else None,
+        stale_after=stale_after)
 
     epoch = db.open_epoch(conn, station)
     changes = (epoch or {}).get("changes") or {}
@@ -458,5 +608,6 @@ def current(conn, station: str, *, now: float | None = None,
         verified=db.transmitters(conn, station),
         span_mhz=observed_span_mhz(conn, station),
         arrivals=arrivals(conn, station, limit=limit, now=now),
+        running=running,
         now=now,
     )

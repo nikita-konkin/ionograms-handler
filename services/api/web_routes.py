@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.templating import Jinja2Templates
 
-from . import db
+from . import acquisition, db
 from .auth import require_read
 from .read_routes import _age_seconds, _command, _tri
 
@@ -26,9 +26,10 @@ router = APIRouter(include_in_schema=False, dependencies=[Depends(require_read)]
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 #: Age past which a station is shown as stale rather than as whatever it last
-#: said. Three push intervals at the agent's 60 s default: one missed push is
-#: a hiccup, three is a story.
-STALE_AFTER_S = 180.0
+#: said. Defined in `acquisition` because the acquiring/stopped indicator
+#: turns on the same threshold: a report too old to show is too old to
+#: conclude anything from.
+STALE_AFTER_S = acquisition.STALE_AFTER_S
 
 
 def _duration(seconds) -> str:
@@ -55,8 +56,6 @@ templates.env.filters["duration"] = _duration
 
 @router.get("/ui")
 def console(request: Request):
-    from . import acquisition
-
     conn = request.app.state.db
     stations = []
     for station in db.stations(conn):
@@ -167,7 +166,6 @@ def sources_page(request: Request, max_days: int = 3, min_count: int = 3):
     a `sounder_timings` list, and until now the only way to get one was to run
     `muf detect` on the station and transcribe the numbers.
     """
-    from . import acquisition
     from . import sources as sources_mod
 
     conn = request.app.state.db

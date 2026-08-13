@@ -51,11 +51,23 @@
               margin-bottom:.8rem">
     <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
       <b>acquisition</b>
+      {# The observation, first and largest: everything after it is the ini
+         read against a clock, which stays true with the recorder dead. #}
+      {% if a.running.state == 'running' %}
+        <span class="pill ok">ACQUIRING</span>
+      {% elif a.running.state == 'stopped' %}
+        <span class="pill fail">NOT ACQUIRING</span>
+      {% elif a.running.state == 'silent' %}
+        <span class="pill fail">NO PRODUCTS</span>
+      {% else %}
+        <span class="pill unk">ACQUIRING?</span>
+      {% endif %}
       {% if a.mode == 'scheduled' %}<span class="pill">scheduled</span>
       {% elif a.mode == 'search' %}<span class="pill">search</span>
       {% else %}<span class="pill unk">mode not recorded</span>{% endif %}
       {% if a.sounding_now %}
-        <span class="pill ok">SOUNDING
+        <span class="pill {{ 'ok' if a.is_running else 'unk' }}">
+          {%- if a.is_running %}SOUNDING{% else %}SLOT DUE{% endif %}
           {{ a.sounding_now|map(attribute='who')|unique|join(', ') }}</span>
       {% elif a.slots %}
         <span class="pill unk">between slots</span>
@@ -69,6 +81,11 @@
         {% endif %}
       </span>
     </div>
+
+    <p class="note">{{ a.running.detail }}.
+    {%- if not a.is_running and a.sounding_now %} <b>The slot marked due is
+    the schedule against the clock, not an observation:</b> it says a chirp is
+    expected this second, not that one is being recorded.{% endif %}</p>
 
     {% if a.unknown %}
     <p class="note">{{ a.unknown }}</p>
@@ -92,7 +109,8 @@
         <td class="muted">{{ '%.1f'|format(slot.rate_hz_s / 1000) }} kHz/s</td>
         <td class="muted">{{ '%g'|format(slot.chirpt_s) }}s of {{ '%g'|format(slot.rep_s) }}s</td>
         <td>{% if slot.in_progress %}
-              <span class="pill ok">sounding</span>
+              <span class="pill {{ 'ok' if a.is_running else 'unk' }}"
+                >{{ 'sounding' if a.is_running else 'due' }}</span>
               <span class="muted">{{ slot.seconds_in|duration }} in,
                 sweep ends {{ slot.ends_at_utc if slot.ends_at_utc else '' }}</span>
             {% elif slot.sweep_s is none %}
@@ -143,7 +161,8 @@
     <p class="note">Last products <b>ingested</b> for this receiver. A stalled
     transfer shows old arrivals while the recorder is fine &mdash; the
     <code>newest_product_age_s</code> metric below is the one that speaks for
-    the station itself.</p>
+    the station itself, and it is what the indicator at the top of this panel
+    reads.</p>
     {% else %}
     <p class="note">Nothing ingested under the receiver name
     <code>{{ s.name }}</code>.</p>
