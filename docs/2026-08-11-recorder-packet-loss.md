@@ -679,6 +679,12 @@ pinned the recorder to `cpu0` and every consumer to `1-7` — which put an MPI
 rank on the other half of the recorder's physical core, sharing its execution
 units, its L1 and its L2.
 
+> **The mechanism in this section is wrong in one detail, and it is worse than
+> stated.** The `taskset` mask never reached the MPI ranks at all: Open MPI
+> re-pinned them, and put rank 0 on `cpu0` *itself*, not merely on the sibling.
+> See §8. The conclusion — the recorder did not have its own core — stands, and
+> so does patch 0010; only the route to it changes.
+
 The recorder never had a dedicated core. It had a dedicated *hyperthread*, on a
 core it shared with a consumer. Everything follows:
 
@@ -718,3 +724,64 @@ looked like a fix and then came apart on a busier day.
 **Read the hardware before profiling it.** `lscpu`, `thread_siblings_list` and
 `/proc/interrupts` are three commands, they cost nothing, and not running them
 put "eight cores" in the premise of every measurement for three days.
+
+## 8. Open MPI was overriding the pinning the whole time (2026-08-13)
+
+Patch 0010 went in at ~10:40 UTC. The verification afterwards is the reason
+this section exists:
+
+```
+9833  rx_uhd_ext_gps      0,1     <- correct
+9883  mpirun (detect)     2-7     <- correct
+9906  detect rank 0       0,1     <- on the recorder's core
+9907  detect rank 1       2,3
+9913  mpirun (calc)       2-7     <- correct
+9925  calc  rank 0        0,1     <- on the recorder's core
+9926  calc  rank 1        2,3
+```
+
+Both `mpirun` processes inherited the launcher's `taskset -cp 2-7` correctly.
+**Neither passed it to the ranks it spawned.** Open MPI calls
+`sched_setaffinity` on each rank after fork, and 1.10.2 — what Ubuntu 16.04
+ships — defaults to `--bind-to core` for `-np <= 2`. It then assigns ranks from
+the machine topology with no reference to the mask it was started under: rank 0
+to physical core 0 (`0,1`), rank 1 to physical core 1 (`2,3`).
+
+So on a box where the whole point was to fence the recorder off, **two compute
+ranks were placed on its core**, and a third of the machine — cores 4-7 — sat
+unused while they did it.
+
+### What this corrects
+
+§7 attributed the residual 3.4% to a consumer on `cpu1`, the sibling. That was
+too generous. Under patch 0008's `taskset -cp 1-7`, rank 0 was still placed on
+`0,1`, so an MPI rank was running on **`cpu0` itself** — the very CPU the mask
+excluded by name. The recorder did not have a dedicated hyperthread either.
+
+It also explains a discrepancy §7 left alone. 0008 measured a real 96% drop
+reduction, and if the ranks were never fenced, that improvement has to have come
+from somewhere else: the *other* nine processes — `station_monitor.py`,
+`drf ringbuffer`, the supervising shells, the receivers still running at the
+time — which are plain `fork`/`exec` children and did inherit the mask. Fencing
+those off was most of the win. The two ranks were the part that never moved, and
+they are the part that was still costing 3.4% by daylight.
+
+### The fix
+
+`--bind-to none` on both `mpirun` invocations, which makes the ranks inherit
+rather than override, at the cost of core-level cache locality. Patch 0011;
+`chirp-detect.service` and `chirp-ionograms.service` carry the same flag, since
+`CPUAffinity=` in a unit file is overridden by exactly the same call.
+
+`--cpu-set 2-7 --bind-to core` would keep the locality, but 1.10's `--cpu-set`
+takes *logical* processor ids and a misread there lands a rank back on core 0 —
+the failure this is meant to end. Not worth the margin.
+
+### The general form of this mistake
+
+An affinity mask is advice that any process is free to overwrite for itself.
+`taskset` and `CPUAffinity=` constrain what a process *inherits*, not what it
+*chooses*, and MPI runtimes, OpenMP, numactl-aware libraries and JVMs all
+choose. **Verify pinning on the leaf processes that do the work, never on the
+launcher** — `mpirun` reading `2-7` is precisely the reading that hid this.
+

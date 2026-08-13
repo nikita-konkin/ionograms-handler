@@ -43,7 +43,12 @@ CPUAffinity=2-7
 # (In serendipitous mode timings come from find_timings.py instead and any -np
 # is valid, which is why this constraint only appeared when DOB switched modes
 # on 2026-08-12.)
-ExecStart=/usr/bin/mpirun -np 2 /home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
+#
+# **--bind-to none is not optional here either** -- see chirp-detect.service for
+# the measurement. Without it Open MPI puts rank 0 on physical core 0 whatever
+# CPUAffinity says, so this unit's deadline-critical rank and the recorder end
+# up sharing execution units, L1 and L2.
+ExecStart=/usr/bin/mpirun --bind-to none -np 2 /home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15
 

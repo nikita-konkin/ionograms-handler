@@ -1,0 +1,90 @@
+Stop Open MPI from overriding the CPU pinning.
+
+**Patches 0008 and 0010 never reached the MPI ranks.** Both work by
+`taskset`ing this script so its children inherit the mask. Every plain
+`fork`/`exec` child does. `mpirun` does too -- and then discards it for the
+ranks it spawns.
+
+Verified on the station on 2026-08-13, minutes after 0010 was applied, with
+`taskset -cp 2-7 $$` already in force at the top of this script:
+
+    9833  rx_uhd_ext_gps      0,1     <- correct, 0010 worked
+    9883  mpirun (detect)     2-7     <- correct, inherited
+    9906  detect rank 0       0,1     <- the recorder's core
+    9907  detect rank 1       2,3
+    9913  mpirun (calc)       2-7     <- correct, inherited
+    9925  calc  rank 0        0,1     <- the recorder's core
+    9926  calc  rank 1        2,3
+
+Open MPI calls `sched_setaffinity` on each rank after fork. Version 1.10.2
+(what Ubuntu 16.04 ships, confirmed by `mpirun --version`) defaults to
+`--bind-to core` for `-np <= 2`, and assigns ranks straight off the machine
+topology: rank 0 to physical core 0, which on this four-core part is CPUs 0
+*and* 1. The mask it inherited is not consulted.
+
+So on a box whose entire tuning story is "fence the recorder off", **two
+compute ranks were placed on the recorder's core**, while cores 4-7 -- a third
+of the machine -- sat unused.
+
+**This also corrects the diagnosis in patch 0010.** 0010 says the residual
+3.4% came from a consumer on `cpu1`, the recorder's sibling. It was worse than
+that: under 0008's `taskset -cp 1-7`, rank 0 was still placed on `0,1`, so a
+rank was running on `cpu0` itself -- the one CPU the mask excluded by name. The
+recorder did not have a dedicated hyperthread either. 0010 is still right and
+still required; only its account of the mechanism was too generous.
+
+It explains 0008's numbers, too. 0008 measured a real 96% drop reduction, and
+if the ranks were never fenced that has to have come from somewhere else: the
+other nine processes -- `station_monitor.py`, `drf ringbuffer`, the supervising
+shells, the receivers still running then -- which are ordinary children and did
+inherit the mask. Moving those off was the win. The two ranks are the part that
+never moved, and the part still costing 3.4% every morning since.
+
+**Why `--bind-to none` and not `--cpu-set`.** `--cpu-set 2-7 --bind-to core`
+would keep core-level cache locality. But 1.10's `--cpu-set` takes *logical*
+processor ids, and misreading it lands a rank back on core 0 -- the exact
+failure this patch ends. Inheriting the script's mask is worth more here than
+the locality; the kernel will spread the ranks across 2-7 on its own.
+
+**One line, at the variable rather than the two call sites.** `$MPIRUN` is
+unquoted at both (lines 138 and 195), so word-splitting expands this to
+`mpirun --bind-to none -np ...` in each.
+
+**Applying this does not require a restart to be worth doing, but it does
+require one to take effect.** Open MPI binds at rank startup and never
+re-asserts it, so `taskset -pc 2-7 <rank pids>` fixes a running station
+immediately; that hand-fix lapses the next time the supervising loop restarts
+either `mpirun`, which is what this patch is for.
+
+**Verify on the ranks, not on the launcher.** `mpirun` reading `2-7` is
+precisely the reading that hid this for two days:
+
+    for p in $(pgrep -f detect_chirps.py) $(pgrep -f calc_ionograms.py); do
+        taskset -pc $p
+    done
+
+All of them must read `2-7`. Only `rx_uhd_ext_gps` may read `0,1`.
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -33,7 +33,18 @@ taskset -cp 2-7 $$ > /dev/null
+ 
+ # Make sure this is the right mpirun command
+ # (you might need mpirun instead of mpirun.mpich)
+-MPIRUN=mpirun
++#
++# --bind-to none is load-bearing, not tuning. Open MPI calls sched_setaffinity
++# on every rank after fork, and 1.10.2 -- what this box runs -- defaults to
++# --bind-to core for -np <= 2. It then places rank 0 on physical core 0 from
++# the machine's own topology, with no reference to the mask it inherited.
++# Measured here on 2026-08-13, with the taskset above already in place: both
++# mpirun processes read 2-7, while a detect rank and a calc rank read 0,1 --
++# the recorder's core -- and cores 4-7 sat unused. Without this flag the
++# taskset ten lines up does nothing whatsoever for the ranks that do the work.
++#
++# If you switch to MPICH, drop the flag: Hydra does not bind by default.
++MPIRUN="mpirun --bind-to none"
+ 
+ # ram disk buffer for fast i/o.
+ # if you have a fast SSD or raid, you can also use that

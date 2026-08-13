@@ -24,7 +24,16 @@ CPUAffinity=2-7
 
 # Ranks here are plain parallelism -- any count is valid, unlike
 # chirp-ionograms.service, where -np is pinned to the schedule.
-ExecStart=/usr/bin/mpirun -np 2 /home/ionouser/chirpsounder2/.venv38/bin/python3 detect_chirps.py --config /home/ionouser/chirpsounder2/my_station.ini
+#
+# **--bind-to none, or CPUAffinity above is decoration.** Open MPI calls
+# sched_setaffinity on each rank after fork, overwriting whatever it inherited,
+# and 1.10 (what Ubuntu 16.04 ships) defaults to --bind-to core for -np <= 2.
+# It then places rank 0 on physical core 0 by machine topology -- CPUs 0 and 1,
+# the recorder's -- with no reference to the mask it was started under.
+# Measured on DOB 2026-08-13, under a launcher already tasksetted to 2-7:
+# mpirun itself read 2-7 while its two ranks read 0,1 and 2,3. This flag makes
+# the ranks inherit instead, at the cost of core-level cache locality.
+ExecStart=/usr/bin/mpirun --bind-to none -np 2 /home/ionouser/chirpsounder2/.venv38/bin/python3 detect_chirps.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15
 

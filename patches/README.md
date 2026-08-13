@@ -21,6 +21,7 @@ Applied against `0d27125`.
 | `0008-dombas-give-the-recorder-its-own-core.patch` | `dombas.sh` pins itself to CPU 1–7 so every child inherits it, and launches the recorder with `taskset -c 0` | with the receivers gone the recorder *still* lost 358,691 samples per 900 s at load 9.4. The fault is **latency, not throughput** — it needs 0.8 of a core the instant a packet arrives, and a run queue of 6–12 does not give it that. Pinned: **zero drops, `RcvbufErrors` frozen for 74 minutes** |
 | `0009-dombas-derive-np-from-the-schedule.patch` | `dombas.sh` computes `calc_ionograms.py`'s `-np` from `sounder_timings` instead of hardcoding 2, and logs the number it derived | in scheduled mode `-np` **is** the schedule: `calc_ionograms.py:452` does `st = conf.sounder_timings[rank]` with no guard, so the count lives in two files and nothing checks they agree. Both ways of disagreeing are silent — too few ranks and the transmitters past the cut are never sounded, too many and one rank dies of `IndexError` while the rest carry on looking healthy |
 | `0010-dombas-give-the-recorder-a-physical-core.patch` | the shell mask goes `1-7` → `2-7` and the recorder `-c 0` → `-c 0-1` | **0008 pinned a hyperthread.** DOB is an i7-4930MX — four cores, eight threads — and `thread_siblings_list` for `cpu0` reads `0-1`, so a rank on `cpu1` was on the recorder's own core. Measured cost over 10.3 h: eleven windows at hard zero whenever that sibling idled, and a sustained **3.4%** of the stream lost through the morning when it did not |
+| `0011-dombas-stop-open-mpi-overriding-the-cpu-pinning.patch` | `MPIRUN=mpirun` → `MPIRUN="mpirun --bind-to none"` | **the mask never reached the MPI ranks.** Open MPI re-pins each rank after fork, and 1.10.2 defaults to `--bind-to core` for `-np <= 2`, placing rank 0 on physical core 0 by topology. Verified minutes after 0010 landed: both `mpirun` processes read `2-7` while a detect rank and a calc rank read `0,1` — the recorder's core — and cores 4-7 sat unused. This also corrects 0010's account: under 0008 a rank was on `cpu0` *itself*, not merely on its sibling |
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
@@ -480,3 +481,20 @@ premise of every measurement in `docs/2026-08-11-recorder-packet-loss.md` for
 three days -- including the sentence the whole investigation opens with. The
 patch that resulted was not wrong, it was half-sized, and nothing in a
 correctly-run measurement would have revealed that.
+
+**Verify pinning on the leaf processes, never on the launcher.** 0008 and 0010
+both work by `taskset`ing `dombas.sh` so its children inherit the mask, and both
+were verified by reading the mask back off things that had inherited it. `mpirun`
+inherits it correctly and then throws it away: Open MPI calls
+`sched_setaffinity` on each rank after fork, and 1.10 defaults to
+`--bind-to core` for `-np <= 2`, which places rank 0 on physical core 0 straight
+off the machine topology. So for two days a detect rank and a calc rank ran on
+the recorder's core while every check said the fence was up — see 0011.
+
+The general form: an affinity mask constrains what a process **inherits**, not
+what it **chooses**. MPI runtimes, OpenMP, numactl-aware libraries and JVMs all
+choose. This applies to `CPUAffinity=` in a unit file exactly as it does to
+`taskset` in a script, which is why `chirp-detect.service` and
+`chirp-ionograms.service` carry `--bind-to none` and
+`tests/test_systemd_units.py` now fails any unit that sets `CPUAffinity=` and
+runs `mpirun` without a `--bind-to`.

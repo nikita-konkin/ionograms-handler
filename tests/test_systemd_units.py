@@ -170,3 +170,28 @@ def test_a_unit_that_drops_privileges_says_how_its_pre_steps_get_them(unit: Path
         f"({root_only[0][1]!r} at line {root_only[0][0]}), but sets neither "
         f"PermissionsStartOnly=true nor a `+` prefix. The pre-step will run "
         f"unprivileged and fail.")
+
+
+@pytest.mark.parametrize("unit", _units(), ids=lambda p: p.name)
+def test_mpirun_under_cpuaffinity_disables_its_own_binding(unit: Path) -> None:
+    """CPUAffinity= does not survive mpirun, which re-pins its ranks.
+
+    Open MPI calls sched_setaffinity on every rank after fork; 1.10 (Ubuntu
+    16.04) defaults to --bind-to core for -np <= 2 and places rank 0 on physical
+    core 0 from the machine topology, ignoring the mask it inherited. On DOB on
+    2026-08-13 that put a detect rank and a calc rank on CPUs 0-1 -- the
+    recorder's core -- under a launcher already confined to 2-7. The unit looks
+    correct and the pinning is not there.
+    """
+    settings = list(_settings(unit))
+    if not any(key == "CPUAffinity" for _, key, _ in settings):
+        return
+
+    for n, key, value in settings:
+        if key not in EXEC_KEYS or "mpirun" not in value:
+            continue
+        assert "--bind-to" in value, (
+            f"{unit.name}:{n}: {key}= runs mpirun under CPUAffinity= but sets "
+            f"no --bind-to. Open MPI will re-pin each rank by topology and put "
+            f"rank 0 on physical core 0, outside this mask. Use "
+            f"`--bind-to none` so the ranks inherit it.")
