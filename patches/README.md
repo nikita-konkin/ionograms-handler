@@ -20,6 +20,7 @@ Applied against `0d27125`.
 | `0007-dombas-move-digisonde-and-drop-plotters.patch` | `dombas.sh` no longer starts the five `receive_digisonde.py` instances or the three plotters | the receivers demodulate digisondes **off air from the ringbuffer** — they are not downloaders — and five of them cost the recorder **~969 dropped events/s**. DOB does not use those products: their range zero is a configured `offset_us`, not a measured delay. Removing them took the drop rate to **zero over an hour** — necessary, but not sufficient: see 0008 |
 | `0008-dombas-give-the-recorder-its-own-core.patch` | `dombas.sh` pins itself to CPU 1–7 so every child inherits it, and launches the recorder with `taskset -c 0` | with the receivers gone the recorder *still* lost 358,691 samples per 900 s at load 9.4. The fault is **latency, not throughput** — it needs 0.8 of a core the instant a packet arrives, and a run queue of 6–12 does not give it that. Pinned: **zero drops, `RcvbufErrors` frozen for 74 minutes** |
 | `0009-dombas-derive-np-from-the-schedule.patch` | `dombas.sh` computes `calc_ionograms.py`'s `-np` from `sounder_timings` instead of hardcoding 2, and logs the number it derived | in scheduled mode `-np` **is** the schedule: `calc_ionograms.py:452` does `st = conf.sounder_timings[rank]` with no guard, so the count lives in two files and nothing checks they agree. Both ways of disagreeing are silent — too few ranks and the transmitters past the cut are never sounded, too many and one rank dies of `IndexError` while the rest carry on looking healthy |
+| `0010-dombas-give-the-recorder-a-physical-core.patch` | the shell mask goes `1-7` → `2-7` and the recorder `-c 0` → `-c 0-1` | **0008 pinned a hyperthread.** DOB is an i7-4930MX — four cores, eight threads — and `thread_siblings_list` for `cpu0` reads `0-1`, so a rank on `cpu1` was on the recorder's own core. Measured cost over 10.3 h: eleven windows at hard zero whenever that sibling idled, and a sustained **3.4%** of the stream lost through the morning when it did not |
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
@@ -470,3 +471,12 @@ ever. An unlocked GPSDO means 0001 falls back to the host clock, and recording
 plausible-looking wrong ranges is worse than recording nothing. The cost is
 that the recorder can sit silently in that wait — which is exactly what
 happened here, and what watching product age would have surfaced.
+
+**Read the hardware before you profile it.** 0008 was written, applied,
+documented and believed on the premise that this machine has eight cores. It
+has four. `lscpu`, `thread_siblings_list` and `/proc/interrupts` are three
+commands that cost nothing, and skipping them put the wrong core count in the
+premise of every measurement in `docs/2026-08-11-recorder-packet-loss.md` for
+three days -- including the sentence the whole investigation opens with. The
+patch that resulted was not wrong, it was half-sized, and nothing in a
+correctly-run measurement would have revealed that.

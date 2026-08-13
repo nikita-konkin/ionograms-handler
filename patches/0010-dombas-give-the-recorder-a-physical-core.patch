@@ -1,0 +1,123 @@
+Give the recorder a whole physical core, not half of one.
+
+**Patch 0008 pinned a hyperthread.** It put the recorder on `cpu0` and every
+child of this script on `1-7`, on the understanding that this box has eight
+cores. It has four:
+
+    model name : Intel(R) Core(TM) i7-4930MX CPU @ 3.00GHz
+    /sys/devices/system/cpu/cpu0/topology/thread_siblings_list -> 0-1
+
+`cpu1` is `cpu0`'s sibling. An MPI rank there shares the recorder's execution
+units, its L1 and its L2 -- so the recorder had a dedicated *thread* on a core
+somebody else was using, which is not what 0008 claims and not what it needs.
+
+**What it cost, measured over 10.3 hours** by `chirp-drop-watch` (2026-08-12
+23:00 to 2026-08-13 09:15 UTC, 41 windows of 900 s):
+
+    eleven consecutive windows   drops 0        RcvbufErrors +0
+    10.3 h mean                  drops 14.4/s   RcvbufErrors +2280/s
+    worst window                 drops 73/s     RcvbufErrors +9811/s
+
+Zero from 00:30 to 02:45 UTC with the counter frozen, then onset at 03:45 and a
+monotone climb all morning -- tracking when the consumers have work, which on
+this station means when the band opens. **0008 is real** (the unpinned station
+never produced a hard zero) **and incomplete**.
+
+**Why it is throughput, not latency.** Patch 0005 got UHD its full 500 MB
+socket buffer, confirmed:
+
+    net.core.rmem_max = 500000000
+    Creating the USRP device with: recv_buff_size=500000000     (no resize warning)
+
+500 MB is **five seconds** of stream at 100 MB/s, so `RcvbufErrors` cannot move
+unless that buffer is full. 2,280/s is 3.36 MB/s of 100 MB/s -- **3.4%**. A
+scheduling stall drops everything for its duration and nothing either side; a
+steady 3.4% with the buffer pinned full is a recorder running at 96.6% of line
+rate. Half a physical core produces exactly that. This is why 0008 improved
+drops by 96% but `RcvbufErrors` by only 81%.
+
+**Four candidates eliminated by direct measurement first**, all during a lossy
+window, because three of them are what anyone would reach for:
+
+| candidate | reading | verdict |
+|---|---|---|
+| load | zero windows 5.01-6.60, lossy 4.90-8.52; corr +0.37 | ranges overlap -- not load |
+| memory reclaim | `allocstall +0`, `pgscan_direct +0`, `pswpin +7` pages / 60 s | out; the 7.3 GB in swap is history |
+| thermal | `package_throttle_count` **+0 in 60 s** (451,688 lifetime) | out, and it was a serious candidate |
+| socket buffer | 500 MB confirmed above | out |
+
+**What changes.** The shell mask goes `1-7` -> `2-7`, and the recorder goes
+`-c 0` -> `-c 0-1`. Both siblings for the recorder rather than `cpu0` alone:
+they share L1 and L2, so a thread moving between them costs nothing, and
+leaving `cpu1` empty would only deny the recorder's own helper threads a place
+to run. The consumers lose one hyperthread, worth roughly 0.3 of a core.
+
+**The caveat that has to travel with this.** One diurnal cycle cannot fully
+separate "the consumers got busy" from "the sun came up". Thermal -- the main
+rival -- was eliminated by measurement, and the topology is not in question.
+But the mechanism rests on a correlation across a single day. **The log after
+this patch is what settles it**: if the sibling was the cause, tomorrow's
+morning windows go to zero at the same detection volumes that cost 20,000 drops
+today. Check before believing:
+
+    sudo tail -40 /var/lib/chirp-drop-watch/drop-watch.log
+
+Apply on top of 0008:
+
+    cd ~/chirpsounder2
+    git apply --check /path/to/0010-dombas-give-the-recorder-a-physical-core.patch
+    git apply         /path/to/0010-dombas-give-the-recorder-a-physical-core.patch
+
+Takes effect on the next full `dombas.sh` launch; a running recorder keeps the
+mask it started with. **Do not run either changed line by hand.** The second is
+the recorder's launch -- in an interactive shell it starts a *second* recorder
+against a USRP the live one owns, and its `>` truncates `thor.log`.
+
+To verify after the next launch, without touching anything:
+
+    taskset -pc $(pgrep -f rx_uhd_ext_gps | head -1)      # want 0-1
+    taskset -pc $(pgrep -f detect_chirps.py | head -1)    # want 2-7
+
+diff --git a/examples/marieluise/dombas.sh b/examples/marieluise/dombas.sh
+index 38bd287..32f4859 100644
+--- a/examples/marieluise/dombas.sh
++++ b/examples/marieluise/dombas.sh
+@@ -12,15 +12,24 @@ INSTALL_PATH="$HOME/chirpsounder2"
+ # Python virtual environment
+ source "$INSTALL_PATH/.venv38/bin/activate"
+ 
+-# Cores 1-7 for everything this script starts. Core 0 belongs to the recorder.
++# Cores 2-7 for everything this script starts. PHYSICAL core 0 -- which is
++# cpu0 *and* cpu1 -- belongs to the recorder.
+ #
+-# The recorder was one of twelve processes queueing for eight cores and lost up
++# The recorder was one of twelve processes queueing for four cores and lost up
+ # to 45% of its samples to the wait -- with CPU to spare, because the fault is
+ # latency, not throughput. It needs 0.8 of a core, but it needs it the instant a
+ # packet arrives. Pinning the shell is inherited by every child; the recorder
+ # widens its own mask back to core 0 below, which a process is always allowed
+ # to do. Core 7 stays in this pool on purpose: every NIC interrupt lands there.
+-taskset -cp 1-7 $$ > /dev/null
++#
++# **2-7, not 1-7.** This box is an i7-4930MX: four physical cores, eight
++# threads, and /sys/devices/system/cpu/cpu0/topology/thread_siblings_list reads
++# `0-1`. A rank on cpu1 shares the recorder's execution units, its L1 and its
++# L2 -- it is the same core, whatever the mask says. Patch 0008 wrote 1-7 and
++# so gave the recorder a dedicated hyperthread on a core a consumer was using.
++# Measured cost over 10.3 hours: clean whenever that sibling idled, a sustained
++# 3.4% of the stream lost through the morning when it did not.
++taskset -cp 2-7 $$ > /dev/null
+ 
+ # Make sure this is the right mpirun command
+ # (you might need mpirun instead of mpirun.mpich)
+@@ -84,7 +93,9 @@ echo "rx_uhd_ext_gps (restarting every 24 hours)"
+     while true;
+     do
+         # TBD: change cpp program so that ini file defines USRP setup!
+-        taskset -c 0 ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" --usrp_args=recv_buff_size=500000000 > logs/thor.log 2>&1
++        # 0-1 is ONE physical core, not two -- they are hyperthread siblings.
++        # See the taskset at the top of this script.
++        taskset -c 0-1 ./rx_uhd_ext_gps --outdir="$RINGBUFFER_DIR" --usrp_args=recv_buff_size=500000000 > logs/thor.log 2>&1
+ 
+         sleep 5
+ 
