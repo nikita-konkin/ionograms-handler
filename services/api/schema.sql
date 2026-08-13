@@ -90,6 +90,54 @@ CREATE TABLE IF NOT EXISTS config_epoch (
 CREATE INDEX IF NOT EXISTS config_epoch_station ON config_epoch(station, valid_from);
 
 
+-- Transmitters an operator has identified, and the timings to sound them at.
+--
+-- **Keyed by the receiving station, not by the transmitter alone.** A slot
+-- second here is a *reception* second: the transmit second plus the one-way
+-- travel time plus this receiver's own epoch offset (see `sources.py`). The
+-- same transmitter heard at two receivers is two different `chirpt` values,
+-- and a table that stored one of them would schedule the other receiver to
+-- listen at the wrong instant -- which records noise while reporting healthy.
+-- Same reasoning as the per-receiver band ceiling in `muf/stations.py`.
+--
+-- `timings` is the JSON list of `sounder_timings` entries for this
+-- transmitter, plural because a transmitter has as many slots as it has: NIC
+-- is heard in four seconds of every cycle at DOB, and which of them to sound
+-- is the operator's choice, made once and kept here.
+--
+-- `evidence` is the census row it was read off, verbatim. Nothing in a
+-- detection identifies a transmitter -- the identification is a human
+-- judgement, exactly as `cyprus1` was resolved to `NIC` -- so what the
+-- judgement was made on is kept with it.
+--
+-- `code` is not a label. It is written into `sounder_timings` as
+-- `transmit_name`, and `calc_ionograms.py:344` puts it in the product's
+-- **file name** and in `ho["txname"]`, which this pipeline ingests as
+-- `sounding.tx` and resolves against `muf/stations.py` for coordinates and
+-- for the band ceiling. Naming an emitter here is what makes every later
+-- product identified, so it is worth getting right and worth keeping stable.
+--
+-- `sounder_id` is chirpsounder2's own `id` field, `%03d` in the same file
+-- name. Stored rather than derived from position so that re-ordering the
+-- schedule does not renumber files that are already on disk.
+CREATE TABLE IF NOT EXISTS transmitter (
+    id           INTEGER PRIMARY KEY,
+    station      TEXT NOT NULL,          -- the RECEIVER these timings are for
+    code         TEXT NOT NULL,          -- the operator's identification
+    name         TEXT,
+    sounder_id   INTEGER NOT NULL,       -- chirpsounder2's `id`, per station
+    timings      TEXT NOT NULL,          -- JSON: list of sounder_timings entries
+    evidence     TEXT,                   -- JSON: the census row, as seen
+    verified_at  TEXT NOT NULL,
+    verified_by  TEXT,
+    note         TEXT,
+    UNIQUE (station, code),
+    UNIQUE (station, sounder_id)
+);
+
+CREATE INDEX IF NOT EXISTS transmitter_station ON transmitter(station, code);
+
+
 -- --------------------------------------------------------------------------
 -- Health and control (sec. 5.4)
 -- --------------------------------------------------------------------------

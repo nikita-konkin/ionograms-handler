@@ -4,31 +4,56 @@
 {% block body %}
 
 <div class="panel">
+  <h2>receiver</h2>
+  {% if not stations %}
+  <p class="muted">No station has reported yet, so there is nothing to identify
+  a transmitter <i>for</i>.</p>
+  {% else %}
+  <p>
+    <label class="muted" style="font-size:.85rem">station
+      <select id="station">
+        {% for s in stations %}<option>{{ s }}</option>{% endfor %}
+      </select></label>
+    <span class="note">Everything on this page is per receiver.</span>
+  </p>
+  <p class="note">
+    A slot second is a <b>reception</b> second &mdash; the transmit second plus
+    the one-way travel time plus this receiver's own epoch offset. The same
+    transmitter heard at two receivers has two different <code>chirpt</code>
+    values, so an identification made here belongs to this circuit and not to
+    the transmitter alone. (The band ceiling is keyed the same way, and for the
+    same reason.)
+  </p>
+  {% endif %}
+</div>
+
+<div class="panel">
   <h2>transmitters heard</h2>
   <p class="note">
     From <b>{{ census.kind }}</b> files over the last {{ max_days }} day(s), grouped
     by chirp rate and arrival phase on a {{ '%.0f'|format(census.cycle_s) }} s cycle.
     This is what <b>search</b> mode is for: it finds who is transmitting, and each
-    row is the <code>sounder_timings</code> entry that would put the station on it in
-    <b>scheduled</b> mode.
+    row is a candidate to be identified and then sounded on purpose.
   </p>
 
   {% if census.emitters %}
   <div class="scroll"><table>
     <tr><th></th><th>rate</th><th>heard at (s into cycle)</th><th>n</th>
         <th title="detections divided by distinct slots: how often it came back">/slot</th>
-        <th>phase ms</th><th>SNR</th><th>span h</th></tr>
+        <th>phase ms</th><th>SNR</th><th>span h</th><th>identified as</th></tr>
     {% for e in census.emitters %}
     <tr>
-      <td><input type="checkbox" class="pick" data-entry='{{ e.timing_entry|tojson }}'></td>
+      <td><button class="identify" data-row='{{ e|tojson }}'>identify</button></td>
       <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
       <td>{{ e.observed_seconds|join(', ') }}</td>
       <td>{{ e.count }}</td>
       <td>{{ e.repeats_per_slot }}</td>
-      <td class="muted">{{ '%.2f'|format(e.fraction_s * 1000) }}
-          <span class="muted">&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}</span></td>
-      <td>{{ '%.1f'|format(e.snr_median) }}</td>
+      <td class="muted">{{ '%.2f'|format(e.fraction_s * 1000) if e.fraction_s is not none else '—' }}
+          <span class="muted">{% if e.fraction_sd_s is not none %}&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}{% endif %}</span></td>
+      <td>{{ '%.1f'|format(e.snr_median) if e.snr_median is not none else '—' }}</td>
       <td class="muted">{{ e.span_hours }}</td>
+      <td class="claim" data-rate="{{ e.rate }}"
+          data-seconds="{{ e.observed_seconds|join(',') }}"></td>
     </tr>
     {% endfor %}
   </table></div>
@@ -65,15 +90,76 @@
         <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
         <td>{{ e.count }}</td>
         <td>{{ e.repeats_per_slot }}</td>
-        <td>{{ '%.2f'|format(e.fraction_s * 1000) }}
-            &plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}</td>
-        <td>{{ '%.1f'|format(e.snr_median) }}</td>
+        <td>{{ '%.2f'|format(e.fraction_s * 1000) if e.fraction_s is not none else '—' }}
+            {% if e.fraction_sd_s is not none %}&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}{% endif %}</td>
+        <td>{{ '%.1f'|format(e.snr_median) if e.snr_median is not none else '—' }}</td>
         <td>{{ e.rejected_because }}</td>
       </tr>
       {% endfor %}
     </table></div>
   </details>
   {% endif %}
+</div>
+
+{% if stations %}
+<div class="panel" id="identify-panel" hidden>
+  <h2>identify this emitter</h2>
+  <p class="note">
+    Nothing in a detection says who is transmitting. The name you give here is
+    a <b>judgement</b>, made the way <code>cyprus1</code> was resolved to
+    <code>NIC</code> &mdash; and it is load-bearing: it is written into the
+    schedule as <code>transmit_name</code>, which
+    <code>calc_ionograms.py</code> puts in the product's <i>file name</i> and in
+    <code>txname</code>. This pipeline reads that back as the transmitter's
+    identity and looks up its coordinates and band ceiling by it. An emitter you
+    cannot name can still be scheduled &mdash; call it what you know it as
+    &mdash; but that string is what every product from it will be called.
+  </p>
+
+  <p class="note" id="from-row"></p>
+
+  <p>
+    <label class="muted" style="font-size:.85rem">code
+      <input id="code" size="12" placeholder="NIC"></label>
+    <label class="muted" style="font-size:.85rem">full name
+      <input id="txname" size="24" placeholder="Nicosia"></label>
+    <label class="muted" style="font-size:.85rem">rep (s)
+      <input id="rep" size="6"></label>
+  </p>
+  <p class="note">Letters, digits, underscore and dot &mdash; <b>no dash</b>.
+  The product file name is dash-delimited
+  (<code>lfm_ionogram-{tx}-{rx}-{ch}-{id}-{t0}.h5</code>), so a dash inside the
+  code does not fail to parse, it shifts every field after it.</p>
+
+  <p>
+    <span class="muted" style="font-size:.85rem">slots to sound:</span>
+    <span id="slots"></span>
+  </p>
+  <p class="note">One entry per ticked slot. Each is another sounding per
+  cycle competing for the ringbuffer window &mdash; see the README on reading
+  <code>find_timings.log</code> before ticking many.</p>
+
+  <p>
+    <label class="muted" style="font-size:.85rem">note
+      <input id="note" size="60"
+             placeholder="how you know -- what settled it"></label>
+  </p>
+  <p>
+    <button class="pill" id="save">save transmitter</button>
+    <button class="pill" id="cancel">cancel</button>
+    <span id="save-result" class="note"></span>
+  </p>
+</div>
+
+<div class="panel">
+  <h2>verified transmitters</h2>
+  <p class="note">
+    Identified once, kept with the census row that settled it. These are what a
+    schedule is composed from &mdash; a raw census row cannot be scheduled,
+    because it has no name and no id, and
+    <code>calc_ionograms.py</code> reads both without a default.
+  </p>
+  <div id="verified"></div>
 </div>
 
 <div class="panel">
@@ -86,14 +172,7 @@
     with an empty one records nothing while every process reports healthy.
   </p>
 
-  {% if not stations %}
-  <p class="muted">No station has reported yet, so there is nothing to command.</p>
-  {% else %}
   <p>
-    <label class="muted" style="font-size:.85rem">station
-      <select id="station">
-        {% for s in stations %}<option>{{ s }}</option>{% endfor %}
-      </select></label>
     <label class="muted" style="font-size:.85rem">mode
       <select id="mode">
         {% for m in modes %}<option>{{ m }}</option>{% endfor %}
@@ -101,58 +180,251 @@
     <button class="pill" id="apply">apply</button>
     <span class="note">takes effect on the next restart</span>
   </p>
-  <p class="note">
-    Schedule to send (ticked rows above, editable). <b>One entry per ticked
-    row, using that row's first slot</b> &mdash; a row listing 37 seconds gives
-    you one of them. Add an entry per slot you actually want, and remember
-    <code>rep</code> is written as the assumed cycle: an emitter whose slots
-    step every 30 s needs <code>rep: 30</code>, or you hear it a tenth as
-    often. Each extra entry is another sounding per cycle competing for the
-    ringbuffer window &mdash; see the README on reading
-    <code>find_timings.log</code> before adding many.
-  </p>
-  <textarea id="timings" rows="4" style="width:100%;font-family:inherit;font-size:.85rem"></textarea>
+
+  <p class="note" id="preview-note">This is what will be sent. One MPI rank
+  group per transmitter, which is upstream's own arrangement &mdash; the
+  launcher must start <code>calc_ionograms.py</code> with that many ranks, and
+  the agent refuses the command if it does not.</p>
+  <pre id="preview" class="note"
+       style="overflow-x:auto; border:1px solid var(--line); border-radius:6px;
+              padding:.6rem"></pre>
   <p id="result" class="note"></p>
-  {% endif %}
 </div>
+{% endif %}
 
 <script>
 // The control token lives in sessionStorage, put there on the console page --
 // never baked into a page that might be left open. Same contract as the
 // start/stop buttons.
-const picks = () => [...document.querySelectorAll('.pick:checked')]
-  .map(c => JSON.parse(c.dataset.entry));
+const VERIFIED = {{ verified|tojson }};
+const MATCH_RATE_HZ = {{ match.rate_hz|tojson }};
+const MATCH_SLOT_S = {{ match.slot_s|tojson }};
+const stationBox = document.getElementById('station');
+const station = () => stationBox ? stationBox.value : '';
 
-function refresh() {
-  const box = document.getElementById('timings');
-  if (!box) return;
-  const chosen = picks();
-  // Nested one level: the ini stores sounder_timings per MPI rank.
-  box.value = chosen.length ? JSON.stringify([chosen], null, 1) : '';
+const token = () => sessionStorage.getItem('tok') || '';
+
+async function control(url, method, body) {
+  const tok = token();
+  if (!tok) return {ok: false, detail:
+    'No control token. Paste it on the console page first.'};
+  const r = await fetch(url, {
+    method,
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const out = await r.json().catch(() => ({}));
+  return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
 }
-document.querySelectorAll('.pick').forEach(c => c.addEventListener('change', refresh));
+
+// --- the identify form ----------------------------------------------------
+
+// Which verified transmitter, if any, a census group already is. Matched on
+// rate and slot -- the same pair, to the same tolerances, that the server
+// matches on when it names a running slot.
+function ownerOf(row) {
+  const seconds = row.observed_seconds || [];
+  return (VERIFIED[station()] || []).find(t => (t.timings || []).some(e =>
+    Math.abs(e['chirp-rate'] - row.rate) <= MATCH_RATE_HZ
+    && seconds.some(s => Math.abs(e.chirpt - s) <= MATCH_SLOT_S))) || null;
+}
+
+let editing = null;
+
+function openIdentify(row) {
+  editing = row;
+  document.getElementById('identify-panel').hidden = false;
+  // Every column here can be absent: a group whose detections carry no SNR
+  // field has no median, and one seen in a single slot has no scatter.
+  const ms = v => v === null || v === undefined ? '?' : (v * 1000).toFixed(2);
+  const dB = v => v === null || v === undefined ? '?' : v.toFixed(1);
+  document.getElementById('from-row').textContent =
+    `${(row.rate / 1000).toFixed(1)} kHz/s, heard ${row.count} time(s) over `
+    + `${row.span_hours} h, arrival phase ${ms(row.fraction_s)}`
+    + ` ±${ms(row.fraction_sd_s)} ms, median SNR ${dB(row.snr_median)} dB.`;
+  document.getElementById('rep').value = row.timing_entry.rep;
+  document.getElementById('save-result').textContent = '';
+
+  // Re-identifying an emitter that is already someone starts from what it
+  // already is. A save replaces the record outright, so a form that defaulted
+  // to one ticked slot would quietly drop the other slots of an existing
+  // schedule -- the station would stop listening in them and nothing would
+  // say why.
+  const owner = ownerOf(row);
+  document.getElementById('code').value = owner ? owner.code : '';
+  document.getElementById('txname').value = owner && owner.name ? owner.name : '';
+  document.getElementById('note').value = owner && owner.note ? owner.note : '';
+  if (owner && (owner.timings[0] || {}).rep)
+    document.getElementById('rep').value = owner.timings[0].rep;
+  const kept = owner
+    ? owner.timings.map(e => e.chirpt)
+    : [row.observed_seconds[0]];
+
+  const slots = document.getElementById('slots');
+  slots.innerHTML = '';
+  row.observed_seconds.forEach((second, i) => {
+    const id = 'slot' + i;
+    const on = kept.some(s => Math.abs(s - second) <= MATCH_SLOT_S);
+    const label = document.createElement('label');
+    label.className = 'muted';
+    label.style.marginRight = '.7rem';
+    label.innerHTML = `<input type="checkbox" class="slot" id="${id}" value="${second}"`
+      + `${on ? ' checked' : ''}> ${second}s`;
+    slots.appendChild(label);
+  });
+  document.getElementById('code').focus();
+}
+
+document.querySelectorAll('.identify').forEach(b =>
+  b.addEventListener('click', () => openIdentify(JSON.parse(b.dataset.row))));
+
+const cancel = document.getElementById('cancel');
+if (cancel) cancel.addEventListener('click', () => {
+  document.getElementById('identify-panel').hidden = true;
+  editing = null;
+});
+
+const save = document.getElementById('save');
+if (save) save.addEventListener('click', async () => {
+  const out = document.getElementById('save-result');
+  const code = document.getElementById('code').value.trim();
+  const rep = parseFloat(document.getElementById('rep').value);
+  const seconds = [...document.querySelectorAll('.slot:checked')]
+    .map(c => parseFloat(c.value));
+  if (!code) { out.textContent = 'A code is required.'; return; }
+  if (!seconds.length) { out.textContent = 'Tick at least one slot.'; return; }
+
+  out.textContent = 'saving...';
+  const r = await control(`/stations/${station()}/transmitters`, 'POST', {
+    code: code,
+    name: document.getElementById('txname').value.trim() || null,
+    note: document.getElementById('note').value.trim() || null,
+    // The census row it was read off, kept verbatim: the identification is a
+    // judgement, so what it was made on travels with it.
+    evidence: editing,
+    timings: seconds.map(s => ({'chirp-rate': editing.rate, rep: rep, chirpt: s})),
+  });
+  if (!r.ok) { out.textContent = 'refused: ' + r.detail; return; }
+  // Re-identifying replaces rather than appends, exactly as the upsert on the
+  // server does; two rows for one code here would offer the operator a choice
+  // the database cannot hold.
+  const record = r.body.transmitter;
+  const kept = (VERIFIED[station()] || []).filter(t => t.code !== record.code);
+  VERIFIED[station()] = [...kept, record].sort(
+    (a, b) => a.code.localeCompare(b.code));
+  document.getElementById('identify-panel').hidden = true;
+  renderVerified();
+  out.textContent = '';
+});
+
+// --- the verified list, and the schedule it composes -----------------------
+
+function renderVerified() {
+  const host = document.getElementById('verified');
+  if (!host) return;
+  const list = VERIFIED[station()] || [];
+  if (!list.length) {
+    host.innerHTML = '<p class="muted">Nothing identified at this receiver yet.'
+      + ' Pick a row above and name it.</p>';
+    markClaims();
+    preview();
+    return;
+  }
+  const rows = list.map(t => `
+    <tr>
+      <td><input type="checkbox" class="use" value="${t.code}"></td>
+      <td>${t.code}</td>
+      <td class="muted">${t.name || ''}</td>
+      <td class="muted">${t.sounder_id}</td>
+      <td class="muted">${(t.timings[0] || {})['chirp-rate'] / 1000} kHz/s</td>
+      <td>${t.timings.map(e => e.chirpt + 's').join(', ')}
+          <span class="muted">of ${(t.timings[0] || {}).rep}s</span></td>
+      <td class="muted">${t.verified_at}${t.verified_by ? ' &middot; ' + t.verified_by : ''}</td>
+      <td class="wrap">${t.note || ''}</td>
+      <td><button class="forget" data-code="${t.code}">forget</button></td>
+    </tr>`).join('');
+  host.innerHTML = `<div class="scroll"><table>
+      <tr><th></th><th>code</th><th>name</th><th>id</th><th>rate</th>
+          <th>slots</th><th>verified</th><th>note</th><th></th></tr>
+      ${rows}</table></div>`;
+
+  host.querySelectorAll('.use').forEach(c =>
+    c.addEventListener('change', preview));
+  host.querySelectorAll('.forget').forEach(b =>
+    b.addEventListener('click', async () => {
+      const code = b.dataset.code;
+      if (!confirm(`Forget ${code} at ${station()}?\n\n`
+          + 'Products already recorded keep the name; only the identification '
+          + 'and its evidence are dropped.')) return;
+      const r = await control(
+        `/stations/${station()}/transmitters/${encodeURIComponent(code)}`, 'DELETE');
+      if (!r.ok) { alert('refused: ' + r.detail); return; }
+      VERIFIED[station()] = (VERIFIED[station()] || []).filter(t => t.code !== code);
+      renderVerified();
+    }));
+  markClaims();
+  preview();
+}
+
+// Mark census rows that are already someone.
+function markClaims() {
+  document.querySelectorAll('.claim').forEach(cell => {
+    const owner = ownerOf({
+      rate: parseFloat(cell.dataset.rate),
+      observed_seconds: (cell.dataset.seconds || '').split(',')
+        .filter(s => s !== '').map(parseFloat),
+    });
+    cell.textContent = owner ? owner.code : '';
+    cell.className = owner ? 'claim' : 'claim muted';
+  });
+}
+
+const chosen = () => [...document.querySelectorAll('.use:checked')].map(c => c.value);
+
+function preview() {
+  const box = document.getElementById('preview');
+  if (!box) return;
+  const mode = document.getElementById('mode').value;
+  const list = VERIFIED[station()] || [];
+  if (mode !== 'scheduled') {
+    box.textContent = `mode = ${mode}\n\n`
+      + 'Search mode needs no schedule: it records whatever sweeps past.';
+    return;
+  }
+  const groups = chosen()
+    .map(code => (list.find(t => t.code === code) || {}).timings)
+    .filter(Boolean);
+  box.textContent = groups.length
+    ? `mode = scheduled\nsounder_timings = ${JSON.stringify(groups)}\n\n`
+      + `${groups.length} rank group(s): calc_ionograms.py must run with `
+      + `-np ${groups.length}.`
+    : 'Tick at least one verified transmitter. Scheduled mode with an empty '
+      + 'schedule records nothing while every process reports healthy.';
+}
+
+if (stationBox) stationBox.addEventListener('change', renderVerified);
+const modeBox = document.getElementById('mode');
+if (modeBox) modeBox.addEventListener('change', preview);
 
 const apply = document.getElementById('apply');
 if (apply) apply.addEventListener('click', async () => {
   const out = document.getElementById('result');
-  const token = sessionStorage.getItem('tok') || '';
-  if (!token) { out.textContent = 'No control token. Paste it on the console page first.'; return; }
-
   const mode = document.getElementById('mode').value;
-  const raw = document.getElementById('timings').value.trim();
-  const changes = {mode};
-  if (raw) changes.sounder_timings = raw;
-
   out.textContent = 'sending...';
-  const r = await fetch(`/stations/${document.getElementById('station').value}/commands`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
-    body: JSON.stringify({name: 'set_config', params: {changes}}),
-  });
-  const body = await r.json().catch(() => ({}));
+
+  // Two different endpoints on purpose. A schedule is named, not typed: the
+  // server looks the numbers up from the verified record rather than trusting
+  // a copy of them that travelled through a form.
+  const r = mode === 'scheduled'
+    ? await control(`/stations/${station()}/schedule`, 'POST', {codes: chosen()})
+    : await control(`/stations/${station()}/commands`, 'POST',
+                    {name: 'set_config', params: {changes: {mode: mode}}});
   out.textContent = r.ok
-    ? `queued (${body.id}); the station applies it on its next pull, and it takes effect on restart`
-    : `refused: ${body.detail || r.status}`;
+    ? `queued (${(r.body.id || '').slice(0, 8)}); the station applies it on its `
+      + `next pull, and it takes effect on restart`
+    : `refused: ${r.detail}`;
 });
+
+renderVerified();
 </script>
 {% endblock %}

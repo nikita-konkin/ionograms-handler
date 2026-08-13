@@ -24,6 +24,7 @@ not a transmit time and it is not a range.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import asdict
@@ -188,9 +189,27 @@ def _rejection(emitter, cycle_s: float, max_scatter_s: float,
     return None
 
 
+def _finite(value):
+    """``NaN``/``inf`` to ``None``, because neither is JSON.
+
+    Python writes them as the bare tokens ``NaN`` and ``Infinity``, which
+    `json.dumps` emits by default and no strict parser accepts --
+    ``JSON.parse`` in a browser throws on the first one. A census row is not
+    exotic input either: a group whose detections carry no SNR field has a
+    ``NaN`` median, and a single-slot group has no scatter to compute.
+
+    So the whole row was unreadable in the browser, and `/sources` returned a
+    document that says it is JSON and is not, because of one absent field in
+    one column nobody was reading.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def _as_row(emitter) -> dict:
     """One emitter, plus the `sounder_timings` entry it would become."""
-    row = asdict(emitter)
+    row = {key: _finite(value) for key, value in asdict(emitter).items()}
     row["span_hours"] = round(emitter.span_hours, 2)
     row["observed_seconds"] = list(emitter.observed_seconds)
     row["repeats_per_slot"] = round(_repeats_per_slot(emitter), 1)

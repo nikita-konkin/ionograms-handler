@@ -46,6 +46,110 @@
   the last ones received, not the current state.</p>
   {% endif %}
 
+  {% set a = s.acquisition %}
+  <div style="border:1px solid var(--line); border-radius:6px; padding:.7rem;
+              margin-bottom:.8rem">
+    <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
+      <b>acquisition</b>
+      {% if a.mode == 'scheduled' %}<span class="pill">scheduled</span>
+      {% elif a.mode == 'search' %}<span class="pill">search</span>
+      {% else %}<span class="pill unk">mode not recorded</span>{% endif %}
+      {% if a.sounding_now %}
+        <span class="pill ok">SOUNDING
+          {{ a.sounding_now|map(attribute='who')|unique|join(', ') }}</span>
+      {% elif a.slots %}
+        <span class="pill unk">between slots</span>
+      {% endif %}
+      {% if a.contended %}
+        <span class="pill fail">RANK {{ a.contended|join(', ') }} OVERSUBSCRIBED</span>
+      {% endif %}
+      <span class="muted" style="font-size:.85rem">
+        {% if a.epoch %}configured {{ a.epoch.valid_from }}
+          {% if a.epoch.changed_by %}by {{ a.epoch.changed_by }}{% endif %}
+        {% endif %}
+      </span>
+    </div>
+
+    {% if a.unknown %}
+    <p class="note">{{ a.unknown }}</p>
+    {% endif %}
+
+    {% if a.mode == 'search' and a.slots %}
+    <p class="note">The station is in <b>search</b> mode, so this schedule is
+    what the ini holds, not what it is doing: search records whatever sweeps
+    past and infers the timing afterwards.</p>
+    {% endif %}
+
+    {% if a.slots %}
+    <div class="scroll"><table>
+      <tr><th>rank</th><th>transmitter</th><th>rate</th><th>slot</th>
+          <th>state</th><th>next</th></tr>
+      {% for slot in a.slots %}
+      <tr>
+        <td class="muted">{{ slot.rank }}</td>
+        <td>{% if slot.transmitter %}{{ slot.transmitter }}
+            {% else %}<span class="muted">unidentified</span>{% endif %}</td>
+        <td class="muted">{{ '%.1f'|format(slot.rate_hz_s / 1000) }} kHz/s</td>
+        <td class="muted">{{ '%g'|format(slot.chirpt_s) }}s of {{ '%g'|format(slot.rep_s) }}s</td>
+        <td>{% if slot.in_progress %}
+              <span class="pill ok">sounding</span>
+              <span class="muted">{{ slot.seconds_in|duration }} in,
+                sweep ends {{ slot.ends_at_utc if slot.ends_at_utc else '' }}</span>
+            {% elif slot.sweep_s is none %}
+              <span class="pill unk">?</span>
+              <span class="muted">sweep length unknown</span>
+            {% else %}
+              <span class="muted">idle</span>
+            {% endif %}</td>
+        <td class="muted">in {{ slot.seconds_until|duration }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% if a.contended %}
+    <p class="note"><b>Rank {{ a.contended|join(', ') }} has more slots in
+    progress than it has processes.</b> A rank sounds one chirp at a time: it
+    takes the slot with the shortest wait and is busy for the whole sweep, so
+    the overlapping one is skipped that cycle without anything saying so. Give
+    the transmitters their own ranks, or move the slots more than one sweep
+    apart.</p>
+    {% endif %}
+
+    {% if a.span_mhz %}
+    <p class="note">A sweep is timed from the band this receiver's recent
+    products actually cover ({{ '%.2f'|format(a.span_mhz) }} MHz) and the
+    entry's chirp rate &mdash; measured, not configured.</p>
+    {% else %}
+    <p class="note">No product has been ingested for this receiver, so the
+    sweep length is unknown and no slot can be called in progress. The slot
+    times themselves are still exact.</p>
+    {% endif %}
+    {% endif %}
+
+    {% if a.arrivals %}
+    <div class="scroll" style="margin-top:.6rem"><table>
+      <tr><th>arrived</th><th>from</th><th>age</th><th>sweep</th><th></th></tr>
+      {% for row in a.arrivals %}
+      <tr>
+        <td class="muted">{{ row.datetime }}</td>
+        <td>{{ row.tx }}</td>
+        <td>{{ row.age_s|duration }}</td>
+        <td class="muted">{% if row.freq_start is not none %}
+          {{ '%.2f'|format(row.freq_start) }}&ndash;{{ '%.2f'|format(row.freq_stop) }} MHz
+          {% endif %}</td>
+        <td><a href="/ui/sounding/{{ row.id }}">open</a></td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    <p class="note">Last products <b>ingested</b> for this receiver. A stalled
+    transfer shows old arrivals while the recorder is fine &mdash; the
+    <code>newest_product_age_s</code> metric below is the one that speaks for
+    the station itself.</p>
+    {% else %}
+    <p class="note">Nothing ingested under the receiver name
+    <code>{{ s.name }}</code>.</p>
+    {% endif %}
+  </div>
+
   <div class="scroll"><table>
     <tr><th></th><th>metric</th><th>value</th><th>detail</th></tr>
     {% for m in s.metrics %}

@@ -1656,10 +1656,11 @@ services/
     systemd/            unit files -- the migration off dombas.sh
   api/                  runs on the server: health ingest, read API, web UI
     watch.py            incremental ingest on a timer
-    sources.py          emitters heard -> a `sounder_timings` schedule
+    sources.py          emitters heard -> candidates for a schedule
+    acquisition.py      which slot is being sounded, and when the next is due
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  562 tests; `python -m pytest tests -q`
+tests/                  736 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1771,9 +1772,50 @@ tell" need different responses.
 ### From search mode to a schedule
 
 `/ui/sources` is the join between the two sounding modes: search records
-whatever sweeps past and infers who was transmitting, and each row is the
-`sounder_timings` entry that would put the station on it. Tick rows, and the
-page builds the JSON and posts it as a `set_config` command.
+whatever sweeps past and infers who was transmitting, and each row is a
+candidate for the `sounder_timings` list that would put the station on it.
+
+It takes **two steps, not one**, and the reason is that a detection is
+anonymous. `calc_ionograms.py:444` reads five keys off every entry with a bare
+subscript and no default — `chirp-rate`, `rep`, `chirpt`, `id` and
+`transmit_name` — and a census can supply the first three. Nothing in a
+detection says who sent it. So a row is **identified** first and scheduled
+after:
+
+1. **Identify.** Pick a census row, give it a code, and it is saved as a
+   verified transmitter for that receiver, with the census row it was read off
+   kept as evidence. This is the same judgement that resolved `cyprus1` to
+   `NIC`, and it is written down instead of being remembered.
+2. **Schedule.** Tick verified transmitters and apply. The page composes the
+   `sounder_timings` list **by name**, never by row number, and posts it as one
+   `set_config` command with the mode.
+
+The name is load-bearing rather than cosmetic. `calc_ionograms.py:344` writes
+it into the product's *file name* and into `txname`, which this pipeline reads
+back as the transmitter's identity and uses to look up its coordinates and its
+band ceiling. **No dash**: `io_chirp.py:188` parses that file name
+dash-delimited, so a dash inside the code does not fail to parse, it shifts
+every field after it.
+
+An identification belongs to a **circuit, not to a transmitter**. A slot second
+is a reception second — transmit second plus one-way travel plus this
+receiver's epoch offset — so the same transmitter heard at two receivers has
+two different `chirpt` values. Verified transmitters are keyed by receiver, for
+the same reason `band_ceiling_mhz` is.
+
+Each transmitter gets its own MPI rank group, which is upstream's own
+arrangement, and the page states the `-np` the launcher then needs. The agent
+refuses a schedule whose rank count does not match what patch 0009 derives.
+
+`/ui` answers the other half — whether it is working *this minute*. Per
+station: the mode, which slot is being sounded right now, when the next one
+starts, and the last few products with their age. A sweep is timed from the
+band the station's recent products actually cover and the entry's chirp rate,
+so it is measured rather than configured; with nothing ingested the slot times
+are still exact and no slot is claimed to be in progress. The panel also flags
+**rank oversubscription** — two slots of one rank whose sweeps overlap. A rank
+is one process, so it takes the nearer slot and the other is skipped that cycle
+with nothing in the log to say so.
 
 A search-mode archive is mostly interference, so three filters run first, all
 on **shape rather than strength** — the loudest group in one real archive had a
@@ -1788,11 +1830,12 @@ higher median SNR than cyprus1 and was pure noise:
 Rejects are **listed with their reason**, not dropped silently: if the row you
 came for is among them, the thresholds are wrong, not the transmitter.
 
-Two things the page cannot do for you. Rows are grouped by chirp rate and
-arrival phase, so several transmitters that all start near the second boundary
-merge into one row — split it by hand. And `rep` is written as the assumed
-cycle, so an emitter whose slots step every 30 s needs `rep` corrected or you
-will hear it a tenth as often.
+Two things the page cannot do for you, both settled in the identify form. Rows
+are grouped by chirp rate and arrival phase, so several transmitters that all
+start near the second boundary merge into one row — identify it as one of them
+and tick only its slots. And `rep` is filled in as the assumed cycle, so an
+emitter whose slots step every 30 s needs it corrected there, or you will hear
+it a tenth as often.
 
 **How many slots you can afford is set by the ringbuffer, not the CPU.** At
 100 kHz/s a sweep across a 25 MHz recorded band takes ~250 s of a 300 s cycle,

@@ -177,6 +177,27 @@ EDITABLE = {
 MODES = {"search": "true", "serendipitous": "true",
          "scheduled": "false", "schedule": "false"}
 
+#: Every key `calc_ionograms.py` reads off a `sounder_timings` entry, each with
+#: a bare subscript and no default:
+#:
+#:     rep      = st[s_idx]["rep"]              # line 444
+#:     chirpt   = st[s_idx]["chirpt"]           # 445
+#:     rate     = st[s_idx]["chirp-rate"]
+#:     cid      = st[s_idx]["id"]               # 446
+#:     txname   = st[s_idx]["transmit_name"]    # 447
+#:
+#: The last two are not decoration. They become the product's file name --
+#: `lfm_ionogram-<transmit_name>-<station>-<ch>-<id>-<t0>.h5` -- and
+#: `ho["txname"]`, which is the only thing downstream has to identify the
+#: transmitter with. Every `.ini` in the clone's `examples/marieluise` carries
+#: all five; a schedule composed anywhere else must too.
+#:
+#: This list is duplicated in `services/api/acquisition.py` on purpose. The
+#: server's copy refuses a bad schedule while the operator is looking at the
+#: screen; this one is the last line, on the station, and must not depend on
+#: the server having been updated.
+SCHEDULE_KEYS = ("chirp-rate", "rep", "chirpt", "id", "transmit_name")
+
 
 def read_config(path: str | Path) -> configparser.ConfigParser:
     parser = configparser.ConfigParser()
@@ -255,12 +276,21 @@ def _validate(parser: configparser.ConfigParser, changes: dict,
                 if not isinstance(entry, dict):
                     raise ControlError(
                         f"sounder_timings entry {entry!r} is not an object with "
-                        f"chirp-rate, rep and chirpt")
-                missing = {"chirp-rate", "rep", "chirpt"} - set(entry)
+                        f"{', '.join(SCHEDULE_KEYS)}")
+                missing = set(SCHEDULE_KEYS) - set(entry)
                 if missing:
                     raise ControlError(
                         f"sounder_timings entry {entry} is missing "
-                        f"{sorted(missing)}")
+                        f"{sorted(missing)}. calc_ionograms.py reads all of "
+                        f"{list(SCHEDULE_KEYS)} with a bare subscript, so an "
+                        f"entry short of one is a KeyError on that rank at the "
+                        f"first slot -- while the other ranks carry on and the "
+                        f"log looks normal.")
+                if not str(entry["transmit_name"]).strip():
+                    raise ControlError(
+                        f"sounder_timings entry {entry} has an empty "
+                        f"transmit_name; it is written into the product's file "
+                        f"name and read back as the transmitter's identity.")
 
         # `calc_ionograms.py:452` does `st = conf.sounder_timings[rank]` with
         # no guard, so the rank count and the schedule length must agree.

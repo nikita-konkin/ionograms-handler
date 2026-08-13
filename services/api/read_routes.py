@@ -108,6 +108,34 @@ def station_history(station: str, request: Request,
                          "healthy": _tri(r["healthy"])} for r in rows]}
 
 
+@router.get("/stations/{station}/transmitters")
+def station_transmitters(station: str, request: Request) -> dict:
+    """Transmitters an operator has identified at this receiver.
+
+    Read scope: knowing who is on air is not a control action, and this is the
+    list a second operator needs before they can be told what the schedule
+    means.
+    """
+    found = db.transmitters(request.app.state.db, station)
+    return {"station": station, "count": len(found), "transmitters": found}
+
+
+@router.get("/stations/{station}/schedule")
+def station_schedule(station: str, request: Request,
+                     limit: int = Query(6, ge=1, le=50)) -> dict:
+    """What this station is sounding right now, and what is due next.
+
+    ``architecture.md`` sec. 4.3. The schedule comes from the open
+    ``config_epoch`` -- what the station was last *seen* configured with,
+    written when it acknowledged the change -- so a station configured by hand
+    reports no schedule rather than a stale one.
+    """
+    from . import acquisition
+
+    return acquisition.current(request.app.state.db, station,
+                               limit=limit).as_dict()
+
+
 @router.get("/soundings")
 def soundings(request: Request,
               tx: str | None = None, rx: str | None = None,

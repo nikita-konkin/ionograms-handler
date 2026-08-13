@@ -18,6 +18,7 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient          # noqa: E402
 
+from services.api import acquisition as acq        # noqa: E402
 from services.api import auth, db                  # noqa: E402
 
 
@@ -175,7 +176,11 @@ def test_a_command_is_queued_delivered_once_and_acked(client):
     assert shown["commands"][0]["ok"] is True
 
 
-SCHEDULE = [{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0}]
+#: One complete schedule entry. All five keys, because all five are read off
+#: it by `calc_ionograms.py` with a bare subscript -- see
+#: `services/api/acquisition.REQUIRED_ENTRY_KEYS`.
+SCHEDULE = [{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
+             "id": 1, "transmit_name": "NIC"}]
 
 
 def test_the_web_queues_process_verbs_and_the_mode_edit_only(client):
@@ -881,3 +886,314 @@ def test_the_sources_page_and_endpoint_agree(client, tmp_path, make_detection_h5
     page = client.get("/ui/sources?min_count=2")
     assert page.status_code == 200
     assert f"{api['count']} emitter(s)" in page.text
+
+
+def test_a_census_row_with_a_missing_column_is_still_json():
+    """`NaN` is not JSON, and a census row is an ordinary place to find one.
+
+    Python writes it as the bare token `NaN`, which `json.dumps` emits by
+    default and no strict parser accepts. Found in the browser: a group whose
+    detections carried no SNR field gave `"snr_median": NaN`, `JSON.parse`
+    threw on it, and the identify button for that row did nothing -- because
+    the whole row travels to the page as one JSON attribute. `/sources`
+    was returning a document that says it is JSON and is not.
+    """
+    from muf.io_detect import Emitter
+    from services.api import sources
+
+    row = sources._as_row(Emitter(
+        rate=100e3, fraction_s=0.5,
+        fraction_sd_s=float("nan"),   # one slot: no scatter to compute
+        count=9, observed_seconds=(235,), cycle_s=300.0,
+        first_seen=1.0, last_seen=3601.0,
+        snr_median=float("nan")))     # detections carried no SNR field
+
+    assert row["snr_median"] is None
+    assert row["fraction_sd_s"] is None
+    assert json.loads(json.dumps(row, allow_nan=False))["rate"] == 100e3
+
+
+# --------------------------------------------------------------------------
+# Verified transmitters, and the schedule composed from them
+# --------------------------------------------------------------------------
+#
+# The gap this closes: an emitter census is anonymous, and `calc_ionograms.py`
+# is not. Its rank loop reads `st[s_idx]["id"]` and `st[s_idx]["transmit_name"]`
+# with a bare subscript, and both end up in the product --
+# `lfm_ionogram-{tx}-{rx}-{ch}-{id:03d}-{t0}.h5` and `ho["txname"]` -- which
+# this pipeline reads back as `sounding.tx` and resolves against
+# `muf/stations.py` for the geometry and the band ceiling. So the schedule
+# cannot be built from the census: somebody has to say who these are.
+
+def _identify(client, station="SIM", code="NIC", **kw):
+    body = {"code": code,
+            "timings": [{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0}]}
+    body.update(kw)
+    return client.post(f"/stations/{station}/transmitters", headers=CTL, json=body)
+
+
+def test_an_identification_round_trips_with_its_evidence(client):
+    r = _identify(client, name="Nicosia", note="operator judgement, 2026-08-05",
+                  evidence={"rate": 100e3, "count": 855, "snr_median": 41.2})
+    assert r.status_code == 200
+
+    listed = client.get("/stations/SIM/transmitters").json()["transmitters"]
+    assert [t["code"] for t in listed] == ["NIC"]
+    assert listed[0]["evidence"]["count"] == 855
+    assert listed[0]["note"].startswith("operator judgement")
+    assert listed[0]["verified_at"]
+
+
+def test_the_two_missing_keys_are_filled_in_from_the_record(client):
+    """Not from the caller. They are the record's identity, in the ini's words.
+
+    Letting a form set `transmit_name` independently of `code` is how a
+    schedule comes to name a transmitter the database has never heard of.
+    """
+    entry = _identify(client, code="NIC").json()["transmitter"]["timings"][0]
+    assert entry["transmit_name"] == "NIC"
+    assert entry["id"] == 1
+    assert set(entry) >= set(acq.REQUIRED_ENTRY_KEYS)
+
+
+def test_a_dash_in_a_code_is_refused_because_of_the_file_name(client):
+    """`lfm_ionogram-{tx}-{rx}-{ch}-{cid}-{t0}.h5`, parsed back by a regex on
+    dashes (`muf/io_chirp.py:188`). A dash inside the transmitter name does not
+    fail to parse -- it parses into the *next* field, so the tail of the name
+    becomes the receiver and everything after it shifts by one."""
+    r = _identify(client, code="yoshkar-ola")
+    assert r.status_code == 400
+    assert "no dash" in r.json()["detail"]
+
+    for bad in ("", "  ", "a/b", "with space", "x" * 25):
+        assert _identify(client, code=bad).status_code == 400, bad
+
+
+def test_a_transmitter_needs_at_least_one_slot(client):
+    assert _identify(client, timings=[]).status_code == 400
+    assert _identify(client, timings=[{"chirp-rate": 100e3}]).status_code == 400
+    assert _identify(client, timings=[{"chirp-rate": 100e3, "rep": 0.0,
+                                       "chirpt": 1.0}]).status_code == 400
+
+
+def test_re_identifying_replaces_and_keeps_the_number(client):
+    """Narrowing the slots after another day of census is the normal case.
+
+    The `sounder_id` must survive it: it is `%03d` in the file name of every
+    product already on disk.
+    """
+    first = _identify(client).json()["transmitter"]
+    second = _identify(client, timings=[
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0},
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 265.0}]).json()["transmitter"]
+
+    assert second["sounder_id"] == first["sounder_id"]
+    assert len(second["timings"]) == 2
+    assert len(client.get("/stations/SIM/transmitters").json()["transmitters"]) == 1
+
+
+def test_ids_are_not_handed_out_twice_even_after_a_forget(client):
+    """Products on disk carry the id. Reusing it makes two sites one number."""
+    _identify(client, code="NIC")
+    _identify(client, code="SGO")
+    assert client.delete("/stations/SIM/transmitters/NIC", headers=CTL).status_code == 200
+
+    again = _identify(client, code="TGO").json()["transmitter"]
+    assert again["sounder_id"] == 3
+
+    missing = client.delete("/stations/SIM/transmitters/NIC", headers=CTL)
+    assert missing.status_code == 404
+
+
+def test_an_identification_is_per_receiver(client):
+    """A slot second is a reception second: transmit time plus travel time plus
+    that receiver's epoch offset. One transmitter, two receivers, two numbers --
+    the same reason the band ceiling is keyed by receiver."""
+    _identify(client, station="DOB", code="NIC")
+    _identify(client, station="KHO", code="NIC",
+              timings=[{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 237.5}])
+
+    dob = client.get("/stations/DOB/transmitters").json()["transmitters"]
+    kho = client.get("/stations/KHO/transmitters").json()["transmitters"]
+    assert dob[0]["timings"][0]["chirpt"] == 235.0
+    assert kho[0]["timings"][0]["chirpt"] == 237.5
+
+
+def test_a_schedule_names_transmitters_rather_than_carrying_numbers(client):
+    _identify(client, code="NIC")
+    r = client.post("/stations/SIM/schedule", headers=CTL, json={"codes": ["TGO"]})
+    assert r.status_code == 400
+    assert "no verified transmitter named TGO" in r.json()["detail"]
+    assert "NIC" in r.json()["detail"], "say what there is, not just what there isn't"
+
+    assert client.post("/stations/SIM/schedule", headers=CTL,
+                       json={"codes": []}).status_code == 400
+
+
+def test_the_schedule_is_one_rank_group_per_transmitter(client):
+    """And it says so, because the launcher's `-np` has to match it."""
+    _identify(client, code="NIC", timings=[
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0},
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 265.0}])
+    _identify(client, code="SGO",
+              timings=[{"chirp-rate": 500.0084e3, "rep": 60.0, "chirpt": 54.0}])
+
+    body = client.post("/stations/SIM/schedule", headers=CTL,
+                       json={"codes": ["NIC", "SGO"]}).json()
+    assert body["ranks"] == 2 and body["entries"] == 3
+    assert "-np 2" in body["note"]
+    assert [len(g) for g in body["sounder_timings"]] == [2, 1]
+    for group in body["sounder_timings"]:
+        for entry in group:
+            assert set(entry) >= set(acq.REQUIRED_ENTRY_KEYS), entry
+
+
+def test_the_schedule_is_queued_as_a_vetted_set_config(client):
+    _identify(client, code="NIC")
+    client.post("/stations/SIM/schedule", headers=CTL, json={"codes": ["NIC"]})
+
+    pulled = client.get("/stations/SIM/commands", headers=CTL).json()["commands"]
+    assert pulled[0]["name"] == "set_config"
+    changes = pulled[0]["params"]["changes"]
+    assert changes["mode"] == "scheduled"
+    assert json.loads(changes["sounder_timings"])[0][0]["transmit_name"] == "NIC"
+
+
+def test_writing_a_transmitter_needs_the_control_scope(client):
+    """It stops no radio, but it names the files the station will write."""
+    assert client.post("/stations/SIM/transmitters", json={
+        "code": "NIC",
+        "timings": [{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 1.0}]
+    }).status_code == 401
+    assert client.post("/stations/SIM/schedule",
+                       json={"codes": ["NIC"]}).status_code == 401
+    assert client.delete("/stations/SIM/transmitters/NIC").status_code == 401
+
+
+# --------------------------------------------------------------------------
+# Configuration epochs, and the live view built on them
+# --------------------------------------------------------------------------
+
+def _journal(mode="false", timings="[[]]"):
+    return {"command": "apply_config", "ok": True,
+            "detail": "mode: 'true' -> 'false'",
+            "journal": {"station": "SIM", "requires_restart": True,
+                        "changes": {"mode": {"from": "true", "to": mode},
+                                    "sounder_timings": {"from": "[]",
+                                                        "to": timings}}}}
+
+
+def test_an_epoch_opens_when_the_station_acknowledges_not_when_it_is_queued(client):
+    """A queued command has changed nothing.
+
+    Opening the epoch at enqueue would attribute every sounding recorded while
+    the station was unreachable to a configuration it was not running.
+    """
+    _identify(client, code="NIC")
+    command_id = client.post("/stations/SIM/schedule", headers=CTL,
+                             json={"codes": ["NIC"]}).json()["id"]
+    assert client.get("/stations/SIM/schedule").json()["mode"] is None
+
+    client.get("/stations/SIM/commands", headers=CTL)          # delivered
+    assert client.get("/stations/SIM/schedule").json()["mode"] is None
+
+    timings = json.dumps([[{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
+                            "id": 1, "transmit_name": "NIC"}]])
+    client.post(f"/stations/SIM/commands/{command_id}/ack", headers=CTL,
+                json={"results": [_journal(timings=timings)]})
+
+    live = client.get("/stations/SIM/schedule").json()
+    assert live["mode"] == "scheduled"
+    assert live["slots"][0]["transmitter"] == "NIC"
+    assert live["epoch"]["changed_by"] == "web"
+
+
+def test_the_epoch_opens_even_when_the_restart_failed(client):
+    """The file on the station has already changed.
+
+    `apply_and_restart` is stop, write, start. If the start fails the command
+    is not ok -- but anything recorded from now on was recorded under the new
+    configuration, and attributing it to the old one is the error that lasts.
+    """
+    command_id = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"mode": "search"}}}).json()["id"]
+    client.post(f"/stations/SIM/commands/{command_id}/ack", headers=CTL, json={
+        "results": [{"command": "stop chirp.target", "ok": True},
+                    _journal(mode="true"),
+                    {"command": "start chirp.target", "ok": False,
+                     "detail": "Job for chirp-rx.service failed"}]})
+
+    assert client.get("/stations/SIM/schedule").json()["mode"] == "search"
+
+
+def test_a_failed_write_opens_no_epoch(client):
+    command_id = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"mode": "search"}}}).json()["id"]
+    client.post(f"/stations/SIM/commands/{command_id}/ack", headers=CTL, json={
+        "results": [{"command": "apply_config", "ok": False,
+                     "detail": "sounder_timings is not valid JSON"}]})
+
+    assert client.get("/stations/SIM/schedule").json()["mode"] is None
+
+
+def test_only_one_epoch_is_ever_open(client, tmp_path):
+    """Two open epochs is not an untidy table, it is a station with two current
+    configurations and a guess behind every attribution after it."""
+    for _ in range(3):
+        cid = client.post("/stations/SIM/commands", headers=CTL, json={
+            "name": "set_config", "params": {"changes": {"mode": "search"}}}).json()["id"]
+        client.post(f"/stations/SIM/commands/{cid}/ack", headers=CTL,
+                    json={"results": [_journal(mode="true")]})
+
+    with db.session(tmp_path / "api.sqlite3") as conn:
+        rows = db.rows(conn, "SELECT valid_from, valid_to FROM config_epoch"
+                             " WHERE station = 'SIM' ORDER BY id")
+        assert len(rows) == 3
+        assert sum(r["valid_to"] is None for r in rows) == 1
+        assert rows[-1]["valid_to"] is None
+
+
+def test_a_station_with_no_epoch_says_so_rather_than_reporting_empty(client):
+    live = client.get("/stations/SIM/schedule").json()
+    assert live["slots"] == []
+    assert "no schedule recorded" in live["unknown"]
+
+
+def test_the_console_shows_what_is_sounding_and_what_arrived(client, tmp_path,
+                                                             monkeypatch):
+    """The panel exists because unit states cannot answer it: every process can
+    be active while the schedule points at a transmitter that stopped."""
+    from services.api import ingest
+
+    client.post("/stations/health", headers=CTL, json=report(station="DOB"))
+    _identify(client, station="DOB", code="NIC")
+    command_id = client.post("/stations/DOB/schedule", headers=CTL,
+                             json={"codes": ["NIC"]}).json()["id"]
+    timings = json.dumps([[{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
+                            "id": 1, "transmit_name": "NIC"}]])
+    client.post(f"/stations/DOB/commands/{command_id}/ack", headers=CTL,
+                json={"results": [_journal(timings=timings)]})
+
+    # One ingested product, which is where the sweep length comes from: the
+    # band is measured off what the receiver actually produced, not configured.
+    path = tmp_path / "lfm_ionogram-NIC-DOB-ch000-001-1785888235.00.h5"
+    path.write_bytes(b"x")
+    with db.session(tmp_path / "api.sqlite3") as conn:
+        ingest.ingest_row(conn, {
+            "file": path.name, "datetime": "2026-08-06 00:03:55",
+            "tx": "NIC", "rx": "DOB", "freq_start": 0.0, "freq_stop": 24.825,
+            "muf_algo": 18.4}, path, tmp_path, ("algo",))
+        conn.commit()          # `ingest_row` leaves the commit to its batch
+
+    live = client.get("/stations/DOB/schedule").json()
+    assert live["span_mhz"] == pytest.approx(24.825)
+    assert live["slots"][0]["sweep_s"] == pytest.approx(248.25)
+    assert live["arrivals"][0]["tx"] == "NIC"
+    assert live["arrivals"][0]["age_s"] > 0
+
+    page = client.get("/ui")
+    assert page.status_code == 200
+    assert "acquisition" in page.text
+    assert "NIC" in page.text

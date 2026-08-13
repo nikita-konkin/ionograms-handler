@@ -523,8 +523,14 @@ GET  /stations/{id}/commands           ← agent pulls pending work
 POST /stations/{id}/commands/{cid}/ack ← agent reports what it did
 
 POST /stations/{id}/commands           authed, queue start | stop | restart
-GET  /stations/{id}/schedule           authed
-POST /stations/{id}/schedule           authed, writes a config_epoch row
+GET  /stations/{id}/schedule           live acquisition state: mode, slots,
+                                       which one is sounding now, arrivals
+POST /stations/{id}/schedule           authed, compose by transmitter name and
+                                       queue it; a config_epoch row opens when
+                                       the station acknowledges
+GET  /stations/{id}/transmitters       verified transmitters at this receiver
+POST /stations/{id}/transmitters       authed, identify one, with its evidence
+DEL  /stations/{id}/transmitters/{code} authed
 POST /stations/{id}/transfer           authed, trigger sync
 ```
 
@@ -535,6 +541,12 @@ POST /stations/{id}/transfer           authed, trigger sync
 > AnyDesk, where a redeploy is a manual errand. The server serves what the
 > client speaks. `tests/test_api.py` drives the real client against the real
 > routes so the two cannot silently desynchronise again.
+
+> **`POST /schedule` names transmitters; it does not take a raw list.** A
+> census row cannot be scheduled: `calc_ionograms.py:444` subscripts `id` and
+> `transmit_name` with no default, and a detection is anonymous. The identity
+> is supplied once, by an operator, through `/transmitters` — and the schedule
+> is composed from those records, one MPI rank group per transmitter.
 
 One surface across acquisition, extraction and forecasting — but **separate
 auth scopes**. Public read of soundings and forecasts must not share a scope
@@ -606,6 +618,17 @@ config_epoch(
   changed_by, note
 )
 
+-- who a receiver has identified, and what the identification rested on.
+-- Keyed by RECEIVER: a slot second is a reception second, so the same
+-- transmitter heard at two receivers has two different `chirpt` values.
+transmitter(
+  id, station, code, name,        -- `code` reaches the product's file name
+  sounder_id,                     -- chirpsounder2's `id`, unique per station
+  timings,                        -- JSON: the sounder_timings entries
+  evidence,                       -- JSON: the census row it was read off
+  verified_at, verified_by, note
+)
+
 -- prediction service output
 forecast(
   issued_at, valid_at, horizon_days, model, param, value, quality
@@ -642,6 +665,12 @@ Separate from the bulk path (§5.1), with opposite direction of trust.
 
 Commands are queued, acknowledged, and recorded with the identity that issued
 them. Parameter changes additionally write `config_epoch`.
+
+**The epoch opens on acknowledgement, not on enqueue.** A queued command has
+changed nothing; the station may pull it minutes later or never. It opens
+whenever the *write* succeeded even if the restart that followed failed —
+the file on the station has already changed, so every sounding after that
+belongs to the new epoch whether or not the process took it up.
 
 ---
 
@@ -754,10 +783,12 @@ this is infrastructure for what comes next, not a deliverable in itself.
 
 ### M5 — Multi-station cutover and control
 - Enable opportunistic detection across transmitters
-- Control endpoints, auth, `config_epoch` (§2.5). M2.5 routes **start/stop/
-  restart only**; `control.py`'s validated parameter edits are implemented and
-  deliberately not exposed, because a parameter change rewrites the station's
-  `.ini` and needs a restart to take effect
+- Control endpoints, auth, `config_epoch` (§2.5). M2.5 routes start/stop/
+  restart, and — since the schedule work — `set_config` through
+  `POST /stations/{id}/schedule`, which is the validated parameter edit
+  `control.py` always had. It is still a rewrite of the station's `.ini` that
+  needs a restart to take effect, so the page says so and the epoch it opens
+  is dated from the acknowledgement
 - Retire v1 **only once the web client covers what operators actually use** —
   watch usage over M4 rather than building for feature parity
 

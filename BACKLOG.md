@@ -823,3 +823,47 @@ decibel or two up and not otherwise. Two consequences worth deciding on:
   on the station, and `services/agent/control.py` refuses a schedule change that
   would break the match. Neither helps a station that has not taken 0009 --
   check by hand there.
+
+## 18. The schedule the UI composed could not have run (2026-08-13)
+
+Found while building the acquisition panel, not by anything failing loudly.
+`calc_ionograms.py:444-447` reads **five** keys off each `sounder_timings`
+entry with a bare subscript and no default -- `chirp-rate`, `rep`, `chirpt`,
+`id`, `transmit_name`. `/ui/sources` composed three. A short entry is a
+`KeyError` on that rank at its first slot, while the other ranks carry on and
+the log looks normal.
+
+Neither missing key can come from a census: **a detection is anonymous.** So
+the fix is not a default, it is a step -- the operator identifies an emitter
+once, the way `cyprus1` was resolved to `NIC`, and that identification is
+stored with the census row it was made on (`transmitter` table, keyed by
+receiver). Schedules are then composed by name. Both the server and
+`services/agent/control.py` now refuse an entry short of any of the five; the
+agent's copy of the list is deliberate duplication, because it is the last
+check before the station's `.ini` and must not depend on the server being
+up to date.
+
+Three further faults surfaced only by driving the page:
+
+- **`NaN` is not JSON, and a census row is an ordinary place to find one.** A
+  group whose detections carry no SNR field gets `snr_median = NaN`, which
+  Python writes as a bare token; `JSON.parse` throws on it. `/sources` was
+  returning a document that says it is JSON and is not, and in the page the
+  whole row was unreadable -- one absent field in a column nobody was reading
+  disabled the button next to it. Non-finite floats are now `null` at the
+  source.
+- **Rank oversubscription is invisible on the station.** Two slots of one rank
+  whose sweeps overlap cannot both be recorded -- a rank is one process. It
+  takes the nearer slot and skips the other, silently. The console flags it,
+  but only where a sweep length is known, which needs an ingested product for
+  that receiver: sweep length is *measured* (band span / chirp rate), never
+  configured.
+- **`config_epoch` was specified in §5.4 and written by nothing.** It is now
+  written on acknowledgement -- not on enqueue, because a queued command has
+  changed nothing -- and whenever the *write* succeeded even if the restart
+  failed, because the file has already changed.
+
+Not addressed: an identification is per receiver, so a second station means
+identifying the same transmitter again. That is correct (the slot second
+differs per circuit) but the evidence and the name are not shared, and they
+could be.

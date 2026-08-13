@@ -435,11 +435,17 @@ def test_an_unset_target_refuses_instead_of_running_systemctl(station, target):
     assert "no systemd target configured" in result.detail
 
 
+#: A complete entry. Five keys, because `calc_ionograms.py` reads five.
+ENTRY = {"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0,
+         "id": 1, "transmit_name": "NIC"}
+
+
 @pytest.mark.parametrize("shape,label", [
-    ([{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0}], "flat"),
-    ([[{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0}]], "one MPI rank"),
-    ([[{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0}],
-      [{"chirp-rate": 1.25e5, "rep": 30.0, "chirpt": 15.0}]], "two ranks"),
+    ([ENTRY], "flat"),
+    ([[ENTRY]], "one MPI rank"),
+    ([[ENTRY], [dict(ENTRY, **{"chirp-rate": 1.25e5, "rep": 30.0,
+                               "chirpt": 15.0, "id": 2,
+                               "transmit_name": "SGO"})]], "two ranks"),
 ])
 def test_both_schedule_shapes_are_accepted(shape, label):
     """`/ui/sources` builds the per-rank shape; the validator knew only flat.
@@ -455,7 +461,7 @@ def test_both_schedule_shapes_are_accepted(shape, label):
 
 
 @pytest.mark.parametrize("shape,expect", [
-    ([[{"rep": 300.0, "chirpt": 235.0}]], "chirp-rate"),
+    ([[{k: v for k, v in ENTRY.items() if k != "chirp-rate"}]], "chirp-rate"),
     ([["not an object"]], "not an object"),
     ([[]], "list of entries"),
 ])
@@ -478,8 +484,8 @@ def _launcher(tmp_path, line: str) -> Path:
 
 
 def _schedule(n: int) -> str:
-    return json.dumps([[{"chirp-rate": 1e5, "rep": 300.0, "chirpt": 235.0,
-                         "transmit_name": f"TX{i}"}] for i in range(n)])
+    return json.dumps([[dict(ENTRY, id=i + 1, transmit_name=f"TX{i}")]
+                       for i in range(n)])
 
 
 @pytest.mark.parametrize("line,ranks,expect", [
@@ -573,8 +579,7 @@ def test_scheduled_mode_without_a_schedule_is_refused(station):
 
 
 def test_scheduled_mode_with_a_schedule_is_accepted(station):
-    timings = json.dumps([{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
-                           "transmit_name": "NIC"}])
+    timings = json.dumps([ENTRY])
     result = control.apply_config(station, {"mode": "scheduled",
                                             "sounder_timings": timings})
     assert result.ok
@@ -586,6 +591,34 @@ def test_an_incomplete_schedule_entry_is_refused(station):
     bad = json.dumps([{"chirp-rate": 100e3}])          # no rep, no chirpt
     with pytest.raises(control.ControlError, match="missing"):
         control.apply_config(station, {"mode": "scheduled", "sounder_timings": bad})
+
+
+@pytest.mark.parametrize("dropped", ["id", "transmit_name"])
+def test_the_two_keys_nothing_was_writing_are_required(station, dropped):
+    """`calc_ionograms.py:446-447` reads both with a bare subscript.
+
+    Neither was in the entry `/ui/sources` composed, and neither is in
+    `chirp_config.py`'s own default -- while every `.ini` in the clone's
+    `examples/marieluise` carries both. A schedule short of them is not a
+    smaller schedule: the rank that receives it dies of KeyError at its first
+    slot, the other ranks carry on, and the log looks normal.
+    """
+    entry = {k: v for k, v in ENTRY.items() if k != dropped}
+    with pytest.raises(control.ControlError, match=dropped):
+        control.apply_config(station, {"mode": "scheduled",
+                                       "sounder_timings": json.dumps([entry])})
+
+
+def test_an_empty_transmit_name_is_refused(station):
+    """It is the product's file name, not a label.
+
+    `lfm_ionogram--DOB-ch000-001-1770163210.00.h5` parses back with an empty
+    transmitter and no error anywhere.
+    """
+    entry = dict(ENTRY, transmit_name="  ")
+    with pytest.raises(control.ControlError, match="empty transmit_name"):
+        control.apply_config(station, {"mode": "scheduled",
+                                       "sounder_timings": json.dumps([entry])})
 
 
 def test_an_output_dir_that_cannot_exist_is_refused(station, tmp_path):

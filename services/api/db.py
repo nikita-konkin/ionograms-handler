@@ -222,10 +222,196 @@ def acknowledge(conn: sqlite3.Connection, command_id: str, results: list) -> boo
         "UPDATE command SET acked_at = ?, ok = ?, results = ? WHERE id = ?",
         (utcnow(), int(ok), json.dumps(results), command_id))
     conn.commit()
-    return cur.rowcount > 0
+    known = cur.rowcount > 0
+    if known:
+        _journal_epoch(conn, command_id, results)
+    return known
+
+
+def _journal_epoch(conn: sqlite3.Connection, command_id: str,
+                   results: list) -> int | None:
+    """Open a `config_epoch` if this acknowledgement says the ini was rewritten.
+
+    Architecture sec. 2.5: "Control endpoints touching acquisition parameters
+    write a `config_epoch` row so every sounding can be attributed to the
+    configuration that produced it." The agent hands back a ``journal`` on the
+    one result that did the write, and that result is the trigger -- not the
+    command's overall ``ok``.
+
+    The distinction is load-bearing. ``apply_and_restart`` is stop, write,
+    start; if the *start* fails the command is not ok, but the file on the
+    station has already changed and anything it records from now on was
+    recorded under the new configuration. Keying the epoch off the overall
+    result would leave those soundings attributed to a configuration that no
+    longer exists.
+    """
+    for result in results or []:
+        if not isinstance(result, dict) or not result.get("ok"):
+            continue
+        journal = result.get("journal")
+        if not isinstance(journal, dict) or not journal.get("changes"):
+            continue
+        row = one(conn, "SELECT station, issued_by FROM command WHERE id = ?",
+                  (command_id,))
+        if row is None:                                       # pragma: no cover
+            return None
+        return record_epoch(
+            conn, row["station"], journal["changes"],
+            changed_by=row["issued_by"],
+            note=f"command {command_id}: {result.get('detail', '')}".strip())
+    return None
 
 
 def recent_commands(conn: sqlite3.Connection, station: str,
                     limit: int = 20) -> list[dict]:
     return rows(conn, "SELECT * FROM command WHERE station = ?"
                       " ORDER BY issued_at DESC LIMIT ?", (station, limit))
+
+
+# --------------------------------------------------------------------------
+# Verified transmitters
+# --------------------------------------------------------------------------
+
+def next_sounder_id(conn: sqlite3.Connection, station: str) -> int:
+    """The next free chirpsounder2 ``id`` for this receiver, counting from 1.
+
+    Reuses nothing. An id freed by deleting a transmitter stays free, because
+    products already on disk carry it in their file names and handing it to a
+    different transmitter would make two sites share one number in one
+    archive.
+    """
+    row = one(conn, "SELECT MAX(sounder_id) AS top FROM transmitter"
+                    " WHERE station = ?", (station,))
+    return int((row or {}).get("top") or 0) + 1
+
+
+def save_transmitter(conn: sqlite3.Connection, station: str, code: str,
+                     timings: list, *, name: str | None = None,
+                     sounder_id: int | None = None,
+                     evidence: Any = None, verified_by: str = "web",
+                     note: str | None = None) -> dict:
+    """Record, or re-record, one identified transmitter for one receiver.
+
+    An upsert on ``(station, code)``. Re-identifying is the normal case, not an
+    error: the operator watches a census for a few days and narrows the slots,
+    and the second save is the better one. What is *not* overwritten silently
+    is the provenance -- ``verified_at`` and ``verified_by`` move with the
+    timings, so the record always says when the current numbers were chosen.
+
+    The entries are normalised on the way in, so what is stored is exactly what
+    the ini will receive: ``transmit_name`` is the code and ``id`` is this
+    transmitter's ``sounder_id``, whatever the caller sent. Those two fields
+    are read by ``calc_ionograms.py`` with a bare subscript, and letting a
+    caller set them independently is how they come to disagree with the record
+    they are supposed to name.
+    """
+    existing = transmitter(conn, station, code)
+    if sounder_id is None:
+        sounder_id = (existing["sounder_id"] if existing
+                      else next_sounder_id(conn, station))
+    entries = [dict(entry, id=int(sounder_id), transmit_name=code)
+               for entry in timings]
+
+    conn.execute(
+        "INSERT INTO transmitter"
+        " (station, code, name, sounder_id, timings, evidence, verified_at,"
+        "  verified_by, note)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(station, code) DO UPDATE SET"
+        "   name = excluded.name, timings = excluded.timings,"
+        "   evidence = excluded.evidence, verified_at = excluded.verified_at,"
+        "   verified_by = excluded.verified_by, note = excluded.note",
+        (station, code, name, int(sounder_id), json.dumps(entries),
+         None if evidence is None else json.dumps(evidence),
+         utcnow(), verified_by, note),
+    )
+    conn.commit()
+    found = transmitter(conn, station, code)
+    if found is None:                                         # pragma: no cover
+        raise RuntimeError(f"{station}/{code} vanished between write and read")
+    return found
+
+
+def _transmitter(row: dict) -> dict:
+    row = dict(row)
+    row["timings"] = json.loads(row["timings"] or "[]")
+    row["evidence"] = json.loads(row["evidence"]) if row.get("evidence") else None
+    return row
+
+
+def transmitters(conn: sqlite3.Connection, station: str) -> list[dict]:
+    return [_transmitter(r) for r in
+            rows(conn, "SELECT * FROM transmitter WHERE station = ?"
+                       " ORDER BY code", (station,))]
+
+
+def transmitter(conn: sqlite3.Connection, station: str,
+                code: str) -> dict | None:
+    row = one(conn, "SELECT * FROM transmitter WHERE station = ? AND code = ?",
+              (station, code))
+    return _transmitter(row) if row else None
+
+
+def delete_transmitter(conn: sqlite3.Connection, station: str,
+                       code: str) -> bool:
+    cur = conn.execute("DELETE FROM transmitter WHERE station = ? AND code = ?",
+                       (station, code))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# --------------------------------------------------------------------------
+# Configuration epochs
+# --------------------------------------------------------------------------
+
+def open_epoch(conn: sqlite3.Connection, station: str) -> dict | None:
+    """The configuration currently in force, or None if none was ever recorded.
+
+    Open-ended by definition: an epoch ends when the next one starts, so
+    ``valid_to IS NULL`` is "what the station is running now" rather than a
+    row waiting to be completed.
+    """
+    row = one(conn, "SELECT * FROM config_epoch WHERE station = ?"
+                    " AND valid_to IS NULL ORDER BY valid_from DESC, id DESC"
+                    " LIMIT 1", (station,))
+    if row is None:
+        return None
+    row = dict(row)
+    row["changes"] = json.loads(row["changes"] or "{}")
+    return row
+
+
+def record_epoch(conn: sqlite3.Connection, station: str, changes: dict,
+                 changed_by: str | None = None,
+                 note: str | None = None) -> int:
+    """Close the open epoch and start a new one.
+
+    Called when a parameter change is *acknowledged*, not when it is queued.
+    A command sitting in the queue has changed nothing, and an epoch opened at
+    enqueue time would attribute every sounding recorded while the station was
+    unreachable to a configuration it was not running.
+
+    Closing first is what keeps the table readable as intervals. Two open
+    epochs for one station is not a worse row, it is a station with two
+    current configurations, and every attribution after it is a guess.
+    """
+    now = utcnow()
+    conn.execute("UPDATE config_epoch SET valid_to = ?"
+                 " WHERE station = ? AND valid_to IS NULL", (now, station))
+    cur = conn.execute(
+        "INSERT INTO config_epoch (station, valid_from, valid_to, changes,"
+        " changed_by, note) VALUES (?, ?, NULL, ?, ?, ?)",
+        (station, now, json.dumps(changes, sort_keys=True), changed_by, note))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def recent_epochs(conn: sqlite3.Connection, station: str,
+                  limit: int = 10) -> list[dict]:
+    out = []
+    for row in rows(conn, "SELECT * FROM config_epoch WHERE station = ?"
+                          " ORDER BY valid_from DESC, id DESC LIMIT ?",
+                    (station, limit)):
+        row["changes"] = json.loads(row["changes"] or "{}")
+        out.append(row)
+    return out

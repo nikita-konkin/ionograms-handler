@@ -31,8 +31,32 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 STALE_AFTER_S = 180.0
 
 
+def _duration(seconds) -> str:
+    """Seconds as something readable at a glance, with a sign for the past.
+
+    An operator reading "is it working this minute" should not have to divide
+    by sixty. ``None`` prints as an em dash rather than as zero, because "not
+    known" and "now" are the two answers this must never confuse.
+    """
+    if seconds is None:
+        return "—"
+    sign, value = ("-", -seconds) if seconds < 0 else ("", seconds)
+    if value < 90:
+        return f"{sign}{value:.0f}s"
+    if value < 5400:
+        return f"{sign}{int(value) // 60}m{int(value) % 60:02d}s"
+    if value < 172800:
+        return f"{sign}{int(value) // 3600}h{(int(value) % 3600) // 60:02d}m"
+    return f"{sign}{value / 86400:.1f}d"
+
+
+templates.env.filters["duration"] = _duration
+
+
 @router.get("/ui")
 def console(request: Request):
+    from . import acquisition
+
     conn = request.app.state.db
     stations = []
     for station in db.stations(conn):
@@ -47,6 +71,10 @@ def console(request: Request):
             "agent_version": latest["agent_version"] if latest else None,
             "metrics": [{**m, "ok": _tri(m["ok"])} for m in metrics],
             "commands": [_command(c) for c in db.recent_commands(conn, station, 8)],
+            # What it is sounding this minute, which is the question the unit
+            # states cannot answer: every process can be active while the
+            # schedule points at a transmitter that stopped months ago.
+            "acquisition": acquisition.current(conn, station),
         })
 
     counts = db.one(conn, "SELECT COUNT(*) AS n FROM sounding") or {"n": 0}
@@ -139,18 +167,32 @@ def sources_page(request: Request, max_days: int = 3, min_count: int = 3):
     a `sounder_timings` list, and until now the only way to get one was to run
     `muf detect` on the station and transcribe the numbers.
     """
+    from . import acquisition
     from . import sources as sources_mod
 
+    conn = request.app.state.db
     census = sources_mod.census(request.app.state.archive_root,
                                 max_days=max_days, min_count=min_count)
+    known = db.stations(conn)
     return templates.TemplateResponse(request, "sources.html", {
         "census": census, "max_days": max_days, "min_count": min_count,
+        # Rendered into the page rather than fetched, so the verified list
+        # survives a READ_TOKEN being set: the page is already authorised, and
+        # a second fetch would need a token this page has no field for.
+        "verified": {s: db.transmitters(conn, s) for s in known},
         # `control.MODES` holds four keys for two modes -- "serendipitous" and
         # "schedule" are the ini's own vocabulary, kept so a command written
         # by hand in either dialect works. Offering all four as choices would
         # suggest four modes, so the page shows the canonical pair.
         "modes": ("search", "scheduled"),
-        "stations": db.stations(request.app.state.db),
+        "stations": known,
+        # The page decides which census row is already someone, and the server
+        # decides which verified entry a slot belongs to. Both are the same
+        # judgement, so both use the same tolerances -- sent rather than
+        # duplicated, because a page that drifts from the server would mark a
+        # row identified that the schedule does not.
+        "match": {"rate_hz": acquisition.MATCH_RATE_HZ,
+                  "slot_s": acquisition.MATCH_SLOT_S},
     })
 
 
