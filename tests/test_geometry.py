@@ -6,9 +6,10 @@ import math
 
 import pytest
 
-from muf.geometry import (EARTH_RADIUS_KM, Point, control_points, fof2_to_muf,
-                          great_circle_km, intermediate, m_factor, midpoint,
-                          muf_to_fof2)
+from muf.geometry import (EARTH_RADIUS_KM, MAX_SINGLE_HOP_KM, Point,
+                          control_points, describe_path, fof2_to_muf,
+                          great_circle_km, hop_count, intermediate, m_factor,
+                          midpoint, muf_to_fof2)
 
 # The registry's Nicosia, which is what the loader now hands to this module
 # for a `cyprus1` sounding; the header's own round 35.00/34.00 is 59.9 km away
@@ -57,6 +58,40 @@ def test_long_path_uses_two_control_points():
     assert len(points) == 2
     assert great_circle_km(CYPRUS, points[0]) == pytest.approx(2000, abs=20)
     assert great_circle_km(far, points[1]) == pytest.approx(2000, abs=20)
+
+
+def test_hop_count_follows_the_single_hop_limit():
+    assert hop_count(0.0) == 1
+    assert hop_count(PATH_KM) == 1
+    assert hop_count(MAX_SINGLE_HOP_KM) == 1
+    assert hop_count(MAX_SINGLE_HOP_KM + 1) == 2
+    assert hop_count(14415.0) == 4
+
+
+def test_the_whole_path_secant_is_not_merely_less_accurate():
+    """Past the single-hop limit it describes a ray that cannot exist.
+
+    `m_factor` peaks at 3840 km and falls away after, because the reflection
+    would have to happen below the horizon. So evaluating an 8000 km path
+    whole *understates* the MUF -- which shows up as the instrument appearing
+    to over-pick, not as the model being asked the wrong question.
+    """
+    whole = m_factor(8000.0, 300.0)
+    per_hop = m_factor(8000.0 / hop_count(8000.0), 300.0)
+
+    assert whole == pytest.approx(2.665, abs=0.01)
+    assert per_hop == pytest.approx(3.370, abs=0.01)
+    assert per_hop > whole
+
+
+def test_describe_path_is_one_phrasing_for_both_exporters():
+    """The CLI and the server formatted their own midpoint until 2026-08-14."""
+    short = describe_path(CYPRUS, YOSHKAR_OLA)
+    assert short == "control point 45.99N 39.09E, D=2588km"
+
+    far = describe_path(CYPRUS, Point(-33.87, 151.21))
+    assert far.startswith("control points ")
+    assert " / " in far and far.endswith(", 4 hops")
 
 
 def test_intermediate_endpoints():

@@ -63,13 +63,25 @@ def circuit_ceiling(header, options: "Options") -> float | None:
     from a single run, which is the case that made a per-run flag inadequate:
     DOB records NIC and SGO in the same directory and they do not give out at
     the same frequency.
+
+    ``options.stations is None`` is resolved the same way every loader call in
+    this module resolves it -- to the built-in table. It used to be read here
+    as "no registry", so a default ``Options()`` loaded NIC->DOB's geometry
+    from the table and then missed its 24.53 MHz ceiling, and the CLI's
+    ``limited_`` flags and SAO ``D`` letters disagreed with the server's for
+    the same sounding.
+
+    A plain mapping -- coordinates and nothing else -- carries no ceilings, so
+    it yields ``None`` rather than raising.
     """
     if options.band_ceiling_mhz is not None:
         return float(options.band_ceiling_mhz)
-    if options.stations is None:
+    lookup = getattr(loader.resolve_stations(options.stations),
+                     "band_ceiling", None)
+    if lookup is None:
         return None
-    return options.stations.band_ceiling(
-        getattr(header, "tx_name", ""), getattr(header, "rx_name", ""))
+    return lookup(getattr(header, "tx_name", ""),
+                  getattr(header, "rx_name", ""))
 
 
 def band_edge_mhz(cal, band_ceiling_mhz: float | None = None) -> float:
@@ -119,9 +131,11 @@ class Options:
     #: Override extension-based format selection. None means dispatch on the
     #: suffix, which is right unless a recording was renamed.
     format: str | None = None
-    #: Station coordinate registry, for v2 products whose header carries only
-    #: a transmitter *name*. None leaves the geometry unavailable rather than
-    #: guessed -- see io_chirp.ChirpHeader.has_coordinates.
+    #: Station coordinate registry. ``None`` means the built-in table, which
+    #: is what `loader.resolve_stations` turns it into; pass ``{}`` for no
+    #: registry at all -- then a v2 product has no geometry (see
+    #: io_chirp.ChirpHeader.has_coordinates) and an .lfs one is read exactly
+    #: as its header was written.
     stations: dict | None = None
     #: Flatten frequency rows whose above-threshold energy spans more range
     #: than any echo can. Off by default because it changes results, and a

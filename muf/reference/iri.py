@@ -30,7 +30,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..geometry import Point, great_circle_km, fof2_to_muf, midpoint
+from ..geometry import (DEFAULT_HMF2_KM, Point, control_points, fof2_to_muf,
+                        great_circle_km, hop_count)
 from . import ReferenceSeries, as_index
 from .indices import IndexUnavailable, solar_indices
 
@@ -125,7 +126,21 @@ def predict(
     f107: float | None = None,
     **_,
 ) -> ReferenceSeries:
-    """MUF for the path, from IRI's foF2 at the control point."""
+    """MUF for the path, from IRI's foF2 at its control point or points.
+
+    Both parts of the geometry come from ``tx`` and ``rx`` and nothing else, so
+    a receiver hearing the same transmitter from somewhere else gets its own
+    control point: Nicosia -> Yoshkar-Ola reflects over 45.99N 39.09E, Nicosia
+    -> Dombas over 49.22N 24.59E, and neither borrows the other's ionosphere.
+
+    Over :data:`muf.geometry.MAX_SINGLE_HOP_KM` the path takes more than one
+    hop, and then it has two control points (ITU-R P.533's convention, 2000 km
+    in from each end) and is **limited by the worse of them** -- the layer that
+    fails first ends the circuit, wherever along it that happens. The obliquity
+    factor applies per hop, at ``D/n``; see :func:`muf.geometry.hop_count` for
+    why the whole distance is not merely less accurate but geometrically
+    impossible.
+    """
     index = as_index(times)
     if not len(index):
         return ReferenceSeries("iri", error="no timestamps given")
@@ -135,7 +150,9 @@ def predict(
         return ReferenceSeries("iri", error=f"not installed. {INSTALL_HINT}")
 
     path_km = great_circle_km(tx, rx)
-    control = midpoint(tx, rx)
+    points = control_points(tx, rx)
+    hops = hop_count(path_km)
+    hop_km = path_km / hops
 
     driver_note = ""
     if f107 is None:
@@ -158,50 +175,69 @@ def predict(
     if f107 is None:
         return ReferenceSeries("iri", error="no solar driver available")
 
-    values = np.full(len(index), np.nan)
-    heights = np.full(len(index), np.nan)
+    # One row per control point: a single-hop path has one, and the loop below
+    # then does exactly what it always did.
+    values = np.full((len(points), len(index)), np.nan)
+    heights = np.full((len(points), len(index)), np.nan)
 
-    if name == "PyIRI":
-        # Grouped by date so each day costs one model evaluation.
-        dates = pd.Series(index.date, index=range(len(index)))
-        for day, positions in dates.groupby(dates).groups.items():
-            rows = np.asarray(positions, dtype=int)
-            hours = np.array([
-                index[i].hour + index[i].minute / 60 + index[i].second / 3600
-                for i in rows
-            ])
-            try:
-                fof2, hmf2 = _pyiri_day(module, day, hours, control, float(f107))
-                values[rows], heights[rows] = fof2, hmf2
-            except Exception as exc:
-                driver_note = driver_note or f"; {type(exc).__name__} on {day}"
-    else:
-        for position, when in enumerate(index):
-            stamp = when.to_pydatetime()
-            try:
-                values[position] = _fof2_iri2016(module, stamp, control)
-                heights[position] = _hmf2_iri2016(module, stamp, control)
-            except Exception as exc:        # one bad sample must not kill the run
-                driver_note = driver_note or f"; {type(exc).__name__} on some samples"
+    for where, control in enumerate(points):
+        if name == "PyIRI":
+            # Grouped by date so each day costs one model evaluation.
+            dates = pd.Series(index.date, index=range(len(index)))
+            for day, positions in dates.groupby(dates).groups.items():
+                rows = np.asarray(positions, dtype=int)
+                hours = np.array([
+                    index[i].hour + index[i].minute / 60 + index[i].second / 3600
+                    for i in rows
+                ])
+                try:
+                    fof2, hmf2 = _pyiri_day(module, day, hours, control, float(f107))
+                    values[where, rows], heights[where, rows] = fof2, hmf2
+                except Exception as exc:
+                    driver_note = driver_note or f"; {type(exc).__name__} on {day}"
+        else:
+            for position, when in enumerate(index):
+                stamp = when.to_pydatetime()
+                try:
+                    values[where, position] = _fof2_iri2016(module, stamp, control)
+                    heights[where, position] = _hmf2_iri2016(module, stamp, control)
+                except Exception as exc:    # one bad sample must not kill the run
+                    driver_note = driver_note or \
+                        f"; {type(exc).__name__} on some samples"
 
-    fof2_series = pd.Series(values, index=index, dtype=float)
-    if not fof2_series.notna().any():
+    where_text = " / ".join(str(point) for point in points)
+    if not np.isfinite(values).any():
         return ReferenceSeries(
-            "iri", error=f"{name} returned no usable foF2 for {control}"
+            "iri", error=f"{name} returned no usable foF2 for {where_text}"
         )
 
-    from ..geometry import DEFAULT_HMF2_KM
-    hmf2_series = pd.Series(heights, index=index, dtype=float).fillna(DEFAULT_HMF2_KM)
+    # The limiting control point, per instant. With one hop this is just the
+    # only one; with two it is whichever gives out first, and the foF2 and hmF2
+    # reported alongside are that point's -- reporting an average of the two
+    # would describe an ionosphere that is nowhere on the path.
+    muf = np.full(len(index), np.nan)
+    fof2 = np.full(len(index), np.nan)
+    hmf2 = np.full(len(index), np.nan)
+    for position in range(len(index)):
+        for where in range(len(points)):
+            f = values[where, position]
+            if not np.isfinite(f):
+                continue
+            h = heights[where, position]
+            h = float(h) if np.isfinite(h) else DEFAULT_HMF2_KM
+            candidate = fof2_to_muf(float(f), hop_km, h)
+            if np.isnan(muf[position]) or candidate < muf[position]:
+                muf[position], fof2[position], hmf2[position] = candidate, f, h
 
-    muf = pd.Series(
-        [fof2_to_muf(f, path_km, h) if np.isfinite(f) else np.nan
-         for f, h in zip(fof2_series, hmf2_series)],
-        index=index,
-    )
+    hop_note = "" if hops == 1 else \
+        f" ({hops} hops of {hop_km:.0f} km, worst control point)"
+    label = "control point" if len(points) == 1 else "control points"
 
     return ReferenceSeries(
         name="iri",
-        muf=muf,
-        detail=pd.DataFrame({"fof2": fof2_series, "hmf2": hmf2_series}),
-        source=f"{name} at control point {control}, F10.7={f107:.0f}{driver_note}",
+        muf=pd.Series(muf, index=index, dtype=float),
+        detail=pd.DataFrame({"fof2": pd.Series(fof2, index=index, dtype=float),
+                             "hmf2": pd.Series(hmf2, index=index, dtype=float)}),
+        source=(f"{name} at {label} {where_text}{hop_note}, "
+                f"F10.7={f107:.0f}{driver_note}"),
     )

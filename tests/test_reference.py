@@ -21,6 +21,7 @@ from muf.reference import chapman, giro, indices, iri, minimuf
 
 CYPRUS = Point(35.18557, 33.38228)   # the registry's Nicosia
 YOSHKAR_OLA = Point(56.38, 47.53)
+DOMBAS = Point(62.073, 9.111)        # the other receiver hearing the same tx
 
 
 @pytest.fixture
@@ -183,6 +184,67 @@ def test_iri_produces_a_plausible_diurnal_curve(day_times):
     fof2 = series.detail["fof2"]
     assert 1.0 < fof2.min() < 8.0        # night
     assert 5.0 < fof2.max() < 20.0       # midday
+
+
+def test_the_control_point_is_this_circuit_s_own(day_times, monkeypatch):
+    """Same transmitter, different receiver, different ionosphere sampled.
+
+    The whole reason the model is evaluated per circuit rather than per
+    transmitter: Nicosia -> Yoshkar-Ola reflects over 45.99N 39.09E and
+    Nicosia -> Dombas over 49.22N 24.59E, 1100 km apart.
+    """
+    from muf.geometry import midpoint
+
+    seen = []
+
+    def record(module, day, hours, point, f107):
+        seen.append(point)
+        return np.full(len(hours), 6.0), np.full(len(hours), 300.0)
+
+    monkeypatch.setattr(iri, "_backend", lambda: ("PyIRI", None))
+    monkeypatch.setattr(iri, "_pyiri_day", record)
+
+    iri.predict(CYPRUS, YOSHKAR_OLA, day_times[:1], f107=136.0)
+    iri.predict(CYPRUS, DOMBAS, day_times[:1], f107=136.0)
+
+    assert seen == [midpoint(CYPRUS, YOSHKAR_OLA), midpoint(CYPRUS, DOMBAS)]
+    assert seen[0] != seen[1]
+
+
+def test_a_multihop_path_is_limited_by_its_worse_control_point(day_times,
+                                                               monkeypatch):
+    """Two control points, and the layer that fails first ends the circuit.
+
+    `control_points` has returned two for a long path since it was written;
+    nothing consumed them, so a 14 000 km path was modelled off one midpoint
+    and converted at a whole-path obliquity no ray achieves.
+    """
+    from muf.geometry import fof2_to_muf, great_circle_km, hop_count
+
+    far = Point(-33.87, 151.21)                      # Sydney: 14 415 km, 4 hops
+    weak, strong = 4.0, 9.0
+
+    def two_points(module, day, hours, point, f107):
+        value = weak if point.lat < 0 else strong
+        return np.full(len(hours), value), np.full(len(hours), 300.0)
+
+    monkeypatch.setattr(iri, "_backend", lambda: ("PyIRI", None))
+    monkeypatch.setattr(iri, "_pyiri_day", two_points)
+
+    series = iri.predict(CYPRUS, far, day_times[:1], f107=136.0)
+
+    path_km = great_circle_km(CYPRUS, far)
+    hop_km = path_km / hop_count(path_km)
+    assert series.muf.iloc[0] == pytest.approx(fof2_to_muf(weak, hop_km, 300.0))
+
+    # The reported foF2 is the limiting point's, not an average of the two:
+    # the mean would describe an ionosphere that is nowhere on the path.
+    assert series.detail["fof2"].iloc[0] == pytest.approx(weak)
+    assert "4 hops" in series.source and "worst control point" in series.source
+
+    # And converting at the whole 14 415 km would have given a different --
+    # geometrically impossible -- answer.
+    assert series.muf.iloc[0] != pytest.approx(fof2_to_muf(weak, path_km, 300.0))
 
 
 # --- solar indices ----------------------------------------------------------

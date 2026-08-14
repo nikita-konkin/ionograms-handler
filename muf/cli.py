@@ -475,9 +475,7 @@ def _iri_values(paths, args) -> dict[Path, saoxml.ModelValues]:
         fof2 = series.detail["fof2"].to_numpy(dtype=float)
         hmf2 = series.detail["hmf2"].to_numpy(dtype=float)
         muf = series.muf.to_numpy(dtype=float)
-        control = geometry.midpoint(tx, rx)
-        options = (f"control point {control.lat:.2f}N {control.lon:.2f}E, "
-                   f"D={geometry.great_circle_km(tx, rx):.0f}km")
+        options = geometry.describe_path(tx, rx)
         for i, (path, _) in enumerate(items):
             values = saoxml.ModelValues(
                 name=series.name.upper(), muf_mhz=muf[i],

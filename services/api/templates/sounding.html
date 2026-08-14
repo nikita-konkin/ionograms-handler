@@ -135,8 +135,10 @@
         <span class="pill unk">IRI</span> {{ scaling.model.error }}
       {% elif scaling.model %}
         <span class="pill ok">IRI</span> {{ scaling.model.source }}<br>
-        control point {{ scaling.model.control }},
-        D={{ '%.0f'|format(scaling.model.path_km or 0) }} km.
+        {# `options` rather than a hardcoded phrase: a path over 4000 km has
+           two control points and hops, and "control point A / B" would be a
+           sentence about a circuit that does not exist. #}
+        {{ scaling.model.options }}.
       {% endif %}
       </p>
       <p class="note">Modelled rows are marked with the model that asserted

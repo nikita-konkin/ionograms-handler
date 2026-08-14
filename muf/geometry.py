@@ -70,6 +70,44 @@ def control_points(a: Point, b: Point) -> list[Point]:
     return [intermediate(a, b, 2000.0), intermediate(b, a, 2000.0)]
 
 
+def hop_count(path_km: float) -> int:
+    """How many F2 reflections a path of this length takes.
+
+    The companion to :func:`control_points`: that one says *where* to sample
+    the ionosphere, this one says what distance the sample then applies to.
+    :func:`m_factor` converts foF2 to an oblique MUF for **one hop**, so a
+    multi-hop path is converted at ``D/n``, not at ``D``.
+
+    Passing the whole distance does not merely lose accuracy, it describes a
+    ray that does not exist: the geometric factor peaks at 3840 km (M = 3.373
+    for a 300 km layer) and falls away after, because past that the reflection
+    would have to happen below the horizon. An 8000 km path evaluated whole
+    gives 2.665 where its two real hops give 3.370 -- a MUF understated by a
+    fifth, which reads as the instrument over-picking rather than the model
+    being asked the wrong question.
+    """
+    if path_km <= MAX_SINGLE_HOP_KM:
+        return 1
+    return math.ceil(path_km / MAX_SINGLE_HOP_KM)
+
+
+def describe_path(a: Point, b: Point) -> str:
+    """Where a reference model was evaluated, for SAO ``ModelOptions``.
+
+    One phrasing, so the CLI's export and the server's cannot describe the same
+    circuit differently -- both used to format a bare midpoint themselves, and
+    a midpoint is the wrong answer for a path that hops twice.
+    """
+    path_km = great_circle_km(a, b)
+    points = control_points(a, b)
+    hops = hop_count(path_km)
+
+    label = "control point" if len(points) == 1 else "control points"
+    where = " / ".join(str(point) for point in points)
+    return (f"{label} {where}, D={path_km:.0f}km"
+            + ("" if hops == 1 else f", {hops} hops"))
+
+
 def intermediate(a: Point, b: Point, distance_km: float) -> Point:
     """The point ``distance_km`` from ``a`` along the great circle toward ``b``."""
     total = great_circle_km(a, b)

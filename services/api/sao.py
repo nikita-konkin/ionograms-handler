@@ -6,16 +6,6 @@ download, the numbers panel and the interactive plot are three views of one
 scaling, so they are built once here rather than three times in three routes
 that could disagree about what the sounding says.
 
-Two decisions worth stating.
-
-**The registry is passed explicitly.** ``pipeline.Options()`` leaves
-``stations`` as ``None``, and ``circuit_ceiling`` reads that as *no registry*
-rather than *the default one* -- so a bare ``Options`` finds no band ceiling
-for NIC -> DOB, and the ``D`` qualifying letter that marks a pick as censored
-by the recorder's band edge never appears. ``loader.resolve_stations(None)`` is
-the function whose whole job is that policy, and calling it here is what makes
-the server's SAO agree with ``muf export``'s.
-
 **The result is memoised on the file.** Detection products are write-once, so
 a path plus its mtime identifies a scaling for good. Building one costs about
 a second; a page that redraws on every gate toggle would pay that each time.
@@ -151,17 +141,19 @@ def _iri_for(ion) -> dict:
         except Exception:                                     # noqa: BLE001
             return None
 
-    control = geometry.midpoint(tx, rx)
     return {
         "name": series.name.upper(),
         "muf_mhz": float(series.muf.iloc[0]),
         "fof2_mhz": first(series.detail, "fof2"),
         "hmf2_km": first(series.detail, "hmf2"),
         "path_km": path_km,
-        "control": f"{control.lat:.2f}N {control.lon:.2f}E",
+        # Both ends' own control point, and two of them on a path that hops
+        # twice: `geometry.describe_path` is the one phrasing, shared with
+        # `muf export --iri` so the page and the download agree.
+        "control": " / ".join(str(point)
+                              for point in geometry.control_points(tx, rx)),
         "source": series.source,
-        "options": (f"control point {control.lat:.2f}N {control.lon:.2f}E, "
-                    f"D={path_km:.0f}km"),
+        "options": geometry.describe_path(tx, rx),
     }
 
 
@@ -200,18 +192,13 @@ def build(path: Path, *, gate: str | None = "auto",
 
 
 def _build(path: Path, *, gate, methods, iri) -> Scaling:
-    from muf import interference, loader
+    from muf import interference
     from muf.export import saoxml
     from muf.pipeline import Options
 
     ion = load_ion(path, gate=gate)
 
-    options = Options(
-        methods=list(methods),
-        # The point of the module docstring: `None` here would mean "no
-        # registry" to `circuit_ceiling`, not "the default one".
-        stations=loader.resolve_stations(None),
-    )
+    options = Options(methods=list(methods))
     ion, _ = interference.apply(ion, options)
 
     # IRI goes *into* the record as `<Modeled>`, not beside it: that is what

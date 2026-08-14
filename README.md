@@ -575,6 +575,17 @@ muf compare out --ref-model all
 For Cyprus -> Yoshkar-Ola the control point is 45.99N 39.09E and **RV149 Rostov**
 sits 146 km away, well inside the F2 correlation scale.
 
+**The control point is the circuit's, not the transmitter's.** It comes from
+each sounding's own two ends, so the same Nicosia transmitter is modelled over
+45.99N 39.09E when Yoshkar-Ola hears it and over 49.22N 24.59E when Dombås
+does — 1100 km and, at 09:00 UTC in February, a different ionosphere. Above
+4000 km a path takes more than one hop: it then has **two** control points,
+2000 km in from each end (ITU-R P.533), is limited by the worse of them, and
+the vertical-to-oblique factor applies per hop rather than to the whole
+distance. That factor peaks at 3840 km and falls away after — beyond it the
+whole-path number describes a reflection below the horizon, so an 8000 km path
+converted whole reads a fifth low. Nothing in the archive is over 4000 km yet.
+
 **What IRI showed.** Where IRI puts the MUF inside the 32.5 MHz sweep, the
 pipeline agrees to **+0.55 MHz** (n=204). Where IRI puts it *above* the sweep --
 82 of 288 soundings, every one between 06:00 and 13:00 UTC -- the pipeline reads
@@ -1652,7 +1663,7 @@ muf/                    the pipeline
   loader.py             format dispatch across the three
   calibrate.py          header -> frequency and virtual-range axes, range gate
   spectro.py            gated spectrogram, noise equalization, caching
-  geometry.py           great-circle path, control point, secant law
+  geometry.py           great-circle path, control points, hops, secant law
   pick.py               the shared MUF decision rule
   extractors/           algorithmic.py, kmeans.py, contour.py, cnn.py
   fit.py                parabola fitted to the nose of the trace
@@ -1679,7 +1690,7 @@ services/
     static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  819 tests; `python -m pytest tests -q`
+tests/                  825 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it

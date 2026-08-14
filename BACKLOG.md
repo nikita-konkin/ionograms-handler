@@ -308,6 +308,17 @@ correctly either way (`sweep_complete`, `sweep_fraction`).
   indices. **R12 smoothed sunspot number is `-1.0` for recent months** -- it
   needs +/-6 months of data, so Feb 2026 will not have one until ~Aug 2026.
   Models needing R12 must fall back to daily SSN or F10.7.
+- **IRI control points.** Every circuit is modelled over its own reflection
+  point, from that sounding's own header: NIC -> Yoshkar-Ola over 45.99N
+  39.09E, NIC -> DOB over 49.22N 24.59E. Since 2026-08-14 a path longer than
+  `geometry.MAX_SINGLE_HOP_KM` also uses **both** control points and is limited
+  by the worse of them, converting at the per-hop distance. `control_points`
+  had returned two since it was written and nothing consumed them, so a long
+  path was modelled off one midpoint and converted at a whole-path obliquity
+  no ray achieves -- `m_factor` peaks at 3840 km and falls away after, so an
+  8000 km path came out a fifth low, which reads as the instrument
+  over-picking. No circuit in the archive is over 4000 km today; DOB hearing
+  something further away is what this is waiting for.
 - **MINIMUF.** The authoritative coefficients (Rose & Martin, NOSC TD 201,
   DTIC ADA066256) could not be retrieved. Implementing it from memory would
   manufacture a plausible-but-wrong reference, which is the exact failure mode
@@ -1055,13 +1066,15 @@ bin, which nobody sees until they zoom.
 CDN: DOB has been off the internet for a week at a time. Still no build step,
 which was the condition in `web_routes.py`'s docstring.
 
-**`pipeline.circuit_ceiling` reads `Options.stations is None` as "no registry"
-rather than "the default one",** so a bare `Options()` finds no band ceiling
-for NIC -> DOB and the `D` qualifying letter never appears. `sao.py` works
-around it by passing `loader.resolve_stations(None)` explicitly, which is what
-makes the served XML agree with `muf export`'s (MUF 24.450 `D`, censored by the
-recorder's band edge). **The CLI still has the bug** -- fix it in
-`pipeline.circuit_ceiling` and drop the workaround.
+**`pipeline.circuit_ceiling` read `Options.stations is None` as "no registry"
+rather than "the default one"** -- fixed 2026-08-14. A bare `Options()` took
+NIC -> DOB's *geometry* from the built-in table and then missed its 24.53 MHz
+ceiling, so the same sounding got different `D` letters from `muf export` and
+from the server, which carried a workaround (`stations=resolve_stations(None)`)
+to paper over it. `circuit_ceiling` now resolves the same way every loader call
+does; `{}` still means no registry, and a bare coordinate mapping yields no
+ceiling rather than raising. The workaround is gone, and the served XML and the
+CLI both anchor NIC -> DOB at 24.38 MHz (24.53 less the three-bin margin).
 
 Smaller things settled along the way:
 

@@ -178,6 +178,27 @@ def test_the_registry_supplies_the_ceiling_per_circuit(synthetic_path, options):
     assert unrelated["limited_algo"] is False
 
 
+def test_a_default_options_finds_the_ceiling_the_table_records():
+    """`stations=None` is the built-in table here too, as in every loader call.
+
+    This one function read it as *no registry* until 2026-08-14, so a bare
+    `Options()` took NIC->DOB's geometry from the table and then missed its
+    24.53 MHz ceiling: `muf export` and the server's SAO gave the same pick
+    different `D` letters. `services/api/sao.py` carried a workaround for it.
+    """
+    class Header:
+        tx_name, rx_name = "NIC", "DOB"
+
+    assert pipeline.circuit_ceiling(Header(), Options()) == pytest.approx(24.53)
+
+    # `{}` is still no registry -- the distinction `resolve_stations` exists
+    # to keep -- and a bare coordinate mapping carries no ceilings at all,
+    # which must read as "none recorded" rather than raise.
+    assert pipeline.circuit_ceiling(Header(), Options(stations={})) is None
+    assert pipeline.circuit_ceiling(
+        Header(), Options(stations={"NIC": (35.18557, 33.38228)})) is None
+
+
 def test_a_ceiling_above_the_pick_leaves_it_a_measurement(
         synthetic_path, options):
     """Guards the sign: a higher ceiling must never flag more, only less."""
