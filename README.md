@@ -1690,7 +1690,7 @@ services/
     static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  825 tests; `python -m pytest tests -q`
+tests/                  826 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1740,6 +1740,13 @@ be the same as a granted one, since these endpoints can stop a radio. And the
 service **binds to `127.0.0.1` by default**; reaching it from the sounding
 laptop means naming a LAN address on purpose, or tunnelling, which
 `deploy/README.md` covers.
+
+The console's **start / stop / restart buttons queue a command; they do not
+execute one.** The press writes a row, the station's agent collects it on its
+next pull, and until then the row reads `pending` — so on a server whose agent
+is not running, a stop stays pending for good and the recorder keeps recording.
+The page says as much when it queues one. `stop` asks twice, in the page rather
+than in a browser dialog, and the 15 s auto-refresh stands down while it waits.
 
 It is deliberately throwaway: SQLite, plain HTTP, no migrations. See
 `architecture.md` §6 M2.5 for what it settled and what M3/M4 should not

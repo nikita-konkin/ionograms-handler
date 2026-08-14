@@ -1505,6 +1505,29 @@ def test_the_console_shows_what_is_sounding_and_what_arrived(client, tmp_path,
     assert "NIC" in page.text
 
 
+def test_the_console_control_does_not_hinge_on_a_native_dialog(client):
+    """A false from ``window.confirm`` is indistinguishable from a dead button.
+
+    The stop button used to be gated behind one, and a dialog the browser
+    suppressed -- or that this page's own 15 s refresh cancelled mid-read --
+    made ``send`` return with no request and no message. The report that found
+    it was "I press STOP but nothing changes", which is precisely what that
+    looks like from the chair. The question now lives in the page, answered by
+    a second press, and every outcome writes a line the operator can read.
+    """
+    client.post("/stations/health", headers=CTL, json=report(station="DOB"))
+    page = client.get("/ui").text
+
+    assert 'id="say-DOB"' in page, "each station needs somewhere to be answered"
+    assert "confirm(" not in page
+    # The refresh must stand down while a stop is armed, or it eats the
+    # question the way it used to cancel the dialog.
+    assert "if (!armed) location.reload()" in page
+    # And queued must not read as done: nothing happens on the station until
+    # its agent pulls the row, which may be never.
+    assert "pending until the station" in page
+
+
 # --------------------------------------------------------------------------
 # Reachability: can this host still refresh the solar indices IRI runs on?
 # --------------------------------------------------------------------------

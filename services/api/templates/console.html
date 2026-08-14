@@ -250,6 +250,7 @@
     <button onclick="send('{{ s.name }}','stop')">stop</button>
     <button onclick="send('{{ s.name }}','restart')">restart</button>
     <span class="note">queued now, collected on the station's next pull</span>
+    <div id="say-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
   </div>
 
   {% if s.commands %}
@@ -284,28 +285,102 @@
 <script>
   const tokField = document.getElementById('tok');
   tokField.value = sessionStorage.getItem('tok') || '';
+  // `oninput` misses a paste from the context menu in some browsers, and a
+  // token that looks pasted but was never stored survives until the refresh
+  // below wipes the field.
+  tokField.addEventListener('change', () => sessionStorage.setItem('tok', tokField.value));
+
+  function say(station, text, bad) {
+    const box = document.getElementById('say-' + station);
+    if (!box) return;
+    box.textContent = text;
+    box.style.color = bad ? 'var(--fail)' : '';
+  }
+
+  // A queued command reloads the page to show its row, which would wipe the
+  // message that says what was queued -- and a message that vanishes is the
+  // same "nothing happened" the operator complained about. Carry it across.
+  for (const key of Object.keys(sessionStorage)) {
+    if (!key.startsWith('said-')) continue;
+    say(key.slice(5), sessionStorage.getItem(key));
+    sessionStorage.removeItem(key);
+  }
+
+  // Two-step in the page, not `window.confirm`. A native dialog returns false
+  // when the browser suppresses it or when this page's own refresh cancels it
+  // mid-read, and `send` then returned silently -- the operator saw a button
+  // that did nothing at all, which is worse than either outcome it was
+  // guarding. `armed` also suspends the refresh, so the question stays on
+  // screen long enough to answer.
+  let armed = null;
+  let armedTimer = null;
+
+  function disarm() {
+    armed = null;
+    clearTimeout(armedTimer);
+    armedTimer = null;
+  }
 
   async function send(station, name) {
     const token = tokField.value.trim();
-    if (!token) { alert('Paste the control token first.'); return; }
-    if (name === 'stop' && !confirm(
-        'Stop acquisition on ' + station + '?\n\n' +
-        'The recorder is stopped with SIGINT so the USRP is released cleanly. ' +
-        'Nothing will be recorded until it is started again.')) return;
-    const r = await fetch('/stations/' + encodeURIComponent(station) + '/commands', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token},
-      body: JSON.stringify({name: name, issued_by: 'web'})
-    });
-    const body = await r.json().catch(() => ({}));
-    alert(r.ok ? (name + ' queued (' + (body.id || '').slice(0, 8) + ')')
-               : ('refused: ' + (body.detail || r.status)));
-    if (r.ok) setTimeout(() => location.reload(), 400);
+    if (!token) { say(station, 'Paste the control token below first.', true); return; }
+
+    if (name === 'stop' && armed !== station) {
+      armed = station;
+      say(station, 'Stop acquisition on ' + station + '? The recorder is '
+        + 'stopped with SIGINT so the USRP is released cleanly, and nothing '
+        + 'is recorded until it is started again. Press stop again to '
+        + 'confirm; the page will not refresh until you do.');
+      // An armed question that is never answered would hold the refresh for
+      // good, and a health console frozen at one moment is worse than a
+      // missed keystroke -- it reads as a live station. Expire the arming.
+      clearTimeout(armedTimer);
+      armedTimer = setTimeout(() => {
+        disarm();
+        say(station, 'stop was not confirmed, so nothing was sent.');
+      }, 30000);
+      return;
+    }
+    disarm();
+
+    say(station, name + ' …');
+    let r, body;
+    try {
+      r = await fetch('/stations/' + encodeURIComponent(station) + '/commands', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + token},
+        body: JSON.stringify({name: name, issued_by: 'web'})
+      });
+      body = await r.json().catch(() => ({}));
+    } catch (e) {
+      say(station, 'could not reach the server: ' + e.message, true);
+      return;
+    }
+    // The server answers 401 with the same "control token required" whether
+    // none was sent or the wrong one was -- it will not confirm which half of
+    // a guess was right. Here we know a token *was* sent, so say the useful
+    // half: it was rejected, and re-pasting it is the thing to try.
+    if (r.status === 401) {
+      say(station, 'refused: this server did not accept that control token.', true);
+      return;
+    }
+    if (!r.ok) { say(station, 'refused: ' + (body.detail || r.status), true); return; }
+
+    // Queued is not done. The station pulls on its own cycle, so the row below
+    // stays `pending` until an agent collects it -- if none is running, it
+    // stays pending for good, and saying so here is the difference between a
+    // slow command and a command nobody will ever execute.
+    const queued = name + ' queued as ' + (body.id || '').slice(0, 8)
+        + ' — pending until the station\'s agent collects it.';
+    say(station, queued);
+    sessionStorage.setItem('said-' + station, queued);
+    setTimeout(() => location.reload(), 900);
   }
 
   // Poll rather than push: this page has one reader and a 15 s refresh is
-  // cheaper in every sense than a websocket that must be reconnected.
-  setTimeout(() => location.reload(), 15000);
+  // cheaper in every sense than a websocket that must be reconnected. It
+  // stands down while a stop is armed, so the refresh cannot eat the question.
+  setInterval(() => { if (!armed) location.reload(); }, 15000);
 </script>
 {% endblock %}

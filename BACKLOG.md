@@ -1076,6 +1076,25 @@ does; `{}` still means no registry, and a bare coordinate mapping yields no
 ceiling rather than raising. The workaround is gone, and the served XML and the
 CLI both anchor NIC -> DOB at 24.38 MHz (24.53 less the three-bin margin).
 
+**The console's stop button did nothing at all** -- fixed 2026-08-15, reported
+as "I paste the control token, press STOP, nothing changes". `send()` opened
+with `if (name === 'stop' && !confirm(...)) return;`, and `window.confirm`
+returns `false` both when the operator cancels and when the browser suppresses
+the dialog outright -- so the function returned with no request, no row and no
+message. This page's own `setTimeout(() => location.reload(), 15000)` also
+cancels an open dialog mid-read, which turns a deliberate confirmation into a
+race the operator loses by reading too slowly. Instrumented in the rig:
+`["native confirm returned", false]` while the same click sent by hand queued
+`f995888d`. Only `stop` was gated, which is why start and restart looked fine.
+
+The question is now in the page: a per-station `say-{name}` line, a second
+press to confirm, and the 15 s refresh suspended while a stop is armed (with a
+30 s expiry, so an unanswered question cannot freeze a health console into
+looking live). Every path writes a line -- no token, rejected token, transport
+failure, and the queue receipt, which says `pending until the station's agent
+collects it` because a queued command is not an executed one: the row waits for
+a pull that never comes if no agent is running.
+
 Smaller things settled along the way:
 
 - `gate=full` is a word the page's own toggle sends. `load_ion` used to read it
@@ -1103,4 +1122,9 @@ Smaller things settled along the way:
 - **No test drives the JavaScript.** The tests check that the frame JSON is
   embedded, that every trace has a distinct legend name and that the bare PNG
   really is bare; whether Plotly then places the image correctly was verified
-  by eye and by reading back `layout.images` in the browser.
+  by eye and by reading back `layout.images` in the browser. The same gap cost
+  a working stop button (section 20, 2026-08-14): the console's control flow is
+  now guarded only by string assertions on the rendered page --- that a `say-`
+  box exists, that no `confirm(` remains, that the refresh stands down while a
+  stop is armed. A headless browser driving one start/stop round trip would
+  cover all of it and nothing else does.
