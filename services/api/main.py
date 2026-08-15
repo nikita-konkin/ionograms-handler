@@ -44,13 +44,24 @@ WARM_CENSUS = os.environ.get("CENSUS_WARM", "1") not in ("0", "", "false")
 def _warm(app: FastAPI) -> None:
     """The cold census, off the request path. Runs in a daemon thread."""
     started = time.perf_counter()
+    # Announced before it starts, not only when it finishes. The census holds
+    # a lock, so while it runs every request for the sources page waits on it;
+    # a log that only speaks on success makes "still reading" and "died in the
+    # thread" the same silence, which is what happened on DOB.
+    print(f"  census warm: reading up to {sources.DEFAULT_MAX_FILES} "
+          f"detection file(s) under {app.state.archive_root}", flush=True)
     got = sources.warm(app.state.archive_root)
     if got is None:
+        print(f"  census warm: failed after "
+              f"{time.perf_counter() - started:.1f}s (see warning above)",
+              flush=True)
         return
     cost = got.get("cost", {})
-    print(f"  census warm: {cost.get('files', 0)} file(s), "
+    capped = (f" (newest of {cost['found']})"
+              if cost.get("capped") else "")
+    print(f"  census warm: {cost.get('files', 0)} file(s){capped}, "
           f"{got.get('count', 0)} emitter(s) in "
-          f"{time.perf_counter() - started:.1f}s")
+          f"{time.perf_counter() - started:.1f}s", flush=True)
 
 
 @asynccontextmanager

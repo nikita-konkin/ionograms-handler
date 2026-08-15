@@ -158,6 +158,15 @@ restart, because who to sound and whether to run it are one decision. The
 console's list comes from the database rather than the archive, so it does not
 pay for the census.
 
+The census opens at most 2000 detection files, newest day first. On an archive
+that is not being pruned it will hit that ceiling — DOB held 172,056 files
+across three days on 2026-08-15 — and then the page says so, and its answer is
+about the recent end of the archive rather than all of it. Ask for
+`?max_days=1` to spend the whole budget on today. The startup log names the
+ceiling before the warm-up starts, so a container that is still reading can be
+told apart from one whose warm-up died; `CENSUS_WARM=0` skips the read
+entirely.
+
 That pairing is the point. **search** (serendipitous) mode records whatever
 sweeps past and infers who was transmitting; **scheduled** mode downconverts a
 fixed list at times it is told, giving named products with an absolute range

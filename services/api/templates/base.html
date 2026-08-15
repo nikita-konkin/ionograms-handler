@@ -9,10 +9,11 @@
     --bg: #14161a; --panel: #1c1f26; --line: #2b3039;
     --ink: #e6e8ec; --dim: #9aa3b2;
     --ok: #4ac26b; --fail: #e5534b; --unknown: #6b7280; --accent: #58a6ff;
+    --warn: #d29922;
   }
   @media (prefers-color-scheme: light) {
     :root { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
-            --dim:#5b6673; --unknown:#98a1ad; }
+            --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; }
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
@@ -37,6 +38,7 @@
   .ok    { color:var(--ok);      border-color:var(--ok); }
   .fail  { color:var(--fail);    border-color:var(--fail); }
   .unk   { color:var(--unknown); border-color:var(--unknown); }
+  .warn  { color:var(--warn);    border-color:var(--warn); }
   .muted { color:var(--dim); }
   button { font:inherit; background:var(--panel); color:var(--ink);
            border:1px solid var(--line); border-radius:6px;

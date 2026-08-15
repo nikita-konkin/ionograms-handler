@@ -1699,7 +1699,7 @@ services/
     static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  830 tests; `python -m pytest tests -q`
+tests/                  847 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1947,8 +1947,25 @@ log says what it cost:
 
 ```console
 api 0.1.0 3097398  db=/data/ionograms.sqlite3  archive=/archive
+  census warm: reading up to 2000 detection file(s) under /archive
   census warm: 1846 file(s), 5 emitter(s) in 0.6s
 ```
+
+The first of those two lines is printed before the read starts, and there is a
+third for a read that failed, because the alternative was silence. **The census
+also refuses to start a read it cannot finish.** Bounding it by days assumed a
+day was a bounded amount of work, and DOB is not that archive: on 2026-08-15 its
+newest three days held **172,056 files**, 45,602 of them the `chirp-*.h5` the
+census reads first — 93× the 1846 this was measured against, and hours of round
+trips. The warm-up took the census lock and never returned it, so the page did
+not answer slowly, it did not answer. At most `DEFAULT_MAX_FILES` (2000) are
+opened now. The budget is spent **newest day first**, so today stays whole and
+the oldest day is the one that loses files, and what is trimmed is *time* and
+not quality — the same detection product, never a fall back to the cheap
+consolidated files, for the reason above. A capped census says so in `cost`
+(`found`, `capped`, `budget`), in a warning, and in a notice on the page naming
+how much of the archive it read: "no such emitter" and "not in the part I read"
+are different answers, and only one of them is a reason to stop looking.
 
 That line's `3097398` is the commit the image was built from, stamped in by
 `deploy/Dockerfile.api` and served at `/healthz` as `build`. `version` is a

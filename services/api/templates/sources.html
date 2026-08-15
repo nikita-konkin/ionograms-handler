@@ -50,6 +50,18 @@
     <a href="?max_days=3&amp;min_count={{ min_count }}">3</a> &middot;
     <a href="?max_days=7&amp;min_count={{ min_count }}">7</a>
   </p>
+  {% if c.capped %}
+  <p class="note"><span class="pill warn">capped</span>
+  <b>This is the newest {{ c.files }} of {{ c.found }} file(s), not all of
+  them.</b> The census stops at {{ c.budget }} because opening the rest would
+  take hours on this archive, and a page that never answers is worse than one
+  that answers about the recent end of it. It trims time, not quality: the same
+  detection product, newest days first, so today is whole and the oldest day is
+  the one that lost files. An emitter that only ever transmitted in the part
+  that was trimmed will be missing &mdash; ask for
+  <a href="?max_days=1&amp;min_count={{ min_count }}">1 day</a> to spend the
+  whole budget on today, and prune the archive if this stays capped.</p>
+  {% endif %}
   {% if c.seconds > 10 %}
   <p class="note"><b>That is slow, and it is the archive, not the arithmetic.</b>
   A census opens one HDF5 file per detection, and each open costs a round trip

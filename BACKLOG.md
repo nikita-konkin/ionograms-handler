@@ -1329,3 +1329,143 @@ been able to say.
   reachable as JSON, so anything scripted against this archive re-derives the
   foF2 and the residual itself, from a different set of assumptions than the
   page states. A `/series/parameters` returning the frame would settle it.
+
+---
+
+## 23. Stopping DOB is a manual sequence, and its evidence is truncated (2026-08-16)
+
+Two findings from stopping acquisition on DOB by hand on 2026-08-15/16, both
+about the same thing: this station is supervised by a shell script, and the
+tooling built around it assumes systemd.
+
+### `thor.log` is truncated on every restart, so drops leave no trace
+
+The supervisor in `patches/0003-local-dombas.sh.result:73` runs the recorder in
+a `while true` loop, redirecting its output with a single `>`. **There is no
+24-hour timer in that loop.** It restarts the recorder whenever
+`rx_uhd_ext_gps` exits, for any reason, and prints `Restarting recording (every
+24 hours).` every time -- so a clean 24 h rotation and a crash after ten
+minutes are indistinguishable in `dombas-launch.log`, and the recorder's own
+output that would tell them apart is overwritten by the next launch five
+seconds later.
+
+Observed 2026-08-15: the two supervisor shells had been up **2 d 10 h** with
+exactly **two** restart lines logged, while the running recorder was **10
+minutes old**. Two exits cannot span 58 hours and leave a ten-minute-old third
+run, so at least one run was nothing like 24 hours -- and there is no way to
+find out which, or why. `logrotate` runs in the same loop but leaves no
+`thor.log.1`, so nothing was ever archived either.
+
+This is the mechanism that would produce section 16's 4.28% sounding loss with
+every process reporting healthy: the recorder exits, the loop revives it five
+seconds later, and the only record of it is a line that also appears when
+nothing is wrong. Changing the redirect to `>>` -- one character -- would make
+the next restart leave evidence. Rotating on size, so it cannot grow without
+bound, is the other half.
+
+### The console's stop button cannot stop this station
+
+`control.py` refuses with "no systemd target configured for this station"
+because DOB's `target` is empty, which is correct and deliberate --
+`systemctl stop chirp.target` cannot reach another supervisor's children. But
+it means the only way to stop DOB is a by-hand sequence that exists nowhere in
+the documentation, and it has a footgun in it:
+
+1. List the processes. **Two** processes match `bash ./dombas.sh` -- the outer
+   script and the `while true` subshell -- and both must die before the
+   recorder, or the loop revives it in five seconds.
+2. Kill those two **by explicit PID**. Never `pkill -f dombas.sh`: on both
+   2026-08-13 and 2026-08-15 that pattern also matched PID 14016,
+   `git diff examples/marieluise/dombas.sh`, a pager idle since Aug 9 -- and it
+   sorted first.
+3. Only then stop the recorder, with **SIGINT** (`pkill -INT -f
+   rx_uhd_ext_gps`). TERM or KILL leaves the USRP transmitting UDP and needs a
+   physical power cycle in Dombas.
+4. Verify past the five-second revive window.
+
+Nothing else in the tree touches the radio: `drf ringbuffer`, both `mpirun`
+groups, `station_monitor.py`, `sync_iono_data.py`, `iono_housekeeping.py` and
+`detections2metadata.py` survive as orphans and are safe to leave or to kill by
+PID. The ringbuffer holds ~14 GB in `/dev/shm` until it is.
+
+This belongs in `deploy/README.md` as a named procedure. The better fix is the
+migration to `services/agent/systemd/` that section 17 already tracks, after
+which the console's button would work and none of the above would be needed.
+
+## 24. DOB's archive is 93x the census design point, and nothing prunes it (2026-08-16)
+
+`/ui/sources` on the work server stopped answering. Not slowly -- at all: the
+startup warm-up began at 19:06:28Z, never printed its completion line, never
+warned, and held `_CENSUS_LOCK` for the rest of the process's life, so every
+request for the page queued behind a read that was never going to finish. The
+container was healthy the whole time (`restarts=0 oomkilled=false`), which is
+exactly the failure mode that gets diagnosed as "the page is broken".
+
+Ruled out first, because each had a plausible story: the in-process cache
+(never restarted), multiple uvicorn workers (one process), the whole-tree
+fallback in `_day_directories` (twelve date-named directories present, all
+parsing), and a stale build (the deployed commit already carried the caching
+fix from section 21).
+
+It is scale. The three newest days under `/archive`:
+
+    2026-08-13    68,288 files
+    2026-08-14    57,332
+    2026-08-15    46,436
+    ------------------------
+                 172,056 files
+
+and 2026-08-15 broken down by prefix:
+
+    chirp-*.h5           45,602
+    lfm_ionogram-*.h5       750
+    cdetections-*.h5         84
+    par-*.h5                  0
+
+The census reads `chirp-*.h5` first by preference, and that preference is about
+quality -- see the docstring, and section 18's 100 kHz/s phantom. So it faced
+~168,000 HDF5 opens at 50-100 ms each on a network archive: **two to five
+hours**. The number this was designed and measured against was **1,846 files
+over three days, 234 s cold** -- 93x smaller.
+
+**Done in this cut:** `DEFAULT_MAX_FILES = 2000` in `services/api/sources.py`.
+The census spends the budget newest day first and reads the newest files of the
+product it already chose, so it trims *time* and never falls back to the cheap
+files; `cost` gained `found`, `capped` and `budget`; the page carries a
+`capped` notice saying it read part of the archive and which part; the warm-up
+prints a line before it starts and on failure, so "still reading" and "died in
+the thread" are no longer the same silence. Five tests in `tests/test_api.py`.
+
+That is a ceiling, not a fix. Three things behind it are the station's:
+
+### Nothing is pruning the archive
+
+45,602 detection files in one day is not a detector working, it is a detector
+firing on noise and nothing clearing up after it. `iono_housekeeping.py` is
+running -- as an *orphan* from a launch two days old, alongside the other
+processes section 23 lists -- and the archive still grew by 46k files that day.
+Whether it is running with the wrong retention, against the wrong directory, or
+losing to the write rate is unknown. There is also an unresolved duplicate pair
+here: `iono_housekeeping.py` (the script) versus `chirp-archive-prune.service`
+(the unit), the same split as `sync_iono_data.py` versus
+`chirp-archive-sync.service`.
+
+### `epoch_offset_s` is dead on DOB
+
+**Zero `par-*.h5`.** The timing solutions are the product that carries the
+receiver's clock offset, and they are the only external check on it -- the
+check that caught the 0.956 s error. `find_timings.py` is absent from the
+launcher's process list, so nothing is writing them. Until it is back, a
+recurrence of that fault is invisible: the files a mis-clocked receiver writes
+are internally perfect.
+
+### 750 ionograms against 45,602 detections
+
+One product of the day's soundings, one for every 61 detection files. Worth
+knowing whether the detector's threshold moved, or whether this is what an
+unpruned ringbuffer looks like from the outside.
+
+The design point should also stop being implicit. A census over a live station
+should be bounded by the archive it will actually meet, and the honest long-term
+answer is an index -- one pass that records what each file contributed, so the
+page reads a summary and not the archive.

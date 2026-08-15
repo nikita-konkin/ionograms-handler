@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,7 @@ from muf.reference import indices                  # noqa: E402
 from services.api import acquisition as acq        # noqa: E402
 from services.api import auth, db, main, net       # noqa: E402
 from services.api import series as series_mod      # noqa: E402
+from services.api import web_routes                # noqa: E402
 
 
 @pytest.fixture
@@ -1291,6 +1293,117 @@ def test_one_unreadable_file_does_not_disable_the_short_circuit(cold_census,
     assert again["cost"]["unchanged"] is True, "one bad file re-read the archive"
     assert again["cost"]["opened"] == 0
     assert again["emitters"] == first["emitters"]
+
+
+# --------------------------------------------------------------------------
+# The ceiling: an archive too big to census the way the page asks
+# --------------------------------------------------------------------------
+#
+# The day bound assumed a day was a bounded amount of work. On 2026-08-15 DOB's
+# newest three days held 172,056 files, 45,602 of them the `chirp-*.h5` this
+# reads first -- 93x what the cache above was measured against. The warm-up
+# took the census lock and never came back, so every request queued behind a
+# read that would have taken hours: the page did not answer slowly, it did not
+# answer. These tests are about answering about part of the archive, loudly,
+# instead of starting a read that cannot finish.
+
+def test_a_census_reads_the_newest_files_and_says_it_capped(cold_census,
+                                                            tmp_path,
+                                                            make_detection_h5):
+    """The recent end is the end the page is about."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=8, into=day)            # 24 files
+    every = sorted(p.name for p in day.glob("chirp-*.h5"))
+
+    with pytest.warns(UserWarning, match="ceiling"):
+        got = cold_census.census(tmp_path, min_count=2, max_files=10)
+
+    cost = got["cost"]
+    assert cost["found"] == len(every) == 24
+    assert (cost["files"], cost["capped"], cost["budget"]) == (10, 14, 10)
+    read = sorted(Path(k).name for k in cold_census._MEMO)
+    assert read == every[-10:], "trimmed the recent end, not the old one"
+
+
+def test_the_budget_is_spent_on_the_newest_day_first(cold_census, tmp_path,
+                                                     make_detection_h5):
+    """Degrading a whole day is better than half-reading two.
+
+    Both days are wanted, but if only some files can be opened they should be
+    today's: an emitter that stopped yesterday is not what "what is on air"
+    means, and a schedule is built from the current one.
+    """
+    old, new = tmp_path / "2026-08-08", tmp_path / "2026-08-09"
+    old.mkdir(), new.mkdir()
+    make_detection_h5("chirp", cycles=4, into=old, base_epoch=1785801600.0)
+    make_detection_h5("chirp", cycles=4, into=new, base_epoch=1785888000.0)
+
+    with pytest.warns(UserWarning, match="ceiling"):
+        got = cold_census.census(tmp_path, max_days=2, min_count=2,
+                                 max_files=12)
+
+    assert (got["cost"]["found"], got["cost"]["capped"]) == (24, 12)
+    assert {Path(k).parent.name for k in cold_census._MEMO} == {"2026-08-09"}
+
+
+def test_the_ceiling_trims_time_and_not_quality(cold_census, tmp_path,
+                                                make_detection_h5):
+    """The cheap files are cheap because they are the detector's raw
+    candidates. Falling back to them under load is how the census loses the
+    transmitter the page exists to find -- 84 `cdetections-*.h5` hold what
+    45,602 `chirp-*.h5` do on DOB, and on one real day they produced a
+    100 kHz/s "emitter" with 26,137 detections that the occupancy filter
+    throws away. So the ceiling drops files, never the product."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=8, into=day)            # 24 files
+    make_detection_h5("cdetections", cycles=8, into=day)      # 1 file, same data
+
+    with pytest.warns(UserWarning, match="ceiling"):
+        got = cold_census.census(tmp_path, min_count=2, max_files=6)
+
+    assert got["kind"] == "detection", "fell back to the consolidated files"
+    assert got["cost"]["found"] == 24, "counted a product it did not read"
+    assert not [k for k in cold_census._MEMO if "cdetections" in k]
+
+
+def test_an_archive_within_the_ceiling_is_not_marked_capped(cold_census,
+                                                            tmp_path,
+                                                            make_detection_h5):
+    """The notice has to mean something, so the ordinary archive must not
+    raise it."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    got = cold_census.census(tmp_path, min_count=2)
+    assert got["cost"]["capped"] == 0
+    assert got["cost"]["found"] == got["cost"]["files"] == 18
+
+
+def test_the_page_says_the_census_only_read_part_of_the_archive(
+        cold_census, client, tmp_path, monkeypatch, make_detection_h5):
+    """A capped answer that looks like a whole one is the worst of the three.
+
+    The operator reads this page to decide what to sound; "no such emitter"
+    and "not in the part I read" are different answers and only one of them
+    is a reason to stop looking.
+    """
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=8, into=day)
+    client.app.state.archive_root = tmp_path
+
+    real = cold_census.census
+    monkeypatch.setattr(web_routes.sources_mod, "census",
+                        lambda root, **kw: real(root, **dict(kw, max_files=10)))
+    with pytest.warns(UserWarning, match="ceiling"):
+        page = client.get("/ui/sources?min_count=2")
+
+    assert page.status_code == 200
+    assert "newest 10 of 24 file(s)" in page.text
+    assert "capped" in page.text
 
 
 def test_the_warm_up_answers_the_question_the_page_asks(cold_census, tmp_path,

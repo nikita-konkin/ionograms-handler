@@ -70,6 +70,25 @@ DEFAULT_MAX_SLOT_FRACTION = 0.25
 #: between 1.5 and 24, so this threshold is in open space.
 DEFAULT_MIN_REPEATS = 3.0
 
+#: Detection files one census may open. The scan below is bounded by days, and
+#: the assumption underneath that was that a day is a bounded amount of work:
+#: the archive this was written against held 1846 files across three days, and
+#: a cold census of it cost 234 s.
+#:
+#: DOB is not that archive. On 2026-08-15 its newest three days held 172,056
+#: files, of which 45,602 were the ``chirp-*.h5`` this reads first -- 93x the
+#: design point, and at 50-100 ms an open on a network archive, hours. The
+#: warm-up started, took the census lock, and never came back; every request
+#: queued behind it, so the page did not answer slowly, it did not answer.
+#:
+#: So the day bound is not enough and there is a file bound too. Days are read
+#: newest first and the budget is spent in that order, which degrades the way
+#: the page is used: today stays whole, and it is the oldest day that gets
+#: trimmed. What is trimmed is *time*, not quality -- the newest files of the
+#: preferred product, never a fallback to a cheaper one, for the reason in
+#: `census`'s docstring. 2000 keeps the cost near the 234 s this was built for.
+DEFAULT_MAX_FILES = 2000
+
 
 #: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
 _DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
@@ -216,7 +235,8 @@ def census(archive_root: str | os.PathLike, *,
            min_count: int = DEFAULT_MIN_COUNT,
            max_scatter_s: float = DEFAULT_MAX_SCATTER_S,
            max_slot_fraction: float = DEFAULT_MAX_SLOT_FRACTION,
-           min_repeats: float = DEFAULT_MIN_REPEATS) -> dict:
+           min_repeats: float = DEFAULT_MIN_REPEATS,
+           max_files: int = DEFAULT_MAX_FILES) -> dict:
     """Repeating emitters under ``archive_root``, newest days first.
 
     Reads whichever detection product the tree actually has, in the order
@@ -238,6 +258,12 @@ def census(archive_root: str | os.PathLike, *,
     has not changed opens nothing and stats nothing. The returned ``cost``
     block reports what it did, because a page that is slow for a reason the
     operator cannot see is a page that gets guessed about.
+
+    At most ``max_files`` are opened. Past that the census reads the newest
+    files it found and reports ``capped``, rather than beginning a read it
+    cannot finish -- see `DEFAULT_MAX_FILES`. It trims time and not quality:
+    the preferred product is kept and its oldest files are dropped, because
+    falling back to the cheap ones is what loses the transmitter.
     """
     from muf import io_detect
 
@@ -266,6 +292,22 @@ def census(archive_root: str | os.PathLike, *,
                 matched += len(paths)
                 break
 
+    # The budget, spent newest day first. Names carry the second they belong
+    # to, so sorting one day's files sorts them by time and the tail is the
+    # recent end of it. A trimmed day still answers the question the page
+    # asks -- 2000 files is ~12 cycles of 300 s, and `min_repeats` wants 3.
+    found, capped = matched, 0
+    if max_files and matched > max_files:
+        budget, kept_scans = max_files, []
+        for paths, reader, expand, name in scans:       # newest day first
+            keep = sorted(paths, key=lambda p: p.name)[len(paths) - budget:] \
+                if len(paths) > budget else list(paths)
+            capped += len(paths) - len(keep)
+            budget -= len(keep)
+            if keep:
+                kept_scans.append((keep, reader, expand, name))
+        scans, matched = kept_scans, found - capped
+
     # Fingerprinted on the file *names*, which the scan above already has for
     # free -- not on their contents, and not on a `stat` per file. Every one
     # of these names carries the second it belongs to, so a name that was
@@ -273,7 +315,7 @@ def census(archive_root: str | os.PathLike, *,
     # prove that would cost a round trip each on the archive this is slow on,
     # which is most of what we are trying to avoid.
     fingerprint = (str(root), max_days, cycle, min_count, max_scatter_s,
-                   max_slot_fraction, min_repeats,
+                   max_slot_fraction, min_repeats, max_files,
                    tuple(sorted(str(p) for paths, *_ in scans for p in paths)))
 
     with _CENSUS_LOCK:
@@ -297,6 +339,7 @@ def census(archive_root: str | os.PathLike, *,
             # had just opened 1846 files when it opened none.
             out["cost"] = dict(out["cost"], unchanged=True,
                                opened=0, cached=matched,
+                               found=found, capped=capped,
                                seconds=round(time.perf_counter() - started, 2))
             return out
 
@@ -318,9 +361,17 @@ def census(archive_root: str | os.PathLike, *,
         cost = dict(
             totals,
             days=[d.name for d in _day_directories(root, max_days)],
-            files=matched, records=len(records), unchanged=False,
+            files=matched, found=found, capped=capped, budget=max_files,
+            records=len(records), unchanged=False,
             seconds=round(time.perf_counter() - started, 2),
         )
+        if capped:
+            # Loud, because the answer is now about part of the archive and
+            # the operator is the one who knows whether that is enough.
+            warnings.warn(
+                f"census read the newest {matched} of {found} detection "
+                f"file(s) under {root}: the {max_files}-file ceiling",
+                stacklevel=2)
 
         if not records:
             out = {"count": 0, "kind": "none", "cycle_s": cycle,
