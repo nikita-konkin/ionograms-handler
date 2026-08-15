@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
+import os
 import statistics
 import warnings
 from dataclasses import dataclass
@@ -310,6 +311,49 @@ def find_timings(target) -> list[Path]:
 def find_cdetections(target) -> list[Path]:
     """``cdetections-*.h5`` under ``target``."""
     return _find(target, "cdetections-*.h5")
+
+
+#: The three products' filename prefixes, best first. A chirpsounder2 name is
+#: ``<product>-<fields...>.h5``, so the text before the first ``-`` names the
+#: product and one pass can sort a directory into all three.
+PRODUCT_PREFIXES = ("par", "chirp", "cdetections")
+
+
+def find_products(target) -> dict[str, list[Path]]:
+    """All three detection products under ``target``, in **one** directory pass.
+
+    The three finders above each walk the tree themselves, which is right when
+    a caller wants one product and wasteful when it wants the best available --
+    which is what a census wants, and what `muf detect` does. On DOB that cost
+    three walks of 46,436 entries per day to establish that two of the three
+    products are not there: the station writes no ``par-*.h5`` at all, and the
+    walk that discovers this visits every one of the 45,602 ``chirp-*.h5`` to
+    do it.
+
+    Matching on the prefix rather than the glob also means a `Path` is built
+    only for files that are wanted. The 750 ``lfm_ionogram-*.h5`` in that same
+    directory are rejected on a string comparison.
+
+    Keys are :data:`PRODUCT_PREFIXES`; every key is present, possibly empty.
+    """
+    out: dict[str, list[Path]] = {p: [] for p in PRODUCT_PREFIXES}
+    target = Path(target)
+    if target.is_file():
+        # Same rule as `_find`: a named file still has to be the kind asked
+        # for, or the wrong reader gets it.
+        head = target.name.split("-", 1)[0]
+        if head in out and target.name.endswith(".h5"):
+            out[head].append(target)
+        return out
+    for root, _dirs, files in os.walk(target):
+        base = Path(root)
+        for name in files:
+            if not name.endswith(".h5"):
+                continue
+            head = name.split("-", 1)[0]
+            if head in out:
+                out[head].append(base / name)
+    return out
 
 
 def read_detection(path: str | Path) -> Detection:

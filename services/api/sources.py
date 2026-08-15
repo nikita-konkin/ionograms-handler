@@ -165,6 +165,27 @@ def _identity(path: Path) -> tuple | None:
     return (st.st_mtime_ns, st.st_size)
 
 
+def _file_time(path: Path) -> tuple[int, float, str]:
+    """Sort key putting the newest detection file last, without a ``stat``.
+
+    Every chirpsounder2 detection name ends in the instant it belongs to:
+    ``chirp-<channel>-<rate>-<i0>-<unix>.h5``, ``par-<channel>-<unix>.h5``,
+    ``cdetections-<station>-<unix>.h5``. Sorting on the *whole name* looks
+    equivalent and is not -- ``i0`` is a sample index of no fixed width, so
+    ``chirp-ch0-100-9000-...`` sorts after ``chirp-ch0-100-44664265260000000-...``
+    on the leading ``9`` and the order becomes one over channel and sample
+    index, with time as a tiebreak. That is the wrong 2000 files.
+
+    A name that does not end in a number sorts first, so an unrecognised one
+    is dropped before a good one rather than displacing it.
+    """
+    tail = path.stem.rsplit("-", 1)[-1]
+    try:
+        return (1, float(tail), path.name)
+    except ValueError:
+        return (0, 0.0, path.name)
+
+
 def _read_cached(paths, reader, expand=None) -> tuple[list, dict, list]:
     """Records for ``paths``, opening only the files not already read.
 
@@ -274,33 +295,36 @@ def census(archive_root: str | os.PathLike, *,
     # Scan first, read second. A directory listing is one round trip per
     # directory; an HDF5 open is several per *file*. Doing the cheap half
     # first is what lets an unchanged archive answer without opening anything.
+    #
+    # One pass per day, not one per product. Asking the three finders in turn
+    # walked the tree three times, and on a station that writes no `par-*.h5`
+    # the first of those walks visited every `chirp-*.h5` in the day to
+    # discover that -- 46,436 entries to return an empty list.
     scans, matched = [], 0
     for day in _day_directories(root, max_days):
-        for finder, reader, expand, name in (
-                (io_detect.find_timings, io_detect.read_timing, None,
-                 "timing solution"),
-                (io_detect.find_detections, io_detect.read_detection, None,
-                 "detection"),
-                (io_detect.find_cdetections, io_detect.read_cdetections,
+        try:
+            products = io_detect.find_products(day)
+        except Exception:
+            continue
+        for key, reader, expand, name in (
+                ("par", io_detect.read_timing, None, "timing solution"),
+                ("chirp", io_detect.read_detection, None, "detection"),
+                ("cdetections", io_detect.read_cdetections,
                  _cdetection_rows, "consolidated detection")):
-            try:
-                paths = finder(day)
-            except Exception:
-                paths = []
+            paths = products.get(key) or []
             if paths:
                 scans.append((paths, reader, expand, name))
                 matched += len(paths)
                 break
 
-    # The budget, spent newest day first. Names carry the second they belong
-    # to, so sorting one day's files sorts them by time and the tail is the
-    # recent end of it. A trimmed day still answers the question the page
-    # asks -- 2000 files is ~12 cycles of 300 s, and `min_repeats` wants 3.
+    # The budget, spent newest day first. A trimmed day still answers the
+    # question the page asks -- 2000 files is ~12 cycles of 300 s, and
+    # `min_repeats` wants 3.
     found, capped = matched, 0
     if max_files and matched > max_files:
         budget, kept_scans = max_files, []
         for paths, reader, expand, name in scans:       # newest day first
-            keep = sorted(paths, key=lambda p: p.name)[len(paths) - budget:] \
+            keep = sorted(paths, key=_file_time)[len(paths) - budget:] \
                 if len(paths) > budget else list(paths)
             capped += len(paths) - len(keep)
             budget -= len(keep)

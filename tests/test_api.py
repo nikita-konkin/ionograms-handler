@@ -1326,6 +1326,50 @@ def test_a_census_reads_the_newest_files_and_says_it_capped(cold_census,
     assert read == every[-10:], "trimmed the recent end, not the old one"
 
 
+def test_the_newest_files_are_the_newest_and_not_the_last_alphabetically(
+        cold_census, tmp_path):
+    """The `i0` field has no fixed width, so sorting on the name is not
+    sorting on time.
+
+    A real DOB name is `chirp-<channel>-<rate>-<i0>-<unix>.h5` where `i0` is a
+    sample index: `9000` and `44664265260000000` sort `9` after `4`, putting an
+    older file last. Under a ceiling that keeps the tail, that is silently the
+    wrong 2000 files -- ordered by channel and sample index, with time as a
+    tiebreak.
+    """
+    from services.api.sources import _file_time
+
+    old = tmp_path / "chirp-ch0-100-9000-1785888000.h5"
+    new = tmp_path / "chirp-ch0-100-44664265260000000-1785899000.h5"
+    assert sorted([old, new], key=lambda p: p.name) == [new, old], \
+        "the name sort no longer inverts these, so this test proves nothing"
+    assert sorted([old, new], key=_file_time) == [old, new]
+
+    junk = tmp_path / "chirp-ch0-100-0-partial.h5"
+    assert sorted([new, junk], key=_file_time)[0] == junk, "dropped a good file"
+
+
+def test_one_directory_pass_answers_for_all_three_products(tmp_path,
+                                                            make_detection_h5):
+    """Three finders meant three walks of the same tree. On a station that
+    writes no `par-*.h5`, the first of them visited all 45,602 `chirp-*.h5`
+    to return an empty list, and then the second visited them again."""
+    from muf import io_detect
+
+    make_detection_h5("chirp", cycles=2, into=tmp_path)
+    make_detection_h5("cdetections", cycles=2, into=tmp_path)
+    (tmp_path / "lfm_ionogram-DOB-007-1785888000.h5").write_bytes(b"not ours")
+
+    got = io_detect.find_products(tmp_path)
+    assert set(got) == set(io_detect.PRODUCT_PREFIXES)
+    assert got["par"] == []
+    assert sorted(got["chirp"]) == sorted(io_detect.find_detections(tmp_path))
+    assert sorted(got["cdetections"]) == sorted(
+        io_detect.find_cdetections(tmp_path))
+    assert not any("lfm_ionogram" in str(p)
+                   for paths in got.values() for p in paths)
+
+
 def test_the_budget_is_spent_on_the_newest_day_first(cold_census, tmp_path,
                                                      make_detection_h5):
     """Degrading a whole day is better than half-reading two.
