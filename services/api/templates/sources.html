@@ -181,37 +181,12 @@
     schedule is composed from &mdash; a raw census row cannot be scheduled,
     because it has no name and no id, and
     <code>calc_ionograms.py</code> reads both without a default.
+    <b>Choosing which of them to sound, and starting the sounding, is on the
+    <a href="/ui">console</a></b>, beside the station that would do it: the
+    schedule and the recorder are one decision, and this page has to read the
+    archive before it can render at all.
   </p>
   <div id="verified"></div>
-</div>
-
-<div class="panel">
-  <h2>sounding mode</h2>
-  <p class="note">
-    <b>search</b> records whatever sweeps past and infers the schedule.
-    <b>scheduled</b> downconverts a fixed list at times it is told &mdash; named
-    products, an absolute range zero, and no dependence on the detector. Leaving
-    search mode <b>requires</b> a schedule in the same command: a scheduled station
-    with an empty one records nothing while every process reports healthy.
-  </p>
-
-  <p>
-    <label class="muted" style="font-size:.85rem">mode
-      <select id="mode">
-        {% for m in modes %}<option>{{ m }}</option>{% endfor %}
-      </select></label>
-    <button class="pill" id="apply">apply</button>
-    <span class="note">takes effect on the next restart</span>
-  </p>
-
-  <p class="note" id="preview-note">This is what will be sent. One MPI rank
-  group per transmitter, which is upstream's own arrangement &mdash; the
-  launcher must start <code>calc_ionograms.py</code> with that many ranks, and
-  the agent refuses the command if it does not.</p>
-  <pre id="preview" class="note"
-       style="overflow-x:auto; border:1px solid var(--line); border-radius:6px;
-              padding:.6rem"></pre>
-  <p id="result" class="note"></p>
 </div>
 {% endif %}
 
@@ -340,7 +315,12 @@ if (save) save.addEventListener('click', async () => {
   out.textContent = '';
 });
 
-// --- the verified list, and the schedule it composes -----------------------
+// --- the verified list -----------------------------------------------------
+//
+// The list, not the schedule made from it: ticking transmitters and applying
+// a mode moved to the console, where the start/stop buttons are. Two pages
+// that could each queue a set_config was one too many, and the one that can
+// also *start* the station is the one where the choice belongs.
 
 function renderVerified() {
   const host = document.getElementById('verified');
@@ -350,12 +330,10 @@ function renderVerified() {
     host.innerHTML = '<p class="muted">Nothing identified at this receiver yet.'
       + ' Pick a row above and name it.</p>';
     markClaims();
-    preview();
     return;
   }
   const rows = list.map(t => `
     <tr>
-      <td><input type="checkbox" class="use" value="${t.code}"></td>
       <td>${t.code}</td>
       <td class="muted">${t.name || ''}</td>
       <td class="muted">${t.sounder_id}</td>
@@ -367,12 +345,10 @@ function renderVerified() {
       <td><button class="forget" data-code="${t.code}">forget</button></td>
     </tr>`).join('');
   host.innerHTML = `<div class="scroll"><table>
-      <tr><th></th><th>code</th><th>name</th><th>id</th><th>rate</th>
+      <tr><th>code</th><th>name</th><th>id</th><th>rate</th>
           <th>slots</th><th>verified</th><th>note</th><th></th></tr>
       ${rows}</table></div>`;
 
-  host.querySelectorAll('.use').forEach(c =>
-    c.addEventListener('change', preview));
   host.querySelectorAll('.forget').forEach(b =>
     b.addEventListener('click', async () => {
       const code = b.dataset.code;
@@ -386,7 +362,6 @@ function renderVerified() {
       renderVerified();
     }));
   markClaims();
-  preview();
 }
 
 // Mark census rows that are already someone.
@@ -402,51 +377,7 @@ function markClaims() {
   });
 }
 
-const chosen = () => [...document.querySelectorAll('.use:checked')].map(c => c.value);
-
-function preview() {
-  const box = document.getElementById('preview');
-  if (!box) return;
-  const mode = document.getElementById('mode').value;
-  const list = VERIFIED[station()] || [];
-  if (mode !== 'scheduled') {
-    box.textContent = `mode = ${mode}\n\n`
-      + 'Search mode needs no schedule: it records whatever sweeps past.';
-    return;
-  }
-  const groups = chosen()
-    .map(code => (list.find(t => t.code === code) || {}).timings)
-    .filter(Boolean);
-  box.textContent = groups.length
-    ? `mode = scheduled\nsounder_timings = ${JSON.stringify(groups)}\n\n`
-      + `${groups.length} rank group(s): calc_ionograms.py must run with `
-      + `-np ${groups.length}.`
-    : 'Tick at least one verified transmitter. Scheduled mode with an empty '
-      + 'schedule records nothing while every process reports healthy.';
-}
-
 if (stationBox) stationBox.addEventListener('change', renderVerified);
-const modeBox = document.getElementById('mode');
-if (modeBox) modeBox.addEventListener('change', preview);
-
-const apply = document.getElementById('apply');
-if (apply) apply.addEventListener('click', async () => {
-  const out = document.getElementById('result');
-  const mode = document.getElementById('mode').value;
-  out.textContent = 'sending...';
-
-  // Two different endpoints on purpose. A schedule is named, not typed: the
-  // server looks the numbers up from the verified record rather than trusting
-  // a copy of them that travelled through a form.
-  const r = mode === 'scheduled'
-    ? await control(`/stations/${station()}/schedule`, 'POST', {codes: chosen()})
-    : await control(`/stations/${station()}/commands`, 'POST',
-                    {name: 'set_config', params: {changes: {mode: mode}}});
-  out.textContent = r.ok
-    ? `queued (${(r.body.id || '').slice(0, 8)}); the station applies it on its `
-      + `next pull, and it takes effect on restart`
-    : `refused: ${r.detail}`;
-});
 
 renderVerified();
 </script>

@@ -1661,6 +1661,7 @@ muf/                    the pipeline
   io_chirp.py           chirpsounder2 lfm_ionogram-*.h5
   io_digisonde.py       digisonde_ionogram-*.h5 -- another station's sounder
   loader.py             format dispatch across the three
+  paths.py              the finders' shared dedupe -- no per-file syscalls
   calibrate.py          header -> frequency and virtual-range axes, range gate
   spectro.py            gated spectrogram, noise equalization, caching
   geometry.py           great-circle path, control points, hops, secant law
@@ -1690,7 +1691,7 @@ services/
     static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  826 tests; `python -m pytest tests -q`
+tests/                  830 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1747,6 +1748,10 @@ next pull, and until then the row reads `pending` — so on a server whose agent
 is not running, a stop stays pending for good and the recorder keeps recording.
 The page says as much when it queues one. `stop` asks twice, in the page rather
 than in a browser dialog, and the 15 s auto-refresh stands down while it waits.
+It stands down for a half-composed schedule too — the **sounding plan** panel
+sits on the same page, so who to sound and whether to start it are chosen in
+one place, and a refresh mid-choice would put every tick back the way the
+server has it.
 
 It is deliberately throwaway: SQLite, plain HTTP, no migrations. See
 `architecture.md` §6 M2.5 for what it settled and what M3/M4 should not
@@ -1819,13 +1824,22 @@ subscript and no default — `chirp-rate`, `rep`, `chirpt`, `id` and
 detection says who sent it. So a row is **identified** first and scheduled
 after:
 
-1. **Identify.** Pick a census row, give it a code, and it is saved as a
-   verified transmitter for that receiver, with the census row it was read off
-   kept as evidence. This is the same judgement that resolved `cyprus1` to
-   `NIC`, and it is written down instead of being remembered.
-2. **Schedule.** Tick verified transmitters and apply. The page composes the
-   `sounder_timings` list **by name**, never by row number, and posts it as one
-   `set_config` command with the mode.
+1. **Identify**, on `/ui/sources`. Pick a census row, give it a code, and it is
+   saved as a verified transmitter for that receiver, with the census row it
+   was read off kept as evidence. This is the same judgement that resolved
+   `cyprus1` to `NIC`, and it is written down instead of being remembered.
+2. **Schedule**, on `/ui`. Tick verified transmitters and apply. The page
+   composes the `sounder_timings` list **by name**, never by row number, and
+   posts it as one `set_config` command with the mode.
+
+The two steps are on two pages on purpose. Identifying is archive work and
+belongs where the census is; choosing who to sound and pressing start are one
+decision, so the chooser sits on the console beside the start button rather
+than a page away. The console's list comes from the database — the identify
+step's output — so it carries the chooser without inheriting the archive read.
+A mode the server has never seen acknowledged pre-selects **nothing**: the box
+reads `— not recorded —` and apply refuses it, because defaulting it to the
+first option puts an unobserved mode one click from a live receiver.
 
 The name is load-bearing rather than cosmetic. `calc_ionograms.py:344` writes
 it into the product's *file name* and into `txname`, which this pipeline reads
@@ -1903,6 +1917,19 @@ it stays slow, either the process restarted or the archive root has no dated
 subdirectories — in which case `_day_directories` falls back to the root and
 the scan walks the whole tree.
 
+A warm load should then open nothing at all, and for a long time it did not.
+Two things spent the saving. The finders keyed their dedupe on
+`Path.resolve()`, which is a `realpath` **system call per file** — 38 ms for
+1368 files locally against 0.4 ms for `abspath`, and a round trip each on the
+network archive, for a listing that itself cost 3 ms; `muf/paths.py` now keys
+on the absolute path. And the "nothing changed" short-circuit was disabled by
+*any* unreadable file, which is the normal state of a directory a detector is
+writing into — one truncated file out of 1846 forced a full re-read and
+re-group on every page load for the life of the process. Only the files that
+failed are re-checked now. Warm census 43 ms → 9.1 ms, warm page 45 ms → 10 ms
+on the local checkout, and the work removed is precisely the per-file round
+trips that dominate on the server.
+
 That cache lives in the process, so **every restart hands the cold read to
 whoever opens the page first** — 234 s on the work server, which looks exactly
 like a broken page and was read as one. The api therefore does that read itself
@@ -1968,6 +1995,66 @@ build fails the page still renders — the row, the neighbours and the stored
 extractions are worth reading, and the failure is named rather than turned into
 a 500. `SAO_MODEL=0` drops the IRI column on a host that should not be making
 outbound requests at all.
+
+### Reading a series
+
+`/ui/series` is the same question over a day instead of over one sounding, and
+it draws four things rather than one: **MUF**, **LOF**, an equivalent **foF2**,
+and **IRI** beside them with the residual underneath. Same vendored plotly as
+the sounding page — drag to zoom, click a legend entry to drop a curve, click a
+point to open that sounding.
+
+**Hue is the parameter, shape is the source.** Markers are measured, lines are
+modelled, so the blue markers and the blue dashed line are this circuit's MUF
+and IRI's, and the gap between them is what the residual panel plots. Overlay
+several circuits with `circuit=all` and hue becomes the *circuit* instead —
+two paths' MUFs in one colour is exactly the comparison the page must not
+invite — with each modelled at its own control point. The five family
+checkboxes move whole parameters at once, because four parameters over five
+circuits is a legend of twenty-odd entries and "show me the LOF" should not be
+twenty clicks.
+
+**Hollow markers are bounds at both ends of the band.** A hollow MUF marker sat
+at the top of the sweep, so the real MUF is at or above it; a hollow LOF marker
+sat at the band floor, so the real one is below. Neither is filtered out —
+dropping either would bend the curve towards the middle of the band — but both
+are **excluded from the residual statistics**, and the count of what was
+excluded is printed beside the count that was used. A pick pinned to the
+ceiling says the ionosphere supported *at least* that much; scoring it as a
+residual reports the recorder's band ceiling as a modelling error, which on a
+ceiling-limited circuit is most of the daytime.
+
+**foF2 here is not a measurement.** An oblique sounder never sees vertical
+incidence. It is the measured MUF put back through the secant law at
+hmF2 = 300 km **over one hop** — the same convention `iri.predict` converts by,
+so the measured curve and the modelled one sit on the same geometry. Over
+`MAX_SINGLE_HOP_KM` the path reflects more than once and the obliquity belongs
+to one hop, not to the whole distance.
+
+**LOF, not LUF.** ITU-R P.533-13 §9 defines the lowest *usable* frequency with
+a required signal-to-noise ratio and a monthly median: a property of a service
+and of a month, and one sounding has neither. What an oblique sounder scales is
+the lowest *observed* frequency. It tracks D-region absorption, so it follows
+the sun rather than the F2 layer — which is why it is worth having on the same
+axis: a MUF that moves while the LOF under it does not is a MUF worth doubting.
+A sounding with a LOF and no MUF is a point on this chart, which it was not
+before; on 2026-08-10 that is 120 soundings of Juliusruh→DOB with one MUF
+between them, and the page used to show none of them.
+
+**The model is evaluated at the sounding instants, one call per day.** At the
+instants because that is what makes a residual subtractable, per day because
+`iri.predict` reads its solar driver from the *first* timestamp it is given —
+one F10.7 stretched across a window holding February and August would be wrong
+with nothing on the page to show it. Beyond `MAX_MODEL_DAYS` (31) the page
+declines and says so rather than spending a minute with the request open.
+`model=off` in the query string, or `SERIES_MODEL=0` in the environment, skips
+it entirely: this is the one part of the page that can reach the network.
+
+On cyprus1→yoshkar-ola for 2026-02-04, `kmeans` against IRI is **r = +0.985**
+over 101 pairs with a **+1.63 MHz** median bias and 13 lower bounds held out —
+and the residual panel shows the shape that number hides: IRI runs low through
+the morning rise and high after it, which is a diurnal disagreement rather than
+a scale one.
 
 ### Can this host still reach its upstream?
 

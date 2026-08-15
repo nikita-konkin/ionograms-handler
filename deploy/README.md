@@ -150,8 +150,13 @@ file and pointless for a corrupt one.
 ### Sounding mode, and where a schedule comes from
 
 `/ui/sources` lists the transmitters the station has actually heard, from the
-detection files under `ARCHIVE_ROOT`, and offers each as a `sounder_timings`
-entry. The panel below it switches the station between the two sounding modes.
+detection files under `ARCHIVE_ROOT`, and each row can be **identified** —
+given a code, which is what turns an anonymous detection into a schedulable
+`sounder_timings` entry. Choosing which of those to sound, and the mode, is on
+the **console**: the *sounding plan* panel on `/ui` sits beside start / stop /
+restart, because who to sound and whether to run it are one decision. The
+console's list comes from the database rather than the archive, so it does not
+pay for the census.
 
 That pairing is the point. **search** (serendipitous) mode records whatever
 sweeps past and infers who was transmitting; **scheduled** mode downconverts a

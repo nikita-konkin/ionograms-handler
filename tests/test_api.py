@@ -19,9 +19,12 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient          # noqa: E402
 
+from muf.geometry import Point                     # noqa: E402
+from muf.reference import ReferenceSeries          # noqa: E402
 from muf.reference import indices                  # noqa: E402
 from services.api import acquisition as acq        # noqa: E402
 from services.api import auth, db, main, net       # noqa: E402
+from services.api import series as series_mod      # noqa: E402
 
 
 @pytest.fixture
@@ -48,6 +51,14 @@ def client(tmp_path, monkeypatch):
     # fails on a train, and quietly tests somebody else's uptime.
     monkeypatch.setattr(net, "ENABLED", False)
     net.reset()
+
+    # Third of the same: the series page runs IRI, and IRI wants a solar
+    # driver it may have to fetch. It is off by default here so that seeding a
+    # sounding with real coordinates -- which is otherwise the most natural
+    # thing to do -- cannot silently put a download in the middle of a test.
+    # The tests that own the model turn it back on deliberately.
+    monkeypatch.setattr(series_mod, "MODEL", False)
+    series_mod.clear()
 
     with TestClient(main.app) as c:
         yield c
@@ -574,14 +585,27 @@ def test_a_tree_with_no_soundings_is_skipped_not_fatal(conn, tmp_path):
 # Web: filtering and neighbours
 # --------------------------------------------------------------------------
 
-def _mk(conn, tmp_path, name, when, *, tx="cyprus1", fmt="lfs", muf=12.0):
+def _mk(conn, tmp_path, name, when, *, tx="cyprus1", fmt="lfs", muf=12.0, **extra):
     """Insert a sounding directly. `conn` must be the database the client is
-    serving -- see `api_db`; the `conn` fixture is a different file."""
+    serving -- see `api_db`; the `conn` fixture is a different file.
+
+    ``extra`` goes into the pipeline row verbatim, which is how a test asks for
+    the columns this helper has no argument for -- ``lof_algo``, the
+    coordinates, ``freq_stop``. Spelled as the pipeline spells them rather than
+    as the schema does, because that is the row `ingest_row` actually reads.
+    """
     from services.api import ingest
     (tmp_path / name).write_bytes(b"x")
     ingest.ingest_row(conn, {"file": name, "datetime": when, "tx": tx, "rx": "rx",
-                             "format": fmt, "muf_algo": muf},
+                             "format": fmt, "muf_algo": muf, **extra},
                       tmp_path / name, tmp_path, ("algo",))
+
+
+#: A circuit with both ends on the map: Nicosia to Yoshkar-Ola, the path the
+#: 2026-02-04 archive was recorded over. Needed by anything that models,
+#: because a control point cannot be found without coordinates.
+GEOMETRY = {"tx_lat": 35.0, "tx_lon": 34.0, "rx_lat": 56.38, "rx_lon": 47.53,
+            "path_km": 2588.4}
 
 
 @pytest.fixture
@@ -742,6 +766,232 @@ def test_a_circuit_no_estimator_picked_is_not_offered(client, api_db, tmp_path):
     page = client.get("/ui/series?method=algo").text
     assert "cyprus1 -&gt; rx" in page or "cyprus1 -> rx" in page
     assert "SGO" not in page, "a circuit with no picks is not a choice"
+
+
+# --------------------------------------------------------------------------
+# Series: four parameters, and a model beside them
+# --------------------------------------------------------------------------
+
+def test_a_sounding_with_only_a_lof_is_still_a_point(client, api_db, tmp_path):
+    """A trace that faded out before it reached the ceiling has a real LOF and
+    no MUF. Under `muf IS NOT NULL` the whole day vanished from the chart,
+    which reads as "nothing was recorded" rather than "the top was never seen"
+    -- and on this archive it is 120 soundings of Juliusruh -> DOB with one
+    MUF between them."""
+    conn = api_db
+    _mk(conn, tmp_path, "lofonly.lfs", "2026-02-04 00:00:00",
+        muf=float("nan"), lof_algo=8.4)
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo").text
+    assert "1 point(s)" in page
+    frame = _frame(page)
+    assert frame["circuits"][0]["lof"] == [8.4]
+    assert frame["circuits"][0]["muf"] == [None]
+
+
+def test_the_frame_carries_lof_and_an_equivalent_fof2(client, api_db, tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0,
+        lof_algo=9.0, **GEOMETRY)
+    conn.commit()
+
+    circuit = _frame(client.get("/ui/series?method=algo").text)["circuits"][0]
+    assert circuit["muf"] == [20.0] and circuit["lof"] == [9.0]
+    # 2588 km at 300 km gives an M-factor near 3.2, so a 20 MHz oblique MUF is
+    # a little over 6 MHz vertical. Asserted as a band rather than a constant:
+    # the point is that it is the inverse of the obliquity, not that the
+    # secant law is reproduced here to five figures.
+    assert 5.5 < circuit["fof2"][0] < 7.0
+
+
+def test_the_equivalent_fof2_is_taken_over_one_hop(client, api_db, tmp_path):
+    """The same convention `iri.predict` converts by.
+
+    A path beyond `MAX_SINGLE_HOP_KM` reflects more than once, and the
+    obliquity is set by one hop's ground distance. Inverting the measurement
+    over the whole path would put the measured foF2 and the modelled one on
+    different geometries -- and the two curves sitting side by side on this
+    page is the entire reason either is drawn.
+    """
+    from muf import geometry
+
+    long_path = 6000.0
+    conn = api_db
+    _mk(conn, tmp_path, "far.lfs", "2026-02-04 06:00:00", muf=20.0,
+        **{**GEOMETRY, "path_km": long_path})
+    conn.commit()
+
+    circuit = _frame(client.get("/ui/series?method=algo").text)["circuits"][0]
+    assert circuit["hops"] == 2
+    hop = geometry.muf_to_fof2(20.0, long_path / 2, series_mod.EQUIVALENT_HMF2_KM)
+    whole = geometry.muf_to_fof2(20.0, long_path, series_mod.EQUIVALENT_HMF2_KM)
+    assert circuit["fof2"][0] == pytest.approx(hop)
+    assert circuit["fof2"][0] != pytest.approx(whole), "the two must differ here"
+
+
+def test_a_circuit_without_coordinates_says_so_rather_than_drawing_nothing(
+        client, api_db, tmp_path, monkeypatch):
+    """`unkown -> DOB` is 647 soundings with no transmitter position.
+
+    The model cannot find a control point without both ends, and a panel that
+    was simply empty would read as "IRI agrees with nothing" rather than as
+    "IRI was never asked".
+    """
+    monkeypatch.setattr(series_mod, "MODEL", True)
+    conn = api_db
+    _mk(conn, tmp_path, "nowhere.lfs", "2026-02-04 06:00:00", muf=20.0)
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo").text
+    assert "no coordinates stored for this circuit" in page
+    circuit = _frame(page)["circuits"][0]
+    assert circuit["model"]["error"]
+    assert circuit["fof2"] == [None], "no geometry, no obliquity to invert"
+
+
+def test_the_page_survives_a_model_that_is_not_installed(client, api_db,
+                                                         tmp_path, monkeypatch):
+    """A missing optional dependency is a normal condition, not a 500."""
+    from muf.reference import iri
+
+    monkeypatch.setattr(series_mod, "MODEL", True)
+    monkeypatch.setattr(iri, "available", lambda: False)
+    series_mod.clear()
+
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo")
+    assert page.status_code == 200
+    assert "not installed" in page.text
+    assert "1 point(s)" in page.text, "the measurement is still drawn"
+
+
+def test_the_model_is_driven_by_each_days_own_sun(monkeypatch):
+    """One IRI call per day, not one per window.
+
+    `iri.predict` reads its solar driver from the *first* timestamp it is
+    given. Handed a window holding February and August it would model both
+    with February's sun and report a single F10.7 that looks like a fact. The
+    page's day pills make multi-day windows normal, so the split is here.
+    """
+    import pandas as pd
+
+    from muf.reference import iri
+
+    calls = []
+
+    def fake(tx, rx, times, **_):
+        index = pd.DatetimeIndex(pd.to_datetime(list(times)))
+        calls.append(index)
+        return ReferenceSeries(
+            name="iri", muf=pd.Series(20.0, index=index),
+            detail=pd.DataFrame({"fof2": pd.Series(6.0, index=index),
+                                 "hmf2": pd.Series(300.0, index=index)}),
+            source=f"fake, F10.7={len(calls) * 10}")
+
+    monkeypatch.setattr(iri, "available", lambda: True)
+    monkeypatch.setattr(iri, "predict", fake)
+    series_mod.clear()
+
+    got = series_mod.model_for(Point(35, 34), Point(56, 47),
+                               ["2026-02-04T00:00:00.000",
+                                "2026-02-04T12:00:00.000",
+                                "2026-08-09T00:00:00.000"])
+    assert len(calls) == 2, "one call per day"
+    assert [len(c) for c in calls] == [2, 1]
+    assert got["muf"] == [20.0, 20.0, 20.0]
+    assert "more driver(s)" in got["source"], "two drivers are not one driver"
+
+
+def test_a_day_the_model_fails_on_does_not_take_the_others_with_it(monkeypatch):
+    import pandas as pd
+
+    from muf.reference import iri
+
+    def fake(tx, rx, times, **_):
+        index = pd.DatetimeIndex(pd.to_datetime(list(times)))
+        if index[0].month == 8:
+            return ReferenceSeries(name="iri", error="no solar driver")
+        return ReferenceSeries(name="iri", muf=pd.Series(20.0, index=index),
+                               detail=pd.DataFrame({"fof2": pd.Series(6.0, index=index)}),
+                               source="fake")
+
+    monkeypatch.setattr(iri, "available", lambda: True)
+    monkeypatch.setattr(iri, "predict", fake)
+    series_mod.clear()
+
+    got = series_mod.model_for(Point(35, 34), Point(56, 47),
+                               ["2026-02-04T00:00:00.000",
+                                "2026-08-09T00:00:00.000"])
+    assert got["muf"] == [20.0, None]
+    assert "1 day(s) unmodelled" in got["note"]
+    assert got["hmf2"] == [None, None], "a detail column that is absent is None"
+
+
+def test_the_model_declines_a_window_it_cannot_afford(monkeypatch):
+    """The cost is one evaluation per day, paid while the request is open. A
+    page that quietly takes a minute is worse than one that says why not."""
+    from muf.reference import iri
+
+    monkeypatch.setattr(iri, "available", lambda: True)
+    monkeypatch.setattr(iri, "predict", lambda *a, **k: pytest.fail("asked anyway"))
+    monkeypatch.setattr(series_mod, "MAX_MODEL_DAYS", 1)
+    series_mod.clear()
+
+    got = series_mod.model_for(Point(35, 34), Point(56, 47),
+                               ["2026-02-04T00:00:00.000",
+                                "2026-02-05T00:00:00.000"])
+    assert "spans 2 days" in got["error"]
+
+
+def test_a_lower_bound_is_counted_but_not_scored(client):
+    """A `limited` MUF says the ionosphere supported *at least* that much.
+
+    Scoring it as a residual reports the recorder's band ceiling as a
+    modelling error, and on a ceiling-limited circuit that is most of the
+    daytime. It is excluded from the statistics and counted beside them --
+    a bias over four of forty points is a different claim from one over forty.
+    """
+    got = series_mod.compare(measured=[20.0, 22.0, 30.0], modelled=[19.0, 21.0, 10.0],
+                             limited=[0, 0, 1])
+    assert got["n"] == 2 and got["excluded"] == 1
+    assert got["bias"] == pytest.approx(1.0), "the bound did not move it"
+    assert got["rms"] == pytest.approx(1.0)
+
+    none = series_mod.compare([20.0], [None], [0])
+    assert none["n"] == 0 and "bias" not in none
+
+
+def test_the_frame_is_json_a_browser_will_parse(client, api_db, tmp_path):
+    """Every array crosses into the page through `|tojson`.
+
+    Python writes a bare `NaN` for a float NaN and `JSON.parse` refuses it, so
+    one absent pick would blank the whole plot with the reason visible only in
+    a console nobody has open. `allow_nan=False` is that failure, here.
+    """
+    rows = [{"id": 1, "datetime": "2026-02-04 00:00:00.009633",
+             "tx": "cyprus1", "rx": "rx", "muf": float("nan"),
+             "lof": None, "limited": None, "loflim": None,
+             "muf_smooth": float("nan"), "freq_stop": 30.0, **GEOMETRY}]
+    got = series_mod.frame(rows, model="off")
+
+    json.dumps(got, allow_nan=False)                 # the whole assertion
+    circuit = got["circuits"][0]
+    assert circuit["muf"] == [None] and circuit["fof2"] == [None]
+    assert circuit["t"] == ["2026-02-04T00:00:00.009"], "milliseconds, and a T"
+
+
+def _frame(page: str) -> dict:
+    """The JSON the page hands plotly, out of the rendered HTML."""
+    import re
+
+    found = re.search(r'<script id="series-frame"[^>]*>(.*?)</script>',
+                      page, re.S)
+    assert found, "the page carries no frame"
+    return json.loads(found.group(1))
 
 
 # --------------------------------------------------------------------------
@@ -1012,6 +1262,35 @@ def test_a_file_caught_mid_write_is_retried_when_it_grows(cold_census,
     after = cold_census.census(tmp_path, min_count=2)
     assert after["cost"]["opened"] == 1
     assert after["cost"]["records"] == n_first + 1, "still skipping a good file"
+
+
+def test_one_unreadable_file_does_not_disable_the_short_circuit(cold_census,
+                                                                tmp_path,
+                                                                make_detection_h5):
+    """It used to, and a live archive always has one.
+
+    The test was "did the last census skip anything at all", so a single
+    truncated file among 1846 -- the normal state of a directory a detector is
+    writing into -- turned every later page load into a full re-read and
+    re-group, for the rest of the process's life. The cache was off exactly
+    where it was needed. Only the files that actually failed are re-stat-ed
+    now, and a file that failed and has not moved since leaves the cache good.
+    """
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    body = next(day.glob("chirp-*.h5")).read_bytes()
+
+    truncated = day / "chirp-ch0-100-44664265260000000-1999999999.h5"
+    truncated.write_bytes(body[:len(body) // 3])
+    with pytest.warns(UserWarning, match="unreadable"):
+        first = cold_census.census(tmp_path, min_count=2)
+    assert first["cost"]["opened"] > 0
+
+    again = cold_census.census(tmp_path, min_count=2)
+    assert again["cost"]["unchanged"] is True, "one bad file re-read the archive"
+    assert again["cost"]["opened"] == 0
+    assert again["emitters"] == first["emitters"]
 
 
 def test_the_warm_up_answers_the_question_the_page_asks(cold_census, tmp_path,
@@ -1522,10 +1801,71 @@ def test_the_console_control_does_not_hinge_on_a_native_dialog(client):
     assert "confirm(" not in page
     # The refresh must stand down while a stop is armed, or it eats the
     # question the way it used to cancel the dialog.
-    assert "if (!armed) location.reload()" in page
+    assert "if (!armed && !planning) location.reload()" in page
     # And queued must not read as done: nothing happens on the station until
     # its agent pulls the row, which may be never.
     assert "pending until the station" in page
+
+
+def test_the_console_carries_the_chooser_the_start_button_needs(client):
+    """Choosing who to sound and starting the sounding are one decision.
+
+    They were two pages: the transmitters lived on /ui/sources, behind a census
+    that reads the archive, and the start button lived here. So the operator
+    picked a schedule on one page, then went looking for the button on another
+    -- and /ui/sources is the slow page, which is a poor place to keep a
+    control. The list comes from the database, not from the census, so the
+    console carries the chooser without inheriting the archive read.
+    """
+    client.post("/stations/health", headers=CTL, json=report(station="DOB"))
+    _identify(client, station="DOB", code="NIC", name="Nicosia")
+    _identify(client, station="DOB", code="SGO", name="Sodankyla")
+    command_id = client.post("/stations/DOB/schedule", headers=CTL,
+                             json={"codes": ["NIC"]}).json()["id"]
+
+    def box(page, code):
+        """The one checkbox for `code`, as the template lays it out."""
+        marker = f'class="use" data-station="DOB"\n                   value="{code}"'
+        assert marker in page, f"{code} is verified here, so it must be tickable"
+        return page.split(marker, 1)[1].split("onchange", 1)[0]
+
+    page = client.get("/ui").text
+    assert "sounding plan" in page
+    assert 'id="mode-DOB"' in page and 'id="planSay-DOB"' in page
+
+    # Queued is not configured. The schedule above has not been acknowledged,
+    # so the station is not running it and nothing may be pre-ticked yet.
+    assert "checked" not in box(page, "NIC"), "a pending command is not a state"
+    assert "checked" not in box(page, "SGO")
+    assert "&mdash; not recorded &mdash;" in page, \
+        "no mode was ever acknowledged, so none may be pre-selected"
+
+    timings = json.dumps([[{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
+                            "id": 1, "transmit_name": "NIC"}]])
+    client.post(f"/stations/DOB/commands/{command_id}/ack", headers=CTL,
+                json={"results": [_journal(mode="scheduled", timings=timings)]})
+
+    acked = client.get("/ui").text
+    assert "checked" in box(acked, "NIC"), "the acknowledged schedule names NIC"
+    assert "checked" not in box(acked, "SGO"), "SGO is verified, not scheduled"
+    assert "&mdash; not recorded &mdash;" not in acked, "the mode is known now"
+
+
+def test_the_console_will_not_apply_a_mode_nobody_recorded(client):
+    """The select's fallback used to be the first option, `search`.
+
+    That put a mode this server never observed one click from being applied to
+    a live receiver -- and search mode records whatever sweeps past, so the
+    mistake is not visible until the products stop matching the schedule. The
+    unrecorded case selects a sentinel with no value instead, and both the
+    preview and `applyPlan` refuse it.
+    """
+    client.post("/stations/health", headers=CTL, json=report(station="DOB"))
+    page = client.get("/ui").text
+
+    assert '<option value="" selected>' in page
+    assert "if (!mode)" in page, "the empty value has to be refused, not sent"
+    assert "no record of the mode" in page
 
 
 # --------------------------------------------------------------------------

@@ -146,11 +146,13 @@ def _identity(path: Path) -> tuple | None:
     return (st.st_mtime_ns, st.st_size)
 
 
-def _read_cached(paths, reader, expand=None) -> tuple[list, dict]:
+def _read_cached(paths, reader, expand=None) -> tuple[list, dict, list]:
     """Records for ``paths``, opening only the files not already read.
 
-    Returns ``(records, counts)`` with ``opened``, ``cached`` and
-    ``unreadable``.
+    Returns ``(records, counts, skipped)`` with ``opened``, ``cached`` and
+    ``unreadable`` counted, and the paths that would not parse listed --
+    :func:`census` keeps those to decide whether a later call may trust its
+    cached answer.
 
     A file that will not parse is remembered as **empty**. A detector caught
     mid-write is normal and one truncated file must not lose the census, but
@@ -164,6 +166,7 @@ def _read_cached(paths, reader, expand=None) -> tuple[list, dict]:
     archive looks exactly like a quiet one.
     """
     records = []
+    skipped: list = []
     counts = {"opened": 0, "cached": 0, "unreadable": 0}
     for path in paths:
         key = str(path)
@@ -178,6 +181,7 @@ def _read_cached(paths, reader, expand=None) -> tuple[list, dict]:
             if was is not None and was == _identity(path):
                 counts["cached"] += 1     # still the same broken file
                 counts["unreadable"] += 1
+                skipped.append(path)
                 continue
         try:
             parsed = reader(path)
@@ -186,13 +190,14 @@ def _read_cached(paths, reader, expand=None) -> tuple[list, dict]:
             got = []
         if not got:
             counts["unreadable"] += 1
+            skipped.append(path)
         _MEMO[key] = (_identity(path) if not got else None, got)
         _MEMO.move_to_end(key)
         counts["opened"] += 1
         while len(_MEMO) > _MEMO_MAX:
             _MEMO.popitem(last=False)
         records.extend(got)
-    return records, counts
+    return records, counts, skipped
 
 
 def _cdetection_rows(path, rows):
@@ -274,10 +279,17 @@ def census(archive_root: str | os.PathLike, *,
     with _CENSUS_LOCK:
         # The names matching is only proof that nothing changed if every file
         # behind them was read. A detector caught mid-write keeps its name
-        # when it finishes, so an archive with a skipped file goes down the
-        # read path again -- which is nearly free, since every good file is a
-        # cache hit and only the skipped ones are looked at.
-        settled = not _LAST.get("census", {}).get("cost", {}).get("unreadable")
+        # when it finishes, so a skipped file has to be looked at again.
+        #
+        # Only the skipped ones, though: this used to test "did the last
+        # census skip anything at all", which one truncated file in an archive
+        # of 1846 turned into a full re-read and re-group on every page load,
+        # for the rest of the process's life. That is exactly the state a live
+        # archive sits in -- the detector is always writing something -- so the
+        # short-circuit was off precisely when it was needed. Re-stat the
+        # handful that failed and trust the cache if none of them moved.
+        settled = all(_MEMO.get(str(p), (None, None))[0] == _identity(p)
+                      for p in _LAST.get("skipped", ()))
         if settled and _LAST.get("fingerprint") == fingerprint:
             out = dict(_LAST["census"])
             # This call's cost, not the cost of the call that filled the
@@ -288,12 +300,13 @@ def census(archive_root: str | os.PathLike, *,
                                seconds=round(time.perf_counter() - started, 2))
             return out
 
-        records, kind = [], "none"
+        records, kind, skipped = [], "none", []
         totals = {"opened": 0, "cached": 0, "unreadable": 0}
         for paths, reader, expand, name in scans:
-            got, counts = _read_cached(paths, reader, expand)
+            got, counts, could_not = _read_cached(paths, reader, expand)
             for field, n in counts.items():
                 totals[field] += n
+            skipped.extend(could_not)
             if got:
                 records.extend(got)
                 kind = name
@@ -312,7 +325,7 @@ def census(archive_root: str | os.PathLike, *,
         if not records:
             out = {"count": 0, "kind": "none", "cycle_s": cycle,
                    "emitters": [], "cost": cost}
-            _LAST.update(fingerprint=fingerprint, census=out)
+            _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped)
             return out
 
         emitters = io_detect.census(records, cycle_s=cycle,
@@ -337,7 +350,7 @@ def census(archive_root: str | os.PathLike, *,
                          for e, why in rejected],
             "cost": cost,
         }
-        _LAST.update(fingerprint=fingerprint, census=out)
+        _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped)
         return out
 
 

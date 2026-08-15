@@ -16,6 +16,7 @@ import pytest
 
 from muf import loader, spectro
 from muf.loader import CHIRP2, LFS, FormatError
+from muf.paths import dedupe_paths
 
 
 def synth_iq(n: int = 8192 * 6) -> np.ndarray:
@@ -89,6 +90,24 @@ def test_detection_files_are_not_soundings(make_chirp_h5, make_detection_h5,
 
     found = loader.find_soundings(tmp_path)
     assert [p.name.split("-")[0] for p in found] == ["lfm_ionogram"]
+
+
+def test_a_file_named_beside_its_own_directory_is_found_once(make_lfs,
+                                                              tmp_path):
+    """Both can be on one command line, and the recording must load once.
+
+    This is the dedupe every finder shares, and it is keyed on the absolute
+    path rather than on `Path.resolve()` -- see `muf.paths.dedupe_paths` for
+    why: `resolve` is a `realpath` per file, and the census pays it per page
+    load on a network archive. The saving is only real if the key still
+    collapses the ordinary duplicate, which is this one.
+    """
+    made = make_lfs(synth_iq(), name="a.lfs")
+    weird = tmp_path / "sub" / ".." / made.name          # same file, other name
+
+    once = loader.find_soundings([tmp_path, made])
+    assert [p.name for p in once] == ["a.lfs"]
+    assert [p.name for p in dedupe_paths([made, weird, made])] == ["a.lfs"]
 
 
 def test_an_empty_tree_says_what_it_looked_for(tmp_path):

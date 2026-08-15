@@ -16,6 +16,8 @@ from typing import Mapping
 
 import numpy as np
 
+from .paths import dedupe_paths
+
 HEADER_SIZE = 512
 
 # Field layout, little-endian, offsets in bytes from the start of the file.
@@ -249,5 +251,4 @@ def find_lfs(target) -> list[Path]:
     if missing and not found:
         raise FileNotFoundError(", ".join(str(m) for m in missing))
 
-    unique = {p.resolve(): p for p in found}
-    return sorted(unique.values(), key=lambda p: (p.name, str(p)))
+    return dedupe_paths(found)

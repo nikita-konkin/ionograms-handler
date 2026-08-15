@@ -430,6 +430,18 @@ class Acquisition:
         return min(self.slots, key=lambda s: s.seconds_until, default=None)
 
     @property
+    def scheduled(self) -> list[str]:
+        """Verified transmitters the running schedule names.
+
+        What the console's chooser ticks on arrival, so the operator edits the
+        schedule the station is actually holding rather than composing a new
+        one from an empty form. Entries nobody has identified are not here --
+        they have no code to tick with -- which is visible in the slot table
+        above it as ``unidentified``.
+        """
+        return sorted({s.transmitter for s in self.slots if s.transmitter})
+
+    @property
     def contended(self) -> list[int]:
         """Ranks whose slots overlap, so one of them is not being recorded.
 

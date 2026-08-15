@@ -36,6 +36,7 @@ from . import io_chirp, spectro, stations as _stations
 from . import io_digisonde
 from .io_lfs import find_lfs
 from .io_lfs import read_header as _read_lfs_header
+from .paths import dedupe_paths
 from .spectro import DEFAULT_WINDOW, DEFAULT_ZERO_PERIODS, Ionogram
 
 #: ``.lfs`` IQ recordings -- this pipeline forms the ionogram itself.
@@ -121,8 +122,7 @@ def find_soundings(target, *, format: str | None = None) -> list[Path]:
         wanted = format or " or ".join(FORMATS)
         raise FileNotFoundError(f"no {wanted} soundings under {target}")
 
-    unique = {p.resolve(): p for p in found}
-    return sorted(unique.values(), key=lambda p: (p.name, str(p)))
+    return dedupe_paths(found)
 
 
 def resolve_stations(stations) -> Mapping[str, tuple[float, float]] | None:

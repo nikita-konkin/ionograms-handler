@@ -1,30 +1,33 @@
 {% extends "base.html" %}
-{% block title %}MUF series{% endblock %}
+{% block title %}series{% endblock %}
 {% block hint %}{{ points|length }} point(s){% endblock %}
 {% block body %}
 
+{%- set window = ('&from=' ~ start if start else '') ~ ('&to=' ~ end if end else '') -%}
+{%- set mod = '&model=off' if model == 'off' else '' -%}
+{%- set tail = window ~ mod -%}
+{%- set circ = '&circuit=' ~ (circuit|urlencode) -%}
+
 <div class="panel">
-  <h2>MUF against time</h2>
-  {%- set window = ('&from=' ~ start if start else '') ~ ('&to=' ~ end if end else '') -%}
-  {%- set circ = '&circuit=' ~ (circuit|urlencode) -%}
+  <h2>Parameters against time</h2>
   <div>
     {% for m in methods %}
-      <a href="/ui/series?method={{ m }}{{ circ }}{{ window }}"
+      <a href="/ui/series?method={{ m }}{{ circ }}{{ tail }}"
          class="pill {% if m == method %}ok{% endif %}">{{ m }}</a>
     {% endfor %}
     {% if not methods %}<span class="muted">nothing ingested yet</span>{% endif %}
   </div>
 
-  {# MUF belongs to a path, not to a receiver. Default is one circuit; `all`
-     overlays them coloured, for when comparing is deliberate. #}
+  {# Every parameter here belongs to a path, not to a receiver. Default is one
+     circuit; `all` overlays them coloured, for when comparing is deliberate. #}
   <div style="margin-top:.5rem">
     <span class="muted" style="font-size:.85rem">circuit</span>
     {% for c in circuits %}
-      <a href="/ui/series?method={{ method }}&circuit={{ c|urlencode }}{{ window }}"
+      <a href="/ui/series?method={{ method }}&circuit={{ c|urlencode }}{{ tail }}"
          class="pill {% if c == circuit %}ok{% endif %}">{{ c }}</a>
     {% endfor %}
     {% if circuits|length > 1 %}
-      <a href="/ui/series?method={{ method }}&circuit=all{{ window }}"
+      <a href="/ui/series?method={{ method }}&circuit=all{{ tail }}"
          class="pill {% if circuit == 'all' %}ok{% endif %}">all (overlaid)</a>
     {% endif %}
     {% if not circuits %}<span class="muted">no picks for this method</span>{% endif %}
@@ -35,17 +38,30 @@
      once with the days as unreadable vertical stripes. #}
   <div style="margin-top:.5rem">
     <span class="muted" style="font-size:.85rem">day</span>
-    <a href="/ui/series?method={{ method }}{{ circ }}"
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ mod }}"
        class="pill {% if not start and not end %}ok{% endif %}">all</a>
     {% for d in days %}
-      <a href="/ui/series?method={{ method }}{{ circ }}&from={{ d }}&to={{ d }}"
+      <a href="/ui/series?method={{ method }}{{ circ }}&from={{ d }}&to={{ d }}{{ mod }}"
          class="pill {% if start == d %}ok{% endif %}">{{ d }}</a>
     {% endfor %}
+  </div>
+
+  {# The model is the one thing on this page that can reach the network -- IRI
+     needs a solar driver -- so it has to be refusable here and not only from
+     the environment. #}
+  <div style="margin-top:.5rem">
+    <span class="muted" style="font-size:.85rem">reference</span>
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}"
+       class="pill {% if model != 'off' %}ok{% endif %}">IRI</a>
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}&model=off"
+       class="pill {% if model == 'off' %}ok{% endif %}">off</a>
+    <span class="note">off skips the model, and the network it may need.</span>
   </div>
 
   <form method="get" action="/ui/series" style="margin-top:.5rem">
     <input type="hidden" name="method" value="{{ method }}">
     <input type="hidden" name="circuit" value="{{ circuit }}">
+    <input type="hidden" name="model" value="{{ model }}">
     <label class="muted" style="font-size:.85rem">from
       <input type="text" name="from" value="{{ start }}" placeholder="2026-08-09"
              size="19"></label>
@@ -55,105 +71,399 @@
     <button type="submit" class="pill">apply</button>
     <span class="note">A bare date covers that whole day at either end.</span>
   </form>
+</div>
 
-  {% if points %}
-  <svg id="plot" viewBox="0 0 1000 360" style="width:100%;height:auto;margin-top:1rem"></svg>
-  {% if circuit == 'all' %}
-  <p class="note" id="legend"></p>
-  <p class="note"><b>Different circuits are different measurements.</b> Path
-  length sets the obliquity, the midpoint sets the local time at the
-  reflection, and the recorder sets the band ceiling &mdash; so a rise on one
-  and a plateau on another are not comparable without saying which is which.</p>
-  {% endif %}
-  <p class="note">
-    Hollow markers are <b>lower bounds</b> &mdash; the pick sat at the top of the
-    sweep, so the real MUF is at or above it. They are drawn rather than filtered
-    out: dropping them silently would bias the curve high.
-    Click a point to open its ionogram.
+{% if points %}
+<div class="panel">
+  <div style="display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;
+              margin-bottom:.4rem" class="note">
+    {# Unchecked in the markup and set from the script, which decides what a
+       first look should hold -- two places deciding it is two places to
+       disagree, and the boxes would then lie about what is on the axes. #}
+    <label><input type="checkbox" class="family" data-family="muf"> MUF</label>
+    <label><input type="checkbox" class="family" data-family="lof"> LOF</label>
+    <label><input type="checkbox" class="family" data-family="fof2"> foF2</label>
+    <label><input type="checkbox" class="family" data-family="model"> IRI</label>
+    <label><input type="checkbox" class="family" data-family="context"> sweep top / hmF2</label>
+    <span>&mdash; drag to zoom, double-click to reset, click a point to open its
+    ionogram.</span>
+  </div>
+
+  <div id="series-plot" style="height:620px"></div>
+
+  <p class="note" style="margin-top:.8rem">
+    <b>Hue is the parameter, shape is the source.</b> Markers are measured,
+    lines are modelled &mdash; so a blue marker and the blue dashed line beside
+    it are this circuit's MUF and IRI's, and the gap between them is what the
+    residual panel plots.
+    {% if frame.circuits|length > 1 %}
+    With several circuits overlaid, hue is the <b>circuit</b> instead &mdash;
+    two paths' MUFs in one colour is exactly the comparison this must not
+    invite &mdash; so only MUF and its model are drawn at first. Each circuit
+    is modelled at its own control point; the legend groups them.
+    {% endif %}
   </p>
-  {% else %}
+  <p class="note">
+    <b>Hollow markers are bounds, not measurements.</b> A hollow MUF marker sat
+    at the top of the sweep, so the real MUF is at or above it; a hollow LOF
+    marker sat at the band floor, so the real LOF is at or below it. They are
+    drawn rather than filtered out &mdash; dropping either silently would bend
+    the curve towards the middle of the band. They are left out of the residual
+    statistics below, which is a different decision and is stated there.
+  </p>
+  <p class="note">
+    <b>foF2 here is not measured.</b> An oblique sounder never sees vertical
+    incidence. It is the measured MUF put back through the secant law at
+    hmF2&nbsp;=&nbsp;{{ '%.0f'|format(frame.hmf2_km) }}&nbsp;km over one hop, which
+    is what makes it comparable with a model or with a nearby vertical
+    ionosonde. IRI's own foF2 is its model output, converted the same way in
+    reverse to get the MUF beside it.
+  </p>
+  <p class="note">
+    <b>LOF, not LUF.</b> ITU-R P.533-13 sec. 9 defines the lowest <i>usable</i>
+    frequency with a required signal-to-noise ratio and a monthly median
+    &mdash; a property of a service and of a month, neither of which one
+    sounding has. What an oblique sounder scales is the lowest <i>observed</i>
+    frequency, and that is what this is. It tracks D-region absorption, so it
+    follows the sun rather than the F2 layer: a MUF that moves while the LOF
+    under it does not is worth a second look.
+  </p>
+</div>
+
+<div class="panel">
+  <h2>summary</h2>
+  <div class="scroll"><table>
+    <tr>
+      <th>circuit</th><th>n</th>
+      <th>MUF median</th><th>at ceiling</th>
+      <th>LOF median</th><th>at floor</th>
+      <th>foF2 median</th>
+      <th>vs IRI: n</th><th>bias</th><th>RMS</th><th>r</th>
+    </tr>
+    {% for c in frame.circuits %}
+    {% set s = c.stats %}
+    <tr>
+      <td title="{{ c.geometry }}">{{ c.name }}{% if c.path_km %}
+          <span class="muted">({{ '%.0f'|format(c.path_km) }} km{% if c.hops > 1 %},
+          {{ c.hops }} hops{% endif %})</span>{% endif %}</td>
+      <td>{{ c.n }}</td>
+      <td>{% if s.muf.median is not none %}{{ '%.2f'|format(s.muf.median) }} MHz
+          <span class="muted">({{ s.muf.n }})</span>{% else %}&mdash;{% endif %}</td>
+      <td>{% if s.limited %}<span class="pill unk"
+            title="pick at the top of the sweep: a lower bound">{{ s.limited }}</span>
+          {% else %}&mdash;{% endif %}</td>
+      <td>{% if s.lof.median is not none %}{{ '%.2f'|format(s.lof.median) }} MHz
+          <span class="muted">({{ s.lof.n }})</span>{% else %}&mdash;{% endif %}</td>
+      <td>{% if s.loflim %}<span class="pill unk"
+            title="LOF ran off the bottom of the band: an upper bound">{{ s.loflim }}</span>
+          {% else %}&mdash;{% endif %}</td>
+      <td>{% if s.fof2.median is not none %}{{ '%.2f'|format(s.fof2.median) }} MHz
+          {% else %}&mdash;{% endif %}</td>
+
+      {% if c.model.get('error') %}
+      <td colspan="4" class="wrap"><span class="pill unk">IRI</span> {{ c.model.error }}</td>
+      {% elif s.model.n %}
+      <td>{{ s.model.n }}{% if s.model.excluded %}
+          <span class="muted" title="lower bounds, left out">+{{ s.model.excluded }}</span>{% endif %}</td>
+      <td>{{ '%+.2f'|format(s.model.bias) }} MHz</td>
+      <td>{{ '%.2f'|format(s.model.rms) }} MHz</td>
+      <td>{% if s.model.r is not none %}{{ '%+.3f'|format(s.model.r) }}{% else %}&mdash;{% endif %}</td>
+      {% else %}
+      <td colspan="4" class="muted">{% if model == 'off' %}reference off{%
+          else %}no pair to compare{% endif %}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>
+
+  <p class="note"><b>Bias is a median of measured &minus; IRI, over the pairs
+  that are measurements.</b> The lower bounds counted in the <i>at ceiling</i>
+  column are excluded from it: a pick pinned to the top of the sweep says the
+  ionosphere supported <i>at least</i> that, and scoring it as a residual would
+  report the recorder's band ceiling as a modelling error. On a
+  ceiling-limited circuit that is most of the daytime, which is why the count
+  of excluded points is printed beside the one used.</p>
+  <p class="note">IRI is a climatology driven by a smoothed solar index, and
+  for a recent month that index does not exist yet &mdash; see
+  <code>muf/reference/indices.py</code>. Treat a few MHz of disagreement as
+  normal and the <i>shape</i> of the residual as the interesting part: a flat
+  offset is a scale question, a diurnal one is not.</p>
+  {% for c in frame.circuits if c.model.get('source') %}
+  <p class="note"><span class="pill ok">IRI</span> {{ c.name }} &mdash;
+     {{ c.model.source }}{% if c.model.get('note') %};
+     {{ c.model.note }}{% endif %}</p>
+  {% endfor %}
+</div>
+
+<script id="series-frame" type="application/json">{{ frame|tojson }}</script>
+<script src="/static/plotly.min.js"></script>
+<script>
+(function () {
+  const FRAME = JSON.parse(document.getElementById('series-frame').textContent);
+  const div = document.getElementById('series-plot');
+  const css = getComputedStyle(document.body);
+  const ink = css.getPropertyValue('--ink').trim();
+  const dim = css.getPropertyValue('--dim').trim();
+  const grid = 'rgba(128,140,160,.18)';
+
+  // Hue is the parameter when one circuit is drawn: the measurement and the
+  // model of the same quantity share it, and the marker/line distinction
+  // carries which is which. Two hues for MUF would say they are two things.
+  const PARAM = {
+    muf: '#3d8bfd', lof: '#d98b1f', fof2: '#2ea043',
+    hmf2: '#8b949e', top: '#8b949e',
+  };
+  // With several circuits the hue has to carry the circuit instead -- two
+  // paths' MUFs in one colour is exactly the comparison this must not invite.
+  const CIRCUITS = ['#5aa9e6', '#e6a15a', '#8ad17a', '#c98ae0', '#e07a7a'];
+  const many = FRAME.circuits.length > 1;
+
+  const traces = [], family = [];
+  const add = (spec, group) => { traces.push(spec); family.push(group); };
+
+  // Values kept only where the bound flag matches, so the measured and the
+  // bounded form of one parameter are two traces on one x. `null` is a gap in
+  // plotly, which is what an absent value is.
+  const mask = (values, flags, want) =>
+    values.map((v, k) => (!!flags[k] === want ? v : null));
+  const some = values => values.some(v => v !== null && v !== undefined);
+
+  let residuals = false;
+
+  FRAME.circuits.forEach((circuit, i) => {
+    const hue = p => many ? CIRCUITS[i % CIRCUITS.length] : PARAM[p];
+    const tag = many ? circuit.name + ' · ' : '';
+    const group = many ? circuit.name : undefined;
+    const of = name => '<extra>' + circuit.name + '<br>' + name + '</extra>';
+    const model = circuit.model || {};
+
+    // --- MUF -------------------------------------------------------------
+    // Guarded, like every parameter here: a day whose trace faded out before
+    // it reached the ceiling has LOFs and no MUFs at all, and an empty trace
+    // puts a legend entry on the page for a curve that is not on it.
+    if (some(mask(circuit.muf, circuit.limited, false))) {
+      add({
+        x: circuit.t, y: mask(circuit.muf, circuit.limited, false),
+        name: tag + 'MUF', legendgroup: group, type: 'scatter',
+        mode: 'markers', marker: {size: 5.5, color: hue('muf')},
+        customdata: circuit.id,
+        hovertemplate: '%{y:.2f} MHz' + of('MUF'),
+      }, 'muf');
+    }
+    if (some(mask(circuit.muf, circuit.limited, true))) {
+      add({
+        x: circuit.t, y: mask(circuit.muf, circuit.limited, true),
+        name: tag + 'MUF (lower bound)', legendgroup: group,
+        type: 'scatter', mode: 'markers', customdata: circuit.id,
+        marker: {size: 7, color: 'rgba(0,0,0,0)',
+                 line: {width: 1.3, color: hue('muf')}},
+        hovertemplate: '&ge; %{y:.2f} MHz' + of('MUF at the top of the sweep'),
+      }, 'muf');
+    }
+    if (some(circuit.muf_smooth)) {
+      add({
+        x: circuit.t, y: circuit.muf_smooth, name: tag + 'MUF smoothed',
+        legendgroup: group, type: 'scatter', mode: 'lines',
+        line: {width: 1.4, color: hue('muf')}, opacity: 0.65,
+        hovertemplate: '%{y:.2f} MHz' + of('MUF, smoothed by track'),
+      }, 'muf');
+    }
+
+    // --- LOF -------------------------------------------------------------
+    if (some(circuit.lof)) {
+      add({
+        x: circuit.t, y: mask(circuit.lof, circuit.loflim, false),
+        name: tag + 'LOF', legendgroup: group, type: 'scatter',
+        mode: 'markers', marker: {size: 5, symbol: 'diamond', color: hue('lof')},
+        customdata: circuit.id,
+        hovertemplate: '%{y:.2f} MHz' + of('LOF'),
+      }, 'lof');
+      if (some(mask(circuit.lof, circuit.loflim, true))) {
+        add({
+          x: circuit.t, y: mask(circuit.lof, circuit.loflim, true),
+          name: tag + 'LOF (at band floor)', legendgroup: group,
+          type: 'scatter', mode: 'markers', customdata: circuit.id,
+          marker: {size: 6.5, symbol: 'diamond', color: 'rgba(0,0,0,0)',
+                   line: {width: 1.3, color: hue('lof')}},
+          hovertemplate: '&le; %{y:.2f} MHz' + of('LOF at the band floor'),
+        }, 'lof');
+      }
+    }
+
+    // --- foF2 ------------------------------------------------------------
+    if (some(circuit.fof2)) {
+      add({
+        x: circuit.t, y: circuit.fof2, name: tag + 'foF2 (equivalent)',
+        legendgroup: group, type: 'scatter', mode: 'markers',
+        marker: {size: 4, symbol: 'square', color: hue('fof2')},
+        customdata: circuit.id,
+        hovertemplate: '%{y:.2f} MHz' + of('foF2 implied by the measured MUF'),
+      }, 'fof2');
+    }
+
+    // --- the model -------------------------------------------------------
+    if (model.muf) {
+      add({
+        x: circuit.t, y: model.muf, name: tag + 'IRI MUF', legendgroup: group,
+        type: 'scatter', mode: 'lines',
+        line: {width: 1.8, dash: 'dash', color: hue('muf')},
+        hovertemplate: '%{y:.2f} MHz' + of('IRI MUF'),
+      }, 'model');
+      if (some(model.fof2)) {
+        add({
+          x: circuit.t, y: model.fof2, name: tag + 'IRI foF2',
+          legendgroup: group, type: 'scatter', mode: 'lines',
+          line: {width: 1.5, dash: 'dot', color: hue('fof2')},
+          hovertemplate: '%{y:.2f} MHz' + of('IRI foF2'),
+        }, 'fof2');
+      }
+      if (some(model.hmf2)) {
+        add({
+          x: circuit.t, y: model.hmf2, name: tag + 'IRI hmF2', yaxis: 'y3',
+          legendgroup: group, type: 'scatter', mode: 'lines',
+          line: {width: 1.2, dash: 'dashdot', color: hue('hmf2')},
+          hovertemplate: '%{y:.0f} km' + of('IRI hmF2, right axis'),
+        }, 'context');
+      }
+      if (some(circuit.residual)) {
+        residuals = true;
+        add({
+          x: circuit.t, y: mask(circuit.residual, circuit.limited, false),
+          name: tag + 'measured − IRI', legendgroup: group, yaxis: 'y2',
+          type: 'scatter', mode: 'markers', showlegend: false,
+          marker: {size: 4, color: hue('muf')}, customdata: circuit.id,
+          hovertemplate: '%{y:+.2f} MHz' + of('measured − IRI'),
+        }, 'model');
+        // The bounds get their own residual trace rather than being dropped:
+        // they are excluded from the statistics, and a reader has to be able
+        // to see how much of the day that excluded.
+        if (some(mask(circuit.residual, circuit.limited, true))) {
+          add({
+            x: circuit.t, y: mask(circuit.residual, circuit.limited, true),
+            name: tag + 'residual (bound)', legendgroup: group, yaxis: 'y2',
+            type: 'scatter', mode: 'markers', showlegend: false,
+            marker: {size: 5, color: 'rgba(0,0,0,0)',
+                     line: {width: 1.1, color: hue('muf')}},
+            customdata: circuit.id,
+            hovertemplate: '&ge; %{y:+.2f} MHz'
+              + of('lower bound: not in the statistics'),
+          }, 'model');
+        }
+      }
+    }
+
+    // --- context ---------------------------------------------------------
+    // The sweep's top edge, which is what a `limited` pick is pinned against.
+    // Without it on the axis, a flat run of hollow markers looks like a flat
+    // ionosphere rather than like a ceiling.
+    if (some(circuit.sweep_top)) {
+      add({
+        x: circuit.t, y: circuit.sweep_top, name: tag + 'sweep top',
+        legendgroup: group, type: 'scatter', mode: 'lines',
+        line: {width: 1, dash: 'dot', color: hue('top')}, opacity: 0.7,
+        hovertemplate: '%{y:.2f} MHz' + of('top of the sweep'),
+      }, 'context');
+    }
+  });
+
+  // What is drawn before anything is clicked. foF2 restates the MUF at a lower
+  // level and the context traces are for explaining a shape once you have one,
+  // so both start in the legend rather than on the axes. LOF joins them once
+  // several circuits are overlaid: five paths times two parameters is ten
+  // curves before the models, and nothing can be read off that.
+  const SHOWN = {muf: true, lof: !many, fof2: false, context: false,
+                 model: {{ 'true' if model != 'off' else 'false' }}};
+  traces.forEach((t, i) => {
+    if (!SHOWN[family[i]]) t.visible = 'legendonly';
+  });
+  document.querySelectorAll('.family').forEach(box => {
+    box.checked = !!SHOWN[box.dataset.family];
+  });
+
+  const heights = traces.some(t => t.yaxis === 'y3');
+  const top = residuals ? [0.30, 1] : [0, 1];
+  const layout = {
+    margin: {l: 62, r: heights ? 58 : 16, t: 18, b: 44},
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: css.getPropertyValue('--bg').trim(),
+    font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
+    xaxis: {type: 'date', anchor: residuals ? 'y2' : 'y',
+            gridcolor: grid, zeroline: false,
+            title: {text: 'time (UTC)'}},
+    yaxis: {domain: top, gridcolor: grid, zeroline: false, rangemode: 'tozero',
+            title: {text: 'frequency (MHz)'}},
+    hovermode: 'closest', dragmode: 'zoom',
+    legend: {orientation: 'h', y: -0.14, x: 0, font: {size: 10}},
+    shapes: [], annotations: [],
+  };
+  if (residuals) {
+    layout.yaxis2 = {
+      domain: [0, 0.20], gridcolor: grid, zeroline: true, zerolinecolor: dim,
+      zerolinewidth: 1, title: {text: 'meas − IRI (MHz)'},
+    };
+  }
+  if (heights) {
+    // Overlaid rather than a third panel: hmF2 is context for the two curves
+    // above it, and reading it against them is the point. Hidden while its
+    // trace is -- an axis labelled km, auto-ranged over nothing, reads 0 to 4
+    // beside a frequency plot and invites someone to believe it.
+    layout.yaxis3 = {domain: top, overlaying: 'y', side: 'right',
+                     showgrid: false, zeroline: false, visible: SHOWN.context,
+                     title: {text: 'hmF2 (km)'},
+                     titlefont: {color: PARAM.hmf2},
+                     tickfont: {color: PARAM.hmf2}};
+  }
+
+  Plotly.newPlot(div, traces, layout, {
+    responsive: true, displaylogo: false,
+    modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+    toImageButtonOptions: {
+      filename: {{ (circuit ~ ' ' ~ method)|replace(' ', '_')|tojson }}, scale: 2},
+  });
+
+  // The right-hand scale follows its own trace, however it was turned on --
+  // the checkbox below or a legend click, both of which restyle.
+  if (heights) {
+    div.on('plotly_restyle', () => {
+      const shown = div.data.some(t => t.yaxis === 'y3'
+        && t.visible !== 'legendonly' && t.visible !== false);
+      if (shown !== !!div.layout.yaxis3.visible) {
+        Plotly.relayout(div, {'yaxis3.visible': shown});
+      }
+    });
+  }
+
+  // A point is a sounding, and the reason to look at a series is usually to
+  // find the one that looks wrong and open it.
+  div.on('plotly_click', event => {
+    const point = event.points && event.points[0];
+    if (point && point.customdata !== undefined && point.customdata !== null) {
+      location.href = '/ui/sounding/' + point.customdata + '?method={{ method }}';
+    }
+  });
+
+  // The checkboxes move whole families at once. With four parameters over
+  // several circuits the legend runs to twenty entries, and "show me the LOF"
+  // should not be twenty clicks.
+  document.querySelectorAll('.family').forEach(box => {
+    box.addEventListener('change', () => {
+      const which = box.dataset.family;
+      const indices = [];
+      family.forEach((f, i) => { if (f === which) indices.push(i); });
+      if (indices.length) {
+        Plotly.restyle(div, {visible: box.checked ? true : 'legendonly'}, indices);
+      }
+    });
+  });
+})();
+</script>
+
+{% else %}
+<div class="panel">
   <p class="muted">No picks for <b>{{ method }}</b>{% if start or end %}
     between <b>{{ start or '(start)' }}</b> and <b>{{ end or '(end)' }}</b> &mdash;
     the method may have picked nothing in that window even though another one did.
     <a href="/ui/series?method={{ method }}">Show the whole range.</a>{% endif %}</p>
-  {% endif %}
 </div>
-
-{% if points %}
-<script>
-const pts = {{ points|tojson }};
-const svg = document.getElementById('plot');
-const W = 1000, H = 360, L = 55, R = 12, T = 14, B = 34;
-
-const t = pts.map(p => Date.parse(p.datetime.replace(' ', 'T') + 'Z'));
-const y = pts.map(p => p.muf);
-const t0 = Math.min(...t), t1 = Math.max(...t);
-const y0 = 0, y1 = Math.max(...y) * 1.1;
-const X = v => L + (W - L - R) * (t1 === t0 ? 0.5 : (v - t0) / (t1 - t0));
-const Y = v => H - B - (H - T - B) * (v - y0) / (y1 - y0);
-
-const ns = 'http://www.w3.org/2000/svg';
-function el(name, attrs, parent) {
-  const e = document.createElementNS(ns, name);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  (parent || svg).appendChild(e);
-  return e;
-}
-const css = getComputedStyle(document.body);
-const line = css.getPropertyValue('--line'), dim = css.getPropertyValue('--dim');
-const accent = css.getPropertyValue('--accent');
-
-// axes
-el('line', {x1:L, y1:H-B, x2:W-R, y2:H-B, stroke:line});
-el('line', {x1:L, y1:T,   x2:L,   y2:H-B, stroke:line});
-for (let i = 0; i <= 5; i++) {
-  const v = y0 + (y1 - y0) * i / 5;
-  el('line', {x1:L, y1:Y(v), x2:W-R, y2:Y(v), stroke:line, 'stroke-dasharray':'2 4'});
-  const lab = el('text', {x:L-8, y:Y(v)+4, fill:dim, 'font-size':11, 'text-anchor':'end'});
-  lab.textContent = v.toFixed(1);
-}
-const ylab = el('text', {x:14, y:H/2, fill:dim, 'font-size':11,
-                         transform:`rotate(-90 14 ${H/2})`, 'text-anchor':'middle'});
-ylab.textContent = 'MUF (MHz)';
-for (let i = 0; i <= 4; i++) {
-  const v = t0 + (t1 - t0) * i / 4;
-  const lab = el('text', {x:X(v), y:H-B+16, fill:dim, 'font-size':11, 'text-anchor':'middle'});
-  lab.textContent = new Date(v).toISOString().slice(5, 16).replace('T', ' ');
-}
-
-// One colour per circuit when several are overlaid, so a reader can at least
-// see that two different paths are present. Chosen to stay distinguishable on
-// the dark background rather than for any physical meaning.
-const CIRCUIT_COLOURS = ['#5aa9e6', '#e6a15a', '#8ad17a', '#c98ae0', '#e07a7a'];
-const circuits = [...new Set(pts.map(p => `${p.tx} → ${p.rx}`))];
-const colourOf = p => circuits.length > 1
-  ? CIRCUIT_COLOURS[circuits.indexOf(`${p.tx} → ${p.rx}`) % CIRCUIT_COLOURS.length]
-  : accent;
-
-// points -- hollow where the value is a lower bound
-pts.forEach((p, i) => {
-  const limited = !!p.limited;
-  const colour = colourOf(p);
-  const c = el('circle', {cx:X(t[i]), cy:Y(p.muf), r:2.6,
-                          fill: limited ? 'none' : colour,
-                          stroke: colour, 'stroke-width': limited ? 1.2 : 0,
-                          style:'cursor:pointer'});
-  const title = el('title', {}, c);
-  title.textContent = `${p.datetime}  ${p.muf.toFixed(2)} MHz`
-    + (limited ? '  (lower bound: pick at the top of the sweep)' : '')
-    + `\n${p.tx} → ${p.rx}`
-    + (p.path_km ? `  (${p.path_km.toFixed(0)} km)` : '');
-  c.addEventListener('click', () => location.href = '/ui/sounding/' + p.id);
-});
-
-const legend = document.getElementById('legend');
-if (legend && circuits.length > 1) {
-  legend.innerHTML = circuits.map((name, i) => {
-    const n = pts.filter(p => `${p.tx} → ${p.rx}` === name).length;
-    const colour = CIRCUIT_COLOURS[i % CIRCUIT_COLOURS.length];
-    return `<span style="color:${colour}">&#9679;</span> ${name} (${n})`;
-  }).join(' &nbsp; ');
-}
-</script>
 {% endif %}
 {% endblock %}

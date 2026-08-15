@@ -127,6 +127,7 @@ import numpy as np
 
 from . import calibrate
 from .calibrate import Calibration
+from .paths import dedupe_paths
 from .spectro import NOISE_COEF, Ionogram
 
 #: Measured dB offset between v2 products and ``.lfs`` products on the *echo*,
@@ -916,8 +917,7 @@ def find_h5(target) -> list[Path]:
     if missing and not found:
         raise FileNotFoundError(", ".join(str(m) for m in missing))
 
-    unique = {p.resolve(): p for p in found}
-    return sorted(unique.values(), key=lambda p: (p.name, str(p)))
+    return dedupe_paths(found)
 
 
 def describe(path: str | Path) -> dict[str, str]:

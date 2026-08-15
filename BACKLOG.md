@@ -1128,3 +1128,206 @@ Smaller things settled along the way:
   box exists, that no `confirm(` remains, that the refresh stands down while a
   stop is armed. A headless browser driving one start/stop round trip would
   cover all of it and nothing else does.
+- **The operator pastes the control token into every new tab.** The token in
+  `deploy/.env` is the server's copy --- the value incoming requests are
+  compared against --- so the browser has to present its own, and it cannot be
+  rendered into the page: `/ui` is read-scope and `READ_TOKEN` unset means
+  reads are open, which would put a token that stops a radio in front of
+  anyone who can reach the port. `sessionStorage` is the compromise, and it is
+  still one paste per tab and a secret living in JavaScript's reach.
+
+  The fix is a session cookie: `POST /control/session` with the token once,
+  the server compares it and sets `HttpOnly; SameSite=Strict; Path=/` (plus
+  `Secure` behind TLS), and the control endpoints accept either that cookie or
+  the bearer header the agent already uses. The token then never enters the
+  DOM, `sessionStorage`, or a screenshot, and the buttons carry nothing secret.
+  `SameSite=Strict` is the load-bearing half: with a cookie, a form on another
+  site could otherwise make the operator's browser queue a stop, which the
+  header-only scheme is immune to by construction. Wants a `DELETE` for sign
+  out, an expiry (an unattended console should not stay armed all week), and a
+  line on the page saying which of the two it is using.
+
+---
+
+## 21. The chooser moved to the console, and the warm census stopped re-reading (2026-08-15)
+
+Both from the same report: "*i still wait too much on the sources tab, and I
+think the list of the sounding stations/transmitters needs to move to the
+console page -- then the user can choose stations to run and start sounding at
+the same page*".
+
+### Choosing and starting were on two pages
+
+Ticking transmitters lived on `/ui/sources` and the start button lived on
+`/ui`, so composing a schedule and running it meant two pages and a page load
+between them -- and the page holding the control was the slow one, behind an
+archive census the decision does not need. The schedule chooser is now a
+**sounding plan** panel on the console, directly above start/stop/restart. Its
+list is `db.transmitters()`, the *identify* step's output, so the console
+carries the chooser without inheriting the archive read; identifying stays on
+`/ui/sources`, where reading the archive belongs. The composer was deleted from
+`sources.html` rather than duplicated -- two pages that could each queue a
+`set_config` was one too many.
+
+Three things the move had to preserve or fix:
+
+- **No recorded mode is not `search`.** The select's fallback was the first
+  option, which put a mode this server never observed one click from a live
+  receiver -- and search mode records whatever sweeps past, so the mistake only
+  surfaces later, as products that do not match the schedule. The unrecorded
+  case now selects a valueless `— not recorded —` sentinel, and both the
+  preview and `applyPlan` refuse it.
+- **A queued schedule is not a running one.** Ticks come from
+  `acquisition.scheduled`, which reads the slots the station *acknowledged*, so
+  a pending command does not appear as configuration.
+- **The 15 s refresh stands down while a plan is half-composed**, exactly as it
+  does for an armed stop, with a 120 s expiry. Otherwise a refresh mid-choice
+  puts every tick back the way the server has it, silently.
+
+Verified end to end on the local rig: apply queued `198cdc8a — 2 rank(s) for
+NIC, SGO`, the row carried `{"mode": "scheduled", "sounder_timings": ...}`, and
+after an agent-style ack the reloaded page showed both boxes ticked with mode
+`scheduled`.
+
+### The warm census was not warm
+
+Section 18 made `/ui/sources` cache every file it opens; the warm load should
+then open nothing, and two things kept spending the saving.
+
+- **`Path.resolve()` in the finders' dedupe is a `realpath` per file.** Used
+  only as a "have I seen this path" key, it cost 38 ms for 1368 files locally
+  against 0.4 ms for `abspath` -- for a directory listing that cost 3 ms -- and
+  on the network archive it is a round trip each, the exact cost section 18 set
+  out to remove. Now `muf/paths.py:dedupe_paths`, shared by `find_lfs`,
+  `find_h5`, `io_detect._find` and `find_soundings`. What is given up: two
+  different paths reaching one file through a symlink no longer collapse, which
+  no caller relies on. (Its own module because `io_chirp` -> `calibrate` ->
+  `io_lfs` already form an import chain -- putting it in `io_chirp` gave a
+  circular import.)
+- **One unreadable file disabled the short-circuit entirely.** The test was
+  "did the last census skip anything at all", and a live archive always has
+  something: the detector is always writing. The one truncated file out of 1846
+  noted in section 18 turned every later page load into a full re-read and
+  re-group, for the life of the process -- the cache was off precisely where it
+  was needed. Only the paths that actually failed are re-stat-ed now.
+
+Warm census 43 ms → 9.1 ms, warm page 45 ms → 10 ms on the local checkout. The
+work removed is per-file system calls, which is where the server's minutes go.
+
+### Still open
+
+- **No test drives this JavaScript either**, same gap as section 20: the plan
+  panel is covered by string assertions on the rendered page (the sentinel
+  option, the pre-ticked codes, that `applyPlan` refuses an empty mode) and by
+  hand in the rig. The preview arithmetic and the refresh hold are not.
+- **The `-np` the plan states is advice, not an action.** The page says how
+  many rank groups a schedule needs; making the launcher match it is still a
+  human editing a command line on the station, and the agent's refusal is the
+  only thing standing between a mismatch and a silently short schedule.
+
+## 22. The series page: four parameters and a reference (2026-08-15)
+
+From "*upgrade the series tab — analyse not only MUF but also LUF, foF2, IRI
+results, interactive, plotly*". `/ui/series` drew one number as a hand-rolled
+SVG scatter: MUF, one circuit, hover text and a click-through, nothing else.
+It now draws MUF, LOF, an equivalent foF2 and IRI over the same axis, with a
+residual panel under it and a summary table under that, on the plotly already
+vendored for the sounding page. New module `services/api/series.py` builds the
+frame; `web_routes.series` only queries and hands it over.
+
+**LOF, not LUF, and the page says why.** P.533-13 §9's lowest *usable*
+frequency carries a required S/N and a monthly median — a property of a service
+and of a month, and one sounding has neither. `muf/lof.py` had settled this
+argument long before; the page now inherits it rather than re-opening it in the
+UI vocabulary.
+
+**A sounding with a LOF and no MUF is a point now.** The query was
+`WHERE e.muf IS NOT NULL`, so a trace that faded out before it reached the
+ceiling was not on the chart at all — which reads as "nothing was recorded"
+rather than "the top was never seen". Widened to `muf IS NOT NULL OR lof IS NOT
+NULL`, and the same condition drives the circuit chooser and the day pills so
+that a choice on offer always draws something. On this archive that is
+Juliusruh → DOB for 2026-08-10: 120 soundings, one MUF between them, and the
+page used to show none of it. LOF picks outnumber MUF picks roughly two to one
+across every method here (895/601 `algo`, 1186/709 `contour`, 1198/710
+`kmeans`), so this is most of what was invisible.
+
+**Bounds are drawn at both ends and held out of the statistics.** Hollow MUF =
+pinned to the top of the sweep, hollow LOF = pinned to the band floor. Both are
+plotted — dropping either bends the curve towards the middle of the band, which
+is section 3's argument run in both directions — and both are excluded from the
+bias and RMS, with the excluded count printed next to the used one. Scoring a
+ceiling-limited pick as a residual reports the *recorder's* ceiling as a
+modelling error.
+
+**foF2 is inverted over one hop, which `saoxml` does not do.** The measured MUF
+goes back through the secant law at `EQUIVALENT_HMF2_KM` = 300 km over
+`path_km / hop_count(path_km)` — the same convention `iri.predict` converts by,
+so the measured and modelled foF2 curves sit on one geometry. See *Still open*.
+
+**The model is called once per day, not once per window.** `iri.predict` reads
+its solar driver off `index[0]` alone; the day pills make multi-day windows
+normal, and one F10.7 across February and August would be wrong with nothing on
+the page to show it. Per-day calls cost nothing extra — PyIRI already evaluates
+a whole day per call — and the reported source counts the distinct drivers
+rather than printing thirty near-identical sentences. Past `MAX_MODEL_DAYS`
+(31) the page declines in words. A day that fails does not take the others with
+it. Memoised on (endpoints, instants) at `CACHE_SIZE` = 8.
+
+**No NaN crosses into the template.** Every array goes through `|tojson`, and
+Python writes a bare `NaN` that `JSON.parse` refuses — one absent pick would
+blank the entire plot with the reason visible only in a console nobody has
+open. `_finite()` maps everything unusable to `None`, and a test asserts
+`json.dumps(frame, allow_nan=False)`.
+
+Smaller things settled along the way:
+
+- **The right-hand hmF2 axis is hidden while its trace is.** Auto-ranged over
+  nothing it read 0–4 beside a frequency plot, labelled km, and invited someone
+  to believe it. It now follows its trace through `plotly_restyle`, so a legend
+  click works as well as the checkbox.
+- **The family checkboxes are unchecked in the markup and set from the script.**
+  Two places deciding the first view is two places to disagree, and the boxes
+  would then lie about what is on the axes. With several circuits overlaid LOF
+  starts off: five paths times two parameters is ten curves before the models.
+- **`SERIES_MODEL=0`, and `model=off` in the query string.** Same knob shape as
+  `SAO_MODEL` and the same reason. The unit suite turns it off in the `client`
+  fixture, because seeding a sounding with real coordinates is the natural
+  thing to do and would otherwise put a solar-index download inside a test.
+- **A circuit with no coordinates says so.** `unkown -> DOB` is 647 soundings
+  with no transmitter position; the model needs both ends for a control point,
+  and an empty panel would read as "IRI agrees with nothing" rather than as
+  "IRI was never asked". Its stored `path_km` of 20015 km — half a
+  circumference, an artefact — is not printed either, because the geometry is
+  read as a pair or not at all.
+
+Verified on the local rig against `data/ionograms.sqlite3` (2298 soundings,
+8 circuits, 9 days). cyprus1 → yoshkar-ola for 2026-02-04, `kmeans`:
+**r = +0.985** over 101 pairs, median bias **+1.63 MHz**, RMS 2.41 MHz, 13
+lower bounds held out — and the residual panel shows what the number hides,
+IRI low through the morning rise and ~5 MHz high after it. That is a diurnal
+disagreement, not a scale one, and it is the first thing this interface has
+been able to say.
+
+### Still open
+
+- **`saoxml._characteristics` inverts the MUF over the whole path, not over one
+  hop.** Line 465 passes `path_km` to `muf_to_fof2` where `iri.predict` passes
+  `path_km / hops`. Every circuit in this archive is single-hop — NIC → DOB is
+  3436 km against `MAX_SINGLE_HOP_KM` = 4000 — so the two agree today and will
+  diverge on the first path over 4000 km, with the SAO download and the series
+  page then reporting different foF2 for one sounding. The series page uses the
+  per-hop convention; `saoxml` should follow, and its `ModelOptions` string
+  (`D={path_km}`) should say which distance it meant.
+- **Still no test drives this JavaScript**, the same gap as sections 20 and 21.
+  The frame is asserted as parsed JSON out of the rendered page — which is
+  better than a string match and covers the data — but the trace assembly, the
+  family toggles and the axis sync were checked by hand in the browser.
+- **The residual panel's y-range is driven by the worst circuit** when several
+  are overlaid, so a path IRI models badly compresses the ones it models well.
+  A per-circuit scale would fix it and would also stop the panel being readable
+  as one comparison, which is the harder call.
+- **`/series/muf` still returns MUF alone.** The page's extra columns are not
+  reachable as JSON, so anything scripted against this archive re-derives the
+  foF2 and the residual itself, from a different set of assumptions than the
+  page states. A `/series/parameters` returning the frame would settle it.

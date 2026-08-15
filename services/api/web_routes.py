@@ -23,6 +23,7 @@ from muf.reference import indices
 from . import acquisition, db
 from . import net as net_mod
 from . import sao as sao_mod
+from . import series as series_mod
 from . import sources as sources_mod
 from .auth import require_read
 from .read_routes import _age_seconds, _command, _tri
@@ -79,6 +80,12 @@ def console(request: Request):
             # states cannot answer: every process can be active while the
             # schedule points at a transmitter that stopped months ago.
             "acquisition": acquisition.current(conn, station),
+            # What it *could* sound. Read from the database, not the archive:
+            # this is the identify workflow's output, so the console carries
+            # the chooser without inheriting the census that made it -- see
+            # `sources_page`, where the same list used to live behind a scan
+            # of every detection file under the archive root.
+            "verified": db.transmitters(conn, station),
         })
 
     counts = db.one(conn, "SELECT COUNT(*) AS n FROM sounding") or {"n": 0}
@@ -89,6 +96,9 @@ def console(request: Request):
     return templates.TemplateResponse(request, "console.html", {
         "stations": stations, "n_soundings": counts["n"], "methods": methods,
         "stale_after": STALE_AFTER_S,
+        # `control.MODES` holds four keys for two modes; the pair below is the
+        # canonical spelling, and offering all four would suggest four modes.
+        "modes": ("search", "scheduled"),
         # Read, never probed: `current` returns the last background reading
         # without blocking, so a page load costs nothing even with every index
         # host unreachable.
@@ -97,12 +107,24 @@ def console(request: Request):
     })
 
 
+#: What counts as a point on the series page.
+#:
+#: MUF *or* LOF, not MUF alone. The page draws both ends of the band now, and
+#: a sounding whose trace faded out before it reached the ceiling has a real
+#: LOF and no MUF -- under the old condition it was not on the chart at all,
+#: which reads as "nothing was recorded" rather than "the top was never seen".
+#: Used for the chooser and the day list too, so a circuit or a day is offered
+#: exactly when selecting it draws something.
+HAS_A_PICK = "(e.muf IS NOT NULL OR e.lof IS NOT NULL)"
+
+
 @router.get("/ui/series")
 def series(request: Request, method: str = "algo",
            circuit: str | None = None,
+           model: str = "iri",
            start: str | None = Query(None, alias="from"),
            end: str | None = Query(None, alias="to")):
-    """MUF against time, for one circuit unless told otherwise.
+    """MUF, LOF, equivalent foF2 and a model, against time, for one circuit.
 
     ``from``/``to`` are spelled and bounded exactly as ``/series/muf`` spells
     them -- inclusive both ends, aliased off ``start``/``end`` because ``from``
@@ -111,16 +133,22 @@ def series(request: Request, method: str = "algo",
     Both go through :func:`db.time_bound`, which is what makes a bare date and
     an ISO timestamp mean what they look like.
 
-    **A circuit is the unit, not the receiver.** MUF is a property of a path:
-    its length sets the obliquity, its midpoint sets the local time at the
-    reflection, and the recorder sets the band ceiling. Two circuits drawn on
-    one axis produce a curve that measures neither, so ``circuit`` defaults to
-    whichever has the most picks rather than to all of them. ``circuit=all``
-    overlays them, coloured and named, for when comparing is the point.
+    **A circuit is the unit, not the receiver.** Every parameter here belongs
+    to a path: its length sets the obliquity that relates foF2 to MUF, its
+    control point is where the model is evaluated, and the recorder sets the
+    band ceiling that censors a pick. Two circuits drawn on one axis produce
+    curves that measure neither, so ``circuit`` defaults to whichever has the
+    most picks rather than to all of them. ``circuit=all`` overlays them,
+    coloured and named -- each with its own model, because they do not share a
+    control point.
 
     Without any window the axis spans everything ingested, and an archive of a
     few days months apart draws them as vertical stripes with nothing legible
     between; ``days`` gives the template one link per day that has picks.
+
+    ``model=off`` drops the reference. It is the only part of this page that
+    can reach the network -- IRI needs a solar driver -- so it has to be
+    refusable from the query string and not only from the environment.
     """
     conn = request.app.state.db
     methods = [r["method"] for r in
@@ -133,7 +161,7 @@ def series(request: Request, method: str = "algo",
     circuits = [f"{r['tx']} -> {r['rx']}" for r in db.rows(
         conn, "SELECT s.tx AS tx, s.rx AS rx, COUNT(*) AS n"
               " FROM extraction e JOIN sounding s ON s.id = e.sounding_id"
-              " WHERE e.method = ? AND e.muf IS NOT NULL"
+              f" WHERE e.method = ? AND {HAS_A_PICK}"
               " GROUP BY s.tx, s.rx ORDER BY n DESC", (method,))]
     if circuit not in ("all", *circuits):
         circuit = circuits[0] if circuits else "all"
@@ -141,12 +169,13 @@ def series(request: Request, method: str = "algo",
     days = [r["day"] for r in db.rows(
         conn, "SELECT DISTINCT substr(s.datetime, 1, 10) AS day"
               " FROM extraction e JOIN sounding s ON s.id = e.sounding_id"
-              " WHERE e.muf IS NOT NULL ORDER BY day")]
+              f" WHERE {HAS_A_PICK} ORDER BY day")]
 
     sql = ["SELECT s.id, s.datetime, s.tx, s.rx, s.path_km,"
-           " e.muf, e.lof, e.limited, e.loflim",
+           " s.tx_lat, s.tx_lon, s.rx_lat, s.rx_lon, s.freq_stop,"
+           " e.muf, e.lof, e.limited, e.loflim, e.muf_smooth, e.snr",
            "FROM extraction e JOIN sounding s ON s.id = e.sounding_id",
-           "WHERE e.method = ? AND e.muf IS NOT NULL"]
+           f"WHERE e.method = ? AND {HAS_A_PICK}"]
     params: list = [method]
     if circuit != "all":
         tx, _, rx = circuit.partition(" -> ")
@@ -165,6 +194,8 @@ def series(request: Request, method: str = "algo",
         "method": method, "methods": methods, "points": points,
         "days": days, "start": start or "", "end": end or "",
         "circuit": circuit, "circuits": circuits,
+        "model": model,
+        "frame": series_mod.frame(points, model=model),
     })
 
 

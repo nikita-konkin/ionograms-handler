@@ -245,6 +245,62 @@
     could not measure it. Only a definite failure makes a station unhealthy.
   </p>
 
+  {# What this receiver *could* sound, beside what it is sounding. The list
+     comes from the database -- the identify workflow's output -- so choosing
+     and starting are one page, while the census that produced the candidates
+     stays on /ui/sources, where reading the archive belongs. #}
+  <div style="border:1px solid var(--line); border-radius:6px; padding:.7rem;
+              margin-top:.8rem">
+    <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
+      <b>sounding plan</b>
+      <label class="muted" style="font-size:.85rem">mode
+        <select data-station="{{ s.name }}" id="mode-{{ s.name }}"
+                onchange="planChanged('{{ s.name }}')">
+          {# No mode recorded is not the same as search. Defaulting the box to
+             the first entry would put a mode this server never observed one
+             click from being applied, so the unrecorded case selects nothing
+             and `applyPlan` refuses it. #}
+          {% if not a.mode %}<option value="" selected>&mdash; not recorded &mdash;</option>{% endif %}
+          {% for m in modes %}
+          <option{% if m == a.mode %} selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select></label>
+      <button onclick="applyPlan('{{ s.name }}')">apply</button>
+      <span class="note">queued now; the station applies it on its next pull
+        and it takes effect when acquisition restarts</span>
+    </div>
+
+    {% if s.verified %}
+    <div class="scroll" style="margin-top:.6rem"><table>
+      <tr><th></th><th>code</th><th>name</th><th>rate</th><th>slots</th>
+          <th>identified</th><th>note</th></tr>
+      {% for t in s.verified %}
+      <tr>
+        <td><input type="checkbox" class="use" data-station="{{ s.name }}"
+                   value="{{ t.code }}"
+                   {% if t.code in a.scheduled %}checked{% endif %}
+                   onchange="planChanged('{{ s.name }}')"></td>
+        <td>{{ t.code }}</td>
+        <td class="muted">{{ t.name or '' }}</td>
+        <td class="muted">{% if t.timings %}
+          {{ '%.1f'|format(t.timings[0]['chirp-rate'] / 1000) }} kHz/s{% endif %}</td>
+        <td class="muted">{{ t.timings|map(attribute='chirpt')|join('s, ') }}s
+          {%- if t.timings %} of {{ '%g'|format(t.timings[0]['rep']) }}s{% endif %}</td>
+        <td class="muted">{{ t.verified_at }}</td>
+        <td class="wrap muted">{{ t.note or '' }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    <p class="note" id="plan-{{ s.name }}"></p>
+    {% else %}
+    <p class="note">Nothing identified at this receiver yet, so there is no
+    schedule to compose. A census row cannot be scheduled &mdash; it has no name
+    and no id, and <code>calc_ionograms.py</code> reads both without a default.
+    Name one on <a href="/ui/sources">sources</a> and it appears here.</p>
+    {% endif %}
+    <div id="planSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
+  </div>
+
   <div style="margin-top:.8rem">
     <button onclick="send('{{ s.name }}','start')">start</button>
     <button onclick="send('{{ s.name }}','stop')">stop</button>
@@ -290,19 +346,27 @@
   // below wipes the field.
   tokField.addEventListener('change', () => sessionStorage.setItem('tok', tokField.value));
 
-  function say(station, text, bad) {
-    const box = document.getElementById('say-' + station);
+  function write(id, text, bad) {
+    const box = document.getElementById(id);
     if (!box) return;
     box.textContent = text;
     box.style.color = bad ? 'var(--fail)' : '';
   }
 
+  const say = (station, text, bad) => write('say-' + station, text, bad);
+  const planSay = (station, text, bad) => write('planSay-' + station, text, bad);
+
   // A queued command reloads the page to show its row, which would wipe the
   // message that says what was queued -- and a message that vanishes is the
   // same "nothing happened" the operator complained about. Carry it across.
   for (const key of Object.keys(sessionStorage)) {
-    if (!key.startsWith('said-')) continue;
-    say(key.slice(5), sessionStorage.getItem(key));
+    if (key.startsWith('said-')) {
+      say(key.slice(5), sessionStorage.getItem(key));
+    } else if (key.startsWith('saidPlan-')) {
+      planSay(key.slice(9), sessionStorage.getItem(key));
+    } else {
+      continue;
+    }
     sessionStorage.removeItem(key);
   }
 
@@ -319,6 +383,37 @@
     armed = null;
     clearTimeout(armedTimer);
     armedTimer = null;
+  }
+
+  // One place where a control request is made and its failures are worded,
+  // because the two callers below must not disagree about what a 401 means.
+  // Returns {ok, body} or {ok: false, detail}.
+  async function control(url, body) {
+    const token = tokField.value.trim();
+    // Flagged rather than worded as a refusal: nothing was sent, so "refused"
+    // would blame the server for a field the operator has not filled in yet.
+    if (!token) return {ok: false, needsToken: true,
+                        detail: 'Paste the control token below first.'};
+    let r, out;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + token},
+        body: JSON.stringify(body)
+      });
+      out = await r.json().catch(() => ({}));
+    } catch (e) {
+      return {ok: false, detail: 'could not reach the server: ' + e.message};
+    }
+    // The server answers 401 with the same "control token required" whether
+    // none was sent or the wrong one was -- it will not confirm which half of
+    // a guess was right. Here we know a token *was* sent, so say the useful
+    // half: it was rejected, and re-pasting it is the thing to try.
+    if (r.status === 401)
+      return {ok: false, detail: 'this server did not accept that control token.'};
+    if (!r.ok) return {ok: false, detail: out.detail || r.status};
+    return {ok: true, body: out};
   }
 
   async function send(station, name) {
@@ -344,43 +439,132 @@
     disarm();
 
     say(station, name + ' …');
-    let r, body;
-    try {
-      r = await fetch('/stations/' + encodeURIComponent(station) + '/commands', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json',
-                  'Authorization': 'Bearer ' + token},
-        body: JSON.stringify({name: name, issued_by: 'web'})
-      });
-      body = await r.json().catch(() => ({}));
-    } catch (e) {
-      say(station, 'could not reach the server: ' + e.message, true);
-      return;
-    }
-    // The server answers 401 with the same "control token required" whether
-    // none was sent or the wrong one was -- it will not confirm which half of
-    // a guess was right. Here we know a token *was* sent, so say the useful
-    // half: it was rejected, and re-pasting it is the thing to try.
-    if (r.status === 401) {
-      say(station, 'refused: this server did not accept that control token.', true);
-      return;
-    }
-    if (!r.ok) { say(station, 'refused: ' + (body.detail || r.status), true); return; }
+    const r = await control('/stations/' + encodeURIComponent(station)
+                            + '/commands', {name: name, issued_by: 'web'});
+    if (!r.ok) { say(station, 'refused: ' + r.detail, true); return; }
 
     // Queued is not done. The station pulls on its own cycle, so the row below
     // stays `pending` until an agent collects it -- if none is running, it
     // stays pending for good, and saying so here is the difference between a
     // slow command and a command nobody will ever execute.
-    const queued = name + ' queued as ' + (body.id || '').slice(0, 8)
-        + ' — pending until the station\'s agent collects it.';
-    say(station, queued);
-    sessionStorage.setItem('said-' + station, queued);
+    queued(station, say, name + ' queued as ' + (r.body.id || '').slice(0, 8)
+           + ' — pending until the station\'s agent collects it.');
+  }
+
+  // --- the sounding plan ---------------------------------------------------
+
+  const VERIFIED = { {% for s in stations %}
+    {{ s.name|tojson }}: {{ s.verified|tojson }}{{ "," if not loop.last }}
+  {% endfor %} };
+
+  const ticked = station => [...document.querySelectorAll('input.use')]
+      .filter(box => box.dataset.station === station && box.checked)
+      .map(box => box.value);
+
+  const modeOf = station =>
+      (document.getElementById('mode-' + station) || {}).value;
+
+  // Editing a plan is slower than reading a page, and the 15 s refresh would
+  // put every tick back the way the server has it -- silently, mid-choice.
+  // Any change to the plan holds the refresh, exactly as an armed stop does.
+  let planning = null;
+  let planningTimer = null;
+
+  function planChanged(station) {
+    planning = station;
+    clearTimeout(planningTimer);
+    planningTimer = setTimeout(() => {
+      planning = null;
+      planSay(station, 'nothing was applied, so the page is live again.');
+      location.reload();
+    }, 120000);
+    preview(station);
+  }
+
+  function preview(station) {
+    const mode = modeOf(station);
+    if (!mode) {
+      write('plan-' + station, 'This server has no record of the mode this '
+        + 'station is in, so nothing is pre-selected. Choose one to see what '
+        + 'would be sent.');
+      return;
+    }
+    if (mode !== 'scheduled') {
+      write('plan-' + station, 'Search mode needs no schedule: it records '
+        + 'whatever sweeps past and infers the timing afterwards. The ticks '
+        + 'are ignored until the mode is scheduled.');
+      return;
+    }
+    const groups = ticked(station)
+      .map(code => (VERIFIED[station] || []).find(t => t.code === code))
+      .filter(Boolean);
+    // One MPI rank group per transmitter, which is upstream's own
+    // arrangement: the launcher must start calc_ionograms.py with that many
+    // ranks, and the agent refuses the command when it does not match.
+    write('plan-' + station, groups.length
+      ? groups.length + ' transmitter(s): ' + groups.map(t => t.code).join(', ')
+        + ' — ' + groups.length + ' rank group(s), so calc_ionograms.py must '
+        + 'run with -np ' + groups.length + '.'
+      : 'Tick at least one transmitter. Scheduled mode with an empty schedule '
+        + 'records nothing while every process reports healthy.', !groups.length);
+  }
+
+  async function applyPlan(station) {
+    const mode = modeOf(station);
+    const codes = ticked(station);
+    if (!mode) {
+      planSay(station, 'Choose a mode first. This server has no record of the '
+        + 'one the station is in, and applying a default would configure it '
+        + 'from an assumption rather than from what you know.', true);
+      return;
+    }
+    if (mode === 'scheduled' && !codes.length) {
+      planSay(station, 'Tick at least one transmitter first — the server '
+        + 'refuses scheduled mode without a schedule, and it is right to.', true);
+      return;
+    }
+    planSay(station, 'sending …');
+
+    // Two endpoints on purpose. A schedule is named, not typed: the server
+    // looks the numbers up from the verified record rather than trusting a
+    // copy of them that travelled through a form.
+    const r = mode === 'scheduled'
+      ? await control('/stations/' + encodeURIComponent(station) + '/schedule',
+                      {codes: codes, issued_by: 'web'})
+      : await control('/stations/' + encodeURIComponent(station) + '/commands',
+                      {name: 'set_config', issued_by: 'web',
+                       params: {changes: {mode: mode}}});
+    if (!r.ok) {
+      planSay(station, (r.needsToken ? '' : 'refused: ') + r.detail, true);
+      return;
+    }
+
+    planning = null;
+    clearTimeout(planningTimer);
+    queued(station, planSay, mode === 'scheduled'
+      ? 'schedule queued as ' + (r.body.id || '').slice(0, 8) + ' — '
+        + r.body.ranks + ' rank(s) for ' + (r.body.transmitters || []).join(', ')
+        + '. It reaches the station on its next pull and takes effect when '
+        + 'acquisition restarts, so press restart after it is collected.'
+      : 'mode ' + mode + ' queued as ' + (r.body.id || '').slice(0, 8)
+        + ' — applied on the station\'s next pull, effective on restart.');
+  }
+
+  // Both fetches end the same way: show what was queued, keep it across the
+  // reload that brings in the new row, then reload.
+  function queued(station, where, message) {
+    where(station, message);
+    sessionStorage.setItem(
+      (where === planSay ? 'saidPlan-' : 'said-') + station, message);
     setTimeout(() => location.reload(), 900);
   }
 
+  for (const station of Object.keys(VERIFIED)) preview(station);
+
   // Poll rather than push: this page has one reader and a 15 s refresh is
   // cheaper in every sense than a websocket that must be reconnected. It
-  // stands down while a stop is armed, so the refresh cannot eat the question.
-  setInterval(() => { if (!armed) location.reload(); }, 15000);
+  // stands down while a stop is armed or a plan is being edited, so the
+  // refresh can eat neither the question nor a half-made choice.
+  setInterval(() => { if (!armed && !planning) location.reload(); }, 15000);
 </script>
 {% endblock %}

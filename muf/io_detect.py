@@ -52,6 +52,7 @@ from typing import Iterable, Sequence
 import numpy as np
 
 from .io_chirp import C_M_S, MAX_VIRTUAL_RANGE_KM, _scalar
+from .paths import dedupe_paths
 
 #: Default schedule cycle. Chirp transmitters repeat on a human-chosen round
 #: number; 300 s covers the ROTHR family, cyprus1 and the Twente chirp list's
@@ -293,8 +294,7 @@ def _find(target, pattern: str) -> list[Path]:
 
     if missing and not found:
         raise FileNotFoundError(", ".join(str(m) for m in missing))
-    unique = {p.resolve(): p for p in found}
-    return sorted(unique.values(), key=lambda p: (p.name, str(p)))
+    return dedupe_paths(found)
 
 
 def find_detections(target) -> list[Path]:
