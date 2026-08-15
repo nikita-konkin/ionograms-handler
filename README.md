@@ -658,7 +658,7 @@ is for. The record then carries both, each labelled with where it came from:
 ```xml
 <Custom  Name="MUF"  Units="MHz" Val="12.200" QL=""/>
 <Modeled Name="foF2" Units="MHz" Val="3.879" ModelName="secant-law"
-         ModelOptions="hmF2=300km,D=2588km"/>
+         ModelOptions="hmF2=300km,hop=2588km"/>
 <Modeled Name="MUF"  Units="MHz" Val="9.904" ModelName="IRI"
          ModelOptions="control point 45.99N 39.09E, D=2588km"/>
 <Modeled Name="foF2" Units="MHz" Val="3.355" ModelName="IRI" …/>
@@ -672,6 +672,14 @@ what tells them apart, so `Characteristic.model` carries it and
 `record.characteristic("foF2", "IRI")` selects one. **`record.muf` always means
 the measured MUF** — a modelled value is never reachable as though the
 instrument had produced it, and there is a test that says so.
+
+The secant-law conversion is taken over **one hop**: `hop=` is the ground
+distance of a single reflection, which is what sets the obliquity, and it
+equals the whole path only while that path stays under `MAX_SINGLE_HOP_KM`.
+Past it `ModelOptions` names both distances and the hop count —
+`hmF2=300km,hop=2919km,D=5837km,2 hops` — because a bare `D=` cannot be read as
+one or the other. Same convention as `iri.predict` and `/ui/series`, so the
+download and the page report one foF2 for a sounding rather than two.
 
 `hmF2` is included because the secant-law conversion assumes 300 km; with a
 modelled hmF2 on the next line a reader can see how far off that is. On the
@@ -757,7 +765,7 @@ What comes out, trimmed:
               Description="Operational MUF … D=2588 km. Not URSI MUF(3000)…"/>
       <Custom Name="MUFGroupRange" Units="km" Val="2739.0"/>
       <Modeled Name="foF2" Units="MHz" Val="3.879" ModelName="secant-law"
-               ModelOptions="hmF2=300km,D=2588km"/>
+               ModelOptions="hmF2=300km,hop=2588km"/>
       <Custom Name="MUFNoseFit" Units="MHz" Val="13.065" Bound="0.181"
               BoundaryType="1sigma"/>
       <Custom Name="LOF" Units="MHz" Val="8.022" QL="E" Description="…"/>

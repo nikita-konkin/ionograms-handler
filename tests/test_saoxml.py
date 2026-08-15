@@ -144,8 +144,63 @@ def test_equivalent_fof2_is_modelled_and_states_its_assumption(sounding):
 
     assert [m.get("Name") for m in modelled] == ["foF2"]
     options = modelled[0].get("ModelOptions")
-    assert "hmF2" in options and "D=" in options
+    assert "hmF2" in options and "hop=" in options
     assert modelled[0].get("ModelName") == "secant-law"
+
+
+def _modelled_fof2(record) -> tuple[float, str]:
+    """``(Val, ModelOptions)`` of the secant-law foF2 in one record."""
+    for element in record.find("CharacteristicList").findall("Modeled"):
+        if element.get("Name") == "foF2" and element.get("ModelName") == "secant-law":
+            return float(element.get("Val")), element.get("ModelOptions")
+    raise AssertionError("no secant-law foF2 in this record")
+
+
+def test_equivalent_fof2_is_inverted_over_one_hop(make_lfs):
+    """The convention `iri.predict` and the series page already use.
+
+    On a path over `MAX_SINGLE_HOP_KM` the obliquity belongs to a single hop,
+    so inverting over the whole distance understates foF2 -- and it would make
+    the SAO.XML download and `/ui/series` report different foF2 for the same
+    sounding, which is worse than either being wrong on its own.
+    """
+    # Down the 34E meridian to the equator: 5837 km against a 4000 km hop
+    # limit, so this path takes two hops and the two conventions separate.
+    ion = _sounding(make_lfs, tx_latitude=5.0, **COMPLETE_SWEEP)
+    _, _, path_km = geometry.path_of(ion.header)
+    assert geometry.hop_count(path_km) == 2
+
+    record = record_of(ion)
+    value, options = _modelled_fof2(record)
+    muf = float(record.find("CharacteristicList")
+                .find("Custom[@Name='MUF']").get("Val"))
+
+    per_hop = geometry.muf_to_fof2(muf, path_km / 2, saoxml.EQUIVALENT_HMF2_KM)
+    whole = geometry.muf_to_fof2(muf, path_km, saoxml.EQUIVALENT_HMF2_KM)
+    assert value == pytest.approx(per_hop, abs=1e-3)
+    assert value != pytest.approx(whole, abs=1e-3), "the two must differ here"
+    # The number is unreadable without the distance it was taken over.
+    assert options == (f"hmF2={saoxml.EQUIVALENT_HMF2_KM:.0f}km,"
+                       f"hop={path_km / 2:.0f}km,D={path_km:.0f}km,2 hops")
+
+
+def test_a_single_hop_path_inverts_over_its_whole_length(sounding):
+    """Where hop and path are the same thing, nothing changed."""
+    _, _, path_km = geometry.path_of(sounding.header)
+    assert geometry.hop_count(path_km) == 1
+
+    record = record_of(sounding)
+    value, options = _modelled_fof2(record)
+    muf = float(record.find("CharacteristicList")
+                .find("Custom[@Name='MUF']").get("Val"))
+
+    assert value == pytest.approx(
+        geometry.muf_to_fof2(muf, path_km, saoxml.EQUIVALENT_HMF2_KM),
+        abs=1e-3)
+    # No hop count on a one-hop path, and no second distance to confuse with
+    # the first.
+    assert options == (f"hmF2={saoxml.EQUIVALENT_HMF2_KM:.0f}km,"
+                       f"hop={path_km:.0f}km")
 
 
 def test_traces_carry_no_polarization(sounding):

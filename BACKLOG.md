@@ -1260,10 +1260,16 @@ bias and RMS, with the excluded count printed next to the used one. Scoring a
 ceiling-limited pick as a residual reports the *recorder's* ceiling as a
 modelling error.
 
-**foF2 is inverted over one hop, which `saoxml` does not do.** The measured MUF
+**foF2 is inverted over one hop, and `saoxml` now follows.** The measured MUF
 goes back through the secant law at `EQUIVALENT_HMF2_KM` = 300 km over
 `path_km / hop_count(path_km)` — the same convention `iri.predict` converts by,
-so the measured and modelled foF2 curves sit on one geometry. See *Still open*.
+so the measured and modelled foF2 curves sit on one geometry. The SAO export
+inverted over the whole path until this was noticed here; it would have agreed
+with the page on every circuit in this archive and disagreed on the first one
+over 4000 km, which is the worst way for two numbers to differ. Its
+`ModelOptions` now says which distance it meant —
+`hmF2=300km,hop=2919km,D=5837km,2 hops`, with the path and the count present
+only when they add something — because `D=` alone cannot be read as a hop.
 
 **The model is called once per day, not once per window.** `iri.predict` reads
 its solar driver off `index[0]` alone; the day pills make multi-day windows
@@ -1311,14 +1317,6 @@ been able to say.
 
 ### Still open
 
-- **`saoxml._characteristics` inverts the MUF over the whole path, not over one
-  hop.** Line 465 passes `path_km` to `muf_to_fof2` where `iri.predict` passes
-  `path_km / hops`. Every circuit in this archive is single-hop — NIC → DOB is
-  3436 km against `MAX_SINGLE_HOP_KM` = 4000 — so the two agree today and will
-  diverge on the first path over 4000 km, with the SAO download and the series
-  page then reporting different foF2 for one sounding. The series page uses the
-  per-hop convention; `saoxml` should follow, and its `ModelOptions` string
-  (`D={path_km}`) should say which distance it meant.
 - **Still no test drives this JavaScript**, the same gap as sections 20 and 21.
   The frame is asserted as parsed JSON out of the rendered page — which is
   better than a string match and covers the data — but the trace assembly, the

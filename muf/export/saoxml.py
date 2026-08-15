@@ -462,12 +462,25 @@ def _characteristics(ion, result, nose, letter: str,
                 Description="Peak power at the picked bin over the noise floor",
             ))
 
-        equivalent = geometry.muf_to_fof2(pick.muf_mhz, path_km,
+        # Over one hop, not over the whole path: the obliquity a ray meets is
+        # set by the ground distance of its own hop, and `m_factor` turns over
+        # past 3840 km, so inverting a two-hop path whole returns the foF2 of a
+        # ray that cannot exist. It is also the convention `iri.predict` and
+        # the series page convert by, so a reader comparing the download
+        # against the page is comparing one geometry with itself.
+        hops = geometry.hop_count(path_km)
+        hop_km = path_km / hops
+        equivalent = geometry.muf_to_fof2(pick.muf_mhz, hop_km,
                                           EQUIVALENT_HMF2_KM)
+        # A bare ``D=`` cannot be read as a hop distance or a path distance,
+        # and the two stop being the same number the moment the path hops.
+        model_options = f"hmF2={EQUIVALENT_HMF2_KM:.0f}km,hop={hop_km:.0f}km"
+        if hops > 1:
+            model_options += f",D={path_km:.0f}km,{hops} hops"
         ET.SubElement(chars, "Modeled", _attrs(
             Name="foF2", Units="MHz", Val=f"{equivalent:.3f}",
             ModelName="secant-law",
-            ModelOptions=f"hmF2={EQUIVALENT_HMF2_KM:.0f}km,D={path_km:.0f}km",
+            ModelOptions=model_options,
         ))
 
     if nose is not None and nose.ok:
