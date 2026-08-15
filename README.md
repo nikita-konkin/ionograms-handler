@@ -1699,7 +1699,7 @@ services/
     static/             plotly.min.js, vendored -- the one asset, no build step
 patches/                diffs against the pinned chirpsounder2 clone
 deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  847 tests; `python -m pytest tests -q`
+tests/                  854 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1966,6 +1966,35 @@ consolidated files, for the reason above. A capped census says so in `cost`
 (`found`, `capped`, `budget`), in a warning, and in a notice on the page naming
 how much of the archive it read: "no such emitter" and "not in the part I read"
 are different answers, and only one of them is a reason to stop looking.
+
+**And then the ceiling turned out not to be enough, because the cost is not in
+the files.** Deployed, the warm-up still never finished. One `os.scandir` of
+`/archive/2026-08-15` on the work server returned its 46,436 entries in
+**293.8 s** — 6.3 ms per directory *entry*, which is a network round trip
+each, not a disk. Listing three days costs a quarter of an hour before the
+first file is opened, and no bound on files opened touches that.
+
+Two things followed. The scan stopped walking the tree once per product:
+`find_timings`, `find_detections` and `find_cdetections` each walked it, so a
+station that writes no `par-*.h5` — DOB writes none — paid a full pass over
+every `chirp-*.h5` in the day to learn that, and then paid it again.
+`io_detect.find_products` does one `os.walk` and buckets on the prefix before
+the first `-`.
+
+More importantly, **a request no longer touches the archive at all.** Both
+`/sources` and `/ui/sources` call the census with `block=False`: it answers
+from the last completed one, reports `age_s`, and starts a background refresh
+when that passes `DEFAULT_MAX_AGE_S` (30 min — a refresh costs about
+five minutes of listing, so ten would leave the server scanning half the time
+it is up) — one refresh at a time, because
+two requests can both find the archive idle and the second would repeat a
+fifteen-minute scan the first was already doing. With nothing computed yet it
+returns `building`, and the page says so in those words: an unfinished census
+and a station that is hearing nothing render identically otherwise, and only
+one of them is a reason to go and look at the radio.
+
+The blocking census is still there and is still the real thing — the startup
+warm-up, the background refresh and the command line all use it.
 
 That line's `3097398` is the commit the image was built from, stamped in by
 `deploy/Dockerfile.api` and served at `/healthz` as `build`. `version` is a

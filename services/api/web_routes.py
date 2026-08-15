@@ -211,10 +211,13 @@ def sources_page(request: Request,
     """
     conn = request.app.state.db
     census = sources_mod.census(request.app.state.archive_root,
-                                max_days=max_days, min_count=min_count)
+                                max_days=max_days, min_count=min_count,
+                                block=False,
+                                max_age_s=sources_mod.DEFAULT_MAX_AGE_S)
     known = db.stations(conn)
     return templates.TemplateResponse(request, "sources.html", {
         "census": census, "max_days": max_days, "min_count": min_count,
+        "max_age_s": sources_mod.DEFAULT_MAX_AGE_S,
         # Rendered into the page rather than fetched, so the verified list
         # survives a READ_TOKEN being set: the page is already authorised, and
         # a second fetch would need a token this page has no field for.

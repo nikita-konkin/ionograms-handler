@@ -37,6 +37,23 @@
   </p>
 
   {% set c = census.cost %}
+  {% set age_s = census.get('age_s') %}
+  {% if census.get('building') %}
+  <p class="note"><span class="pill warn">first census running</span>
+  <b>No census has finished yet, so this is not "no transmitters heard".</b>
+  Listing one day of this archive costs minutes before a file is opened, so the
+  census runs in the background and the page never waits for it. Reload in a
+  few minutes. If it never completes, the archive mount is the thing to look
+  at, not this page.</p>
+  {% elif age_s and age_s > 60 %}
+  <p class="note"><span class="pill muted">as of
+  {{ '%.0f'|format(age_s / 60) }} min ago</span>
+  {% if census.get('refreshing') %}A newer one is being read now.{% else %}
+  A newer one starts when this passes
+  {{ '%.0f'|format(max_age_s / 60) }} min.{% endif %}
+  The archive is too slow to census while you wait, so the page shows the last
+  completed one and its age rather than blocking on a new one.</p>
+  {% endif %}
   <p class="note">
     {% if c.unchanged %}<span class="pill ok">cached</span>{% endif %}
     Read {{ c.files }} file(s) from {{ c.days|join(', ') if c.days else 'the

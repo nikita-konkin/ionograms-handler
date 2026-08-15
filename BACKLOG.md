@@ -1469,3 +1469,58 @@ The design point should also stop being implicit. A census over a live station
 should be bounded by the archive it will actually meet, and the honest long-term
 answer is an index -- one pass that records what each file contributed, so the
 page reads a summary and not the archive.
+
+## 25. The archive mount lists at 6.3 ms per directory entry (2026-08-16)
+
+Section 24's ceiling was deployed as `0b8c488` and **the warm-up still never
+finished** -- twice, across two container starts, the new "reading up to 2000
+detection file(s)" line printed and no completion line followed. Since only
+2000 files can now be opened, the time was not in the reads.
+
+Measured inside the container:
+
+    python -c "os.scandir('/archive/2026-08-15')"    46,436 entries, 293.8 s
+
+**6.3 ms per directory entry.** Not a disk -- that is a round trip each, on a
+mount. Listing the three newest days costs ~15 minutes before the first HDF5
+file is opened, and it is paid on every census, including the ones that would
+have answered from cache, because the fingerprint is built from the listing.
+
+Two changes followed, in `b5d087d` and this cut:
+
+- **One directory pass per day, not one per product.** `find_timings`,
+  `find_detections` and `find_cdetections` each walked the tree. On DOB, which
+  writes no `par-*.h5`, the first walk visited all 45,602 `chirp-*.h5` in the
+  day to return an empty list, and the second walked them again.
+  `io_detect.find_products` does one `os.walk` and buckets on the prefix
+  before the first `-`, so a `Path` is built only for a file that is wanted.
+  3x less scanning -- which on this mount still leaves ~5 minutes.
+- **The request path no longer touches the archive.** `block=False` serves the
+  last completed census with an `age_s`, starts one background refresh past
+  `DEFAULT_MAX_AGE_S`, and reports `building` when nothing has finished yet.
+
+Also fixed here: the ceiling was keeping the wrong 2000 files. It sorted on the
+whole filename, but a name is `chirp-<channel>-<rate>-<i0>-<unix>.h5` and `i0`
+is a sample index of no fixed width -- `9000` sorts after `44664265260000000`
+on the leading digit, so the order was over channel and sample index with time
+as a tiebreak. `sources._file_time` sorts on the trailing field.
+
+### What is still unresolved
+
+The page now renders, but every refresh still costs ~5 minutes of listing, and
+a 2000-file ceiling on a 45,602-file day covers about the newest 40 minutes.
+Three ways out, cheapest first:
+
+1. **Prune.** At the 1846-file design point a listing is ~12 s. This is the
+   station's problem and section 24 has it: `iono_housekeeping.py` runs as an
+   orphan and the archive grew by 46k files that day anyway.
+2. **Find out what `/archive` actually is.** 6.3 ms per `readdir` entry is
+   pathological even for NFS. If it is sshfs, rclone or an S3-backed FUSE, or
+   if it is the live rsync target from DOB and contending with the write
+   stream, the fix may be a mount option rather than any code here. Nobody has
+   looked; `df -T /archive` and `mount | grep archive` would say in a second.
+3. **Census at the station.** The files are on local disk there. The agent
+   already posts health on a schedule; posting a census alongside it would
+   make this page a database read like the console's list already is, and the
+   archive mount would stop being on the path at all. This is the same shape
+   as the index proposed at the end of section 24, and it subsumes it.

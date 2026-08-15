@@ -89,6 +89,24 @@ DEFAULT_MIN_REPEATS = 3.0
 #: `census`'s docstring. 2000 keeps the cost near the 234 s this was built for.
 DEFAULT_MAX_FILES = 2000
 
+#: How old a served census may be before a new one is started. The refresh runs
+#: in the background and the page is answered from the previous result, because
+#: on the archive this actually runs against there is no such thing as a census
+#: on the request path: **one `os.scandir` of one day's directory measured
+#: 293.8 s for 46,436 entries** -- 6.3 ms per directory entry, which is a
+#: network round trip each, not a disk. Three days is a quarter of an hour
+#: before the first file is opened.
+#:
+#: So the page serves what the last completed census found and says how old it
+#: is. A transmitter schedule does not change minute to minute; a page that
+#: never renders does.
+#:
+#: Half an hour, because a refresh costs about five minutes of listing even
+#: after the scan was cut to one pass per day. Ten minutes would leave the
+#: server scanning half the time it is up, for an answer that changes when a
+#: transmitter comes on air -- which is not a per-minute event.
+DEFAULT_MAX_AGE_S = 1800.0
+
 
 #: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
 _DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
@@ -154,6 +172,35 @@ _CENSUS_LOCK = threading.Lock()
 
 #: Last result, with the fingerprint of the files it was computed from.
 _LAST: dict = {}
+
+#: One background refresh at a time, and never two queued behind each other.
+#: The lock alone is not enough: two requests can both find it free, both
+#: spawn, and the second then repeats a fifteen-minute scan the first just
+#: finished.
+_REFRESH_LOCK = threading.Lock()
+_REFRESHING = False
+
+
+def _start_refresh(work) -> bool:
+    """Run ``work`` in a daemon thread unless a refresh is already running."""
+    global _REFRESHING
+    with _REFRESH_LOCK:
+        if _REFRESHING:
+            return False
+        _REFRESHING = True
+
+    def run() -> None:
+        global _REFRESHING
+        try:
+            work()
+        except Exception as exc:                              # noqa: BLE001
+            warnings.warn(f"census refresh failed: {exc!r}", stacklevel=2)
+        finally:
+            with _REFRESH_LOCK:
+                _REFRESHING = False
+
+    threading.Thread(target=run, daemon=True, name="census-refresh").start()
+    return True
 
 
 def _identity(path: Path) -> tuple | None:
@@ -240,6 +287,37 @@ def _read_cached(paths, reader, expand=None) -> tuple[list, dict, list]:
     return records, counts, skipped
 
 
+def _served(params: tuple, max_age_s: float | None) -> dict | None:
+    """The last census, if it answers *this* question and is young enough.
+
+    Keyed on the tuning parameters alone, not on the file list: proving the
+    file list has not changed costs the scan, which is the thing that cannot
+    be afforded on a request. Age is what stands in for it.
+    """
+    if _LAST.get("params") != params or "census" not in _LAST:
+        return None
+    age = time.time() - _LAST.get("at", 0.0)
+    if max_age_s is not None and age > max_age_s:
+        return None
+    out = dict(_LAST["census"])
+    out["age_s"] = round(age, 1)
+    out["refreshing"] = _REFRESHING
+    out["cost"] = dict(out["cost"], unchanged=True, opened=0, seconds=0.0)
+    return out
+
+
+def _building(cycle: float, max_files: int) -> dict:
+    """No census has finished yet. Distinct from "no transmitters heard"."""
+    return {
+        "count": 0, "kind": "none", "cycle_s": cycle, "emitters": [],
+        "rejected": [], "building": True, "age_s": None, "refreshing": True,
+        "cost": {"opened": 0, "cached": 0, "unreadable": 0, "days": [],
+                 "files": 0, "found": 0, "capped": 0, "budget": max_files,
+                 "records": 0, "unchanged": False, "seconds": 0.0,
+                 "building": True},
+    }
+
+
 def _cdetection_rows(path, rows):
     """One `cdetections-*.h5` array as `Detection` records. See io_detect."""
     from muf.io_detect import Detection
@@ -257,7 +335,9 @@ def census(archive_root: str | os.PathLike, *,
            max_scatter_s: float = DEFAULT_MAX_SCATTER_S,
            max_slot_fraction: float = DEFAULT_MAX_SLOT_FRACTION,
            min_repeats: float = DEFAULT_MIN_REPEATS,
-           max_files: int = DEFAULT_MAX_FILES) -> dict:
+           max_files: int = DEFAULT_MAX_FILES,
+           block: bool = True,
+           max_age_s: float | None = None) -> dict:
     """Repeating emitters under ``archive_root``, newest days first.
 
     Reads whichever detection product the tree actually has, in the order
@@ -285,12 +365,35 @@ def census(archive_root: str | os.PathLike, *,
     cannot finish -- see `DEFAULT_MAX_FILES`. It trims time and not quality:
     the preferred product is kept and its oldest files are dropped, because
     falling back to the cheap ones is what loses the transmitter.
+
+    ``block=False`` never touches the archive. It answers from the last
+    completed census, starting a background refresh if that answer is older
+    than ``max_age_s``, and reports ``building`` when there is nothing yet.
+    **That is what a request should use**, because the scan alone -- before any
+    file is opened -- measured 293.8 s per day on the archive this serves; see
+    `DEFAULT_MAX_AGE_S`. ``block=True`` is the real thing, for the warm-up, the
+    background refresh, and the command line.
     """
     from muf import io_detect
 
     cycle = cycle_s or io_detect.DEFAULT_CYCLE_S
     root = Path(archive_root)
     started = time.perf_counter()
+    params = (str(root), max_days, cycle, min_count, max_scatter_s,
+              max_slot_fraction, min_repeats, max_files)
+
+    if not block:
+        served = _served(params, max_age_s)
+        if served is not None:
+            return served
+        _start_refresh(lambda: census(
+            archive_root, max_days=max_days, cycle_s=cycle_s,
+            min_count=min_count, max_scatter_s=max_scatter_s,
+            max_slot_fraction=max_slot_fraction, min_repeats=min_repeats,
+            max_files=max_files, block=True))
+        # Stale is still an answer; nothing yet is not, and says so rather
+        # than rendering an empty archive as "no transmitters heard".
+        return _served(params, None) or _building(cycle, max_files)
 
     # Scan first, read second. A directory listing is one round trip per
     # directory; an HDF5 open is several per *file*. Doing the cheap half
@@ -338,9 +441,8 @@ def census(archive_root: str | os.PathLike, *,
     # there last time refers to the same recording. Stat-ing 1846 files to
     # prove that would cost a round trip each on the archive this is slow on,
     # which is most of what we are trying to avoid.
-    fingerprint = (str(root), max_days, cycle, min_count, max_scatter_s,
-                   max_slot_fraction, min_repeats, max_files,
-                   tuple(sorted(str(p) for paths, *_ in scans for p in paths)))
+    fingerprint = params + (
+        tuple(sorted(str(p) for paths, *_ in scans for p in paths)),)
 
     with _CENSUS_LOCK:
         # The names matching is only proof that nothing changed if every file
@@ -400,7 +502,8 @@ def census(archive_root: str | os.PathLike, *,
         if not records:
             out = {"count": 0, "kind": "none", "cycle_s": cycle,
                    "emitters": [], "cost": cost}
-            _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped)
+            _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped,
+                         params=params, at=time.time())
             return out
 
         emitters = io_detect.census(records, cycle_s=cycle,
@@ -425,7 +528,8 @@ def census(archive_root: str | os.PathLike, *,
                          for e, why in rejected],
             "cost": cost,
         }
-        _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped)
+        _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped,
+                         params=params, at=time.time())
         return out
 
 

@@ -1141,15 +1141,21 @@ def test_an_archive_with_no_detections_is_empty_not_an_error(tmp_path):
     assert got["cost"]["files"] == 0
 
 
-def test_the_sources_page_and_endpoint_agree(client, tmp_path, make_detection_h5):
+def test_the_sources_page_and_endpoint_agree(cold_census, client, tmp_path,
+                                             make_detection_h5):
     day = tmp_path / "2026-08-09"
     day.mkdir()
     make_detection_h5("chirp", cycles=6, into=day)
     client.app.state.archive_root = tmp_path
+    # Neither surface reads the archive on the request path, so warm the cache
+    # first -- otherwise both agree on "still building" and prove nothing.
+    warmed = cold_census.census(tmp_path, min_count=2)
+    assert warmed["count"] > 0
 
     api = client.get("/sources?min_count=2").json()
     page = client.get("/ui/sources?min_count=2")
     assert page.status_code == 200
+    assert api["count"] == warmed["count"], "served something else"
     assert f"{api['count']} emitter(s)" in page.text
 
 
@@ -1171,9 +1177,13 @@ def cold_census():
 
     sources._MEMO.clear()
     sources._LAST.clear()
+    # A refresh spawned by an earlier test may still be in flight, and its flag
+    # is what decides whether the next one is allowed to start.
+    sources._REFRESHING = False
     yield sources
     sources._MEMO.clear()
     sources._LAST.clear()
+    sources._REFRESHING = False
 
 
 def test_an_unchanged_archive_is_not_read_twice(cold_census, tmp_path,
@@ -1440,14 +1450,114 @@ def test_the_page_says_the_census_only_read_part_of_the_archive(
     client.app.state.archive_root = tmp_path
 
     real = cold_census.census
-    monkeypatch.setattr(web_routes.sources_mod, "census",
-                        lambda root, **kw: real(root, **dict(kw, max_files=10)))
+    monkeypatch.setattr(
+        web_routes.sources_mod, "census",
+        lambda root, **kw: real(root, **dict(kw, max_files=10, block=True)))
     with pytest.warns(UserWarning, match="ceiling"):
         page = client.get("/ui/sources?min_count=2")
 
     assert page.status_code == 200
     assert "newest 10 of 24 file(s)" in page.text
     assert "capped" in page.text
+
+
+# --------------------------------------------------------------------------
+# The request path never touches the archive
+# --------------------------------------------------------------------------
+#
+# Measured on the deployed server: one `os.scandir` of `/archive/2026-08-15`
+# returned 46,436 entries in **293.8 s**. That is 6.3 ms per directory entry --
+# a network round trip each -- so listing three days costs a quarter of an hour
+# before the first file is opened, and no ceiling on files opened can help. The
+# page therefore answers from the last completed census and says how old it is.
+
+def test_a_request_never_waits_for_the_archive(cold_census, tmp_path,
+                                               monkeypatch, make_detection_h5):
+    """The scan is the cost, so `block=False` must not reach it at all."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    from muf import io_detect
+    monkeypatch.setattr(io_detect, "find_products",
+                        lambda target: pytest.fail("scanned on a request"))
+    # As if a refresh were already in flight, so the request path is the only
+    # thing running and a background thread cannot muddy the assertion.
+    monkeypatch.setattr(cold_census, "_REFRESHING", True)
+
+    got = cold_census.census(tmp_path, min_count=2, block=False)
+    assert got["building"] is True
+    assert got["emitters"] == [] and got["cost"]["files"] == 0
+
+
+def test_nothing_yet_is_not_the_same_as_nothing_heard(cold_census, tmp_path,
+                                                      make_detection_h5):
+    """An empty page and an unfinished census look identical, and only one of
+    them means the station is not hearing anything."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+
+    building = cold_census.census(tmp_path, min_count=2, block=False)
+    assert building.get("building") is True
+
+    cold_census.census(tmp_path, min_count=2)               # the real thing
+    served = cold_census.census(tmp_path, min_count=2, block=False)
+    assert not served.get("building")
+    assert served["emitters"], "served nothing after a completed census"
+    assert served["age_s"] is not None
+
+
+def test_a_stale_census_is_served_rather_than_a_new_one_awaited(
+        cold_census, tmp_path, make_detection_h5):
+    """Past `max_age_s` the answer is still the old one -- the refresh happens
+    behind it. Blocking would hand the fifteen-minute scan to whoever opened
+    the page, which is the whole failure this replaces."""
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    fresh = cold_census.census(tmp_path, min_count=2)
+
+    cold_census._LAST["at"] = time.time() - 10_000          # long past due
+    served = cold_census.census(tmp_path, min_count=2, block=False,
+                                max_age_s=60)
+    assert served["emitters"] == fresh["emitters"], "dropped a usable answer"
+    assert served["age_s"] > 60
+
+
+def test_only_one_background_refresh_runs_at_a_time(cold_census):
+    """Two requests can both find the archive idle. If both spawn, the second
+    repeats a scan the first is already doing -- half an hour of a mount that
+    takes 294 s to list one day."""
+    import threading
+
+    running, release, second = threading.Event(), threading.Event(), []
+
+    def slow():
+        running.set()
+        release.wait(5)
+
+    assert cold_census._start_refresh(slow) is True
+    assert running.wait(5), "the refresh never started"
+    try:
+        assert cold_census._start_refresh(lambda: second.append(1)) is False
+    finally:
+        release.set()
+    assert second == [], "a second scan of the same archive was queued"
+
+
+def test_the_page_says_a_census_is_still_being_built(cold_census, client,
+                                                     tmp_path,
+                                                     make_detection_h5):
+    day = tmp_path / "2026-08-09"
+    day.mkdir()
+    make_detection_h5("chirp", cycles=6, into=day)
+    client.app.state.archive_root = tmp_path
+
+    page = client.get("/ui/sources?min_count=2")
+    assert page.status_code == 200
+    assert "first census running" in page.text
+    assert "No census has finished yet" in page.text
 
 
 def test_the_warm_up_answers_the_question_the_page_asks(cold_census, tmp_path,

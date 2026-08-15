@@ -213,9 +213,14 @@ def sources(request: Request,
     it would become. See `services.api.sources` for why the seconds are as
     received rather than as transmitted.
     """
+    # Never on the request path: the scan alone costs minutes on the archive
+    # this serves. Answers from the last completed census and refreshes in the
+    # background -- `age_s` says how old it is, `building` that there is
+    # nothing yet. See `sources.DEFAULT_MAX_AGE_S`.
     return sources_mod.census(request.app.state.archive_root,
                               max_days=max_days, cycle_s=cycle_s,
-                              min_count=min_count)
+                              min_count=min_count, block=False,
+                              max_age_s=sources_mod.DEFAULT_MAX_AGE_S)
 
 
 @router.get("/net")
