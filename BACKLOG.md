@@ -1650,3 +1650,47 @@ where to look.
   it on p99.
 - The static mount sets an ETag but no `Cache-Control`, so every page load still
   spends a round trip revalidating a 1 MB bundle that never changes.
+
+## 26. The station rename is done in the database and not on disk (2026-08-16)
+
+`tools/relabel_station.py` moves a receiver's name across `sounding`,
+`extraction.hops`, `config_epoch`, `transmitter`, `health_report` and
+`command`, and — the part that matters — recomputes the `rx_lat`/`rx_lon`/
+`path_km` the name decides. Written for `DOB` → `Yoshkar-Ola`, where the stored
+distance was wrong by 848 km on the Nicosia circuit and every foF2 on it was
+divided by an M-factor of 3.353 instead of 3.145.
+
+Three things it deliberately leaves, each of which is a real open question:
+
+**The old name is still on disk.** It is in the filename and in the h5's own
+`station_name`, and `io_chirp.read_header` prefers the file's attribute over
+everything else — correctly, since the file records what was actually written.
+So re-ingesting any pre-rename product puts `DOB` back on that row, and the
+archive has ~6977 of them. Nothing currently prevents that, and the ingest path
+gives no warning when it happens. The options are a rename map applied at
+ingest, rewriting the attribute in place across the archive, or accepting that
+a re-ingest needs the tool run again afterwards. None has been chosen.
+
+**`gate_lo`/`gate_hi` still describe the old geometry.** They record the window
+the estimators actually searched, so they are honest as history and wrong as a
+description of where the echo should have been. `calibrate.default_gate` would
+now choose differently on every renamed row. The fix is re-extraction, which is
+a different job with a different cost.
+
+**The `reference` rows are stale by ~1000 km.** IRI is evaluated at the control
+point, the control point is the path midpoint, and the midpoint of
+Nicosia→Dombås is not the midpoint of Nicosia→Yoshkar-Ola — README sec. on
+control points has the two positions, 49.22N 24.59E against 45.99N 39.09E. The
+GIRO station chosen by proximity moves with it, from a European sounder to
+RV149 Rostov. `--drop-reference` deletes them so they get recomputed; it is not
+the default, because deleting a user's data as a side effect of a rename is not
+a tool's call to make. Recomputing them is the batch-IRI-per-circuit-day job
+that is already on this list.
+
+And one that is not the tool's problem but surfaces here: `Station.band_ceiling_mhz`
+is keyed by receiver code, and this receiver now has two eras under one key —
+24.53 MHz measured on the v2 24.825 MHz sweep as `DOB`, and no entry for
+`yoshkar-ola` because the `.lfs` era's 32.49 MHz sweep genuinely was its own
+limit. After the rename both collapse onto `yoshkar-ola`, and `(("DOB", 24.53),)`
+on the `NIC` entry stops matching anything. Keying a ceiling by receiver alone
+stopped being sufficient the moment the rename landed.
