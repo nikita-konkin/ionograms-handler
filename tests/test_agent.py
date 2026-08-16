@@ -11,6 +11,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import replace
@@ -959,6 +960,52 @@ def test_a_command_is_acknowledged_even_when_it_fails(station):
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
+
+def test_the_station_example_asks_for_no_digisonde_receiver():
+    """A `chirp-digisonde@` instance in this file is how the 45% sample loss
+    comes back, and it has come back once already.
+
+    `receive_digisonde.py` is not a downloader -- it demodulates off air from
+    the ringbuffer at 25 MS/s, so each instance costs what `detect_chirps`
+    costs. Patch 0007 removed five of them from `dombas.sh` and took the
+    recorder from ~969 dropped events/s to zero over an hour; the unavoidable
+    pipeline already needs 4.4 of 8 cores and the receivers want ~3.4 more.
+
+    This file is not documentation. It is copied to the station as
+    `agent.json`, and its unit list is read as the set of units to enable --
+    which is exactly what happened on 2026-08-16, four instances enabled off
+    `_units_when_migrated`, restoring the fault patch 0007 exists to fix. On a
+    systemd station nothing reports it: `chirp-drop-watch` reads a `thor.log`
+    that systemd no longer writes and answers zero drops for ever.
+
+    Every string in the file is checked, not just the two unit lists, because
+    the prose is what gets copied when the JSON does not. What counts as naming
+    one is an instance name straight after the ``@`` -- the file is allowed,
+    and expected, to talk *about* `chirp-digisonde@` in order to say no.
+    """
+    example = Path(__file__).resolve().parent.parent / "deploy/station-dob.json.example"
+    config = json.loads(example.read_text(encoding="utf-8"))
+
+    def strings(node):
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, dict):
+            for value in node.values():
+                yield from strings(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from strings(value)
+
+    instance = re.compile(r"chirp-digisonde@\w")
+    named = [s for s in strings(config) if instance.search(s)]
+    assert named == [], (
+        f"{example.name} names {named}. Enabling a digisonde receiver costs "
+        "the recorder ~969 dropped events/s and nothing on the station "
+        "reports it -- see patches/0007-dombas-move-digisonde-and-drop-"
+        "plotters.patch. If a station really wants them back, start with "
+        "CPUAffinity pinning and measure, do not list them here."
+    )
+
 
 def test_the_token_can_come_from_the_environment(tmp_path, monkeypatch):
     """`deploy/station-sim.json` is committed, so the secret must not live in

@@ -257,12 +257,29 @@ failure with nobody at the keyboard:
 crontab -l; ls -la /etc/rc.local 2>/dev/null; grep -rn dombas /etc/cron.d /etc/rc.local 2>/dev/null
 ```
 
-Digisondes are separate instances of a template, enabled by name. Four are
-listed in `deploy/station-dob.json.example`:
+**Do not enable any `chirp-digisonde@` instance.** The template ships so that a
+station which wants them can express them, not because this one should run
+them. An earlier revision of this runbook said to enable four, copied out of
+`deploy/station-dob.json.example`, and that was wrong in the most expensive
+way available: the digisonde receivers are the cause of the 45% sample loss,
+and patch 0007 exists to remove them.
 
-```bash
-sudo systemctl enable chirp-digisonde@Juliusruh.service chirp-digisonde@JuliusruhN.service chirp-digisonde@Chilton.service chirp-digisonde@Dourbes.service
-```
+They are not downloaders. `receive_digisonde.py` demodulates the sounders **off
+air from this station's own ringbuffer** at 25 MS/s, so each instance is a
+`detect_chirps`-sized consumer. Measured on 2026-08-12: five of them cost ~969
+dropped events/s and ~65,000 `RcvbufErrors`/s at load 10.40 on eight cores;
+stopping them gave zero dropped samples and zero dropped datagrams over a full
+hour. The pipeline that cannot be avoided already needs 4.4 of the 8 cores, and
+the receivers want ~3.4 more.
+
+Nothing on the station will tell you if they come back. `chirp-drop-watch`
+counts `D` markers in what `logs/thor.log` grew by, and under systemd that file
+stops being written — it reports zero drops for ever (see Regressions). The
+console shows a healthy station losing half its samples.
+
+If they are ever wanted back, the first thing to try is `CPUAffinity` pinning
+for the recorder and the NIC IRQ — untested, and the budget above says 3.4
+cores would have to come from somewhere.
 
 The archive timers are independent of the target and can be started now, on
 air, without waiting — they only read products and write to the NAS. Do this
@@ -481,17 +498,19 @@ visible. A process missing from this list cannot be reported unhealthy.
       "chirp-timings.service",
       "chirp-ionograms.service",
       "chirp-metadata.service",
-      "chirp-sync.service",
-      "chirp-digisonde@Juliusruh.service",
-      "chirp-digisonde@JuliusruhN.service",
-      "chirp-digisonde@Chilton.service",
-      "chirp-digisonde@Dourbes.service"
+      "chirp-sync.service"
     ],
 
-Include only units you actually enabled in step 1. `systemctl is-active` on a
-unit that does not exist answers `inactive`, `health.py` reads that as a
-definite failure, and the station reports UNHEALTHY while acquiring perfectly
-well. Eleven false reds is how a status column stops being read.
+Include only units you actually enabled in step 1 — and no `chirp-digisonde@`
+instance, for the reason given there. `systemctl is-active` on a unit that does
+not exist answers `inactive`, `health.py` reads that as a definite failure, and
+the station reports UNHEALTHY while acquiring perfectly well. Eleven false reds
+is how a status column stops being read.
+
+The same sentence is why this list and the enabled set have to move together:
+stopping a unit that is still named here turns it red, so a digisonde being
+disabled after the fact means editing both, in either order, before the next
+push.
 
 **4.2 — `target`.** This is the line that makes the console's buttons work, and
 it must not be set before step 3 has succeeded:

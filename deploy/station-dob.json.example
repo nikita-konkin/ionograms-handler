@@ -27,7 +27,20 @@
     "token file is the whole of the station's configuration."
   ],
 
-  "station": "DOB",
+  "_station_comment": [
+    "The site is Yoshkar-Ola (56.38N 47.53E), not Dombas. `my_station.ini`",
+    "wrote station_name=DOB from the start and this file copied it, so every",
+    "product, filename and database row up to 2026-08-16 carries a code that",
+    "belongs to a different site 2400 km away. muf/stations.py resolves DOB to",
+    "62.073N 9.111E, which is where every wrong path length came from.",
+    "",
+    "This field labels HEALTH AND COMMANDS ONLY. The receiver name on a",
+    "sounding comes from the product file, written by chirpsounder2 out of",
+    "my_station.ini. Change one without the other and the console splits the",
+    "station in two: a new name with live metrics and no data, an old name",
+    "with every sounding ever ingested and no agent."
+  ],
+  "station": "Yoshkar-Ola",
   "server_url": "http://<work-pc-lan-ip>:8002",
   "token": "",
   "push_interval_s": 60,
@@ -76,27 +89,48 @@
     "Set `target` to chirp.target at the same time, never before: the target",
     "is what start/stop/restart act on.",
     "",
+    "NO chirp-digisonde@ INSTANCE BELONGS IN THIS LIST, and none should be",
+    "enabled. This list used to name four of them and that was wrong: patch",
+    "0007 removed the digisonde receivers from dombas.sh because they are the",
+    "cause of the 45% sample loss -- receiving five of them off air cost ~969",
+    "dropped events/s and ~65,000 RcvbufErrors/s, and stopping them took the",
+    "recorder to zero drops over a full hour. They are ringbuffer consumers at",
+    "25 MS/s, not downloaders, and ~3.4 cores of an 8-core budget that the",
+    "unavoidable pipeline already spends 4.4 of. Listing them here is how they",
+    "come back: the list is copied into agent.json and then read as the set of",
+    "units to enable. On 2026-08-16 exactly that happened.",
+    "",
     "chirp-rx.service",
     "chirp-ringbuffer.service",
     "chirp-detect.service",
     "chirp-timings.service",
     "chirp-ionograms.service",
     "chirp-metadata.service",
-    "chirp-sync.service",
-    "chirp-digisonde@Juliusruh.service",
-    "chirp-digisonde@JuliusruhN.service",
-    "chirp-digisonde@Chilton.service",
-    "chirp-digisonde@Dourbes.service"
+    "chirp-sync.service"
   ],
 
   "startup_grace_s": 300,
   "expected_sample_rate": 25000000,
 
+  "_reference_tx_comment": [
+    "distance_km is Nicosia to THIS RECEIVER, and it was 3436.0 here until",
+    "2026-08-16 -- the Nicosia->Dombas figure, on a receiver that is not in",
+    "Dombas. solve_epoch_offset models tau = distance/c with no ionospheric",
+    "hop, so the 848 km error came back as clock error: epoch_offset_s read",
+    "-0.002108 s against a GPSDO-disciplined recorder, where 2.1 ms of real",
+    "clock error is not available. 2587.83 km moved it to +0.000975 s, i.e.",
+    "positive, which is the only sign an unmodelled hop excess can produce.",
+    "That is the measurement that confirmed the site, not just the assertion.",
+    "",
+    "It now sits 25 us inside the abs(offset) < 1e-3 failure threshold and",
+    "will flap red when the virtual height runs high. The budget is spent on",
+    "group path the model does not subtract, not on a clock fault."
+  ],
   "reference_tx": {
     "name": "cyprus1",
     "rate": 100000.0,
     "transmit_seconds": [235, 240, 245, 300],
-    "distance_km": 3436.0,
+    "distance_km": 2587.83,
     "cycle_s": 300.0,
     "window_s": 2.0
   }

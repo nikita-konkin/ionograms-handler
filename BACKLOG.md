@@ -1414,6 +1414,41 @@ not visible before:
   of the launcher; left pointing at `dombas.sh` it would guard a script that no
   longer starts anything.
 
+### The migration re-enabled the digisonde receivers, undoing patch 0007
+
+Found on the live station 2026-08-16, after the cutover, by the operator
+noticing digisonde rows still arriving. Section 1 of the runbook said to enable
+four `chirp-digisonde@` instances, copied out of `_units_when_migrated` in
+`deploy/station-dob.json.example`. Neither file had been checked against
+`patches/0007`, whose whole subject is that those receivers **are** the 45%
+sample loss: five of them cost ~969 dropped events/s and ~65,000
+`RcvbufErrors`/s, and removing them gave zero drops over a full hour.
+
+Three things made it survivable only by luck:
+
+- **Nothing on the station reports it.** `chirp-drop-watch` fails green (above),
+  so the one metric that would have shown 969/s answers zero for ever. Every
+  unit reads `active` and the console says HEALTHY.
+- **The unit list and the enabled set are separately edited.** Stopping an
+  instance still named in `agent.json` turns it red, so backing the change out
+  is two edits, and doing only the first is a visible failure that invites
+  putting the receivers back.
+- **A config example is executable.** This file is copied to the station as
+  `agent.json` and its lists are read as instructions. Prose in it saying
+  "these are optional" would not have helped; the list is the interface.
+
+Fixed in both files, with `test_the_station_example_asks_for_no_digisonde_receiver`
+so the list cannot regrow silently. The `chirp-digisonde@.service` template
+stays — a station with cores to spare can still express them, and its header
+comment is now the only place that names an instance.
+
+Two follow-ups this leaves open. The template's own comment still argues *for*
+running them ("a free extra circuit with a named, registered transmitter") and
+says the sounders are "a few hundred km away" — true from Dombås (864–1360 km),
+not from Yoshkar-Ola, where the same four are 2014–3169 km out. And with the
+site corrected, whether any digisonde circuit is worth a core is a question
+nobody has re-asked; every digisonde row on the console currently picks 0/3.
+
 ## 24. DOB's archive is 93x the census design point, and nothing prunes it (2026-08-16)
 
 `/ui/sources` on the work server stopped answering. Not slowly -- at all: the
