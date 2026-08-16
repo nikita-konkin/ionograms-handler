@@ -1389,8 +1389,30 @@ groups, `station_monitor.py`, `sync_iono_data.py`, `iono_housekeeping.py` and
 PID. The ringbuffer holds ~14 GB in `/dev/shm` until it is.
 
 This belongs in `deploy/README.md` as a named procedure. The better fix is the
-migration to `services/agent/systemd/` that section 17 already tracks, after
-which the console's button would work and none of the above would be needed.
+migration to `services/agent/systemd/`, after which the console's button would
+work and none of the above would be needed.
+
+**Written up 2026-08-16 as `deploy/migrate-dob-to-systemd.md`**, with the
+sequence above as its section 2. Three things came out of writing it that were
+not visible before:
+
+- **The agent calls `systemctl` bare, as `ionouser`.** Nothing in this repo
+  grants that user the privilege, so the migration as previously imagined ends
+  with the console failing on `Interactive authentication required` instead of
+  on an empty target -- a different sentence and the same dead button. Ubuntu
+  16.04 ships polkit 0.105, which reads `.pkla`; the `.rules` format every
+  current answer shows needs 0.106 and is silently ignored here. Same shape as
+  the `+` prefix in `chirp-rx.service`.
+- **`chirp-drop-watch` fails green.** `tools/drop-watch.sh` counts `D`s in what
+  `logs/thor.log` grew by; under systemd that file stops being written and the
+  script reports zero drops forever. There is no unit-file fix on 229 --
+  `StandardOutput=file:` needs 236, `append:` needs 240 -- and wrapping
+  `ExecStart` in a redirecting shell would send the `SIGINT` to the wrapper
+  rather than to the recorder. It has to read the journal instead.
+- **`launcher` must be repointed at `chirp-ionograms.service`.** `set_config`
+  validates the schedule's rank-group count against the `-np` it text-scans out
+  of the launcher; left pointing at `dombas.sh` it would guard a script that no
+  longer starts anything.
 
 ## 24. DOB's archive is 93x the census design point, and nothing prunes it (2026-08-16)
 

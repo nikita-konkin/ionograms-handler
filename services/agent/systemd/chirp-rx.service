@@ -28,9 +28,34 @@ WorkingDirectory=/home/ionouser/chirpsounder2
 # and the recorder never starts. This unit had that bug from the day it was
 # written; it was never caught because nothing has installed it yet.
 PermissionsStartOnly=true
-ExecStartPre=/sbin/ethtool -G enp0s25 rx 4096
+#
+# **`ethtool -G` exits 80 when the ring is already the size you asked for**,
+# printing `no ring parameters changed, aborting`. So the first start of this
+# unit succeeds, sets the ring 256 -> 4096, and thereby guarantees that every
+# later start fails in `ExecStartPre` and never reaches the recorder at all.
+# Observed on the station 2026-08-16: one clean start at 12:55 that streamed,
+# then `Control process exited, code=exited status=80` every ten seconds
+# forever. The unit's own success is what breaks it, which is why the fault
+# only appears on the *second* start -- i.e. on the restart path, i.e. on the
+# console button this whole migration exists to make work.
+#
+# `-` on the line would hide a genuinely wrong interface name too, and that one
+# is silent and expensive: the ring stays at 256 and the recorder drops up to
+# 45% of its samples while everything reports healthy. So exit 80 is accepted
+# by name and every other failure still stops the start.
+ExecStartPre=/bin/sh -c '/sbin/ethtool -G enp0s25 rx 4096; case $? in 0|80) exit 0;; *) exit 1;; esac'
 ExecStartPre=/sbin/sysctl -w net.core.rmem_max=500000000
+#
+# The recorder runs as `ionouser`; these two lines run as **root**, because
+# `PermissionsStartOnly` is per-unit and not per-line. A bare `mkdir -p` here
+# therefore creates a root-owned directory that the recorder cannot write into
+# -- it fails at `mkdir -p /dev/shm/hf25/ch0` with EACCES, which reads as a
+# recorder bug and is not one. It has never bitten because the directory
+# already existed, owned by `ionouser`, from `dombas.sh`; the first start after
+# `/dev/shm/hf25` is cleared by hand is the one that finds out. Same shape, and
+# the same fix, as `/var/lib/chirp-drop-watch` in chirp-drop-watch.service.
 ExecStartPre=/bin/mkdir -p /dev/shm/hf25
+ExecStartPre=/bin/chown ionouser:ionouser /dev/shm/hf25
 
 # The ringbuffer belongs to the recorder, so it dies with it. Upstream's
 # `dombas.sh` clears it once at script start but its 24-hour restart loop only

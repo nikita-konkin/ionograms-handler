@@ -195,3 +195,55 @@ def test_mpirun_under_cpuaffinity_disables_its_own_binding(unit: Path) -> None:
             f"no --bind-to. Open MPI will re-pin each rank by topology and put "
             f"rank 0 on physical core 0, outside this mask. Use "
             f"`--bind-to none` so the ranks inherit it.")
+
+
+@pytest.mark.parametrize("unit", _units(), ids=lambda p: p.name)
+def test_a_directory_made_by_root_is_given_to_the_user_that_writes_it(unit: Path):
+    """`PermissionsStartOnly` is per-unit, so `mkdir` in a pre-step runs as root.
+
+    The directory it creates is then root-owned and the `User=` process cannot
+    write into it. The failure surfaces inside that process -- the recorder
+    dies at `mkdir -p /dev/shm/hf25/ch0` with EACCES -- so it reads as a bug in
+    the program rather than as ownership, and it stays hidden for as long as
+    something else happens to have created the directory first. On the station
+    that something else was `dombas.sh`; the migration removed it.
+    """
+    settings = list(_settings(unit))
+    keys = {key for _, key, _ in settings}
+    if "User" not in keys:
+        return
+
+    chowned = " ".join(value for _, key, value in settings
+                       if key in EXEC_KEYS and "/bin/chown" in value)
+    for n, key, value in settings:
+        if key != "ExecStartPre" or "/bin/mkdir" not in value:
+            continue
+        made = [word for word in value.split()[1:] if not word.startswith("-")]
+        for path in made:
+            assert path in chowned, (
+                f"{unit.name}:{n}: root creates {path} and User= writes to it, "
+                f"but no ExecStartPre chowns it. Add "
+                f"`ExecStartPre=/bin/chown <user>:<user> {path}`.")
+
+
+@pytest.mark.parametrize("unit", _units(), ids=lambda p: p.name)
+def test_setting_the_nic_ring_tolerates_it_being_set_already(unit: Path) -> None:
+    """`ethtool -G` exits **80** when nothing changed, which fails the start.
+
+    Not a general rule about idempotence -- a specific exit code with a
+    specific consequence. The first start of the recorder sets the ring
+    256 -> 4096 and succeeds; every start after it asks for a size the ring
+    already has, `ethtool` prints `no ring parameters changed, aborting` and
+    returns 80, `ExecStartPre` fails, and the recorder never runs. Observed on
+    the station 2026-08-16: one clean start, then `status=80` every ten seconds
+    indefinitely. The unit works exactly once, which is the worst way for it to
+    be wrong -- the restart path is the whole point of running under systemd.
+    """
+    for n, key, value in _settings(unit):
+        if key not in EXEC_KEYS or "ethtool -G" not in value:
+            continue
+        assert "80" in value, (
+            f"{unit.name}:{n}: {key}= runs `ethtool -G` without accepting exit "
+            f"80. It succeeds on a ring that is not already the requested size "
+            f"and fails on one that is, so this unit would start once and then "
+            f"never again.")

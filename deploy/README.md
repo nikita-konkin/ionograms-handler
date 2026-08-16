@@ -456,6 +456,19 @@ Leave it running under the unit once the single pass works:
 sudo systemctl enable --now chirp-agent.service
 ```
 
+That gets health *out* of the station. Getting commands *in* needs one more
+thing, and DOB does not have it yet: acquisition there is run by `dombas.sh`,
+so `target` in `agent.json` is empty and the agent refuses every start, stop,
+restart and `set_config` — correctly, because `systemctl restart chirp.target`
+on a script-run station starts a second recorder against the same USRP rather
+than restarting the first. The console's buttons stay dead until systemd is
+actually the supervisor.
+
+**[migrate-dob-to-systemd.md](migrate-dob-to-systemd.md) is that procedure**:
+the checks to do while still on air (including the polkit one, which decides
+whether any of it works), the ordered cutover, what regresses, and how to roll
+back. Do not set `target` before following it.
+
 ### Case B — different networks
 
 **Do not port-forward this over the internet.** It is plain HTTP and one
