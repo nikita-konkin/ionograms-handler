@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -96,6 +97,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ionograms-handler api", version=VERSION,
               lifespan=lifespan)
+
+# Everything this service sends is text over a link that is often the station's
+# slow one, and text of a peculiarly compressible kind: tables of numbers and a
+# plotting library. Measured on the real archive, gzip takes the vendored
+# plotly bundle from 1008 to 348 KB, a 500-sounding JSON listing from 237 to
+# 7.4 KB, and the all-circuits series page from 122 to 22 KB. `minimum_size`
+# keeps it off the small health responses, where a compressed frame would be
+# larger than the answer.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(agent_routes.router)
 app.include_router(control_routes.router)

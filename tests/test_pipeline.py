@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 
 import numpy as np
@@ -223,6 +224,69 @@ def test_process_many(tmp_path, make_lfs, options):
 def test_missing_target():
     with pytest.raises(FileNotFoundError):
         pipeline.process_many("no/such/place")
+
+
+# --- holding the math libraries to one thread per worker ---------------------
+
+def test_workers_are_pinned_to_one_math_thread(monkeypatch):
+    for name in pipeline._THREAD_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+    with pipeline._pinned_threads():
+        inside = {name: os.environ.get(name) for name in pipeline._THREAD_VARS}
+
+    assert inside == {name: "1" for name in pipeline._THREAD_VARS}
+
+
+def test_a_count_the_operator_set_is_left_alone(monkeypatch):
+    """Someone who wrote a number there meant it; only blanks get filled in."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS", raising=False)
+
+    with pipeline._pinned_threads():
+        assert os.environ["OMP_NUM_THREADS"] == "4"
+        assert os.environ["OPENBLAS_NUM_THREADS"] == "1"
+
+
+def test_the_environment_is_handed_back_as_it_was(monkeypatch):
+    """A caller that runs a pool and then does its own numerics is not pinned."""
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.setenv("MKL_NUM_THREADS", "2")
+
+    with pipeline._pinned_threads():
+        pass
+
+    assert "OMP_NUM_THREADS" not in os.environ
+    assert os.environ["MKL_NUM_THREADS"] == "2"
+
+
+def test_pinning_can_be_turned_off(monkeypatch):
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+
+    with pipeline._pinned_threads(enabled=False):
+        assert "OMP_NUM_THREADS" not in os.environ
+
+
+def test_pinning_does_not_change_the_picks(tmp_path, make_lfs, options):
+    """The only reason this is on by default, asserted rather than assumed."""
+    for hour in range(3):
+        iq = synth_iq(n_freq=N_FREQ, window=WINDOW, echo_range_km=2700.0,
+                      half_span_km=HALF_SPAN, echo_last_bin=100 + hour)
+        make_lfs(iq, name=f"s_{hour}.lfs", start_hour=hour)
+
+    columns = [c for c in ("datetime", "muf_algo", "lof_algo") if c]
+
+    monkeypatch_free = pipeline.PIN_THREADS
+    try:
+        pipeline.PIN_THREADS = False
+        loose = pipeline.process_many(tmp_path, options, jobs=2, progress=False)
+        pipeline.PIN_THREADS = True
+        pinned = pipeline.process_many(tmp_path, options, jobs=2, progress=False)
+    finally:
+        pipeline.PIN_THREADS = monkeypatch_free
+
+    shared = [c for c in columns if c in loose and c in pinned]
+    pd.testing.assert_frame_equal(loose[shared], pinned[shared])
 
 
 # --- several days at once ----------------------------------------------------

@@ -2110,6 +2110,37 @@ and the residual panel shows the shape that number hides: IRI runs low through
 the morning rise and high after it, which is a diurnal disagreement rather than
 a scale one.
 
+### Is this box still keeping up?
+
+`tools/benchmark.py` measures where the time goes and, more usefully, whether
+that has changed. Take a run when things are healthy, keep the JSON, and pass
+it back as `--baseline` when something feels slow:
+
+```
+python tools/benchmark.py --archive /data/lfs --json healthy.json
+python tools/benchmark.py --archive /data/lfs --baseline healthy.json
+```
+
+It samples the archive with a fixed seed — `--files`, forty by default — runs
+that sample serially and then across workers, and reports the split between
+reading a sounding and processing it. Add `--url http://127.0.0.1:8000` to time
+the served pages as well, and `--token` if that instance wants one.
+
+Absolute timings do not travel between machines, so nothing is compared against
+a figure from somewhere else. The verdicts come from ratios that mean the same
+thing everywhere, and from this same box on an earlier day:
+
+| what it watches | why it matters |
+|---|---|
+| parallel speed-up | below ~3x on four or more cores, the workers are fighting each other for threads rather than sharing the machine — check `MUF_PIN_THREADS` |
+| share of a sounding spent reading it | about 3 % on a local disk; far above that is the archive mount, and it moves long before a page looks slow |
+| peak RSS across the sample | a worker should settle after its first file |
+| soundings that raised | a correctness problem wearing a performance costume — see `tools/diagnose_reception.py` |
+| the picks themselves | with `--picks`, a later run proves a speed-up did not move a measurement |
+
+It exits non-zero when it finds something serious, so it can be run from cron
+and left to stay quiet.
+
 ### Can this host still reach its upstream?
 
 Everything above is about the station. The **upstream** panel is about the

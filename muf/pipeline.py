@@ -1,13 +1,25 @@
 """Driving the estimators over files and days.
 
 One spectrogram is formed per sounding and shared by every estimator, so adding
-a method costs almost nothing beyond the method itself -- the FFTs dominate.
+a method costs almost nothing beyond the method itself.
+
+Where the ~265 ms a warm sounding costs actually goes, measured rather than
+assumed: 172 ms forming the spectrogram, 86 ms in the k-means estimator, under
+a millisecond each in the other two, and 7 ms reading the 80 MB off disk.
+Inside the spectrogram, the per-frequency noise floor -- one ``np.median`` over
+the full spectrum per frequency, `muf.spectro` -- costs 80 ms against the FFTs'
+54 ms, so the medians, not the transforms, are the hottest thing here. The I/O
+is a rounding error on a local disk and the first thing to move on a bad mount.
+
+`tools/benchmark.py` re-measures all of it on demand; the figures above are one
+machine on one day and are only meaningful against that same box later.
 """
 
 from __future__ import annotations
 
 import os
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -336,6 +348,64 @@ def _worker(args: tuple[Path, Options]) -> dict:
     return process_file(*args)
 
 
+#: The thread-pool knobs of every math library underneath us, in the spelling
+#: each one reads. NumPy's own FFT is single-threaded, but BLAS and the OpenMP
+#: runtime k-means clusters through are not: left alone each *worker process*
+#: opens about as many threads as the machine has cores.
+_THREAD_VARS = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+#: Hold each worker to one math thread. Set ``MUF_PIN_THREADS=0`` to leave the
+#: libraries to their own devices.
+#:
+#: Workers are already processes, so the parallelism is ours to hand out and
+#: theirs to duplicate: eight workers on a ten-core machine were opening up to
+#: eighty threads to share ten cores. Measured over one day of the real archive
+#: -- 133 files, 10.6 GB, 10 cores -- pinning took eight workers from 13.5 s to
+#: 8.7 s, 9.8 to 15.3 files/s, and turned a 2.9x speed-up over one worker into
+#: 4.7x. Every pick was identical, which is the only reason this is on by
+#: default.
+#:
+#: Deliberately not applied at ``jobs=1``: with no second process to contend
+#: with, the threads are free parallelism and taking them away cost 5 %.
+PIN_THREADS = os.environ.get("MUF_PIN_THREADS", "1") not in ("0", "", "false")
+
+
+@contextmanager
+def _pinned_threads(enabled: bool = True):
+    """Hold the math libraries to one thread each, for workers spawned inside.
+
+    Set in this process' environment rather than through a pool ``initializer``
+    because the libraries read these once, as they load. A worker imports
+    NumPy on the way to unpickling its first task, which is *before* any
+    initializer of ours can run -- by then the thread pool it would resize
+    already exists. Spawned children inherit the environment, so setting it
+    here is early enough and an initializer is not.
+
+    An operator who has set a count already means it; only unset names are
+    filled in. The environment is restored on the way out, so a caller that
+    runs a pool and then does its own numerics is not left pinned.
+    """
+    if not enabled:
+        yield
+        return
+    previous = {name: os.environ.get(name) for name in _THREAD_VARS}
+    try:
+        for name, was in previous.items():
+            if was is None:
+                os.environ[name] = "1"
+        yield
+    finally:
+        for name, was in previous.items():
+            if was is None:
+                os.environ.pop(name, None)
+
+
 def process_many(
     target,
     options: Options | None = None,
@@ -360,9 +430,12 @@ def process_many(
         iterator = (process_file(p, options) for p in paths)
         rows = list(_maybe_progress(iterator, len(paths), progress))
     else:
-        with ProcessPoolExecutor(max_workers=jobs) as pool:
-            iterator = pool.map(_worker, [(p, options) for p in paths])
-            rows = list(_maybe_progress(iterator, len(paths), progress))
+        # Around the whole pool, not just its construction: workers are spawned
+        # on demand, so the last one can start well after the first task does.
+        with _pinned_threads(PIN_THREADS):
+            with ProcessPoolExecutor(max_workers=jobs) as pool:
+                iterator = pool.map(_worker, [(p, options) for p in paths])
+                rows = list(_maybe_progress(iterator, len(paths), progress))
 
     frame = pd.DataFrame(rows)
     if "datetime" in frame:

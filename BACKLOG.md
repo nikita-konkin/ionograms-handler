@@ -1524,3 +1524,72 @@ Three ways out, cheapest first:
    make this page a database read like the console's list already is, and the
    archive mount would stop being on the path at all. This is the same shape
    as the index proposed at the end of section 24, and it subsumes it.
+
+## 23. Two measured wins, and a benchmark to keep them (2026-08-16)
+
+Profiled the whole read path and the extraction pipeline against the real
+archive rather than guessing. Most of what looked slow was not, and the two
+things that were are both one-line fixes.
+
+**What the profile actually said.** Every warm page answers in single-digit
+milliseconds and the database is 1.6 MB, so there is no query work worth
+doing. Three cold numbers stood out -- the sounding page at 2417 ms, the
+all-circuits series at 1357 ms, one day plus IRI at 374 ms -- and none of them
+are computation. They are first use: importing scikit-learn costs 1.19 s, and
+PyIRI's first read of its CCIR/URSI coefficient files 0.87 s. Warm, an IRI day
+is 70 ms. Reading an 80 MB `.lfs` takes 6-12 ms, about 3 % of what that
+sounding costs to process, so the archive I/O is not on anyone's critical path
+either.
+
+**Threads, not cores, were capping the pipeline.** Eight workers on ten cores
+were only 2.9x faster than one. That looked like a memory wall and was not:
+pool start-up accounts for 0.80 s of it, and the rest was every worker process
+opening its own BLAS and OpenMP pools -- up to eighty threads over ten cores.
+`pipeline.PIN_THREADS` now holds each worker to one math thread for the
+duration of the pool. Over one day of the archive, 133 files and 10.6 GB:
+13.5 s to 8.7 s, 9.8 to 15.3 files/s, 2.9x to 4.7x. Re-measured since over a
+40-file sample: 4.94 s to 3.26 s. Every pick identical, which is the only
+reason it is on by default; `MUF_PIN_THREADS=0` turns it off. Deliberately not
+applied at `jobs=1`, where the threads are free parallelism and taking them
+away cost 5 %.
+
+Set through the environment rather than a pool `initializer` because these
+libraries read their thread counts once, as they load, and a worker imports
+NumPy on the way to unpickling its first task -- before any initializer of ours
+could run. Counts an operator has already set are left alone, and the
+environment is restored when the pool closes.
+
+**Nothing was compressed.** Every response went out `identity`. `GZipMiddleware`
+at `minimum_size=1000` takes the vendored plotly bundle from 1008 to 348 KB, a
+500-sounding listing from 237 to 7.0 KB, the all-circuits series page from 122
+to 21 KB, and the soundings table from 74 to 3.5 KB. Confirmed over real HTTP,
+not just in a test client. This is the largest single saving in the project and
+it is one line.
+
+**`tools/benchmark.py`** keeps both honest. It samples the archive with a fixed
+seed, runs it serially and across workers, times the served pages if given a
+`--url`, and writes JSON to use as a later `--baseline`. Absolute timings from
+one box say nothing about another, so the verdicts are drawn from ratios that
+travel -- parallel speed-up, the share of a sounding spent reading it, RSS
+growth across files -- plus a same-machine diff against the baseline. It also
+records the picks, so a run can prove a speed-up did not move a measurement.
+Verified by running it unpinned, where it correctly reports the 2.16x and says
+where to look.
+
+### Still open
+
+- The comment in `muf/pipeline.py` used to claim the FFTs dominate. They do not:
+  inside the 172 ms spectrogram the per-frequency `np.median` costs 80 ms
+  against the transforms' 54 ms. Docstring corrected, but the median itself is
+  untouched and is now the hottest line in the pipeline.
+- Two obvious follow-ons were measured and rejected. Batching the per-frequency
+  FFT loop into one 2-D transform gains 16 % and costs ~160 MB per worker, on
+  top of the 303 MB one already holds. Subsampling the noise-floor median is
+  6x faster and shifts the floor by up to 24.8 %, which moves real MUFs. Both
+  should stay rejected unless the trade changes.
+- The heavy imports are still paid by whoever loads the first page. The lifespan
+  already warms the census in a daemon thread and could warm these on the same
+  one; it would move ~2 s off the first visitor and change no median, so judge
+  it on p99.
+- The static mount sets an ETag but no `Cache-Control`, so every page load still
+  spends a round trip revalidating a 1 MB bundle that never changes.
