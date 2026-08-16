@@ -228,6 +228,29 @@ def _nan(value) -> float:
     return float("nan") if value is None else float(value)
 
 
+def colour_axis() -> dict | None:
+    """The raster's colour key: limits, label and the map itself.
+
+    ``None`` when matplotlib cannot be asked -- the page then draws the plot
+    without a bar rather than inventing one. Every other panel on this page
+    survives its own source being unavailable and says so; a colour scale
+    guessed from a default would instead be a confident wrong answer about
+    what the picture means.
+    """
+    from muf import render
+
+    try:
+        stops = render.colour_scale()
+    except Exception:
+        return None
+    return {
+        "vmin": render.DEFAULT_VMIN_DB,
+        "vmax": render.DEFAULT_VMAX_DB,
+        "label": render.COLOUR_LABEL,
+        "stops": stops,
+    }
+
+
 def plot_data(scaling: Scaling, method: str) -> dict:
     """One record as the browser needs it: traces, markers and the frame.
 
@@ -244,6 +267,12 @@ def plot_data(scaling: Scaling, method: str) -> dict:
     out: dict = {
         "extent": {"f_lo": f_lo, "f_hi": f_hi, "r_lo": r_lo, "r_hi": r_hi},
         "traces": [], "marks": [], "relative": False,
+        # The key to the raster. It travels with the frame rather than living
+        # in the template because it has to be the map the PNG was actually
+        # drawn with -- see `render.colour_scale`. Included even when there is
+        # no record to scale: the raster is drawn either way, and a picture in
+        # false colour with no key is exactly what this fixes.
+        "scale": colour_axis(),
     }
     if record is None:
         return out

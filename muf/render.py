@@ -21,12 +21,49 @@ DEFAULT_VMIN_DB = 20.0
 DEFAULT_VMAX_DB = 75.0
 DEFAULT_DPI = 150
 
+#: The raster's colormap. Named once because two surfaces have to agree on it:
+#: the PNG drawn here, and the colour bar the interactive plot puts beside that
+#: PNG. A bar built from a different map than the image it explains is worse
+#: than no bar, because it reads as authoritative.
+DEFAULT_CMAP = "jet"
+
+#: What the colour axis actually is. `spectro.compute` divides every spectrum
+#: by its own noise floor before `to_db`, so a cell is already a ratio against
+#: the noise -- the same quantity the SAO record spells `MUFSignalToNoise`.
+COLOUR_LABEL = "SNR (dB)"
+
 _MARKER_COLOURS = {
     "algo": "#ffffff",
     "kmeans": "#00ff88",
     "contour": "#ff2a6d",
     "cnn": "#ffd166",
 }
+
+
+def colour_scale(cmap: str | None = None, stops: int = 32) -> list[list]:
+    """The raster's colormap, sampled as plotly colorscale stops.
+
+    For the interactive plot, which shows the raster as a PNG behind its traces
+    and so has nothing carrying a colour axis of its own -- a picture in false
+    colour with no key to it. Derived from the same colormap `plot` draws with
+    rather than transcribed into the template, because a hand-copied scale goes
+    quietly wrong the day someone changes `DEFAULT_CMAP` and stays wrong: the
+    bar would keep looking authoritative while describing a different image.
+
+    32 stops rather than the full 256: plotly interpolates between them, jet is
+    piecewise linear over about eight anchors, and the difference is invisible
+    against a 55 dB span while the frame stays small.
+    """
+    from matplotlib import colormaps
+
+    table = colormaps[cmap or DEFAULT_CMAP]
+    out = []
+    for index in range(stops):
+        position = index / (stops - 1)
+        red, green, blue, _ = table(position)
+        out.append([round(position, 4),
+                    f"rgb({red * 255:.0f},{green * 255:.0f},{blue * 255:.0f})"])
+    return out
 
 
 def _figure(figsize, **kwargs):
@@ -107,7 +144,7 @@ def plot(
     axes: bool = True,
     dpi: int = DEFAULT_DPI,
     figsize: tuple[float, float] = (16, 7),
-    cmap: str = "jet",
+    cmap: str | None = None,
     segments=None,
     reconstruction=None,
 ) -> Path:
@@ -126,7 +163,7 @@ def plot(
     # pcolormesh wants [y, x] = [range, frequency].
     mesh = ax.pcolormesh(
         ion.freq, ion.vrange, ion.db.T,
-        shading="nearest", cmap=cmap, vmin=vmin_db, vmax=vmax_db,
+        shading="nearest", cmap=cmap or DEFAULT_CMAP, vmin=vmin_db, vmax=vmax_db,
     )
 
     if axes:
@@ -147,7 +184,7 @@ def plot(
         ax.set_title(title, fontsize=14)
 
         bar = fig.colorbar(mesh, ax=ax, pad=0.01)
-        bar.set_label("Power over noise floor (dB)")
+        bar.set_label(COLOUR_LABEL)
 
         if segments or reconstruction is not None:
             _overlay_trace(ax, segments, reconstruction)
@@ -359,7 +396,7 @@ def plot_sao(
     trace: bool | None = None,
     vmin_db: float = DEFAULT_VMIN_DB,
     vmax_db: float = DEFAULT_VMAX_DB,
-    cmap: str = "jet",
+    cmap: str | None = None,
 ) -> Path:
     """Draw one parsed ``<SAORecord>``: scaled values beside the sounding.
 
@@ -384,7 +421,8 @@ def plot_sao(
     mesh = None
     if ion is not None:
         mesh = ax.pcolormesh(ion.freq, ion.vrange, ion.db.T, shading="nearest",
-                             cmap=cmap, vmin=vmin_db, vmax=vmax_db, zorder=0)
+                             cmap=cmap or DEFAULT_CMAP, vmin=vmin_db,
+                             vmax=vmax_db, zorder=0)
 
     drawn = [t for t in record.traces
              if t.freq.size and t.freq.size == t.vrange.size]
@@ -451,7 +489,7 @@ def plot_sao(
 
     if mesh is not None:
         bar = fig.colorbar(mesh, ax=ax, pad=0.09)
-        bar.set_label("Power over noise floor (dB)", fontsize=9)
+        bar.set_label(COLOUR_LABEL, fontsize=9)
 
     if drawn or muf is not None or mesh is not None:
         # How far the echo travelled beyond the ground path -- the oblique

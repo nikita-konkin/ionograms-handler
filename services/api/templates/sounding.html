@@ -170,7 +170,7 @@
       xanchor: 'left', yanchor: 'top', sizing: 'stretch', layer: 'below',
     };
 
-    const traces = frame.traces.map(t => ({
+    const points = frame.traces.map(t => ({
       x: t.freq, y: t.vrange, name: t.name, type: 'scatter', mode: 'markers',
       marker: {symbol: 'circle-open', size: 8, color: t.colour,
                line: {width: 1.6, color: t.colour}},
@@ -179,6 +179,31 @@
         + (t.amplitude ? '<br>%{customdata:.1f} dB' : '')
         + '<extra>' + t.name + (t.hops ? ' · ' + t.hops + ' hop' : '') + '</extra>',
     }));
+
+    // The raster is an image, so nothing in this plot carries a colour axis
+    // and the field is false colour with no key. A marker trace holding the
+    // two ends of the scale draws the bar; it plots at no coordinate, so it
+    // adds a legend of colours without adding a point to the picture.
+    //
+    // The bundle is plotly-basic, which has no heatmap, image or contour
+    // trace -- but scatter markers carry a colorscale, and that is all a
+    // colorbar needs. Nothing here requires a bigger bundle.
+    const scale = frame.scale;
+    const bar = scale ? {
+      x: [null], y: [null], type: 'scatter', mode: 'markers',
+      showlegend: false, hoverinfo: 'skip',
+      marker: {
+        color: [scale.vmin, scale.vmax], colorscale: scale.stops,
+        cmin: scale.vmin, cmax: scale.vmax, showscale: true, opacity: 0,
+        colorbar: {
+          title: {text: scale.label, side: 'right'},
+          thickness: 12, len: 0.92, outlinewidth: 0, ticks: 'outside',
+          ticklen: 3, tickcolor: 'rgba(255,255,255,.35)', ticksuffix: '',
+        },
+      },
+    } : null;
+
+    const traces = bar ? points.concat([bar]) : points;
 
     // MUF and LOF as verticals, not as points: they are characteristics of
     // the whole record and have no value on the range axis to be read off.
@@ -198,7 +223,7 @@
     }));
 
     Plotly.newPlot(div, traces, {
-      margin: {l: 62, r: 12, t: 26, b: 46},
+      margin: {l: 62, r: bar ? 78 : 12, t: 26, b: 46},
       paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#0b0d10',
       font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
       xaxis: {title: {text: 'Frequency (MHz)'}, range: [e.f_lo, e.f_hi],
@@ -216,10 +241,20 @@
       const box = document.getElementById(id);
       box.addEventListener('change', () => apply(box.checked));
     };
+    // Indices over `points`, not over `traces`: the colour bar rides on a
+    // trace of its own and hiding it with the scaled points would take the
+    // key away from a raster that is still on screen.
     bind('show-points', on => Plotly.restyle(
-      div, {visible: on ? true : 'legendonly'}, traces.map((_, i) => i)));
-    bind('show-raster', on => Plotly.relayout(
-      div, {images: on ? [raster] : []}));
+      div, {visible: on ? true : 'legendonly'}, points.map((_, i) => i)));
+    bind('show-raster', on => {
+      Plotly.relayout(div, {images: on ? [raster] : []});
+      // The bar explains the raster, so it goes with it. Left behind, it would
+      // be a scale for a picture that is no longer there.
+      if (bar) {
+        Plotly.restyle(div, {'marker.showscale': on}, [traces.length - 1]);
+        Plotly.relayout(div, {'margin.r': on ? 78 : 12});
+      }
+    });
     bind('show-marks', on => Plotly.relayout(
       div, {shapes: on ? shapes : [], annotations: on ? notes : []}));
   })();

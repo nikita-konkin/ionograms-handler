@@ -2419,10 +2419,79 @@ def test_the_plot_frame_carries_points_not_the_raster(scaled):
 
     _, path = scaled
     frame = sao.plot_data(sao.build(path, gate=None), "algo")
-    assert set(frame) == {"extent", "traces", "marks", "relative"}
+    assert set(frame) == {"extent", "traces", "marks", "relative", "scale"}
     for trace in frame["traces"]:
         assert len(trace["freq"]) == len(trace["vrange"])
         assert len(trace["freq"]) < 5000
+    # The colour key is 32 stops, not 1.9 million cells: it describes the
+    # raster rather than reproducing it.
+    assert len(frame["scale"]["stops"]) == 32
+
+
+# --------------------------------------------------------------------------
+# The raster's colour key
+# --------------------------------------------------------------------------
+
+def test_the_colour_bar_is_the_map_the_raster_was_drawn_with():
+    """A bar built from a different colormap than the image it explains is
+    worse than no bar, because it still reads as authoritative."""
+    from muf import render
+
+    from services.api import sao
+
+    axis = sao.colour_axis()
+
+    assert axis["vmin"] == render.DEFAULT_VMIN_DB
+    assert axis["vmax"] == render.DEFAULT_VMAX_DB
+    assert axis["stops"] == render.colour_scale(render.DEFAULT_CMAP)
+
+
+def test_the_colour_bar_follows_a_change_of_colormap(monkeypatch):
+    """Nothing transcribes the scale, so changing the map moves the bar too."""
+    from muf import render
+
+    from services.api import sao
+
+    monkeypatch.setattr(render, "DEFAULT_CMAP", "viridis")
+
+    assert sao.colour_axis()["stops"] == render.colour_scale("viridis")
+
+
+def test_the_scale_spans_the_map_from_end_to_end():
+    from muf import render
+
+    stops = render.colour_scale()
+
+    assert stops[0][0] == 0.0 and stops[-1][0] == 1.0
+    assert all(a[0] < b[0] for a, b in zip(stops, stops[1:]))
+    assert all(stop[1].startswith("rgb(") for stop in stops)
+
+
+def test_a_sounding_with_no_record_still_gets_its_colour_key(scaled):
+    """The raster is drawn whether or not an estimator scaled it, and a field
+    in false colour with no key is what this exists to fix."""
+    from services.api import sao
+
+    _, path = scaled
+    frame = sao.plot_data(sao.build(path, gate=None), "no-such-method")
+
+    assert frame["traces"] == []
+    assert frame["scale"]["label"] == "SNR (dB)"
+
+
+def test_the_page_draws_without_a_bar_rather_than_inventing_one(monkeypatch):
+    """No matplotlib, no honest scale. Guessing one would be a confident
+    wrong answer about what the picture means."""
+    from muf import render
+
+    from services.api import sao
+
+    def refuse(*a, **k):                        # noqa: ANN002, ANN003
+        raise ModuleNotFoundError("no matplotlib")
+
+    monkeypatch.setattr(render, "colour_scale", refuse)
+
+    assert sao.colour_axis() is None
 
 
 def test_the_sao_download_holds_one_record_per_estimator(client, scaled):
