@@ -1750,6 +1750,30 @@ def test_a_transmitter_needs_at_least_one_slot(client):
                                        "chirpt": 1.0}]).status_code == 400
 
 
+def test_a_code_the_registry_cannot_resolve_is_saved_with_a_warning(client):
+    """Not refused: a newly heard emitter has to be nameable before anyone
+    knows where it is, and refusing here would make identifying one impossible.
+
+    But `io_chirp._coords_for` answers NaN for an unknown name by design, so
+    the cost is silent and hours away -- a full-span range gate, a NULL
+    path_km, no measured band ceiling, and finally IRI reporting a foF2 at
+    `nanS nanW` on a sounding page, with nothing tying it back to the name that
+    was typed. That is exactly how NIC1 and NIC3 were lost on 2026-08-16.
+    """
+    body = _identify(client, code="TGO7").json()
+    assert body["ok"] is True
+    assert body["transmitter"]["code"] == "TGO7"
+    assert "nanS nanW" in body["warning"]
+    assert "muf/stations.py" in body["warning"]
+
+
+def test_a_code_the_registry_knows_warns_about_nothing(client):
+    """Including the per-slot aliases, which is the shape the warning exists to
+    make people reach for: NIC1 is another slot of NIC, not another site."""
+    for code in ("NIC", "NIC1", "cyprus1"):
+        assert "warning" not in _identify(client, code=code).json(), code
+
+
 def test_re_identifying_replaces_and_keeps_the_number(client):
     """Narrowing the slots after another day of census is the normal case.
 

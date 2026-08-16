@@ -318,3 +318,27 @@ def test_describe_shows_provenance_and_the_cyprus_note():
     assert V2 in text and LFS in text
     assert "cyprus1" in text
     assert "17 stations" in text
+
+
+@pytest.mark.parametrize("code", ["NIC0", "NIC1", "NIC2", "NIC3", "NIC4"])
+def test_a_per_slot_transmitter_code_resolves_to_its_site(code):
+    """The console mints one code per slot, because `transmitter` is UNIQUE
+    (station, code) and five slots cannot share a row. That code becomes
+    `transmit_name` -> `txname` -> `sounding.tx`, and is resolved here.
+
+    Unresolved it does not raise -- `_coords_for` returns NaN by design -- so
+    the whole failure is downstream and silent: the range gate widens to the
+    full span, `path_km` goes NULL, and IRI is asked for a foF2 at nanS nanW.
+    That happened on 2026-08-16, which is why these five are pinned.
+    """
+    registry = stations.default_registry()
+    assert registry.station(code) is registry.station("NIC")
+    assert registry.station(code).coordinates == (35.18557, 33.38228)
+
+
+def test_a_transmitter_code_nobody_has_identified_still_does_not_resolve():
+    """The aliases above are five named slots of one emitter, not a pattern.
+    `NIC9` is a code no one has matched to a site, and inventing coordinates
+    for it would be the failure this table exists to prevent -- a plausible
+    path length is worse than none."""
+    assert stations.default_registry().station("NIC9") is None

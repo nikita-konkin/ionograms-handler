@@ -51,6 +51,8 @@ import re
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 
+from muf.stations import default_registry
+
 from . import acquisition, db
 from .auth import require_control
 
@@ -223,7 +225,28 @@ def save_transmitter(station: str, request: Request,
         evidence=payload.get("evidence"),
         verified_by=str(payload.get("verified_by") or "web"),
         note=payload.get("note"))
-    return {"ok": True, "station": station, "transmitter": record}
+    response = {"ok": True, "station": station, "transmitter": record}
+
+    # A code `muf/stations.py` cannot resolve is saved, not refused: a newly
+    # heard emitter has to be nameable before anyone knows where it is, and
+    # refusing here would make identifying one impossible. But it is said out
+    # loud, because nothing downstream will.
+    #
+    # `io_chirp._coords_for` returns NaN for an unknown name by design, so the
+    # consequence is silent and hours away: the range gate falls back to the
+    # full span, `path_km` is NULL, `sounded_ceiling` loses its measured limit,
+    # and IRI is finally asked for a foF2 at `nanS nanW`. That is the first
+    # sentence the operator sees, on a sounding page, with nothing connecting
+    # it to the name they typed. It happened on 2026-08-16 with NIC1 and NIC3.
+    if default_registry().station(code) is None:
+        response["warning"] = (
+            f"Saved, but {code!r} is not in the station registry, so products "
+            f"from it will have no transmitter coordinates: no path length, no "
+            f"M-factor, a full-span range gate, and IRI will report a foF2 at "
+            f"nanS nanW. Either reuse the code of a site already known, or add "
+            f"{code!r} to muf/stations.py -- as an alias if this is another "
+            f"slot of an emitter already there.")
+    return response
 
 
 @router.delete("/stations/{station}/transmitters/{code}")

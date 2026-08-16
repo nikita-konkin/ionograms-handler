@@ -339,8 +339,14 @@ if (save) save.addEventListener('click', async () => {
   const kept = (VERIFIED[station()] || []).filter(t => t.code !== record.code);
   VERIFIED[station()] = [...kept, record].sort(
     (a, b) => a.code.localeCompare(b.code));
-  document.getElementById('identify-panel').hidden = true;
   renderVerified();
+  // Saved either way -- a warning is not a refusal, because a newly heard
+  // emitter has to be nameable before anyone knows where it is. The panel
+  // stays open for it: the only cost of an unresolvable code is silent and
+  // hours downstream, so this is the one moment it can be connected to the
+  // name that caused it.
+  if (r.body.warning) { out.textContent = r.body.warning; return; }
+  document.getElementById('identify-panel').hidden = true;
   out.textContent = '';
 });
 

@@ -119,10 +119,27 @@ _V2_STATIONS = (
     # yoshkar-ola: on that circuit the same measurement returns 32.48 against a
     # declared 32.49, i.e. the sweep really is the limit there, and the default
     # is already right.
+    # `NIC0`..`NIC4` are the same emitter, one alias per slot it is heard in.
+    # The console's transmitter table mints a code per slot because
+    # `transmitter` is UNIQUE (station, code) and five slots cannot share one
+    # row, and that code becomes `transmit_name` -> the product's `txname` ->
+    # `sounding.tx`, which is resolved *here*. Named on 2026-08-16 against the
+    # Twente websdr chirp reference, all five as "Nicosia" at 100 kHz/s,
+    # differing only in `chirpt`: 0, 235, 240, 245, 280 s of a 300 s cycle.
+    # Consistent with what this archive already showed -- CYPRUS1_LFS_COORDINATES
+    # records cyprus1 on four slots giving 3398/3420/3422/3504 km, one site.
+    #
+    # Without them the codes resolve to nothing, and nothing says so:
+    # `_coords_for` returns NaN by design, so the failure is silent and
+    # downstream. Observed the day they were named -- the range gate fell back
+    # to the full +/-3998 km span, `path_km` was NULL, and IRI reported "no
+    # usable foF2 for nanS nanW / nanS nanW" (two control points, because
+    # `NaN <= MAX_SINGLE_HOP_KM` is false and the path reads as multi-hop).
     Station("NIC", "Nicosia, Cyprus", 35.18557, 33.38228, V2,
-            aliases=("cyprus1",),
+            aliases=("cyprus1", "NIC0", "NIC1", "NIC2", "NIC3", "NIC4"),
             note="also the .lfs archive's 'cyprus1'; its header says "
-                 "35.0/34.0, 59.9 km away, superseded by these five decimals",
+                 "35.0/34.0, 59.9 km away, superseded by these five decimals. "
+                 "NIC0-NIC4 are per-slot codes for this same emitter",
             band_ceiling_mhz=(("DOB", 24.53),)),
     Station("Ramfjordmoen", "Ramfjordmoen",
             69.58187184247221, 19.220853348827067, V2),
