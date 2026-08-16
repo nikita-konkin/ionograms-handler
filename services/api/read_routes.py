@@ -383,12 +383,32 @@ def _age_seconds(received_at: str | None) -> float | None:
 
 
 def _command(row: dict) -> dict:
+    # `results` is what the agent said, and until now it stayed in the
+    # database: the console printed the command's *parameters* in a column
+    # headed "result", so every refusal rendered as a bare red `failed` with
+    # the request echoed back. The agent always sends a reason -- "no systemd
+    # target configured for this station", "the schedule has 2 rank group(s)
+    # but the launcher starts calc_ionograms.py with -np 1" -- and that reason
+    # is the only thing that tells an operator what to change.
     return {
         "id": row["id"], "name": row["name"],
         "params": json.loads(row["params"] or "{}"),
+        "results": json.loads(row["results"] or "[]"),
+        "detail": _detail(row["results"]),
         "issued_at": row["issued_at"], "issued_by": row["issued_by"],
         "delivered_at": row["delivered_at"], "acked_at": row["acked_at"],
         "ok": _tri(row["ok"]),
         "state": ("acked" if row["acked_at"] else
                   "delivered" if row["delivered_at"] else "pending"),
     }
+
+
+def _detail(results: str | None) -> str:
+    """The agent's reasons, joined. Empty when it did not give one."""
+    try:
+        parsed = json.loads(results or "[]")
+    except (TypeError, ValueError):
+        return ""
+    return "; ".join(
+        str(r.get("detail", "")).strip() for r in parsed
+        if isinstance(r, dict) and str(r.get("detail", "")).strip())

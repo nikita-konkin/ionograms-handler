@@ -322,7 +322,10 @@
           {% else %}<span class="pill">pending</span>{% endif %}</td>
       <td class="muted">{{ c.issued_at }}</td>
       <td class="muted">{{ c.acked_at or '&mdash;'|safe }}</td>
-      <td class="wrap">{{ c.params if c.params else '' }}</td>
+      {# The agent's reason first. A refusal echoing back the request is not a
+         result, and it is what this column showed for every failed command. #}
+      <td class="wrap">{% if c.detail %}<b>{{ c.detail }}</b>
+        {% elif c.params %}{{ c.params }}{% endif %}</td>
     </tr>
     {% endfor %}
   </table></div>

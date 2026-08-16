@@ -286,6 +286,28 @@ def test_a_failed_command_is_recorded_as_failed(client):
 
     shown = client.get("/stations/SIM/health").json()["commands"][0]
     assert shown["state"] == "acked" and shown["ok"] is False
+    assert shown["detail"] == "timed out"
+
+
+def test_the_console_shows_why_a_command_failed(client):
+    """It used to show the *request* in a column headed "result".
+
+    Every refusal on DOB rendered as a bare red `failed` with the parameters
+    echoed back, so "no systemd target configured for this station" -- which
+    says exactly what to do -- was in the database and nowhere else. An
+    operator cannot act on a colour.
+    """
+    why = ("no systemd target configured for this station (`target` is empty "
+           "in the agent config)")
+    queued = client.post("/stations/SIM/commands", json={"name": "restart"},
+                         headers=CTL).json()
+    client.get("/stations/SIM/commands", headers=CTL)
+    client.post(f"/stations/SIM/commands/{queued['id']}/ack", headers=CTL,
+                json={"results": [{"command": "restart", "ok": False,
+                                   "detail": why}]})
+
+    page = client.get("/ui").text
+    assert why in page, "the agent's reason never reached the page"
 
 
 def test_acking_an_unknown_command_is_accepted(client):
@@ -2484,3 +2506,43 @@ def test_a_scaling_that_fails_does_not_take_the_page_with_it(client, scaled,
     assert got.status_code == 200
     assert "truncated product" in got.text
     assert "extractions" in got.text
+
+
+# --------------------------------------------------------------------------
+# Compression
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def many_soundings(api_db, tmp_path):
+    """Enough rows for a listing to be worth compressing."""
+    for minute in range(60):
+        _mk(api_db, tmp_path, f"bulk_{minute}.lfs",
+            f"2026-02-04 00:{minute:02d}:00", **GEOMETRY)
+    api_db.commit()
+    return api_db
+
+
+def test_a_large_page_is_compressed(client, many_soundings):
+    """The station's link is slow and its pages are tables of numbers."""
+    got = client.get("/soundings?limit=500",
+                     headers={"Accept-Encoding": "gzip"})
+
+    assert got.status_code == 200
+    assert got.headers.get("content-encoding") == "gzip"
+
+
+def test_a_client_that_cannot_unpack_gzip_still_gets_its_answer(
+        client, many_soundings):
+    got = client.get("/soundings?limit=500", headers={"Accept-Encoding": ""})
+
+    assert got.status_code == 200
+    assert "content-encoding" not in got.headers
+    assert got.json()["count"] == 60
+
+
+def test_a_short_answer_is_sent_as_it_is(client):
+    """Compressing a health check makes the response bigger, not smaller."""
+    got = client.get("/healthz", headers={"Accept-Encoding": "gzip"})
+
+    assert got.status_code == 200
+    assert "content-encoding" not in got.headers
