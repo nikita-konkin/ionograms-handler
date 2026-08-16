@@ -207,6 +207,35 @@ def read_config(path: str | Path) -> configparser.ConfigParser:
     return parser
 
 
+#: ``Key=`` at the head of a line. In a systemd unit only ``Exec*`` runs
+#: anything; in a shell script this matches a variable assignment, which is
+#: likewise not a launch.
+_DIRECTIVE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)\s*=")
+
+
+def _logical_lines(text: str):
+    """Lines with trailing-backslash continuations joined, comments left alone.
+
+    systemd and shell both continue a line with ``\\``; a comment continues in
+    neither, so a ``#`` line that happens to end in one must not swallow what
+    follows it.
+    """
+    buffered = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if buffered or not stripped.startswith("#"):
+            if stripped.endswith("\\"):
+                buffered += stripped[:-1].strip() + " "
+                continue
+            if buffered:
+                yield (buffered + stripped).strip()
+                buffered = ""
+                continue
+        yield stripped
+    if buffered:
+        yield buffered.strip()
+
+
 def _launcher_ranks(path: str | Path | None) -> int | None:
     """How many MPI ranks the launcher starts ``calc_ionograms.py`` with.
 
@@ -217,6 +246,21 @@ def _launcher_ranks(path: str | Path | None) -> int | None:
 
     Deliberately a text scan and not an execution. The launcher is a shell
     script that starts a radio; the agent reads it and never runs it.
+
+    Reads a **systemd unit** as readily as a shell script, because after the
+    migration off ``dombas.sh`` the unit is what starts the program and is
+    therefore what `launcher` should point at. Two things about unit files that
+    a script does not have, both of which this got wrong on 2026-08-16:
+
+    * a unit names the program in ``Description=`` *before* it launches it in
+      ``ExecStart=``. That first mention carries no ``-np``, so the naive scan
+      took the "not under mpirun" branch and answered 1 for a unit that starts
+      two ranks -- which then refused a correct two-transmitter schedule with
+      a message describing a mismatch that did not exist. Only ``Exec*=``
+      lines are launches; every other ``Key=`` line is prose or configuration.
+    * ``ExecStart=`` is routinely wrapped across lines with a trailing
+      backslash, which would put ``-np`` and the script name in different
+      lines. Shell continues the same way, so joining first is right for both.
     """
     if path is None:
         return None
@@ -225,9 +269,11 @@ def _launcher_ranks(path: str | Path | None) -> int | None:
     except OSError:
         return None
 
-    for line in text.splitlines():
-        stripped = line.strip()
+    for stripped in _logical_lines(text):
         if "calc_ionograms.py" not in stripped or stripped.startswith("#"):
+            continue
+        directive = _DIRECTIVE_RE.match(stripped)
+        if directive is not None and not directive.group(1).startswith("Exec"):
             continue
         found = re.search(r"-np\s+(\S+)", stripped)
         if found is None:

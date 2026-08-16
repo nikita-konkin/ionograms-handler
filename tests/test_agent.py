@@ -552,6 +552,61 @@ def test_a_missing_launcher_does_not_block_a_schedule(tmp_path, station):
         station, {"mode": "scheduled", "sounder_timings": _schedule(2)}).ok
 
 
+def _unit(tmp_path, exec_start: str) -> Path:
+    """The real shape of `chirp-ionograms.service`, Description= included."""
+    path = tmp_path / "chirp-ionograms.service"
+    path.write_text(
+        "[Unit]\n"
+        "Description=chirpsounder2 calc_ionograms.py\n"
+        "PartOf=chirp.target\n\n"
+        "[Service]\n"
+        "User=ionouser\n"
+        "# -np must equal len(sounder_timings): calc_ionograms.py:452 does\n"
+        "# `st = conf.sounder_timings[rank]` with no guard.\n"
+        f"{exec_start}\n"
+        "Restart=always\n")
+    return path
+
+
+def test_the_launcher_may_be_a_systemd_unit(tmp_path, station):
+    """After the migration the unit is what starts it, so it is the launcher.
+
+    A unit names the program in `Description=` before it launches it in
+    `ExecStart=`, and that first mention carries no `-np`. Read naively it
+    answers 1 for a unit that starts two ranks, and then refuses a correct
+    two-transmitter schedule with a mismatch that does not exist -- which is
+    what happened on the station on 2026-08-16, the day `launcher` was
+    repointed at the unit.
+    """
+    station = replace(station, launcher=_unit(
+        tmp_path,
+        "ExecStart=/usr/bin/mpirun --bind-to none -np 2 /opt/python3 "
+        "calc_ionograms.py --config /home/ionouser/my_station.ini"))
+    assert control.apply_config(
+        station, {"mode": "scheduled", "sounder_timings": _schedule(2)}).ok
+
+    with pytest.raises(control.ControlError, match="never be sounded"):
+        control.apply_config(
+            station, {"mode": "scheduled", "sounder_timings": _schedule(3)})
+
+
+def test_a_unit_whose_exec_wraps_across_lines_is_still_read(tmp_path, station):
+    """`ExecStart=` is routinely wrapped, which splits `-np` from the script.
+
+    Both halves have to be joined before the scan or the `-np` is on a line
+    with no `calc_ionograms.py` in it and the check reads the wrong number --
+    the same failure as `Description=`, arrived at from the other side.
+    """
+    station = replace(station, launcher=_unit(
+        tmp_path,
+        "ExecStart=/usr/bin/mpirun --bind-to none -np 2 \\\n"
+        "    /opt/python3 calc_ionograms.py \\\n"
+        "    --config /home/ionouser/my_station.ini"))
+    with pytest.raises(control.ControlError, match="IndexError"):
+        control.apply_config(
+            station, {"mode": "scheduled", "sounder_timings": _schedule(1)})
+
+
 def test_a_stop_that_times_out_warns_about_the_radio(station):
     """systemd escalates to SIGKILL, and a killed USRP needs a site visit."""
     def timeout_runner(args, **kw):
