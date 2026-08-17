@@ -26,7 +26,7 @@ from . import sao as sao_mod
 from . import series as series_mod
 from . import sources as sources_mod
 from .auth import require_read
-from .read_routes import _age_seconds, _command, _tri
+from .read_routes import _age_seconds, _command, _preview, _tri
 
 router = APIRouter(include_in_schema=False, dependencies=[Depends(require_read)])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -86,6 +86,10 @@ def console(request: Request):
             # `sources_page`, where the same list used to live behind a scan
             # of every detection file under the archive root.
             "verified": db.transmitters(conn, station),
+            # The newest picture from each transmitter, straight off the
+            # station's own disk. Metadata only -- the PNGs are fetched by the
+            # browser from `/preview/...`, so no image travels inside the HTML.
+            "previews": [_preview(p) for p in db.previews(conn, station)],
         })
 
     counts = db.one(conn, "SELECT COUNT(*) AS n FROM sounding") or {"n": 0}

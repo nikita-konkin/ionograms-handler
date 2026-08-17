@@ -190,3 +190,35 @@ CREATE TABLE IF NOT EXISTS command (
 );
 
 CREATE INDEX IF NOT EXISTS command_pending ON command(station, delivered_at);
+
+
+-- The newest picture each station has of each transmitter, from the station's
+-- own disk. `arrivals` measures the *archive*, which reaches this server only
+-- on `chirp-archive-sync`'s timer, so nothing else here can show what the
+-- acquisition laptop is seeing right now. See services/agent/preview.py.
+--
+-- One row per circuit, overwritten in place: this is a live view, not a
+-- record, and the archive is where the record belongs. Bounded by the number
+-- of transmitters rather than by time, so unlike `health_report` it does not
+-- grow -- and a circuit that stops reporting is swept after
+-- `PREVIEW_RETENTION_DAYS` rather than leaving a picture up forever.
+--
+-- The only BLOB in this schema. A base64 TEXT column would cost a third more
+-- for a value nothing ever reads as text: it goes out of `GET /preview/...`
+-- as image bytes and is never joined, searched or compared.
+CREATE TABLE IF NOT EXISTS station_preview (
+    station     TEXT NOT NULL,
+    tx          TEXT NOT NULL,          -- transmitter, from the product's name
+    t0          REAL,                   -- the sounding's start time: identity,
+                                        -- not arrival, and the browser's cache key
+    received_at TEXT NOT NULL,          -- server clock, as everywhere else here
+    width       INTEGER,
+    height      INTEGER,
+    freq_lo_hz  REAL,
+    freq_hi_hz  REAL,
+    range_lo_m  REAL,
+    range_hi_m  REAL,
+    cropped     INTEGER,                -- 1 when the range axis was narrowed
+    image       BLOB NOT NULL,          -- PNG, as the agent encoded it
+    PRIMARY KEY (station, tx)
+);

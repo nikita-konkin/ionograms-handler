@@ -120,6 +120,30 @@
   "startup_grace_s": 300,
   "expected_sample_rate": 25000000,
 
+  "_preview_comment": [
+    "A thumbnail of the newest product from each transmitter, encoded here and",
+    "pushed alongside the health report. It is the only thing in the console",
+    "that shows what this laptop is receiving RIGHT NOW: the arrivals table",
+    "measures the archive, which reaches the server on chirp-archive-sync's",
+    "timer and is routinely hours behind.",
+    "",
+    "What it costs on this machine, measured on real DOB products: 2.5 ms for",
+    "an ordinary one, 18 ms for a search-mode one, once per push -- under a",
+    "tenth of a percent of one core -- and about 3 KB on the wire. Nothing is",
+    "recomputed: a v2 .h5 holds the ionogram already, so this is a read, a",
+    "decimation and a PNG. At most four products are decoded per pass.",
+    "",
+    "It needs numpy and h5py, which is why it runs under chirpsounder2's",
+    ".venv38 and not the system python. Without them the agent says so in the",
+    "pass log and reports health exactly as before -- the preview can never",
+    "take the health push down with it.",
+    "",
+    "Set false to send none. preview_size is [frequencies, ranges]; larger",
+    "only sends pixels the console throws away."
+  ],
+  "preview": true,
+  "preview_size": [128, 96],
+
   "_reference_tx_comment": [
     "distance_km is Nicosia to THIS RECEIVER, and it was 3436.0 here until",
     "2026-08-16 -- the Nicosia->Dombas figure, on a receiver that is not in",

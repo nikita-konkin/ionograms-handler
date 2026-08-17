@@ -48,6 +48,13 @@ STALE_PRODUCT_S = 1800.0
 #: station's Python with no numpy and no h5py.
 _PRODUCT_T0_RE = re.compile(r"-(\d{9,12}(?:\.\d+)?)\.h5$")
 
+#: The whole name, when the transmitter is wanted too. Same shape as
+#: ``muf.io_chirp._NAME_RE`` and duplicated for the same reason as above.
+_PRODUCT_NAME_RE = re.compile(
+    r"^lfm_ionogram-(?P<tx>.+?)-(?P<rx>.+?)-(?P<ch>.+?)-(?P<cid>\d+)"
+    r"-(?P<t0>[\d.]+)\.h5$"
+)
+
 
 def _t0_from_name(name: str) -> float | None:
     """The sounding's own start time, or None if the name does not carry one."""
@@ -58,6 +65,42 @@ def _t0_from_name(name: str) -> float | None:
         return float(match.group(1))
     except ValueError:                                        # pragma: no cover
         return None
+
+
+def scan_products(root: Path) -> tuple[dict[str, tuple[Path, float]], float | None]:
+    """One walk of ``root``: newest product per transmitter, plus the mtime
+    fallback for names that carry no epoch.
+
+    Split out of :func:`newest_product_age` because the preview collector wants
+    the same files and the *walk* is the expensive half of both. On DOB
+    ``output_dir`` is a USB volume behind a FUSE daemon that competes with the
+    recorder for CPU, so walking it twice to answer two questions about one set
+    of names would be paying that cost for nothing.
+
+    The transmitter comes out of the filename, which means grouping by circuit
+    costs no extra I/O and does not open a single product.
+    """
+    by_tx: dict[str, tuple[Path, float]] = {}
+    newest_mtime = None
+    for path in root.rglob("lfm_ionogram-*.h5"):
+        t0 = _t0_from_name(path.name)
+        if t0 is not None:
+            match = _PRODUCT_NAME_RE.match(path.name)
+            # A name with an epoch but no parseable transmitter still counts as
+            # a product -- it is what the `unkown` marker looks like -- so it is
+            # grouped under the empty name rather than dropped.
+            tx = match.group("tx") if match is not None else ""
+            known = by_tx.get(tx)
+            if known is None or t0 > known[1]:
+                by_tx[tx] = (path, t0)
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue                      # vanished mid-scan; the rest still count
+        newest_mtime = (mtime if newest_mtime is None
+                        else max(newest_mtime, mtime))
+    return by_tx, newest_mtime
 
 #: How far a product may be stamped ahead of the clock before the age becomes
 #: unmeasurable rather than merely small. A few seconds is ordinary skew --
@@ -150,7 +193,7 @@ def unit_states(config: StationConfig) -> list[Metric]:
     return out
 
 
-def newest_product_age(config: StationConfig) -> Metric:
+def newest_product_age(config: StationConfig, scan=None) -> Metric:
     """Age of the newest sounding. Soundings stopping is not the same as a
     process dying, and this is the metric that separates them.
 
@@ -175,26 +218,19 @@ def newest_product_age(config: StationConfig) -> Metric:
     true for every negative number -- so the one metric watching for
     acquisition stopping was passing unconditionally, and would have gone on
     passing with the recorder dead.
+
+    ``scan`` is a :func:`scan_products` result the caller already has, so a
+    pass that also builds previews walks the archive once rather than twice.
     """
     root = Path(config.output_dir)
     if not root.is_dir():
         return Metric.unknown("newest_product_age_s", f"{root}: no such directory")
 
-    newest_t0, newest_mtime = None, None
     try:
-        for path in root.rglob("lfm_ionogram-*.h5"):
-            t0 = _t0_from_name(path.name)
-            if t0 is not None:
-                newest_t0 = t0 if newest_t0 is None else max(newest_t0, t0)
-                continue
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
-                continue                  # vanished mid-scan; the rest still count
-            newest_mtime = (mtime if newest_mtime is None
-                            else max(newest_mtime, mtime))
+        by_tx, newest_mtime = scan_products(root) if scan is None else scan
     except OSError as exc:
         return Metric.unknown("newest_product_age_s", f"{type(exc).__name__}: {exc}")
+    newest_t0 = max((t0 for _, t0 in by_tx.values()), default=None)
 
     if newest_t0 is not None:
         newest, source = newest_t0, "sounding start time from the filename"
@@ -563,12 +599,15 @@ class HealthReport:
 
 
 def collect(config: StationConfig | None = None, *,
-            include_epoch: bool = True) -> HealthReport:
-    """Every metric, in one document. Never raises."""
+            include_epoch: bool = True, scan=None) -> HealthReport:
+    """Every metric, in one document. Never raises.
+
+    ``scan`` is passed straight to :func:`newest_product_age`; see there.
+    """
     config = config or StationConfig()
     metrics: list[Metric] = []
     metrics.extend(unit_states(config))
-    metrics.append(newest_product_age(config))
+    metrics.append(newest_product_age(config, scan))
     metrics.extend(disk_free(config))
     metrics.append(sample_rate(config))
     metrics.append(uptime_s())

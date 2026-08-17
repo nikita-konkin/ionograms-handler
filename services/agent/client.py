@@ -19,6 +19,7 @@ one.
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 import urllib.error
@@ -95,6 +96,38 @@ def push_health(config: StationConfig, report, *, opener=None,
     url = config.server_url.rstrip("/") + "/stations/health"
     return _request(url, token=config.token, method="POST",
                     payload=json.loads(report.to_json()),
+                    timeout=timeout, opener=opener)
+
+
+def push_preview(config: StationConfig, preview, *, opener=None,
+                 timeout: float = 15.0) -> dict:
+    """POST one thumbnail of the newest product from a transmitter.
+
+    Its own endpoint rather than a field in the health document, because that
+    document is stored verbatim forever and re-read in full on every console
+    render. See :mod:`services.agent.preview`.
+
+    The PNG travels base64 in the JSON body: it costs a third more on the wire
+    -- about a kilobyte, once a minute -- and buys one transport with one set
+    of error paths, which on a link that is already carrying the health push is
+    the better trade. The server decodes it back to bytes before storing.
+    """
+    if not config.server_url:
+        raise TransportError("no server_url configured")
+    url = config.server_url.rstrip("/") + f"/stations/{config.station}/preview"
+    payload = {
+        "tx": preview.tx,
+        "t0": preview.t0,
+        "width": preview.width,
+        "height": preview.height,
+        "freq_lo_hz": preview.freq_lo_hz,
+        "freq_hi_hz": preview.freq_hi_hz,
+        "range_lo_m": preview.range_lo_m,
+        "range_hi_m": preview.range_hi_m,
+        "cropped": preview.cropped,
+        "image_b64": base64.b64encode(preview.png).decode("ascii"),
+    }
+    return _request(url, token=config.token, method="POST", payload=payload,
                     timeout=timeout, opener=opener)
 
 

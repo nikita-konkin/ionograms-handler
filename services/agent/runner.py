@@ -17,9 +17,10 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
-from . import client, control, health, logs
+from . import client, control, health, logs, preview
 from .config import StationConfig
 
 
@@ -30,8 +31,23 @@ class PassResult:
     pushed: bool = False
     healthy: bool | None = None
     commands_run: int = 0
+    previews_sent: int = 0
     errors: list[str] = field(default_factory=list)
     report: Any = None
+
+
+@dataclass
+class PreviewState:
+    """What the server already has, carried between passes.
+
+    In memory and nowhere else. An agent restart re-sends every thumbnail once,
+    which costs four passes' worth of work and gets the console a fresh picture
+    -- both better outcomes than a state file on the acquisition laptop that
+    could disagree with the server.
+    """
+
+    sent: dict = field(default_factory=dict)      # tx -> t0 the server holds
+    cursor: int = 0
 
 
 def _dispatch(config: StationConfig, command: client.Command) -> list:
@@ -81,13 +97,70 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
                      f"understands start, stop, restart, set_config, logs, triage")]
 
 
+def _push_previews(config: StationConfig, scan, state: PreviewState,
+                   result: PassResult, opener: Callable | None) -> None:
+    """Encode and send the thumbnails that changed. Never raises.
+
+    Sent *after* the health push, deliberately: the health document is the
+    thing sec. 5.4 makes silence mean something about, and a picture must never
+    be able to delay or displace it.
+    """
+    picked, state.cursor = preview.due(scan[0], state.sent,
+                                       cursor=state.cursor)
+    for tx, path, t0 in picked:
+        try:
+            shot = preview.build(path, config.preview_size)
+        except preview.PreviewUnavailable as exc:
+            # numpy or h5py is missing. Nothing is wrong with the station, and
+            # saying so once per pass per circuit would drown the log.
+            result.errors.append(f"preview: unavailable ({exc})")
+            return
+        except Exception as exc:
+            # A product opened mid-write is the ordinary case here, not an
+            # incident: it will be complete by the next pass, and `sent` is
+            # left alone so the next pass tries again.
+            result.errors.append(f"preview {tx}: {type(exc).__name__}: {exc}")
+            continue
+        # The product's own `txname` is authoritative for *labelling* it -- a
+        # station renamed in config makes the two disagree, and the file is the
+        # record of what was actually written. The filename is what the scan
+        # grouped by, so it stays the key here: dedup keyed on a name that only
+        # appears after the decode would re-send every pass whenever they
+        # differ, which is exactly the case the fallback exists for.
+        shot.tx = shot.tx or tx
+        try:
+            client.push_preview(config, shot, opener=opener)
+        except client.TransportError as exc:
+            result.errors.append(f"preview {tx}: {exc}")
+            continue
+        state.sent[tx] = t0
+        result.previews_sent += 1
+
+
 def run_once(config: StationConfig, *, opener: Callable | None = None,
-             include_epoch: bool = True) -> PassResult:
-    """Collect health, push it, then pull and execute any pending commands."""
+             include_epoch: bool = True,
+             previews: PreviewState | None = None) -> PassResult:
+    """Collect health, push it, then pull and execute any pending commands.
+
+    ``previews`` carries what the server already has; without one every pass
+    re-sends, which is what a single ``--once`` run should do.
+    """
     result = PassResult()
 
+    scan = None
+    if config.preview:
+        # One walk of the archive for both the age metric and the previews. On
+        # DOB `output_dir` sits behind a FUSE daemon competing with the
+        # recorder for CPU, so walking it twice to answer two questions about
+        # the same set of filenames would be paying that cost for nothing.
+        try:
+            root = Path(config.output_dir)
+            scan = health.scan_products(root) if root.is_dir() else ({}, None)
+        except OSError as exc:
+            result.errors.append(f"scan: {type(exc).__name__}: {exc}")
+
     try:
-        report = health.collect(config, include_epoch=include_epoch)
+        report = health.collect(config, include_epoch=include_epoch, scan=scan)
         result.report = report
         result.healthy = report.healthy
     except Exception as exc:                                  # pragma: no cover
@@ -100,6 +173,10 @@ def run_once(config: StationConfig, *, opener: Callable | None = None,
             result.pushed = True
         except client.TransportError as exc:
             result.errors.append(f"push: {exc}")
+
+        if scan is not None:
+            _push_previews(config, scan, previews or PreviewState(),
+                           result, opener)
 
         try:
             commands = client.pull_commands(config, opener=opener)
@@ -127,9 +204,10 @@ def run_forever(config: StationConfig, *, opener: Callable | None = None,
                 max_passes: int | None = None) -> None:
     """``run_once`` on an interval. ``max_passes`` exists so a test can stop."""
     passes = 0
+    previews = PreviewState()
     while max_passes is None or passes < max_passes:
         started = time.time()
-        result = run_once(config, opener=opener)
+        result = run_once(config, opener=opener, previews=previews)
         for problem in result.errors:
             print(f"agent: {problem}", file=sys.stderr)
         if result.report is not None and not result.healthy:

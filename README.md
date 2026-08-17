@@ -1832,6 +1832,62 @@ tell" need different responses.
   self-consistent — so consider leaving `find_timings.py` running even in
   scheduled mode, and keep `chirp-timings.service` in `units` to match.
 
+### The picture the station sends of itself
+
+Every metric above answers *whether* the station is producing. None of them
+answers **what is in the products**, and a station can be green on all of them
+while the pictures are pure interference. So the agent also encodes a 128×96
+thumbnail of the newest product **from each transmitter it is hearing** and
+pushes it with the health report; the console shows the row in the station
+panel, above the arrivals table.
+
+It has to come from the station because nothing else can. `arrivals` measures
+the **archive**, which reaches the server only on `chirp-archive-sync`'s timer
+and is routinely hours behind — the note under that table has always said so.
+This is the one thing in the console that is current.
+
+**It is affordable because a v2 `.h5` holds the ionogram already computed.**
+There is no FFT here, only a read, a decimation and a PNG: measured at 2.5 ms
+for an ordinary DOB product and 18 ms for a search-mode one, once per 60 s
+push, against a full server-side render's ~200 ms of matplotlib. At most four
+products are decoded per pass and an unchanged one is skipped entirely, so an
+idle circuit costs nothing at all.
+
+Four decisions in `services/agent/preview.py` are not free choices:
+
+- **The range axis is reversed.** v2 stores it ascending, this pipeline uses
+  descending virtual range, and `render` puts the largest range at the top.
+  Skip the reversal and the thumbnail is upside down and entirely plausible.
+- **Decimation keeps the maximum of each block**, not the mean and not a
+  stride. A trace is one bright cell among noise; at the ~30× reduction a
+  search-mode product needs, averaging dilutes it below the noise floor and
+  point-sampling misses it. This is the difference between a picture with a
+  trace in it and a picture of noise.
+- **The dB scale is the renderer's**, 20–75 dB through the same `jet`, so
+  brightness means one thing across both. NaN — v2's "below the storage
+  threshold" — lands at 25.6 dB, well under the 43 dB a detection needs, so the
+  sparsification cannot invent a trace.
+- **The PNG is written with `zlib` and `struct`**, about twenty lines, because
+  the acquisition laptop has no Pillow and adding a dependency there to make a
+  3 KB picture would be a poor trade. Four bits per pixel and a 16-entry
+  palette: the colours of the full render for the size of greyscale.
+
+Server-side it is a separate endpoint and a separate table, **not** a field in
+the health document. That document is stored verbatim forever, written 1440×
+per station per day, and read back in full twice per station on every 15 s
+console refresh — putting images in it would be tens of megabytes a day of
+permanent storage, re-read constantly by code that throws it away.
+`station_preview` instead holds one row per `(station, transmitter)`,
+overwritten in place and swept after seven days, so it is bounded by the number
+of circuits rather than by time. The `<img>` URL carries the sounding's `t0`:
+the console reloads whole every 15 s, so with a plain URL the picture would
+freeze behind `max-age` and without one it would re-transfer four times a
+minute.
+
+Needs numpy and h5py, which the station has because chirpsounder2 does. Their
+absence degrades to *no preview* and says so — never to a failed health pass.
+Set `"preview": false` in `~/agent.json` to send none.
+
 ### From search mode to a schedule
 
 `/ui/sources` is the join between the two sounding modes: search records

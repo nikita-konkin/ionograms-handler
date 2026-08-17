@@ -905,6 +905,211 @@ def test_triage_answers_which_failure_without_the_text(station, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Preview
+# --------------------------------------------------------------------------
+
+def decode_png(data: bytes):
+    """An independent 4-bit palette PNG reader, in about fifteen lines.
+
+    Independent on purpose: a round-trip through
+    ``services.agent.preview.encode_png``'s own logic would prove only that it
+    agrees with itself, and the encoder is hand-rolled precisely because there
+    is no library on the station to check it against.
+    """
+    import struct
+    import zlib
+
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    chunks, i = {}, 8
+    while i < len(data):
+        (size,) = struct.unpack(">I", data[i:i + 4])
+        kind = data[i + 4:i + 8]
+        chunks.setdefault(kind, b"")
+        chunks[kind] += data[i + 8:i + 8 + size]
+        i += 12 + size
+    width, height, depth, colour = struct.unpack(">IIBB", chunks[b"IHDR"][:10])
+    assert (depth, colour) == (4, 3), "expected a 4-bit palette PNG"
+    palette = [tuple(chunks[b"PLTE"][k:k + 3])
+               for k in range(0, len(chunks[b"PLTE"]), 3)]
+
+    raw = zlib.decompress(chunks[b"IDAT"])
+    stride = (width + 1) // 2
+    rows = []
+    for y in range(height):
+        line = raw[y * (stride + 1):(y + 1) * (stride + 1)]
+        assert line[0] == 0, "filter type 0 only"
+        nibbles = []
+        for byte in line[1:]:
+            nibbles += [byte >> 4, byte & 0xF]
+        rows.append(nibbles[:width])
+    return rows, palette
+
+
+def test_the_png_encoder_writes_a_png(tmp_path):
+    """Every pixel back, unchanged, through a decoder that shares no code."""
+    from services.agent import preview
+
+    want = [[(x + y) % 16 for x in range(7)] for y in range(5)]   # odd width
+    rows, palette = decode_png(
+        preview.encode_png([bytes(r) for r in want], 7))
+
+    assert rows == want
+    assert palette == [tuple(c) for c in preview.JET_16]
+
+
+def test_the_preview_constants_still_match_muf():
+    """The duplication this module admits to, pinned.
+
+    `preview` cannot import `muf` -- the agent is stdlib-only and `muf` is a
+    server-side package -- so the arithmetic is copied. Copied constants drift;
+    this is what stops them.
+    """
+    io_chirp = pytest.importorskip("muf.io_chirp")
+    render = pytest.importorskip("muf.render")
+    spectro = pytest.importorskip("muf.spectro")
+    from services.agent import preview
+
+    assert preview.NOISE_COEF == spectro.NOISE_COEF
+    assert preview.C_M_S == io_chirp.C_M_S
+    assert preview.UNIDENTIFIED_TX == io_chirp.UNIDENTIFIED_TX
+    assert preview.MAX_VIRTUAL_RANGE_KM == io_chirp.MAX_VIRTUAL_RANGE_KM
+    assert (preview.VMIN_DB, preview.VMAX_DB) == (render.DEFAULT_VMIN_DB,
+                                                  render.DEFAULT_VMAX_DB)
+    assert preview.SNR_OFFSET_DB == io_chirp.SNR_OFFSET_DB
+
+
+def test_the_preview_is_not_mirrored_top_to_bottom(make_chirp_h5):
+    """The one bug in here that would still look like an ionogram.
+
+    v2's range axis ascends and this pipeline's descends, with the largest
+    virtual range at the top of the picture where `render` draws it. Reverse it
+    wrongly and the thumbnail is upside down and entirely plausible.
+
+    The echo is put in the *near* half of the stored axis, so an unreversed
+    read puts it in the wrong half of the image rather than merely off-centre.
+    """
+    np = pytest.importorskip("numpy")
+    from services.agent import preview
+
+    n_freq, fftlen = 32, 3000          # 40 km bins, so 71 fit under the extent
+    power = np.full((n_freq, fftlen), 1.0)
+    power[:, fftlen // 2 - 20] = 400.0     # ascending axis: below centre is near
+    path = make_chirp_h5(power, max_range_extent_km=1400.0)
+    shot = preview.build(path, size=(32, 24))
+
+    assert not shot.cropped, "this product is narrow enough to be shown whole"
+    rows, _ = decode_png(shot.png)
+    brightest = max(range(len(rows)), key=lambda y: max(rows[y]))
+    assert brightest > len(rows) // 2, (
+        "a near echo belongs near the bottom, where `render` puts the small "
+        "ranges -- finding it in the upper half means the reversal was skipped")
+
+
+def test_the_preview_uses_the_same_db_scale_as_the_full_render(make_chirp_h5):
+    """A bright cell in the thumbnail has to mean what it means in the big one."""
+    np = pytest.importorskip("numpy")
+    io_chirp = pytest.importorskip("muf.io_chirp")
+    from services.agent import preview
+
+    rng = np.random.default_rng(11)
+    power = rng.gamma(2.0, 1.0, (32, 3000)) + 0.5
+    power[:, 1520] = 900.0
+    path = make_chirp_h5(power, max_range_extent_km=1400.0)
+
+    ion = io_chirp.load(path)
+    want = preview._block_max(preview._block_max(ion.db, 16, 0), 12, 1)
+    want = np.clip(np.rint((want - preview.VMIN_DB) * 15.0
+                           / (preview.VMAX_DB - preview.VMIN_DB)), 0, 15).T
+
+    rows, _ = decode_png(preview.build(path, size=(16, 12)).png)
+    assert np.array_equal(np.array(rows), want.astype(int)), (
+        "the thumbnail's levels must come from the same dB the renderer uses")
+
+
+def test_a_zero_byte_product_costs_a_preview_and_nothing_else(station):
+    """Products are opened while the recorder is still writing them.
+
+    Every existing health test writes zero-byte products; a decoder that raised
+    out of the pass would take all of them with it.
+    """
+    pytest.importorskip("h5py")
+    (station.output_dir / "lfm_ionogram-A-TST-ch0-001-1785846834.00.h5").touch()
+    live = replace(station, server_url="http://server/api")
+    pushed = []
+
+    def opener(request, timeout=None):
+        pushed.append(request.full_url)
+        return FakeResponse({"ok": True})
+
+    result = runner.run_once(live, opener=opener, include_epoch=False,
+                             previews=runner.PreviewState())
+
+    assert result.pushed, "health must still go out"
+    assert result.previews_sent == 0
+    assert not any(u.endswith("/preview") for u in pushed)
+    assert any("preview A:" in e for e in result.errors)
+
+
+def test_the_walk_groups_products_by_transmitter(station):
+    """One rglob answers both `newest_product_age` and the previews.
+
+    The transmitter is in the filename, so grouping by circuit opens nothing
+    and stats nothing -- which is what makes doing this every 60 s on a FUSE
+    volume reasonable.
+    """
+    for name in ("lfm_ionogram-SGO-TST-ch0-001-1785846000.00.h5",
+                 "lfm_ionogram-SGO-TST-ch0-001-1785849000.00.h5",
+                 "lfm_ionogram-cyprus1-TST-ch0-002-1785847000.00.h5"):
+        (station.output_dir / name).touch()
+
+    by_tx, mtime = health.scan_products(station.output_dir)
+
+    assert set(by_tx) == {"SGO", "cyprus1"}
+    assert by_tx["SGO"][1] == 1785849000.0, "newest per circuit, not first seen"
+    assert mtime is None, "no name needed the mtime fallback"
+    # And the metric still reads the newest of all of them.
+    assert health.newest_product_age(station, (by_tx, mtime)).detail.startswith(
+        "sounding start time")
+
+
+def test_an_unchanged_product_is_not_sent_twice():
+    """An idle circuit must cost nothing at all."""
+    from services.agent import preview
+
+    newest = {"SGO": (Path("a.h5"), 100.0)}
+    picked, cursor = preview.due(newest, {})
+    assert [p[0] for p in picked] == ["SGO"]
+
+    picked, cursor = preview.due(newest, {"SGO": 100.0}, cursor=cursor)
+    assert picked == []
+
+    picked, _ = preview.due({"SGO": (Path("b.h5"), 200.0)}, {"SGO": 100.0})
+    assert [p[2] for p in picked] == [200.0], "a newer product must go"
+
+
+def test_more_new_products_than_the_budget_spread_over_passes():
+    """A station handed eleven circuits at once must not make one long pass.
+
+    Round-robin rather than newest-first: sorting by `t0` would let a busy
+    circuit starve a quiet one forever, and the quiet one is usually the
+    interesting one.
+    """
+    from services.agent import preview
+
+    newest = {f"tx{i}": (Path(f"{i}.h5"), float(i)) for i in range(11)}
+    sent, cursor, seen = {}, 0, []
+    for _ in range(3):
+        picked, cursor = preview.due(newest, sent, cursor=cursor)
+        assert len(picked) <= preview.MAX_PER_PASS
+        for tx, _path, t0 in picked:
+            sent[tx] = t0
+            seen.append(tx)
+
+    assert len(seen) == len(set(seen)) == 11, (
+        "three passes at four each must cover eleven circuits exactly once")
+
+
+# --------------------------------------------------------------------------
 # Transport and loop
 # --------------------------------------------------------------------------
 

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
@@ -274,6 +276,30 @@ def ionogram(sounding_id: int, request: Request,
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
+@router.get("/preview/{station}/{tx}.png")
+def station_preview(station: str, tx: str, request: Request,
+                    t: str | None = None) -> Response:
+    """The newest thumbnail a station pushed for one transmitter.
+
+    Encoded on the station itself; see ``services/agent/preview.py`` for why
+    that is where it belongs and what it costs there.
+
+    ``t`` is ignored and exists to be in the URL. The console reloads itself
+    entirely every 15 s, so every ``<img>`` is requested again; with a plain
+    URL and this ``max-age`` the picture would freeze for an hour, and with
+    ``no-cache`` every open console would re-transfer every thumbnail four
+    times a minute. Keying the URL on the sounding's own ``t0`` makes an
+    unchanged product a cache hit and a new one a miss, which is exactly the
+    question being asked.
+    """
+    image = db.preview_image(request.app.state.db, station, tx)
+    if image is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no preview for {tx} at {station}")
+    return Response(image, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
 @router.get("/soundings/{sounding_id}/sao.xml")
 def sounding_sao(sounding_id: int, request: Request,
                  gate: str = "auto") -> Response:
@@ -380,6 +406,41 @@ def _age_seconds(received_at: str | None) -> float | None:
     except ValueError:
         return None
     return round((datetime.now(timezone.utc) - when).total_seconds(), 1)
+
+
+def _preview(row: dict) -> dict:
+    """One thumbnail's metadata, ready for a template. No image bytes.
+
+    ``age_s`` is measured from ``t0`` -- the sounding's own start time -- not
+    from ``received_at``. "How old is this picture of the ionosphere" is the
+    question being asked, and a push that was delayed does not make the
+    sounding in it any newer. It is the same choice ``newest_product_age``
+    makes on the station, and it can come out negative for the same reason:
+    the recorder's clock disagreeing with this one, which the health metrics
+    are where to go and look at.
+    """
+    t0 = row["t0"]
+    url = f"/preview/{quote(row['station'])}/{quote(str(row['tx']))}.png"
+    return {
+        "tx": row["tx"],
+        "t0": t0,
+        # `t0` in the query string is the cache key and nothing else; see the
+        # `station_preview` endpoint for why the URL needs one at all.
+        "url": url if t0 is None else f"{url}?t={t0:.0f}",
+        "age_s": None if t0 is None else time.time() - float(t0),
+        "received_at": row["received_at"],
+        "width": row["width"], "height": row["height"],
+        "freq_mhz": _span(row["freq_lo_hz"], row["freq_hi_hz"], 1e6),
+        "range_km": _span(row["range_lo_m"], row["range_hi_m"], 1e3),
+        "cropped": bool(row["cropped"]),
+    }
+
+
+def _span(lo, hi, scale: float) -> str:
+    """``"0.6-16.0"``, or empty when the agent did not say."""
+    if lo is None or hi is None:
+        return ""
+    return f"{float(lo) / scale:.1f}–{float(hi) / scale:.1f}"
 
 
 def _command(row: dict) -> dict:

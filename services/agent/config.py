@@ -95,6 +95,15 @@ class StationConfig:
     #: for a first run and for a test.
     token: str = ""
 
+    #: Send a thumbnail of the newest product per transmitter alongside the
+    #: health push. Off makes the station report ages and nothing else, which
+    #: is what it did before; see :mod:`services.agent.preview` for what one
+    #: costs (2.5 ms and ~3 KB for an ordinary DOB product).
+    preview: bool = True
+    #: ``(frequencies, ranges)``. Wider than the console shows would only send
+    #: pixels the browser throws away.
+    preview_size: tuple[int, int] = (128, 96)
+
     push_interval_s: float = 60.0
     #: How long after boot to suppress alerts. A station coming up looks
     #: exactly like a station that has died.
@@ -151,7 +160,7 @@ class StationConfig:
         for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir"):
             if key in known:
                 known[key] = Path(known[key])
-        for key in ("units", "optional_units"):
+        for key in ("units", "optional_units", "preview_size"):
             if key in known:
                 known[key] = tuple(known[key])
         return cls(**known)

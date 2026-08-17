@@ -318,6 +318,109 @@ def test_acking_an_unknown_command_is_accepted(client):
 
 
 # --------------------------------------------------------------------------
+# Station previews
+# --------------------------------------------------------------------------
+
+PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"x" * 30)
+
+
+def push_preview(client, station="SIM", tx="cyprus1", image=PNG, **meta):
+    import base64
+
+    body = {"tx": tx, "image_b64": base64.b64encode(image).decode("ascii")}
+    body.update(meta)
+    return client.post(f"/stations/{station}/preview", json=body, headers=CTL)
+
+
+def test_a_preview_needs_the_control_scope(client):
+    """A picture of what a station is receiving is a station write."""
+    import base64
+
+    r = client.post("/stations/SIM/preview",
+                    json={"tx": "x", "image_b64": base64.b64encode(PNG).decode()})
+    assert r.status_code == 401
+
+
+def test_a_preview_replaces_the_one_before_it(client):
+    """One row per circuit. This table is a live view, not a record."""
+    assert push_preview(client, t0=100.0).status_code == 200
+    assert push_preview(client, t0=200.0, image=PNG + b"newer").status_code == 200
+
+    with db.session(db.DEFAULT_DB) as conn:
+        stored = db.previews(conn, "SIM")
+        assert len(stored) == 1
+        assert stored[0]["t0"] == 200.0
+        assert db.preview_image(conn, "SIM", "cyprus1") == PNG + b"newer"
+
+    got = client.get("/preview/SIM/cyprus1.png")
+    assert got.status_code == 200
+    assert got.headers["content-type"] == "image/png"
+    assert got.content == PNG + b"newer"
+
+
+def test_an_oversize_preview_is_refused(client):
+    """The first endpoint here where an unbounded body fills a disk."""
+    from services.api import agent_routes
+
+    r = push_preview(client, image=b"\x89PNG\r\n\x1a\n"
+                     + b"x" * agent_routes.MAX_PREVIEW_BYTES)
+    assert r.status_code == 413
+
+
+def test_something_that_is_not_a_png_is_refused(client):
+    """Stored bytes are served back under `image/png`, so they must be one.
+
+    Without this the endpoint hands a browser arbitrary content under a
+    content type of the server's choosing.
+    """
+    assert push_preview(client, image=b"GIF89a" + b"x" * 40).status_code == 400
+    assert push_preview(client, tx="").status_code == 400
+
+
+def test_an_absent_preview_is_a_404_not_an_empty_image(client):
+    assert client.get("/preview/SIM/nobody.png").status_code == 404
+
+
+def test_forgetting_a_receiver_takes_its_pictures_too(client):
+    """Otherwise the pictures outlive the panel they hung on."""
+    push_preview(client)
+    with db.session(db.DEFAULT_DB) as conn:
+        went = db.forget_station(conn, "SIM")
+        assert went["previews"] == 1
+        assert db.previews(conn, "SIM") == []
+
+
+def test_a_circuit_that_stops_reporting_is_swept(conn):
+    """A renamed or retired transmitter must not leave a picture up forever."""
+    db.save_preview(conn, "SIM", "gone", PNG, t0=1.0)
+    stale = (db.datetime.now(db.timezone.utc)
+             - db.timedelta(days=db.PREVIEW_RETENTION_DAYS + 1))
+    conn.execute("UPDATE station_preview SET received_at = ?",
+                 (stale.strftime(db.TIME_FORMAT),))
+    conn.commit()
+
+    db.save_preview(conn, "SIM", "here", PNG, t0=2.0)
+
+    assert [p["tx"] for p in db.previews(conn, "SIM")] == ["here"]
+
+
+def test_the_console_links_the_picture_and_never_carries_it(client):
+    """The console reloads whole every 15 s; an inlined image would go with it."""
+    client.post("/stations/health", json=report(), headers=CTL)
+    push_preview(client, t0=1785846834.0, width=128, height=96,
+                 freq_lo_hz=5.5e5, freq_hi_hz=1.6e7,
+                 range_lo_m=2.3e6, range_hi_m=5.0e6)
+
+    html = client.get("/ui").text
+
+    assert '/preview/SIM/cyprus1.png?t=1785846834' in html, (
+        "the URL carries `t0` or the picture freezes for an hour behind "
+        "`max-age`, and without `max-age` it re-transfers four times a minute")
+    assert "base64" not in html
+    assert "0.6–16.0 MHz" in html
+
+
+# --------------------------------------------------------------------------
 # The real agent against the real server
 # --------------------------------------------------------------------------
 
@@ -374,6 +477,71 @@ def test_the_agent_and_the_server_agree_on_every_path(client, tmp_path):
     shown = client.get("/stations/SIM/health").json()
     assert shown["metrics"], "the real collector produced a document"
     assert shown["commands"][0]["state"] == "acked"
+
+
+def test_a_product_on_the_stations_disk_reaches_the_console(client, tmp_path,
+                                                            make_chirp_h5):
+    """The whole path, with nothing faked but the network.
+
+    A real product is decoded by the real agent, pushed through the real route
+    and rendered by the real template. Every piece of this is exercised
+    separately elsewhere; what only this test can catch is the two halves
+    disagreeing about a name -- the transmitter that keys the row, the URL and
+    the dedup are three places the same string has to arrive.
+    """
+    pytest.importorskip("h5py")
+    numpy = pytest.importorskip("numpy")
+    from services.agent import runner
+    from services.agent.config import StationConfig
+
+    products = tmp_path / "products"
+    products.mkdir()
+    power = numpy.full((16, 600), 1.0)
+    power[:, 290] = 300.0
+    shutil.move(str(make_chirp_h5(power, txname="cyprus1",
+                                  station_name="SIM")),
+                str(products / "lfm_ionogram-cyprus1-SIM-ch000-007-"
+                                "1770163210.01.h5"))
+
+    config = StationConfig(station="SIM", server_url="http://testserver",
+                           token="ctl", chirp_config=tmp_path / "none.ini",
+                           output_dir=products, ringbuffer_dir=tmp_path,
+                           reference_tx={})
+
+    def opener(request, timeout=None):
+        url = request.full_url.replace("http://testserver", "")
+        body = json.loads(request.data.decode()) if request.data else None
+        headers = {k: v for k, v in request.header_items()}
+        response = (client.get(url, headers=headers)
+                    if request.get_method() == "GET"
+                    else client.post(url, json=body, headers=headers))
+        assert response.status_code == 200, f"{url} -> {response.text[:200]}"
+
+        class Wrapped:
+            def read(self_inner):
+                return response.content
+
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+        return Wrapped()
+
+    state = runner.PreviewState()
+    first = runner.run_once(config, opener=opener, include_epoch=False,
+                            previews=state)
+    assert first.previews_sent == 1, first.errors
+
+    again = runner.run_once(config, opener=opener, include_epoch=False,
+                            previews=state)
+    assert again.previews_sent == 0, "an unchanged product must cost nothing"
+
+    image = client.get("/preview/SIM/cyprus1.png")
+    assert image.status_code == 200
+    assert image.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert '/preview/SIM/cyprus1.png?t=1770163210' in client.get("/ui").text
 
 
 # --------------------------------------------------------------------------

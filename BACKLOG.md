@@ -1831,7 +1831,7 @@ it are.
 Verified in the browser against a seeded database: optional units render as
 grey `?` with their reason on a HEALTHY panel, the button appears on the stale
 panel and nowhere else, and a live station is refused with its age in the
-message. 816 passed, 34 skipped.
+message. 934 passed, 34 skipped.
 
 ### Still open
 
@@ -1843,3 +1843,101 @@ message. 816 passed, 34 skipped.
   and the move is one `UPDATE` per table plus a collision rule — but it is
   done by hand, and the hand that skips it leaves identifications filed under
   a receiver the console no longer shows.
+
+
+## 29. What the station is receiving right now (2026-08-18)
+
+The console could call a station HEALTHY without anyone being able to see
+whether it was making *usable* pictures. `newest_product_age_s` says a product
+exists; nothing said what was in it. And the one table that showed pictures —
+arrivals — measures the **archive**, which reaches the server on
+`chirp-archive-sync`'s timer and is routinely hours behind; its own note in the
+panel said so.
+
+So the agent now encodes a 128×96 thumbnail of the newest product **per
+transmitter**, straight off the acquisition laptop's own disk, and pushes it
+with the health report. The console shows them in the station panel, above the
+arrivals table — the side of that note where "what the station itself says"
+already lives.
+
+**The cost was measured before anything was built, because that was the
+constraint.** A v2 `.h5` holds the ionogram already computed, so this is a
+read, a decimation and a PNG, not an FFT:
+
+| | |
+|---|---|
+| ordinary DOB product, decode + decimate + encode | **2.5 ms** |
+| search-mode product, `(486, 3999)`, 3.8 MB raw | **18 ms** |
+| thumbnail on the wire | ~3 KB, ~4 KB base64 |
+| push interval | 60 s |
+
+18 ms a minute is 0.03 % of one core on the machine running the recorder. At
+most four products are decoded per pass, round-robin so a busy circuit cannot
+starve a quiet one, and a transmitter whose newest product has already been
+sent is skipped without opening anything.
+
+- **One walk of the archive, not two.** `newest_product_age` already `rglob`ed
+  `lfm_ionogram-*.h5` and read `t0` out of the *filename*; the transmitter is
+  in that name too. The walk moved into `health.scan_products` and both
+  questions are answered from it. On DOB `output_dir` is a USB volume behind a
+  FUSE daemon competing with the recorder for CPU, so a second walk would be
+  paying that cost for nothing.
+- **The range axis is reversed, and that is the bug this could most easily
+  have shipped.** v2 stores ascending, this pipeline uses descending virtual
+  range, `render` draws the largest range at the top. Get it wrong and the
+  thumbnail is upside down and entirely plausible. There is a test that puts a
+  near echo in a product and fails if it comes back in the top half.
+- **Block-max decimation, not mean and not striding.** A trace is one bright
+  cell among noise. Verified against a real sounding with a real trace: the
+  cusp, the 2700 km direct line and a 28 MHz interferer all survive 128×96.
+- **The same dB scale as the full renderer** — `(snr+1)/NOISE_COEF`, `to_db`,
+  clipped to 20–75 through the same `jet`. A test pins the copied constants
+  against `muf`'s originals, because `preview.py` cannot import `muf`: the
+  agent is stdlib-only at import and `muf` is a server-side package.
+- **The PNG encoder is `zlib` plus `struct`**, about twenty lines, 4 bits per
+  pixel with a 16-entry palette. The station has no Pillow and does not get one
+  for this. A test decodes it with a reader that shares no code.
+- **`import h5py` inside the function, under `try/except`** — the pattern
+  `epoch_offset` already uses. Missing numpy or h5py degrades to *no preview*
+  and says so; it can never take the health push down with it. A zero-byte
+  product — which every existing health test writes — costs one log line.
+
+**Not in the health document.** That document is stored verbatim forever,
+written 1440× per station per day, and read back in full twice per station on
+every 15 s console refresh, then discarded both times. Four thumbnails there
+would be tens of megabytes a day of permanent storage re-read constantly by
+code that throws it away. `station_preview` is one row per
+`(station, transmitter)`, upserted in place and swept after seven days, so it
+is bounded by circuits rather than by time — and `forget_station` clears it,
+or the pictures would outlive the panel they hung on.
+
+- **The first `BLOB` in this schema.** A base64 `TEXT` column would cost a
+  third more for a value nothing reads as text.
+- **The push endpoint is the first one here where an unbounded body is a
+  disk-fill vector.** There is a byte cap checked *before* the base64 is
+  decoded, and a PNG-magic check before storing: the bytes are served straight
+  back as `image/png`, so what goes in has to be one.
+- **The URL carries `t0`.** The console reloads whole every 15 s, so every
+  `<img>` is re-requested; with a plain URL the picture freezes for an hour
+  behind `max-age`, and with `no-cache` every open console re-transfers every
+  thumbnail four times a minute. The sounding's own start time is exactly the
+  right cache key.
+
+Verified end to end: the real agent decoding real products against the real
+routes, twice, with the second pass sending nothing. 951 passed, 34 skipped.
+
+### Still open
+
+- **The dedup lives in the agent's memory only.** A restart re-sends every
+  thumbnail once. That is four passes of work and a fresher console, both
+  better than a state file on the acquisition laptop that could disagree with
+  the server — but it does mean `Restart=always` flapping would re-push.
+- **The crop is a fixed 3000 km window around the strongest row.** It is right
+  for a search-mode product spanning 8000 km and it is arbitrary. The stored
+  gate is used when it is narrower; nothing consults the detections, which is
+  what `render`'s `gate=auto` does with a real trace in hand.
+- **Nothing shows the preview on the sounding page.** That route is keyed on a
+  database id, and a product being received now does not have one — `watch.py`
+  waits 60 s plus a 900 s timer before ingest. "Now" and "has an id" are
+  mutually exclusive states, so the live picture belongs on the console and the
+  ingested one on the sounding page.

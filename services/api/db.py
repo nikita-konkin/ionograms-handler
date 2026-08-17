@@ -1,6 +1,6 @@
 """SQLite access for the api service.
 
-Stdlib ``sqlite3`` and hand-written SQL rather than an ORM. The schema is nine
+Stdlib ``sqlite3`` and hand-written SQL rather than an ORM. The schema is ten
 tables of flat columns (``schema.sql``); an ORM would add a dependency, a
 migration tool and a query language to learn, in exchange for nothing this
 service needs.
@@ -17,7 +17,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -74,6 +74,12 @@ def time_bound(value: str | None, *, end: bool = False) -> str | None:
     return text
 
 
+#: The spelling of ``received_at`` and friends. Named so that anything
+#: comparing against those columns -- a retention cutoff, say -- formats its
+#: own timestamp the identical way; these are compared as text.
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
 def utcnow() -> str:
     """ISO-8601 UTC, second resolution, with the ``Z``.
 
@@ -81,7 +87,7 @@ def utcnow() -> str:
     into a table that also holds station-reported UTC is the kind of thing that
     reads correctly for months and then produces a negative age.
     """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime(TIME_FORMAT)
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
@@ -180,9 +186,10 @@ def stations(conn: sqlite3.Connection) -> list[str]:
 
 
 def forget_station(conn: sqlite3.Connection, station: str) -> dict:
-    """Drop a station's health reports and commands. Returns what went.
+    """Drop a station's health reports, commands and previews. Returns what went.
 
-    The two tables :func:`stations` reads, because the point is to
+    The two tables :func:`stations` reads, plus the pictures that hang off the
+    panel they build, because the point is to
     remove the console panel of a receiver that has been renamed or retired --
     one that will never push again, and whose permanently STALE panel trains
     the reader to ignore a colour that means something on the others.
@@ -209,8 +216,77 @@ def forget_station(conn: sqlite3.Connection, station: str) -> dict:
                            (station,)).rowcount
     commands = conn.execute("DELETE FROM command WHERE station = ?",
                             (station,)).rowcount
+    previews = conn.execute("DELETE FROM station_preview WHERE station = ?",
+                            (station,)).rowcount
     conn.commit()
-    return {"health_reports": reports, "commands": commands, "kept": kept}
+    return {"health_reports": reports, "commands": commands,
+            "previews": previews, "kept": kept}
+
+
+# --------------------------------------------------------------------------
+# Previews (services/agent/preview.py)
+# --------------------------------------------------------------------------
+
+#: How long a circuit's thumbnail outlives its last push. Long enough that a
+#: transmitter sounded once a day is not swept between soundings; short enough
+#: that a renamed or retired one does not leave a picture up forever, which is
+#: the same failure `forget_station` exists to fix one level up.
+PREVIEW_RETENTION_DAYS = 7
+
+
+def save_preview(conn: sqlite3.Connection, station: str, tx: str,
+                 image: bytes, **meta: Any) -> None:
+    """Store, or replace, one station's newest picture of one transmitter.
+
+    An upsert on ``(station, tx)``: this table is a live view and the newest
+    picture is the only one worth keeping. The retention sweep runs here rather
+    than on a timer because a push is the only moment this table is written at
+    all -- a separate scheduler for a handful of rows would be more machinery
+    than the problem.
+    """
+    conn.execute(
+        "INSERT INTO station_preview"
+        " (station, tx, t0, received_at, width, height, freq_lo_hz,"
+        "  freq_hi_hz, range_lo_m, range_hi_m, cropped, image)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(station, tx) DO UPDATE SET"
+        "   t0 = excluded.t0, received_at = excluded.received_at,"
+        "   width = excluded.width, height = excluded.height,"
+        "   freq_lo_hz = excluded.freq_lo_hz, freq_hi_hz = excluded.freq_hi_hz,"
+        "   range_lo_m = excluded.range_lo_m, range_hi_m = excluded.range_hi_m,"
+        "   cropped = excluded.cropped, image = excluded.image",
+        (station, tx, meta.get("t0"), utcnow(),
+         meta.get("width"), meta.get("height"),
+         meta.get("freq_lo_hz"), meta.get("freq_hi_hz"),
+         meta.get("range_lo_m"), meta.get("range_hi_m"),
+         _tri(meta.get("cropped")), sqlite3.Binary(image)),
+    )
+    conn.execute(
+        "DELETE FROM station_preview WHERE received_at < ?",
+        ((datetime.now(timezone.utc)
+          - timedelta(days=PREVIEW_RETENTION_DAYS)).strftime(TIME_FORMAT),))
+    conn.commit()
+
+
+def previews(conn: sqlite3.Connection, station: str) -> list[dict]:
+    """Every circuit's preview metadata for one station -- **without the image**.
+
+    The console renders one panel per station on every 15 s refresh; carrying
+    the PNGs through that query would put a few hundred kilobytes of image into
+    the HTML render path to decide where to put an ``<img>`` tag.
+    """
+    return rows(conn,
+                "SELECT station, tx, t0, received_at, width, height,"
+                " freq_lo_hz, freq_hi_hz, range_lo_m, range_hi_m, cropped"
+                " FROM station_preview WHERE station = ?"
+                " ORDER BY t0 DESC, tx", (station,))
+
+
+def preview_image(conn: sqlite3.Connection, station: str,
+                  tx: str) -> bytes | None:
+    row = one(conn, "SELECT image FROM station_preview"
+                    " WHERE station = ? AND tx = ?", (station, tx))
+    return None if row is None else bytes(row["image"])
 
 
 # --------------------------------------------------------------------------

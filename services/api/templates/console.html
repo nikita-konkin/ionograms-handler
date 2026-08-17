@@ -212,6 +212,35 @@
     {% endif %}
     {% endif %}
 
+    {% if s.previews %}
+    <div style="display:flex;flex-wrap:wrap;gap:.7rem;margin-top:.7rem">
+      {% for p in s.previews %}
+      <div style="font-size:.75rem">
+        {# `image-rendering:pixelated` on purpose: this is 128x96 of real
+           cells, and a browser smoothing them would invent a trace between
+           two noise bins. #}
+        <img class="iono" src="{{ p.url }}" alt="newest sounding from {{ p.tx }}"
+             width="{{ p.width or 128 }}" height="{{ p.height or 96 }}"
+             style="width:180px;height:auto;image-rendering:pixelated">
+        <div><b>{{ p.tx }}</b> <span class="muted">{{ p.age_s|duration }} old</span></div>
+        <div class="muted">{{ p.freq_mhz }} MHz{% if p.range_km %} &middot;
+          {{ p.range_km }} km{% if p.cropped %}*{% endif %}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="note">The newest product on <b>this station's own disk</b>, one
+    per transmitter, encoded there and pushed with the health report &mdash; so
+    it is current even when the archive transfer is hours behind. Age is the
+    sounding's own start time. Colours are the same 20&ndash;75 dB
+    <code>jet</code> scale as a full ionogram{% if s.previews|selectattr('cropped')|list %};
+    an asterisk marks a range axis narrowed to fit the echoes{% endif %}.</p>
+    {% else %}
+    <p class="note">This station sends no preview. Either its agent predates
+    the feature or <code>preview</code> is <code>false</code> in its
+    <code>agent.json</code>; whether it has products to show at all is what
+    <code>newest_product_age_s</code> below answers.</p>
+    {% endif %}
+
     {% if a.arrivals %}
     <div class="scroll" style="margin-top:.6rem"><table>
       <tr><th>arrived</th><th>from</th><th>age</th><th>sweep</th><th></th></tr>
