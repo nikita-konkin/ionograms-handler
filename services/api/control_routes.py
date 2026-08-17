@@ -55,6 +55,7 @@ from muf.stations import default_registry
 
 from . import acquisition, db
 from .auth import require_control
+from .read_routes import _age_seconds
 
 router = APIRouter(tags=["control"])
 
@@ -258,6 +259,53 @@ def forget_transmitter(station: str, code: str, request: Request,
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             f"{station} has no transmitter {code!r}")
     return {"ok": True, "station": station, "code": code}
+
+
+@router.delete("/stations/{station}")
+def forget_station(station: str, request: Request, force: bool = False,
+                   _: str = Depends(require_control)) -> dict:
+    """Remove a renamed or retired receiver from the console.
+
+    The console lists every station that has ever pushed, so a receiver that
+    changed its name leaves a panel behind that is STALE for good. That is the
+    one thing a health console cannot afford: a red that is always red is a
+    red nobody reads, and the next one that means something arrives beside it.
+
+    **A station still reporting is refused.** Deleting its history would clear
+    the panel until the next push and lose the record of when reports stopped
+    -- the question sec. 5.4 keeps every report to answer. The name lives in
+    the station's own ``~/agent.json``, so the fix for a live station is
+    there, not here. ``?force=true`` overrides for the case the operator
+    means it.
+
+    Identifications and configuration epochs stay, under the old name. See
+    :func:`services.api.db.forget_station`.
+    """
+    conn = request.app.state.db
+    if station not in db.stations(conn):
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no health reports or commands for {station!r}")
+
+    latest = db.latest_health(conn, station)
+    age_s = _age_seconds(latest["received_at"]) if latest else None
+    if not force and age_s is not None and age_s <= acquisition.STALE_AFTER_S:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{station} reported {age_s:.0f}s ago, so an agent is still "
+            f"pushing under that name and the panel would return on its next "
+            f"push. Change `station` in that agent's config first. Pass "
+            f"force=true to delete the history anyway.")
+
+    removed = db.forget_station(conn, station)
+    kept = removed["kept"]
+    return {
+        "ok": True, "station": station, **removed,
+        "note": (f"{removed['health_reports']} report(s) and "
+                 f"{removed['commands']} command(s) removed. "
+                 f"{kept['transmitters']} identification(s) and "
+                 f"{kept['config_epochs']} config epoch(s) were kept under "
+                 f"this name -- they are provenance, not console furniture."),
+    }
 
 
 @router.post("/stations/{station}/schedule")

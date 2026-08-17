@@ -126,14 +126,27 @@ def unit_states(config: StationConfig) -> list[Metric]:
     ``systemctl is-active`` rather than a process-table scan: the units are
     the supervision boundary, and a bare ``pgrep`` cannot tell a service that
     exited cleanly from one that was never started.
+
+    A unit matching ``config.optional_units`` reports its state and never a
+    failure. "Not running" and "wrong" are different claims, and for the
+    digisonde receivers only the first one is true -- see
+    :data:`~services.agent.config.DEFAULT_OPTIONAL_UNITS`.
     """
     out = []
     for unit in config.units:
         code, text = _run(["systemctl", "is-active", unit])
         if text in ("", "unknown") or code == 127:
             out.append(Metric.unknown(f"unit:{unit}", text or "no systemctl"))
+        elif text == "active":
+            out.append(Metric(f"unit:{unit}", text, ok=True))
+        elif any(part in unit for part in config.optional_units):
+            # Not `Metric.unknown`: the state was measured and is worth
+            # showing. What is unknown is whether anyone minds.
+            out.append(Metric(f"unit:{unit}", text, ok=None,
+                              detail="optional unit -- the station acquires "
+                                     "its own path without it"))
         else:
-            out.append(Metric(f"unit:{unit}", text, ok=(text == "active")))
+            out.append(Metric(f"unit:{unit}", text, ok=False))
     return out
 
 

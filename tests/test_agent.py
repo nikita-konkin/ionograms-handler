@@ -331,6 +331,52 @@ def test_one_definite_failure_is_enough(station):
     assert not report.healthy
 
 
+def _fake_systemctl(monkeypatch, states: dict):
+    """`systemctl is-active <unit>` answering from a table."""
+    monkeypatch.setattr(health, "_run",
+                        lambda args, **kw: (0, states[args[-1]]))
+
+
+UNITS = ("chirp-rx.service", "chirp-digisonde@Dourbes.service")
+
+
+def test_an_inactive_digisonde_receiver_is_not_a_failure(monkeypatch, station):
+    """Four stopped digisonde receivers made DOB read UNHEALTHY.
+
+    Each is an oblique reception of a remote vertical sounder -- an extra
+    circuit, not the instrument -- so their state is worth reporting and is
+    not evidence about this station. The state itself still travels: "down
+    since Tuesday" is a different sentence from "not watched".
+    """
+    _fake_systemctl(monkeypatch, {"chirp-rx.service": "active",
+                                  "chirp-digisonde@Dourbes.service": "inactive"})
+    metrics = {m.name: m for m in health.unit_states(replace(station, units=UNITS))}
+
+    optional = metrics["unit:chirp-digisonde@Dourbes.service"]
+    assert optional.ok is None and optional.value == "inactive"
+    assert metrics["unit:chirp-rx.service"].ok is True
+    assert health.HealthReport("TST", 0.0, list(metrics.values())).healthy
+
+
+def test_a_required_unit_that_is_inactive_still_fails(monkeypatch, station):
+    """The exemption is by name, not a general softening of the check."""
+    _fake_systemctl(monkeypatch, {"chirp-rx.service": "inactive",
+                                  "chirp-digisonde@Dourbes.service": "active"})
+    metrics = health.unit_states(replace(station, units=UNITS))
+
+    assert not health.HealthReport("TST", 0.0, metrics).healthy
+    assert [m.name for m in metrics if m.ok is False] == ["unit:chirp-rx.service"]
+
+
+def test_the_exemption_can_be_turned_off_per_station(monkeypatch, station):
+    """A station that does depend on its digisonde feeds says so."""
+    _fake_systemctl(monkeypatch, {"chirp-digisonde@Dourbes.service": "failed"})
+    config = replace(station, units=UNITS[1:], optional_units=())
+    metric = health.unit_states(config)[0]
+
+    assert metric.ok is False and metric.value == "failed"
+
+
 def test_a_clock_five_years_slow_is_caught_with_no_data_on_disk(monkeypatch, station):
     """2026-08-06: the RTC had lost five years and the recorder stamped a run
     2021-04-02. `epoch_offset` cannot see this -- a clock that wrong means no

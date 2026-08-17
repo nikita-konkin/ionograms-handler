@@ -1813,6 +1813,19 @@ tell" need different responses.
   On a network archive `system_clock_s` reports the NTP state instead and
   carries the skew as a note — it once accused a host sitting 47 ms from its
   NTP server, and worse, returned before the NTP check ran at all.
+- **The digisonde receivers are watched but cannot fail the station.** Each
+  `chirp-digisonde@…` instance is an oblique reception of a *remote vertical*
+  sounder — an extra circuit, and one this station is normally better off
+  without: they are ringbuffer consumers at 25 MS/s and the cause of the 45 %
+  sample loss, which is why none should be enabled here at all. Stopped is
+  therefore the *correct* state, and painting four permanent reds for it is how
+  a status column stops being read. Their state is still reported, as `?`
+  rather than `FAIL`, because "Dourbes has been down since Tuesday" is worth
+  reading and "not running" and "wrong" are different claims. `optional_units`
+  in `~/agent.json` is the list, matched as a substring of the unit name; set
+  it to `[]` on a receiver that really does depend on one. The exemption is a
+  safety net for a station whose unit list has not been cleaned up yet — it
+  makes an enabled receiver quiet, not cheap.
 - **`epoch_offset_s` needs `par-*.h5`**, which only search mode produces. It is
   the only external check on the recorder's clock — it caught a 0.956 s offset
   that displaced every echo by 286,000 km while every product stayed

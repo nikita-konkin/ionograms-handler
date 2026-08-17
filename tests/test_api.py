@@ -1817,6 +1817,81 @@ def test_an_identification_is_per_receiver(client):
     assert kho[0]["timings"][0]["chirpt"] == 237.5
 
 
+# --------------------------------------------------------------------------
+# Forgetting a receiver
+# --------------------------------------------------------------------------
+
+def _retired(client, api_db, station="DOB"):
+    """A station that reported once and never will again, e.g. renamed."""
+    client.post("/stations/health", json=report(station=station), headers=CTL)
+    api_db.execute("UPDATE health_report SET received_at = '2026-08-01T00:00:00Z'"
+                   " WHERE station = ?", (station,))
+    api_db.commit()
+
+
+def test_a_renamed_receiver_can_be_forgotten(client, api_db):
+    """Its panel is STALE for good, and a red that is always red is not read."""
+    _retired(client, api_db)
+    assert "DOB" in client.get("/ui").text
+
+    r = client.delete("/stations/DOB", headers=CTL)
+    assert r.status_code == 200 and r.json()["health_reports"] == 1
+
+    assert client.get("/stations").json()["stations"] == []
+    assert "DOB" not in client.get("/ui").text
+    # The cascade is only as good as the PRAGMA, so it is asserted rather than
+    # assumed: orphaned metrics are invisible and would never be noticed.
+    assert api_db.execute("SELECT COUNT(*) FROM health_metric").fetchone()[0] == 0
+
+
+def test_forgetting_a_receiver_keeps_what_is_provenance(client, api_db):
+    """The identifications outlive the panel.
+
+    A transmitter row is a human judgement with its evidence attached, and
+    products already on disk carry the name it assigned. Deleting that to tidy
+    a console would be destroying a record to fix a colour.
+    """
+    _identify(client, station="DOB", code="NIC")
+    _retired(client, api_db)
+
+    body = client.delete("/stations/DOB", headers=CTL).json()
+
+    assert body["kept"]["transmitters"] == 1
+    assert "1 identification(s)" in body["note"]
+    listed = client.get("/stations/DOB/transmitters").json()["transmitters"]
+    assert [t["code"] for t in listed] == ["NIC"]
+
+
+def test_a_receiver_that_is_still_pushing_is_not_forgotten(client, api_db):
+    """Clearing a live station loses when reports stopped and gains nothing:
+    the panel returns on the next push. The name is the agent's to change."""
+    client.post("/stations/health", json=report(station="SIM"), headers=CTL)
+
+    refused = client.delete("/stations/SIM", headers=CTL)
+    assert refused.status_code == 409
+    assert "still pushing under that name" in refused.json()["detail"]
+
+    forced = client.delete("/stations/SIM?force=true", headers=CTL)
+    assert forced.status_code == 200
+
+
+def test_the_forget_button_is_offered_only_on_a_stale_panel(client, api_db):
+    """The server refuses a live receiver at the same threshold, so the button
+    appears exactly where pressing it would be accepted."""
+    client.post("/stations/health", json=report(station="SIM"), headers=CTL)
+    assert "forget this receiver" not in client.get("/ui").text
+
+    _retired(client, api_db, station="DOB")
+    assert client.get("/ui").text.count("forget this receiver") == 1
+
+
+def test_forgetting_a_receiver_is_control_scope(client, api_db):
+    _retired(client, api_db)
+    assert client.delete("/stations/DOB").status_code == 401
+    assert client.delete("/stations/NOSUCH", headers=CTL).status_code == 404
+    assert "DOB" in client.get("/ui").text, "a refused delete must delete nothing"
+
+
 def test_a_schedule_names_transmitters_rather_than_carrying_numbers(client):
     _identify(client, code="NIC")
     r = client.post("/stations/SIM/schedule", headers=CTL, json={"codes": ["TGO"]})

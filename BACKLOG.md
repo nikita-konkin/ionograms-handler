@@ -1756,3 +1756,90 @@ Also open: nothing anywhere asserts the recorder is still running 24 h after a
 start. `tests/test_systemd_units.py` now pins the policy, but the policy is a
 proxy. `newest_product_age_s` is the real check and it fires 30 minutes late by
 design.
+
+## 28. Two panels that were lying (2026-08-17)
+
+Both from the console as it actually looked on the work server: four permanent
+reds and a receiver that no longer exists. Neither is a fault in the station,
+and both cost the same thing — a reader who has learned that the colours on
+this page do not mean anything.
+
+**Four inactive digisonde receivers no longer fail the station.**
+
+```
+FAIL  unit:chirp-digisonde@Chilton.service     inactive
+FAIL  unit:chirp-digisonde@Dourbes.service     inactive
+FAIL  unit:chirp-digisonde@Juliusruh.service   inactive
+FAIL  unit:chirp-digisonde@JuliusruhN.service  inactive
+```
+
+Each of those is an oblique reception of a *remote vertical* sounder — an
+extra circuit — and this station acquires its own path with all four stopped.
+They are also the ones that stop: a template instance whose ini section is
+missing exits at startup, and Chilton has no feed here at all. So
+`HealthReport.healthy` was false permanently, for four circuits nobody
+promised, which is the eleven-false-reds failure the station config was
+written to avoid, arriving one migration later.
+
+Sec. 23, "The migration re-enabled the digisonde receivers", settled the
+harder half of this the same day and in the other direction: those receivers
+are not free at all — they are ringbuffer consumers
+at 25 MS/s and the cause of the 45 % sample loss, none should be enabled on
+this station, and the example config no longer names one. That makes
+*inactive* the correct state rather than merely a tolerable one, and it makes
+this exemption a safety net for a unit list that has not been cleaned up yet
+rather than a licence to keep them listed. An exempt unit is quiet, not cheap.
+
+`StationConfig.optional_units` now defaults to `("chirp-digisonde@",)`,
+matched as a substring of the unit name. A match reports `ok=None` rather than
+`ok=False` — **not** `Metric.unknown`: the state *was* measured and is worth
+showing, and "Dourbes has been down since Tuesday" stays on the page for
+whoever wants it. What is unknown is whether anyone minds. `"optional_units":
+[]` in a station's `agent.json` makes every listed unit count again, which is
+the right knob for a receiver whose digisonde feeds are the point.
+
+Dropping them from `units` instead would have been the smaller edit and the
+worse one: it removes the information along with the alarm, and the next
+question about them is answered by nothing.
+
+**A renamed receiver can be removed from the console.** The panel list is
+`db.stations()` — every name that has ever pushed a report or been sent a
+command — so a receiver that changed its name leaves a panel behind that is
+STALE for good. `DELETE /stations/{station}` (control scope) drops exactly
+those two tables, and the console offers a "forget this receiver" button on
+stale panels only, armed in-page the same way the destructive controls beside
+it are.
+
+- **Identifications and configuration epochs stay, under the old name.** A
+  `transmitter` row is a human judgement with its evidence attached, and a
+  `config_epoch` is what `sounding.config_epoch_id` points at: deleting either
+  to tidy a panel would destroy the provenance of products already on disk.
+  The response says how many stayed. Moving them to the new name is a
+  deliberate second step, and it can collide — `transmitter` is unique on
+  `(station, code)` and on `(station, sounder_id)`, and where the new receiver
+  has already identified a transmitter for itself, its own timings are the
+  correct ones. A slot second is a *reception* second.
+- **A station still reporting is refused with 409.** Deleting a live history
+  clears the panel until the next push and loses the record of when reports
+  stopped — the question sec. 5.4 keeps every report to answer. The name lives
+  in that station's own `agent.json`, so the fix is there; `?force=true`
+  overrides for the operator who means it.
+- **`health_metric` is deleted explicitly**, not left to `ON DELETE CASCADE`:
+  the pragma is per connection, and a maintenance script that forgot it would
+  orphan the metrics where nothing would ever list them again.
+
+Verified in the browser against a seeded database: optional units render as
+grey `?` with their reason on a HEALTHY panel, the button appears on the stale
+panel and nowhere else, and a live station is refused with its age in the
+message. 816 passed, 34 skipped.
+
+### Still open
+
+- **The exemption is a substring match.** `chirp-digisonde@` covers the four
+  instances by construction, but a unit named to look like one would inherit
+  the exemption silently. A prefix-and-instance match would be stricter; the
+  substring is what makes `optional_units` readable in a JSON file.
+- **Nothing moves provenance to the new name.** The API keeps it and says so,
+  and the move is one `UPDATE` per table plus a collision rule — but it is
+  done by hand, and the hand that skips it leaves identifications filed under
+  a receiver the console no longer shows.

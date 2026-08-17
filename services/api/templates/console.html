@@ -101,6 +101,18 @@
   <p class="note">Nothing has arrived for more than {{ '%.0f'|format(stale_after) }} s.
   Health is pushed, so silence is itself the alert &mdash; the metrics below are
   the last ones received, not the current state.</p>
+  {# Offered only on a stale panel, and the server refuses a receiver still
+     pushing at the same threshold -- so the button appears exactly where it
+     would be accepted. A renamed receiver is STALE for good otherwise, and a
+     red that is always red is a red nobody reads. #}
+  <p class="note">
+    <button onclick="forget('{{ s.name }}')">forget this receiver</button>
+    For one that was <b>renamed or retired</b>. Drops its health history and
+    queued commands, which is what this panel is made of. Identifications and
+    configuration epochs are kept &mdash; they are the provenance of products
+    already on disk.
+  </p>
+  <div id="forgetSay-{{ s.name }}" class="note" style="margin-bottom:.6rem"></div>
   {% endif %}
 
   {% set a = s.acquisition %}
@@ -358,6 +370,7 @@
 
   const say = (station, text, bad) => write('say-' + station, text, bad);
   const planSay = (station, text, bad) => write('planSay-' + station, text, bad);
+  const forgetSay = (station, text, bad) => write('forgetSay-' + station, text, bad);
 
   // A queued command reloads the page to show its row, which would wipe the
   // message that says what was queued -- and a message that vanishes is the
@@ -391,7 +404,7 @@
   // One place where a control request is made and its failures are worded,
   // because the two callers below must not disagree about what a 401 means.
   // Returns {ok, body} or {ok: false, detail}.
-  async function control(url, body) {
+  async function control(url, body, method) {
     const token = tokField.value.trim();
     // Flagged rather than worded as a refusal: nothing was sent, so "refused"
     // would blame the server for a field the operator has not filled in yet.
@@ -400,10 +413,12 @@
     let r, out;
     try {
       r = await fetch(url, {
-        method: 'POST',
+        method: method || 'POST',
         headers: {'Content-Type': 'application/json',
                   'Authorization': 'Bearer ' + token},
-        body: JSON.stringify(body)
+        // A DELETE carries no body, and sending `"undefined"` as one gets it
+        // parsed as JSON by the server and refused as a malformed request.
+        body: body === undefined || body === null ? undefined : JSON.stringify(body)
       });
       out = await r.json().catch(() => ({}));
     } catch (e) {
@@ -452,6 +467,39 @@
     // slow command and a command nobody will ever execute.
     queued(station, say, name + ' queued as ' + (r.body.id || '').slice(0, 8)
            + ' — pending until the station\'s agent collects it.');
+  }
+
+  // Two-step like stop, and for the same reason: this deletes the record of
+  // when a receiver's reports stopped, which is the one thing silence-as-alert
+  // rests on. Keyed apart from the stop arming so confirming one cannot
+  // confirm the other.
+  async function forget(station) {
+    if (armed !== 'forget-' + station) {
+      armed = 'forget-' + station;
+      forgetSay(station, 'Forget ' + station + '? Its health history and '
+        + 'queued commands are deleted -- including when its reports stopped. '
+        + 'Identifications and configuration epochs are kept. Press again to '
+        + 'confirm; the page will not refresh until you do.');
+      clearTimeout(armedTimer);
+      armedTimer = setTimeout(() => {
+        disarm();
+        forgetSay(station, 'forget was not confirmed, so nothing was deleted.');
+      }, 30000);
+      return;
+    }
+    disarm();
+
+    forgetSay(station, 'forgetting ' + station + ' …');
+    const r = await control('/stations/' + encodeURIComponent(station),
+                            null, 'DELETE');
+    if (!r.ok) {
+      forgetSay(station, (r.needsToken ? '' : 'refused: ') + r.detail, true);
+      return;
+    }
+    // No carried message: the panel it would have been written in is the
+    // thing that just went away, and its absence is the confirmation.
+    forgetSay(station, r.body.note || 'forgotten');
+    setTimeout(() => location.reload(), 900);
   }
 
   // --- the sounding plan ---------------------------------------------------

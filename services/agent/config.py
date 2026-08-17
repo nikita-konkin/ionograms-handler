@@ -29,6 +29,22 @@ DEFAULT_UNITS = (
     "chirp-metadata.service",
 )
 
+#: Units that are watched but whose absence is not a failure, matched as a
+#: substring of the unit name.
+#:
+#: The digisonde receivers are the case this exists for. Each is an oblique
+#: reception of a *remote vertical* sounder -- a free extra circuit -- and the
+#: station acquires its own path perfectly well with all four stopped. They
+#: are also the ones that stop: a template instance whose ini section is
+#: missing exits at startup, and Chilton has no feed at all. Reporting four
+#: reds for four circuits nobody promised is the "eleven false reds" failure
+#: the station config was written to avoid, one migration later.
+#:
+#: Not the same as leaving them out of ``units``: an optional unit still
+#: reports its state, so "Dourbes has been down since Tuesday" is on the page
+#: for whoever wants it. It just cannot make the station unhealthy.
+DEFAULT_OPTIONAL_UNITS = ("chirp-digisonde@",)
+
 #: Systemd target the control commands act on. One target rather than five
 #: units, so ordering is systemd's problem and not the agent's.
 DEFAULT_TARGET = "chirp.target"
@@ -66,6 +82,10 @@ class StationConfig:
     ringbuffer_dir: Path = Path("/dev/shm/hf25")
 
     units: tuple[str, ...] = DEFAULT_UNITS
+    #: Of those, the ones allowed to be inactive. See
+    #: :data:`DEFAULT_OPTIONAL_UNITS`; set it to ``[]`` to have every listed
+    #: unit count.
+    optional_units: tuple[str, ...] = DEFAULT_OPTIONAL_UNITS
     target: str = DEFAULT_TARGET
 
     #: Where health goes. Push, per sec. 5.4 -- the station never listens.
@@ -131,8 +151,9 @@ class StationConfig:
         for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir"):
             if key in known:
                 known[key] = Path(known[key])
-        if "units" in known:
-            known["units"] = tuple(known["units"])
+        for key in ("units", "optional_units"):
+            if key in known:
+                known[key] = tuple(known[key])
         return cls(**known)
 
     @classmethod

@@ -179,6 +179,40 @@ def stations(conn: sqlite3.Connection) -> list[str]:
     return sorted(seen)
 
 
+def forget_station(conn: sqlite3.Connection, station: str) -> dict:
+    """Drop a station's health reports and commands. Returns what went.
+
+    The two tables :func:`stations` reads, because the point is to
+    remove the console panel of a receiver that has been renamed or retired --
+    one that will never push again, and whose permanently STALE panel trains
+    the reader to ignore a colour that means something on the others.
+
+    **Not the identifications, not the configuration epochs.** A transmitter
+    row is a human judgement with its evidence attached, and a config epoch is
+    what ``sounding.config_epoch_id`` points at -- deleting either to tidy a
+    panel would destroy the provenance of products already on disk. They
+    survive under the old station name and can be moved to the new one; the
+    counts are returned so a caller can say what stayed behind.
+    """
+    kept = {
+        "transmitters": len(transmitters(conn, station)),
+        "config_epochs": (one(conn, "SELECT COUNT(*) AS n FROM config_epoch"
+                                    " WHERE station = ?", (station,))
+                          or {"n": 0})["n"],
+    }
+    # `health_metric` cascades from `health_report`, but only while
+    # `PRAGMA foreign_keys` is on -- it is per connection, and a maintenance
+    # script that forgot it would leave the metrics orphaned and invisible.
+    conn.execute("DELETE FROM health_metric WHERE report_id IN"
+                 " (SELECT id FROM health_report WHERE station = ?)", (station,))
+    reports = conn.execute("DELETE FROM health_report WHERE station = ?",
+                           (station,)).rowcount
+    commands = conn.execute("DELETE FROM command WHERE station = ?",
+                            (station,)).rowcount
+    conn.commit()
+    return {"health_reports": reports, "commands": commands, "kept": kept}
+
+
 # --------------------------------------------------------------------------
 # Commands
 # --------------------------------------------------------------------------
