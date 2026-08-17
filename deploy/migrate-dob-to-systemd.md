@@ -35,7 +35,7 @@ things a user-run shell script cannot do:
 | `KillSignal=SIGINT` | the script's `while true` loop has no signal policy at all |
 | per-unit `CPUAffinity` | `taskset` in a launcher only reaches that script's children |
 | the pruner supervised | `drf ringbuffer` dying was invisible for two days |
-| restart-on-failure per process | the script revives only the recorder |
+| restart per process, including the recorder's own 24 h exit | the script revives only the recorder |
 | the recorder's output kept | `> logs/thor.log` is truncated on every restart |
 | the console's start/stop/restart | the whole point |
 
@@ -361,8 +361,8 @@ pgrep -a -f 'drf ringbuffer|detect_chirps|calc_ionograms|find_timings|detections
 Then confirm the list is empty by re-running the same `pgrep`.
 
 **2.7 — clear the stale ringbuffer.** The old recorder's ~14 GB is still in
-`/dev/shm` and nothing will reclaim it: `ExecStopPost=-/bin/rm -rf
-/dev/shm/hf25` belongs to the *unit*, which never ran. Left in place, the new
+`/dev/shm` and nothing will reclaim it: the unit's `ExecStopPost=` clears
+`/dev/shm/hf25/*` and that unit never ran. Left in place, the new
 recorder dies at sample 0 with ENOSPC and prints
 `dataset_samples_written = 0` — which is exactly what happened on 2026-08-06.
 `dombas.sh` cleared it at every start for this reason.
@@ -575,9 +575,14 @@ If a command comes back failed, the reason is now printed in the console's
 result column — that was the fix in `49f0f76`. `Interactive authentication
 required` there means step 0.6 did not take.
 
-Then the one that only time can answer: after the recorder's first
-restart-on-failure, its earlier output is still readable. Under `dombas.sh` it
-was not.
+Then the one that only time can answer, and the one this migration got wrong
+the first time: **24 hours and 10 seconds after the recorder started, it must
+be running again.** `rx_uhd_ext_gps` ends its own run at 24 h with exit 0 and
+`Channel 0 finished 24h streaming.`, so this is the check that the restart
+policy is `always` and not `on-failure` — with `on-failure` the station simply
+stops here, reporting `inactive (dead)` and `status=0/SUCCESS`. Its earlier
+output is still readable across that restart, too; under `dombas.sh` it was
+not.
 
 ```bash
 journalctl -u chirp-rx.service --since '2 hours ago' --no-pager | tail -40
@@ -662,8 +667,8 @@ sudo systemctl disable chirp.target chirp-rx.service chirp-ringbuffer.service ch
 ```
 
 Confirm the recorder is really gone — the same 2.5 check, for the same
-five-second reason — and that `/dev/shm/hf25` was reclaimed by
-`ExecStopPost`:
+five-second reason — and that `/dev/shm/hf25` was emptied by `ExecStopPost`
+(the directory stays; it is the ~14 GB inside it that must be back):
 
 ```bash
 pgrep -a -f rx_uhd_ext_gps; df -h /dev/shm

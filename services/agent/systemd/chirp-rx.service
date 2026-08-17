@@ -57,16 +57,31 @@ ExecStartPre=/sbin/sysctl -w net.core.rmem_max=500000000
 ExecStartPre=/bin/mkdir -p /dev/shm/hf25
 ExecStartPre=/bin/chown ionouser:ionouser /dev/shm/hf25
 
-# The ringbuffer belongs to the recorder, so it dies with it. Upstream's
-# `dombas.sh` clears it once at script start but its 24-hour restart loop only
-# re-execs the recorder -- so a run that ended with the pruner dead leaves a
-# full tmpfs, and the next start dies at sample 0 with ENOSPC
+# The ringbuffer's *contents* belong to the recorder, so they die with it.
+# Upstream's `dombas.sh` clears them once at script start but its restart loop
+# only re-execs the recorder -- so a run that ended with the pruner dead leaves
+# a full tmpfs, and the next start dies at sample 0 with ENOSPC
 # ("dataset_samples_written = 0", 2026-08-06). Reclaiming on *stop* rather than
 # on start is deliberate: a start-time rm would delete data the consumers are
 # still reading during an in-place restart. A tmpfs filling while the recorder
 # runs is a different fault -- a dead pruner -- and belongs to
 # `ringbuffer_free_fraction`, not here.
-ExecStopPost=-/bin/rm -rf /dev/shm/hf25
+#
+# **The directory itself must survive, and this line used to remove it.** With
+# `Restart=always` below, the every-24-h exit is now an automatic restart, and
+# `chirp-ringbuffer.service` does not follow the recorder through one -- it is
+# only `After=`, with no `BindsTo=`, so it stays up. `drf ringbuffer` watches a
+# path; delete the path and the pruner spends the next 24 h holding a watch on
+# an unlinked inode while `ExecStartPre` builds a fresh directory nothing
+# prunes. That is precisely the two-days-of-soundings failure the pruner exists
+# to prevent, rearmed to fire once a day. Observed as the ancestor of this
+# arrangement: under `dombas.sh` the directory persisted across every 24 h
+# rotation and one long-lived pruner kept working, which is the configuration
+# with field evidence behind it.
+#
+# The glob leaves the directory and its ownership in place. It does not match
+# dotfiles; Digital RF writes none.
+ExecStopPost=-/bin/sh -c 'rm -rf /dev/shm/hf25/*'
 
 # Real-time priority for the receive thread, granted by systemd rather than by
 # limits.conf (which does nothing without pam_limits.so in common-session --
@@ -134,7 +149,25 @@ TimeoutStopSec=30
 # losing an ionogram consumer to losing the radio.
 OOMScoreAdjust=-1000
 
-Restart=on-failure
+# **`always`, not `on-failure`. The recorder's normal end of life is exit 0.**
+# `rx_uhd_ext_gps` streams for 24 hours and then stops on purpose, logging
+# `Channel 0 finished 24h streaming.` -- that is where `dombas.sh`'s `while
+# true` loop came from, and BACKLOG sec. 23 is wrong to call it "no 24-hour
+# timer in that loop": the timer is in the C++ program and the loop is what
+# catches it.
+#
+# This unit was migrated with `on-failure`, which by definition declines to
+# restart a success. So the station recorded for exactly 24 h after each start
+# and then stopped for good, leaving no failure anywhere to look at: the unit
+# reads `inactive (dead)`, not `failed`, `systemctl status` shows
+# `status=0/SUCCESS`, and the only alarm is `newest_product_age_s` half an hour
+# later. Yoshkar-Ola, 2026-08-17: started 16:52:53 MSK on the 16th, exited
+# 16:52:58 MSK on the 17th, 24 h and 5 s, and stayed down.
+#
+# `always` does not defeat the console's stop button. systemd auto-restarts on
+# a unit *exiting*, never after a `systemctl stop` job -- so a deliberate stop
+# still stops, which is the property the USRP's SIGINT handling depends on.
+Restart=always
 RestartSec=10
 
 [Install]

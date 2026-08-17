@@ -230,6 +230,12 @@ tmpfs to the next one. `chirp-rx.service` reclaims it with `ExecStopPost=`
 instead — on stop rather than start, so an in-place restart cannot delete data
 the consumers are still reading.
 
+That line clears the directory's *contents* and leaves the directory. `drf
+ringbuffer` watches a path, and `chirp-ringbuffer.service` does not follow the
+recorder through the automatic restart it now performs every 24 hours, so
+removing the directory would leave the pruner watching an unlinked inode while
+a fresh, unpruned one filled up — the same two-day failure, on a daily timer.
+
 ### 2A.5 Shutdown — the setting that is a site visit
 
 `KillSignal=SIGINT`, `TimeoutStopSec=30`.

@@ -1341,9 +1341,12 @@ tooling built around it assumes systemd.
 ### `thor.log` is truncated on every restart, so drops leave no trace
 
 The supervisor in `patches/0003-local-dombas.sh.result:73` runs the recorder in
-a `while true` loop, redirecting its output with a single `>`. **There is no
-24-hour timer in that loop.** It restarts the recorder whenever
-`rx_uhd_ext_gps` exits, for any reason, and prints `Restarting recording (every
+a `while true` loop, redirecting its output with a single `>`. **The 24-hour
+timer is not in that loop -- it is inside `rx_uhd_ext_gps`**, which streams for
+24 h and then exits 0 with `Channel 0 finished 24h streaming.` (established
+2026-08-17; see sec. 27, where reading this paragraph as "there is no 24-hour
+rotation" cost an afternoon). The loop restarts the recorder whenever it exits,
+for any reason, and prints `Restarting recording (every
 24 hours).` every time -- so a clean 24 h rotation and a crash after ten
 minutes are indistinguishable in `dombas-launch.log`, and the recorder's own
 output that would tell them apart is overwritten by the next launch five
@@ -1694,3 +1697,62 @@ is keyed by receiver code, and this receiver now has two eras under one key —
 limit. After the rename both collapse onto `yoshkar-ola`, and `(("DOB", 24.53),)`
 on the `NIC` entry stops matching anything. Keying a ceiling by receiver alone
 stopped being sufficient the moment the rename landed.
+
+
+## 27. The recorder ends its own run at 24 h, and the migration dropped the restart (2026-08-17)
+
+`rx_uhd_ext_gps` streams for 24 hours and then stops on purpose, logging
+`Channel 0 finished 24h streaming.` and exiting 0. That is what `dombas.sh`'s
+`while true` loop was for: not fault recovery, a scheduled rotation the
+recorder performs on itself.
+
+`chirp-rx.service` was migrated with `Restart=on-failure`, which by definition
+declines to restart a success. **So the station recorded for exactly 24 hours
+after each start and then stopped for good.** Yoshkar-Ola: started 2026-08-16
+16:52:53 MSK, exited 2026-08-17 16:52:58 MSK, 24 h and 5 s, and stayed down
+until someone ran `systemctl restart chirp.target` two and a half hours later.
+
+Everything about the aftermath reads as healthy, which is why it took an
+afternoon to find:
+
+* `systemctl is-active` says `inactive`, not `failed`, so the unit is not in
+  any failed state to notice or reset.
+* `systemctl status` says `code=exited, status=0/SUCCESS` for the main process
+  *and* for every `ExecStartPre` — including the `ethtool` line, which is the
+  fault this looks like.
+* `/dev/shm/hf25: no such path` in the health report is `ExecStopPost` doing
+  its job, not a second failure.
+* `chirp-ringbuffer.service` stays `active` throughout, because it is only
+  `After=chirp-rx.service`.
+
+The only true signal is `newest_product_age_s`, half an hour later — and on
+this station it was landing on a console that had read UNHEALTHY continuously
+since the digisonde receivers were disabled without being removed from
+`agent.json`'s `units` (sec. 23). A permanently red station cannot get redder.
+That is the second half of this incident and the cheaper half to fix.
+
+Fixed by `Restart=always`. Two things had to move with it:
+
+* `ExecStopPost` used to `rm -rf /dev/shm/hf25`. Under `on-failure` that ran
+  once, at a deliberate stop. Under `always` it runs at every 24 h rotation —
+  and `drf ringbuffer` watches a *path*, so the pruner would spend each day
+  holding a watch on an unlinked inode while `ExecStartPre` built a fresh
+  directory nothing pruned. It now clears `/dev/shm/hf25/*` and leaves the
+  directory, which is the arrangement `dombas.sh` ran for years.
+* `Restart=always` does not defeat the console's stop button: systemd
+  auto-restarts on a unit exiting, never after a `systemctl stop` job. The
+  SIGINT-only shutdown the USRP depends on is unaffected.
+
+**Still open.** `chirp-ringbuffer.service` does not follow the recorder through
+a restart at all — it has no `BindsTo=`. Keeping the directory alive makes that
+survivable rather than correct, and it has not been tested that `drf
+ringbuffer` prunes a Digital RF channel the recorder recreated underneath it
+(the `dombas.sh` evidence says the pruner survives recorder restarts, but there
+the channel directory was never emptied either). The check is one
+`ringbuffer_free_fraction` reading 24 h after a rotation: if it is falling
+toward zero, the pruner needs binding to the recorder's lifecycle.
+
+Also open: nothing anywhere asserts the recorder is still running 24 h after a
+start. `tests/test_systemd_units.py` now pins the policy, but the policy is a
+proxy. `newest_product_age_s` is the real check and it fires 30 minutes late by
+design.

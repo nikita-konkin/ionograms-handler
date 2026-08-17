@@ -247,3 +247,49 @@ def test_setting_the_nic_ring_tolerates_it_being_set_already(unit: Path) -> None
             f"80. It succeeds on a ring that is not already the requested size "
             f"and fails on one that is, so this unit would start once and then "
             f"never again.")
+
+
+def test_the_recorder_is_restarted_after_a_clean_exit() -> None:
+    """`rx_uhd_ext_gps` ends its own run at 24 h with exit 0.
+
+    It logs `Channel 0 finished 24h streaming.` and stops -- the timer is in
+    the C++ program, not in the launcher, and `dombas.sh`'s `while true` loop
+    existed to catch it. `Restart=on-failure` declines to restart a success, so
+    with that policy the station records for exactly 24 h per start and then
+    stops for good. Nothing reads as broken afterwards: `inactive (dead)` not
+    `failed`, `status=0/SUCCESS`, and the first alarm is
+    `newest_product_age_s` thirty minutes later. Yoshkar-Ola lost an afternoon
+    to it on 2026-08-17.
+    """
+    unit = UNIT_DIR / "chirp-rx.service"
+    policies = [(n, v) for n, k, v in _settings(unit) if k == "Restart"]
+    assert policies, f"{unit.name}: no Restart= at all, so a 24 h exit is final."
+    n, value = policies[-1]
+    assert value == "always", (
+        f"{unit.name}:{n}: Restart={value}. The recorder exits 0 on purpose "
+        f"every 24 hours, so anything but `always` stops the station for good "
+        f"once a day and reports success while doing it.")
+
+
+@pytest.mark.parametrize("unit", _units(), ids=lambda p: p.name)
+def test_a_directory_another_unit_watches_is_emptied_and_not_removed(unit: Path):
+    """`drf ringbuffer` watches a path, so removing it disarms the pruner.
+
+    `chirp-ringbuffer.service` is only `After=chirp-rx.service` -- no
+    `BindsTo=` -- so it does not follow the recorder through the automatic
+    restart that `Restart=always` now performs every 24 h. If the recorder's
+    `ExecStopPost` removes `/dev/shm/hf25`, the pruner is left holding a watch
+    on an unlinked inode while `ExecStartPre` builds a fresh directory that
+    nothing prunes, and the tmpfs fills. That is the failure that cost two days
+    of soundings, rearmed to fire daily.
+    """
+    watched = "/dev/shm/hf25"
+    for n, key, value in _settings(unit):
+        if key not in EXEC_KEYS or "rm " not in value:
+            continue
+        if watched not in value:
+            continue
+        assert f"{watched}/" in value, (
+            f"{unit.name}:{n}: {key}= removes {watched} itself. Clear its "
+            f"contents instead ({watched}/*) so the pruner's watch survives "
+            f"the recorder's 24-hour restart.")
