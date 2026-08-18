@@ -239,6 +239,30 @@ There is a feedback term: a longer sweep is more work per sounding at the same
 sounding rate, so raising the cap lowers `r`. Re-measure after the change, not
 only before it.
 
+**Measured 2026-08-18, and it says no: `n=1039 lost=87 (8.37%)`.** That is with
+the digisonde receivers already gone, and it is *twice* sec. 16's 4.28%
+baseline -- so freeing ~3.4 cores did not buy consumer speed. Inverting
+`r * B / (1 - r) = 248 s` at `B = 139 s` puts `r` at about **0.64**: below what
+today's 25 MHz sweep needs, never mind 30 MHz. The cap cannot move until this
+does.
+
+The likely reason is in `chirp-ringbuffer.service` and is not CPU: this station
+writes products to a 5400 rpm laptop disk over ntfs-3g -- FUSE, userspace,
+seek-bound -- with a mirror job reading the same spindle every five minutes,
+and `ionice` does not reach the ntfs-3g daemon doing that I/O. A CPU fix cannot
+move an I/O-bound `r`, which is exactly the shape of this result. Confirm with
+`df -T` on `output_dir` (sec. 25) before buying anything.
+
+Two things this measurement does not settle. The 24 h window may overlap the
+2026-08-17 recorder outage (sec. 27), so re-run it over a window that is
+entirely after the restart. And whether more buffer would help at all is a
+separate question with its own one-liner -- more history saves a sounding that
+missed by 5 s and does nothing for one that missed by 200:
+
+    journalctl -u chirp-timings.service --since '24 hours ago' --no-pager \
+      | grep -oE '\-?[0-9.]+ s left' | awk '$1<=0' \
+      | awk '{n++; if($1>-120) s++} END {printf "%d of %d saved by +120s\n", s+0, n}'
+
 **Two things go stale the moment the cap moves.** `Station.band_ceiling_mhz`
 carries `NIC -> (("DOB", 24.53),)`, measured against a 25 MHz cap and already
 mis-keyed by the rename (sec. 26); and `nominal_stop_mhz` defaults to the
