@@ -46,7 +46,30 @@
   "push_interval_s": 60,
 
   "chirp_config": "/home/ionouser/chirpsounder2/my_station.ini",
-  "output_dir": "/media/ionouser/DATA3/ionozond_data2",
+
+  "_output_dir_comment": [
+    "The BOOT SSD, and this file said /media/ionouser/DATA3/ionozond_data2",
+    "until 2026-08-18 while the station wrote here. DATA3 is a USB-attached",
+    "NTFS volume served by a `mount.ntfs` FUSE daemon measured at 8.2% CPU on",
+    "a host that cannot spare it -- writing products there costs the recorder",
+    "samples. The trade is 256 GB of headroom instead of 928 GB, which is why",
+    "chirp-archive-prune exists.",
+    "",
+    "Getting this wrong is quiet, and it is quiet in three separate places at",
+    "once: newest_product_age_s reports `no such directory` or `no recent",
+    "product` for a recorder that is producing normally, the station preview",
+    "finds nothing to encode and the console says the agent must be too old,",
+    "and chirp-archive-sync mirrors an empty tree and reports success. Nothing",
+    "in that list looks like a wrong path.",
+    "",
+    "Three places, one path: here, ARCHIVE_LOCAL in chirp-archive-sync.service",
+    "and ARCHIVE_LOCAL in chirp-archive-prune.service. A test pins all three",
+    "together. The authority above all of them is `output_dir` in",
+    "my_station.ini -- that is what chirpsounder2 actually obeys; these three",
+    "only describe it."
+  ],
+  "output_dir": "/home/ionouser/ionozond_data2",
+
   "ringbuffer_dir": "/dev/shm/hf25",
 
   "_units_comment": [

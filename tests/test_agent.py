@@ -1212,6 +1212,43 @@ def test_a_command_is_acknowledged_even_when_it_fails(station):
 # Config
 # --------------------------------------------------------------------------
 
+def test_one_output_dir_is_written_in_three_places():
+    """`agent.json` and the two archive units must name the same directory.
+
+    `chirp-archive-sync.service` says it in its own comment -- "three places,
+    one path" -- and for eleven days two of them said one thing and the third
+    said `/media/ionouser/DATA3/ionozond_data2`, a volume the station had
+    stopped writing to. Nothing reported it, because every symptom of this
+    points somewhere else: `newest_product_age_s` answers `no such directory`
+    for a recorder that is producing normally, the station preview finds
+    nothing to encode and the console explains that the agent must be too old,
+    and `chirp-archive-sync` mirrors an empty tree and exits 0.
+
+    The authority is `output_dir` in `my_station.ini`, which is on the station
+    and not in this repository, so this cannot check the truth -- only that the
+    three copies of it here have not drifted apart, which is the failure that
+    actually happened.
+    """
+    root = Path(__file__).resolve().parent.parent
+    example = root / "deploy/station-dob.json.example"
+    wanted = json.loads(example.read_text(encoding="utf-8"))["output_dir"]
+
+    for unit in ("chirp-archive-sync.service", "chirp-archive-prune.service"):
+        text = (root / "services/agent/systemd" / unit).read_text(encoding="utf-8")
+        found = re.findall(r"^Environment=ARCHIVE_LOCAL=(.+)$", text, re.M)
+        assert found == [wanted], (
+            f"{unit} stages from {found} while {example.name} says {wanted!r}. "
+            "Whichever is wrong is silent: the mirror reports success over an "
+            "empty directory, and the agent reports a station that has stopped "
+            "producing. Fix both against `output_dir` in my_station.ini."
+        )
+
+    assert StationConfig().output_dir == Path(wanted), (
+        "the dataclass default is what a station with no output_dir in its "
+        "agent.json gets, so it is a fourth copy of this path"
+    )
+
+
 def test_the_station_example_asks_for_no_digisonde_receiver():
     """A `chirp-digisonde@` instance in this file is how the 45% sample loss
     comes back, and it has come back once already.

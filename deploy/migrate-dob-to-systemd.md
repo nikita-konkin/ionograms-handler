@@ -103,13 +103,21 @@ transmitters past the cut are never sounded, too many and one rank dies of
 grep -n 'sounder_timings\|serendipitous' /home/ionouser/chirpsounder2/my_station.ini
 ```
 
-**0.5 — where products are written.** `chirp-archive-sync.service` and
-`chirp-archive-prune.service` both hardcode
-`ARCHIVE_LOCAL=/home/ionouser/ionozond_data2`, while
-`deploy/station-dob.json.example` says
-`/media/ionouser/DATA3/ionozond_data2`. They cannot both be right. The
-authority is `output_dir` in `my_station.ini`; make the two units match it, or
-the mirror mirrors an empty directory and reports success.
+**0.5 — where products are written.** Settled on 2026-08-18: the station
+writes to `/home/ionouser/ionozond_data2`, the boot SSD, and all three places
+that name it now agree — `ARCHIVE_LOCAL` in `chirp-archive-sync.service` and
+`chirp-archive-prune.service`, and `output_dir` in
+`deploy/station-dob.json.example`, which had said
+`/media/ionouser/DATA3/ionozond_data2` since before the migration.
+`test_one_output_dir_is_written_in_three_places` keeps them together.
+
+The authority is still `output_dir` in `my_station.ini` — that is what
+chirpsounder2 obeys, it lives on the station, and nothing in this repository
+can check it. Read it once here and make sure the three copies match, because
+a disagreement is silent in three different ways: the mirror mirrors an empty
+directory and reports success, `newest_product_age_s` reports a recorder that
+has stopped when it has not, and the station preview shows nothing while the
+console blames the agent's version.
 
 **0.6 — the privilege to run `systemctl`.** This is the step most likely to
 make the whole migration land and still not work, so do it now and prove it.
