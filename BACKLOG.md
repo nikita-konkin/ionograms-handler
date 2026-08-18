@@ -203,9 +203,48 @@ band to the right of the pick.
 
 **Consequences for DOB specifically.** Unlike the legacy station this is not a
 midday-only bias -- 24.8 MHz is reachable on this path from 05:00, and midday
-will be worse. Any Cyprus daily maximum is currently a lower bound. The remedy
-in this section's last bullet applies unchanged: the top comes from `dur` at the
-configured rate, and raising it costs sweep time.
+will be worse. Any Cyprus daily maximum is currently a lower bound.
+
+**The knob is not `dur` (2026-08-18).** That is v1's, and it is wrong here:
+`.lfs` covers 7.5-32.5 MHz because v1 records a fixed band around a fixed LO,
+whereas v2 follows the chirp and covers 0 to `[lfm]
+maximum_analysis_frequency`, default 25e6 (`muf/io_chirp.py:56`). One key in
+`my_station.ini`, absent from the agent's `EDITABLE` allow-list, so it is a
+hand edit and a `chirp-ionograms.service` restart.
+
+Raising it costs sweep time, and **the ringbuffer is what that time is spent
+against**. From `chirp-ringbuffer.service`, a consumer running at fraction `r`
+of realtime can finish a sweep of at most `r * B / (1 - r)`, where `B` is the
+buffer's history (139 s measured at 14000MB). At 100 kHz/s the frequency is
+that time divided by 10:
+
+| target | sweep | needs |
+|---|---:|---|
+| 25 MHz (today) | 250 s | r >= 0.64 at B = 139 s |
+| 27 MHz | 270 s | r >= 0.66 -- the last measured value, with no margin |
+| 30 MHz | 300 s | r >= 0.68, and it is the ceiling `rep = 300` allows |
+| 32.5 MHz (the `.lfs` figure) | 325 s | exceeds `rep`; see signal-chain sec. 7.5 |
+
+**Measure `r` before spending RAM.** 0.66 was measured while five
+`receive_digisonde.py` instances were competing for the same eight cores; patch
+0007 removed them and the migration's leftover units were disabled 2026-08-17,
+which should have moved it. The margins are the measurement -- under systemd
+they are in `journalctl -u chirp-timings.service`, not `logs/find_timings.log`:
+
+    journalctl -u chirp-timings.service --since '24 hours ago' --no-pager \
+      | grep -oE '\-?[0-9.]+ s left' \
+      | awk '{n++; if($1<=0) z++} END {printf "n=%d lost=%d (%.2f%%)\n", n, z+0, 100*z/n}'
+
+There is a feedback term: a longer sweep is more work per sounding at the same
+sounding rate, so raising the cap lowers `r`. Re-measure after the change, not
+only before it.
+
+**Two things go stale the moment the cap moves.** `Station.band_ceiling_mhz`
+carries `NIC -> (("DOB", 24.53),)`, measured against a 25 MHz cap and already
+mis-keyed by the rename (sec. 26); and `nominal_stop_mhz` defaults to the
+observed stop (`muf/io_chirp.py:602`), so a truncated sweep reads as complete
+unless the new cap is passed in. After the change the archive spans two eras
+with different nominal tops and one key cannot describe both.
 
 ### The anchor is fixed (2026-08-13)
 
