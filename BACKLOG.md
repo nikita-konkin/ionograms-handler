@@ -225,6 +225,40 @@ that time divided by 10:
 | 30 MHz | 300 s | r >= 0.68, and it is the ceiling `rep = 300` allows |
 | 32.5 MHz (the `.lfs` figure) | 325 s | exceeds `rep`; see signal-chain sec. 7.5 |
 
+**None of that table matters above 25 MHz, because the recorder never
+digitised it (2026-08-18).** `maximum_analysis_frequency` was set to `30e6` on
+the station and the products' sweep top moved 24.82 -> **24.98 MHz** and
+stopped -- not to 30, and not to anything the ionosphere chose. 24.98 is one
+bin under 25.000, which is `sample_rate` exactly. v2 covers 0 to the config
+value *or the top of the sampled band, whichever is lower*, and the second one
+binds: `rx_uhd_ext_gps` runs 25 MS/s with the rate hardcoded in the C++ (the
+unit's own `TBD: change cpp program so that ini file defines USRP setup!`), so
+there is no signal above 25 MHz in the ringbuffer for any analysis to find.
+The config key cannot conjure spectrum that was never sampled.
+
+25 MS/s is also not an arbitrary choice: complex int16 at that rate is
+100 MB/s, and the N2x0 is on 1 GbE (~118 MB/s usable). 30 MS/s of sc16 is
+120 MB/s and does not fit. The routes that do:
+
+* **`otw_format=sc8`.** 8-bit on the wire halves the link cost, so 30 MS/s
+  becomes 60 MB/s with room to spare. Costs ~4 bits of dynamic range against
+  observed SNRs around 50 dB. Needs the recorder edited and rebuilt.
+* **Retune the window upward**, the way v1 did with `cf = 20 MHz` for
+  7.5-32.5 MHz. Same C++ edit, and a worse one: `muf/io_chirp.py:50` documents
+  that v2's frequency axis *is* elapsed time times chirp rate, absolute from
+  0 Hz, so a non-zero LO breaks the axis rather than shifting it.
+
+Either way the ringbuffer gets more expensive, not less: at 30 MS/s of sc16 the
+buffer holds 116 s per 14000MB instead of 139 s, so `B` falls at the same
+moment the sweep needs it to rise.
+
+**And setting it made the station worse in the meantime.** The analysis window
+went to 300 s while `r * B / (1 - r)` still capped it at 247 s, so soundings
+started failing at a far higher rate than the 8.17% baseline -- visible as
+half-empty five-minute slots in the soundings table -- for a frequency axis
+that gained 0.16 MHz. Revert to `25e6` until the recorder can actually reach
+higher.
+
 **Measure `r` before spending RAM.** 0.66 was measured while five
 `receive_digisonde.py` instances were competing for the same eight cores; patch
 0007 removed them and the migration's leftover units were disabled 2026-08-17,
