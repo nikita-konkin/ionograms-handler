@@ -1,0 +1,95 @@
+From: ionograms-handler
+Subject: [PATCH] treat the analysis band as a span, not a top
+
+`calc_ionograms.py` assumes every sweep starts at 0 Hz. `dur` is
+`maximum_analysis_frequency / rate`, the downconverter starts at `t0`, and the
+frequency axis is `rate * arange(n) * fft_step / sr_dec` -- all three measured
+from zero. That is correct only while the recorded band also starts at zero.
+
+With 0012 the band is 7.5-32.5 MHz, and the sweep is not in it until it reaches
+7.5 MHz. Unpatched, reaching 32.5 MHz means `maximum_analysis_frequency =
+32.5e6`, so `dur` becomes 325 s: the first 75 s of every sounding is spent
+running FFTs over spectrum that was never digitised, and 325 s overruns both
+the transmitter's `rep = 300` and the ringbuffer budget (~249 s at the current
+consumer speed). As a span it is (32.5-7.5)/0.1 = **250 s** -- the same window,
+the same `n_windows`, and the same margin as the 0-25 MHz configuration it
+replaces. The cost of the wider top is exactly zero, paid for by a bottom end
+that was below the antenna.
+
+`minimum_analysis_frequency` is already in the ini and already parsed
+(`chirp_config.py:287`). Its only reader was
+`serendipitous_ionogram_queue.py:115`, so on the scheduled path -- the one
+every station with `sounder_timings` runs -- setting it did nothing, silently.
+This patch is what makes the existing knob mean something there.
+
+The read pointer and the dechirp phase move together, via the downconverter's
+own `advance_time`. Moving only the pointer leaves the mixer 7.5 MHz off and
+produces ionograms that plot and are wrong -- the failure `muf/io_chirp.py`
+exists to warn about. `advance_time` is called only with a single block, the
+same argument the missing-data branch below already passes it, so the skip
+walks a tested path rather than trusting one large jump.
+
+**Requires 0012.** Applying this alone changes nothing while `min`/`max` are
+still 0 and 25e6, and is actively wrong once they are moved without the LO.
+
+Applied against 0d27125.
+
+diff --git a/calc_ionograms.py b/calc_ionograms.py
+--- a/calc_ionograms.py
++++ b/calc_ionograms.py
+@@ -223,7 +223,20 @@ def chirp_downconvert(conf,
+     sleep_time = 0.0
+     sr = conf.sample_rate
+     cf = conf.center_freq
+-    dur = conf.maximum_analysis_frequency / rate
++    # **`dur` is the span analysed, not the top of it.** Those are the same
++    # number only while the band starts at 0 Hz. With the LO at 20 MHz the
++    # sweep is not in the band until it reaches 7.5 MHz, and analysing from
++    # zero spends the first 75 s of every sounding running FFTs over spectrum
++    # that was never digitised -- a 325 s window against a 300 s `rep`, which
++    # overruns the cycle and loses soundings.
++    #
++    # `minimum_analysis_frequency` already exists in the ini and is already
++    # parsed (chirp_config.py:287). Before this, its only reader was
++    # serendipitous_ionogram_queue.py:115, so on the scheduled path -- the one
++    # every station with `sounder_timings` runs -- setting it did nothing at
++    # all, and said nothing about it.
++    fmin = conf.minimum_analysis_frequency
++    dur = (conf.maximum_analysis_frequency - fmin) / rate
+     if realtime_req == None:
+         realtime_req = dur
+     idx = 0
+@@ -239,6 +252,24 @@ def chirp_downconvert(conf,
+                                downconversion_filter=conf.downconversion_filter,
+                                cic_stages=conf.cic_stages)
+ 
++    # Move the read pointer AND the dechirp phase to where the sweep enters the
++    # band. Both, or the mixer is off by `fmin` and every product is plausible
++    # and false. `advance_time` is the downconverter's own primitive for this --
++    # the missing-data branch below already uses it to step past a block it
++    # could not read -- and it is called here only with a single block, the
++    # argument that branch passes, so this walks a tested path instead of
++    # trusting one large jump to behave.
++    blk = step * dec
++    n_skip = int(round(fmin / rate * sr / blk)) * blk
++    for _ in range(n_skip // blk):
++        cdc.advance_time(blk)
++    idx += n_skip
++    # The *aligned* start, which is what the frequency axis has to be built
++    # from. It equals `fmin` whenever fmin/rate*sr divides the block -- 750
++    # blocks exactly at 7.5 MHz, 100 kHz/s, 25 MS/s, dec 625, step 4000 -- and
++    # this line is what keeps the axis honest when it does not.
++    f_skip = (n_skip / sr) * rate
++
+     zd_len = n_windows * step
+     zd = np.zeros(zd_len, dtype=np.complex64)
+ 
+@@ -288,7 +319,7 @@ def chirp_downconvert(conf,
+     S = spectrogram(np.conj(zd), window=fftlen,
+                     step=fft_step, wf=ss.hann(fftlen))
+     
+-    freqs = rate * np.arange(S.shape[0]) * fft_step / sr_dec
++    freqs = f_skip + rate * np.arange(S.shape[0]) * fft_step / sr_dec
+     range_gates = ds * np.fft.fftshift(np.fft.fftfreq(fftlen, d=1.0 / sr_dec))
+     
+     fidx = n.arange(len(freqs), dtype=int)

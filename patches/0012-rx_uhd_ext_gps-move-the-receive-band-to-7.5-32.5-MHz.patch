@@ -1,0 +1,38 @@
+From: ionograms-handler
+Subject: [PATCH] tune the LO to 20 MHz so the band is 7.5-32.5 MHz
+
+The recorder tunes to `sample_rate/2`, so the recorded band runs 0 to
+`sample_rate` -- 0-25 MHz at 25 MS/s. The MUF on the Nicosia circuit is clipped
+against the top of it: 24.500 MHz measured against a 24.825 sweep top and an
+IRI prediction of 25.942, flat for about seven hours a day. The bottom of the
+same band is wasted, since LOF sits at 9.5-15.5 MHz and the antenna does not
+respond below a few MHz.
+
+So move the window instead of widening it. Widening is not available anyway:
+the N2x0's master clock is 100 MHz and the rate must divide it, 100/4 = 25 is
+what runs today and 100/3 = 33.33 is the next step up, which needs `sc8` on the
+wire to fit 1 GbE and *shrinks* the ringbuffer's time depth from 140 s to 105 s.
+Moving costs nothing at all: same 25 MS/s, same 100 MB/s over the link, same
+14 GB of `/dev/shm`, same 250 s analysis window, same `-np`.
+
+**This receiver already ran this band.** `cyprus1_20260204_000010.lfs` recorded
+7.5-32.5 MHz here in February on this hardware, `cf` 20 MHz, `sample_rate`
+25 MHz, `dur` 250 s (`docs/signal-chain.md` sec. 8). The antenna, the front end
+and the analysis all did it before, so the change is a return rather than an
+experiment.
+
+**Requires 0013, and requires `center_freq = 20e6` in the ini.** Applying this
+one alone moves the samples without telling the analysis, and `calc_ionograms`
+builds its downconversion mixer from `center_freq` (`f0=-cf`) -- a mismatch
+dechirps 7.5 MHz off and yields empty products with no error in any log.
+Nothing checks the two against each other and nothing can: the LO is not in the
+Digital RF metadata. See the note in README.md.
+
+Applied against 0d27125.
+
+diff --git a/rx_uhd_ext_gps.cpp b/rx_uhd_ext_gps.cpp
+--- a/rx_uhd_ext_gps.cpp
++++ b/rx_uhd_ext_gps.cpp
+@@ -187 +187 @@ void streaming_by_channel(size_t chan,double rate,std::string subdev,std::string
+-    usrp->set_rx_freq(12.5e6,chan);
++    usrp->set_rx_freq(20e6,chan);

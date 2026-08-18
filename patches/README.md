@@ -22,6 +22,27 @@ Applied against `0d27125`.
 | `0009-dombas-derive-np-from-the-schedule.patch` | `dombas.sh` computes `calc_ionograms.py`'s `-np` from `sounder_timings` instead of hardcoding 2, and logs the number it derived | in scheduled mode `-np` **is** the schedule: `calc_ionograms.py:452` does `st = conf.sounder_timings[rank]` with no guard, so the count lives in two files and nothing checks they agree. Both ways of disagreeing are silent — too few ranks and the transmitters past the cut are never sounded, too many and one rank dies of `IndexError` while the rest carry on looking healthy |
 | `0010-dombas-give-the-recorder-a-physical-core.patch` | the shell mask goes `1-7` → `2-7` and the recorder `-c 0` → `-c 0-1` | **0008 pinned a hyperthread.** DOB is an i7-4930MX — four cores, eight threads — and `thread_siblings_list` for `cpu0` reads `0-1`, so a rank on `cpu1` was on the recorder's own core. Measured cost over 10.3 h: eleven windows at hard zero whenever that sibling idled, and a sustained **3.4%** of the stream lost through the morning when it did not |
 | `0011-dombas-stop-open-mpi-overriding-the-cpu-pinning.patch` | `MPIRUN=mpirun` → `MPIRUN="mpirun --bind-to none"` | **the mask never reached the MPI ranks.** Open MPI re-pins each rank after fork, and 1.10.2 defaults to `--bind-to core` for `-np <= 2`, placing rank 0 on physical core 0 by topology. Verified minutes after 0010 landed: both `mpirun` processes read `2-7` while a detect rank and a calc rank read `0,1` — the recorder's core — and cores 4-7 sat unused. This also corrects 0010's account: under 0008 a rank was on `cpu0` *itself*, not merely on its sibling |
+| `0012-rx_uhd_ext_gps-move-the-receive-band-to-7.5-32.5-MHz.patch` | the recorder's LO goes `12.5e6` → `20e6` | the MUF is clipped against the top of the 0–25 MHz band — 24.500 measured against a 24.825 sweep top and 25.942 predicted, flat ~7 h/day — while the bottom of that band is below both the antenna and the 9.5–15.5 MHz LOF. Widening is not available (the N2x0 clock is 100 MHz, so the next rate up is 33.33 MS/s, which needs `sc8` and *shrinks* the ringbuffer from 140 s to 105 s); moving costs nothing at all. **This receiver already ran 7.5–32.5 MHz** in February — `cyprus1_20260204_000010.lfs`, `docs/signal-chain.md` §8 |
+| `0013-calc_ionograms-analyse-a-span-not-a-top.patch` | `dur`, the downconverter start and the frequency axis are measured from `minimum_analysis_frequency` instead of from 0 Hz | v1 carried `cf` in the header so the software knew where the band began; v2 dropped it and assumes every sweep starts at zero. Unpatched, reaching 32.5 MHz means `dur = 325 s` — 75 s of FFTs over spectrum that was never digitised, overrunning both `rep = 300` and the ~249 s ringbuffer budget. As a span it is 250 s, identical to the 0–25 MHz configuration. `minimum_analysis_frequency` was already in the ini and already parsed, but its only reader was `serendipitous_ionogram_queue.py:115`, so on the scheduled path it did nothing, silently |
+
+**0012 and 0013 go together, and half of the pair is worse than none of it.** The recorder's
+`set_rx_freq` and the ini's `center_freq` must carry the same number, because
+`calc_ionograms` builds the downconversion mixer from `center_freq` (`f0=-cf`)
+while the samples come from wherever the binary actually tuned. Nothing checks
+them against each other and nothing can: the LO is not in the Digital RF
+metadata. A mismatch dechirps 7.5 MHz off and produces empty products with no
+error in any log. That is not hypothetical — on 2026-08-19 the ini was moved to
+20e6 against the 12.5e6 build, because editing `rx_uhd_ext_gps.cpp` looks like
+it changed the recorder when it only changed the source. **Rebuild between the
+two, and restart once at the end.**
+
+The ini side of the pair is four keys in `[lfm]` plus one in `[config]`:
+`center_freq = 20e6`, `min_freq = 7.5e6`, `max_freq = 32.5e6`,
+`minimum_analysis_frequency = 7.5e6`, `maximum_analysis_frequency = 32.5e6`.
+`min_freq`/`max_freq` gate the *stored* axis under `manual_freq_extent`
+(`calc_ionograms.py:296`) and are a separate cap from the analysis one — a
+sweep reported as `0.53–24.98` is those two, one 20.48 kHz bin inside each
+edge, not the recorder.
 
 **0003 has two forms.** The unsuffixed one is against `0d27125` and is the
 canonical diff, per this directory's convention. DOB's working copy has local
