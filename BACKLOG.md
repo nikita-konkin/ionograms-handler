@@ -2421,8 +2421,11 @@ Two more guards, both cheap and both aimed at yesterday's failure:
 
 ### Order
 
-1. Census, checked in as `docs/chirpsounder2-config.md` + a test that fails
-   when a key gains or loses readers. Useful alone.
+1. ~~Census, checked in as `docs/chirpsounder2-config.md` + a test that fails
+   when a key gains or loses readers.~~ **Done 2026-08-19.** It paid for itself
+   immediately: `copy_to_server` gates seven blocking POSTs to `juha.no` while
+   the `copy_destination` the operator configured is read by nothing, which is
+   the 8.37% loss of sec. 3 with a one-key remedy.
 2. 0014/0015. Small, and closes class 3.
 3. `set_band` in the agent, with the four checks and the `--help` precondition.
 4. The panel, rendering the census.
