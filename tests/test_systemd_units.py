@@ -411,3 +411,63 @@ def test_detect_np_is_not_tied_to_the_schedule() -> None:
             "has become a constraint too, and this unit needs the same rule "
             "as chirp-ionograms.service"
         )
+
+
+# --- a script systemd runs must be runnable ----------------------------------
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _exec_targets(unit: Path) -> list[str]:
+    """The program each ``Exec*=`` line runs, prefixes stripped.
+
+    Uses the agent's own line joiner rather than a second copy: ``ExecStart=``
+    is routinely wrapped with a trailing backslash, and a scanner that misses
+    that reads the program name out of the wrong line.
+    """
+    from services.agent.control import _logical_lines
+
+    out = []
+    for line in _logical_lines(unit.read_text(encoding="utf-8")):
+        key, _, value = line.partition("=")
+        if not key.strip().startswith("Exec") or not value.strip():
+            continue
+        word = value.strip().split()[0]
+        out.append(word.lstrip("-+@:!"))     # systemd's Exec prefixes
+    return out
+
+
+@pytest.mark.parametrize("unit", _units(), ids=lambda p: p.name)
+def test_a_script_this_repo_ships_is_executable_in_git(unit: Path) -> None:
+    """``ExecStart`` on a non-executable file is 203/EXEC, and the unit never
+    starts.
+
+    Twice now this repo has shipped a launcher git recorded as 100644.
+    `tools/chirp-rx-launch.sh` was caught before it ran; `tools/drop-watch.sh`
+    was not, and was fixed by hand on the station on some unrecorded day --
+    which is worse than the bug, because the working station and the repo then
+    disagree and only the station knows why.
+
+    The file mode on disk is not the thing to check: a fresh clone gets its
+    mode from git's index, so that is what has to be right.
+    """
+    import subprocess
+
+    for target in _exec_targets(unit):
+        if not target.startswith("/"):
+            continue
+        # Only paths this repo actually ships. /bin/mkdir is not ours.
+        for prefix in ("/home/ionouser/ionograms-handler/",):
+            if not target.startswith(prefix):
+                continue
+            relative = target[len(prefix):]
+            if not (REPO / relative).exists():
+                continue
+            recorded = subprocess.run(
+                ["git", "ls-files", "-s", "--", relative],
+                cwd=REPO, capture_output=True, text=True).stdout.split()
+            assert recorded, f"{relative}: named by {unit.name}, not tracked"
+            assert recorded[0] == "100755", (
+                f"{relative} is {recorded[0]} in git, but {unit.name} runs it "
+                f"as ExecStart. A fresh clone gets 203/EXEC and the unit never "
+                f"starts. Fix with: git update-index --chmod=+x {relative}")
