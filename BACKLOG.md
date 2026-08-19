@@ -2445,3 +2445,63 @@ Two more guards, both cheap and both aimed at yesterday's failure:
 5. `--help` precondition and observed-vs-requested readback.
 
 Steps 1 and 2 are worth doing whether or not the panel is ever built.
+
+## 31. A rank that has crashed since 2026-08-12 and never said so (2026-08-19)
+
+`chirp-ionograms.service` launched `mpirun ... -np 2` against a schedule with
+one transmitter. In scheduled mode `calc_ionograms.py:483` does
+
+    st = conf.sounder_timings[rank]
+
+with no guard, so rank selects a transmitter and `-np` must equal the outer
+list length exactly. The schedule dropped from SGO+NIC to NIC3 alone on
+2026-08-12 and `-np` stayed at 2. Rank 1 has been raising `IndexError` ever
+since.
+
+**What made it invisible for a week** is the shape of the failure, not its
+rarity. `calc_ionograms.py` wraps its main loop in
+
+    while True:
+        try:
+            d = drf.DigitalRFReader(conf.data_dir)
+            analyze_realtime(conf, d)
+            time.sleep(1)
+        except:
+            print("error in calc_ionograms.py. trying to restart")
+
+so the doomed rank catches its own `IndexError`, prints, sleeps a second and
+tries again -- forever. It never exits, so mpirun never tears the job down, so
+systemd reports the unit `active (running)`. Rank 0 meanwhile has the one real
+transmitter and keeps writing products on schedule. Every indicator an operator
+would check says the service is healthy: unit state, product freshness, product
+timestamps. The only evidence is in the journal body, and only if you read past
+the first screen of normal output.
+
+The cost is not zero. Each pass of the doomed loop constructs a fresh
+`DigitalRFReader`, which walks the whole ringbuffer directory tree -- once a
+second, on a box where `chirp-ringbuffer` already makes directory listing the
+scarce resource (sec. 25: 6.3 ms per entry on the archive mount) and where
+8.37% of soundings are already lost to the deadline (sec. 3). A core spent
+rescanning a tree to reach the same `IndexError` is a plausible contributor to
+that number, and worth re-measuring against the loss rate now that it is gone.
+
+**Fixed** by setting `-np 1`, with the reasoning moved into the unit's own
+comment block and pinned by `test_ionograms_np_matches_the_number_of_transmitters`,
+which reads `len(sounder_timings)` out of the station clone's ini and compares.
+
+`chirp-detect.service` keeps `-np 2` and must: `detect_chirps.py` stripes work
+with `if block_idx % size == rank` and never indexes `sounder_timings`, so rank
+is a shard id there, not a transmitter id, and any `-np` is valid. That
+asymmetry is the actual trap -- the two units look identical at the ExecStart
+line and mean different things by the same flag. There is now a test asserting
+detect's independence too, which fails if upstream ever makes rank select a
+transmitter there as well.
+
+**The general lesson, for the settings panel (sec. 30).** This is a class-3 key
+in the census's terms: `sounder_timings` must agree with something outside the
+ini -- an argument in a systemd unit. The panel is going to let an operator
+edit the schedule from a browser, and a schedule edit that does not also move
+`-np` reintroduces exactly this bug, silently, with the operator watching a
+console that says everything is fine. `set_schedule` needs the same
+cross-check the band verb needs, and the agent has to own it, because the unit
+file is the only place the other half of the constraint lives.

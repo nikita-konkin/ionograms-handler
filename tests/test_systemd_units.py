@@ -350,3 +350,64 @@ def test_the_launcher_refuses_to_start_on_an_unreadable_ini():
     assert "set -eu" in body, (
         "without `set -e` a failing python3 leaves CENTER_FREQ empty and the "
         "guard is the only thing between that and a mistuned radio")
+
+
+# --- -np against the schedule ------------------------------------------------
+#
+# The two mpirun units use `rank` for opposite purposes, so a single rule about
+# -np would be wrong for one of them:
+#
+#   calc_ionograms.py:483  `st = conf.sounder_timings[rank]`  -- rank *selects a
+#       transmitter*. -np must equal the outer list length exactly.
+#   detect_chirps.py       `if block_idx % size == rank`      -- rank *stripes
+#       work*. Any -np is valid; more ranks is just more throughput.
+#
+# The over-count is invisible where you would look for it. The doomed rank
+# catches its own IndexError in a `while True` and retries at 1 Hz forever, so
+# mpirun stays up, systemd reports active, and rank 0 keeps producing products.
+# It ran that way from 2026-08-12 to 2026-08-19.
+
+CLONE = Path(__file__).resolve().parents[2] / "chirpsounder2"
+
+
+def _np(unit_name: str) -> int:
+    text = (UNIT_DIR / unit_name).read_text()
+    m = re.search(r"^ExecStart=.*?\s-np\s+(\d+)\b", text, re.M)
+    assert m, f"no `-np N` in {unit_name} ExecStart"
+    return int(m.group(1))
+
+
+def _station_timing_groups() -> int:
+    ini = CLONE / "my_station.ini"
+    if not ini.exists():
+        pytest.skip(f"station chirpsounder2 clone not present: {CLONE}")
+    import ast
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.read(ini)
+    for section in cp.sections():
+        if "sounder_timings" in cp[section]:
+            return len(ast.literal_eval(cp[section]["sounder_timings"]))
+    pytest.skip("no sounder_timings in the station ini")
+
+
+def test_ionograms_np_matches_the_number_of_transmitters() -> None:
+    """-np greater than len(sounder_timings) wedges a rank; smaller drops a
+    transmitter. Neither shows up as a failed unit."""
+    assert _np("chirp-ionograms.service") == _station_timing_groups()
+
+
+def test_detect_np_is_not_tied_to_the_schedule() -> None:
+    """detect_chirps.py stripes blocks by rank and never indexes
+    sounder_timings, so its -np is a throughput choice, not a constraint. This
+    test exists so nobody 'fixes' it to match the ionograms unit."""
+    text = (UNIT_DIR / "chirp-detect.service").read_text()
+    assert "-np" in text
+    if (CLONE / "detect_chirps.py").exists():
+        src = (CLONE / "detect_chirps.py").read_text()
+        assert "sounder_timings[rank]" not in src, (
+            "detect_chirps.py now indexes sounder_timings by rank -- its -np "
+            "has become a constraint too, and this unit needs the same rule "
+            "as chirp-ionograms.service"
+        )
