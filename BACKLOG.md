@@ -2409,10 +2409,18 @@ new frame.
 
 Two more guards, both cheap and both aimed at yesterday's failure:
 
-* **Precondition on the binary.** Before allowing a band change, run
-  `rx_uhd_ext_gps --help` and require `center-freq` in the output. A station
-  whose recorder predates 0014 then *cannot* be misconfigured from the web --
-  it is refused with "rebuild first" instead of going quietly blind.
+* **Precondition on the binary.** Before allowing a band change, require the
+  recorder to support `--center-freq`. **Do not test this by running
+  `rx_uhd_ext_gps --help`.** The option is declared but never handled: there is
+  no `vm.count("help")` branch, so the program falls through to
+  `multi_usrp::make` and opens the radio. `--help` *starts a recorder*, and
+  against a USRP the live one owns. Read the binary instead --
+  `strings rx_uhd_ext_gps | grep -q center-freq` -- which touches nothing. A
+  station whose recorder predates 0014 is then refused with "rebuild first"
+  instead of going quietly blind.
+
+  Handling `--help` properly is worth a patch of its own; until then it belongs
+  with the other things that must never be run by hand on this station.
 * **Close the loop.** After the restart, report the band the newest product
   actually covers next to the band that was requested. The console already
   reads `freq_start`/`freq_stop` per product (`console.html:253`) and already
