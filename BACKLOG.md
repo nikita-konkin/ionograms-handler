@@ -226,7 +226,9 @@ that time divided by 10:
 | 32.5 MHz (the `.lfs` figure) | 325 s | exceeds `rep`; see signal-chain sec. 7.5 |
 
 **None of that table matters above 25 MHz, because the recorder never
-digitised it (2026-08-18).** `maximum_analysis_frequency` was set to `30e6` on
+digitised it (2026-08-18).** *Superseded: the band was moved rather than
+widened, and the span never changed -- see the resolution at the end of this
+section.* `maximum_analysis_frequency` was set to `30e6` on
 the station and the products' sweep top moved 24.82 -> **24.98 MHz** and
 stopped -- not to 30, and not to anything the ionosphere chose. 24.98 is one
 bin under 25.000, which is `sample_rate` exactly. v2 covers 0 to the config
@@ -244,9 +246,12 @@ The config key cannot conjure spectrum that was never sampled.
   becomes 60 MB/s with room to spare. Costs ~4 bits of dynamic range against
   observed SNRs around 50 dB. Needs the recorder edited and rebuilt.
 * **Retune the window upward**, the way v1 did with `cf = 20 MHz` for
-  7.5-32.5 MHz. Same C++ edit, and a worse one: `muf/io_chirp.py:50` documents
-  that v2's frequency axis *is* elapsed time times chirp rate, absolute from
-  0 Hz, so a non-zero LO breaks the axis rather than shifting it.
+  7.5-32.5 MHz. Same C++ edit, and **this is the one that worked** -- see the
+  resolution at the end of this section. The objection recorded here, that a
+  non-zero LO breaks v2's frequency axis, is wrong: the axis is elapsed time
+  times chirp rate, which is absolute RF *whatever* the LO does, because the LO
+  decides which part of the sweep lands in the recording and not what frequency
+  a given instant corresponds to.
 
 Either way the ringbuffer gets more expensive, not less: at 30 MS/s of sc16 the
 buffer holds 116 s per 14000MB instead of 139 s, so `B` falls at the same
@@ -280,12 +285,24 @@ baseline -- so freeing ~3.4 cores did not buy consumer speed. Inverting
 today's 25 MHz sweep needs, never mind 30 MHz. The cap cannot move until this
 does.
 
-The likely reason is in `chirp-ringbuffer.service` and is not CPU: this station
-writes products to a 5400 rpm laptop disk over ntfs-3g -- FUSE, userspace,
-seek-bound -- with a mirror job reading the same spindle every five minutes,
-and `ionice` does not reach the ntfs-3g daemon doing that I/O. A CPU fix cannot
-move an I/O-bound `r`, which is exactly the shape of this result. Confirm with
-`df -T` on `output_dir` (sec. 25) before buying anything.
+**The disk theory was wrong, and so was the I/O framing (2026-08-19).** This
+paragraph used to blame a 5400 rpm laptop disk over ntfs-3g. `lsblk` says
+otherwise: `output_dir` is on `sda`, `ROTA=0`, a Micron MTFDDAK256MAM SSD, and
+the whole staged archive is 720 MB. `IOSchedulingClass=idle` is decoration here
+too -- `/sys/block/sda/queue/scheduler` reads `noop [deadline] cfq`, and
+`deadline` does not honour ioprio, so only `Nice` is doing anything on four
+units that carry both.
+
+The actual cause is in the journal: `calc_ionograms` posts every product to
+`juha.no`, which is unreachable from this network, and blocks up to **60 s per
+file** on a TCP connect that never completes -- twice a cycle, inside the
+process with the deadline. The shape of the losses says the same thing
+independently. They are bimodal with a 164 s dead zone: in one sample hour the
+misses ran -915, -433, -385, -258, -190, -185, -139 and the successes started
+at +24.6, with nothing in between. A consumer losing a race by seconds does not
+leave a gap like that; a consumer stalling for minutes and then draining a
+backlog does. Hour 07 of 2026-08-18 logged no soundings at all and hour 08
+opened at -915 s, three full cycles deep.
 
 Two things this measurement does not settle. The 24 h window may overlap the
 2026-08-17 recorder outage (sec. 27), so re-run it over a window that is
@@ -303,6 +320,88 @@ mis-keyed by the rename (sec. 26); and `nominal_stop_mhz` defaults to the
 observed stop (`muf/io_chirp.py:602`), so a truncated sweep reads as complete
 unless the new cap is passed in. After the change the archive spans two eras
 with different nominal tops and one key cannot describe both.
+
+### The band moved instead of widening, and that was free (2026-08-19)
+
+Everything above prices *widening* the sweep and concludes, correctly, that it
+cannot be paid for. It is the wrong question. The measurement needs 25 MHz of
+span somewhere useful, not 32.5 MHz of span starting at zero -- and the bottom
+7.5 MHz of the recorded band was carrying nothing, being below both the antenna
+and the 9.5-15.5 MHz LOF. So move the window instead of stretching it.
+
+Moving costs nothing at all, which is the whole point: same 25 MS/s, same
+100 MB/s over the link, same 14 GB of `/dev/shm`, same 250 s analysis window,
+same `n_windows` (2501, verified), same `-np`. The `r * B / (1 - r)` table
+above still holds -- it prices the *span*, and the span does not change.
+
+It took two patches and five ini keys:
+
+* **0012** -- `rx_uhd_ext_gps.cpp:187`, `set_rx_freq(12.5e6)` -> `20e6`. The LO
+  sits at `sample_rate/2`, so the band is 0 to `sample_rate` by construction;
+  at 20 MHz it becomes 7.5-32.5.
+* **0013** -- `calc_ionograms.py` measures `dur`, the downconverter start and
+  the frequency axis from `minimum_analysis_frequency` rather than from 0 Hz.
+  Without it, reaching 32.5 MHz means `dur = 325 s` -- 75 s of FFTs over
+  spectrum that was never digitised -- against `rep = 300` and a ~249 s budget.
+* `center_freq = 20e6`, `min_freq = 7.5e6`, `max_freq = 32.5e6`,
+  `minimum_analysis_frequency = 7.5e6`, `maximum_analysis_frequency = 32.5e6`.
+
+Deployed to the station 2026-08-19 01:05 MSK. Measured immediately after, from
+`lfm_ionogram-NIC3-Yoshkar-Ola-ch0-004-1787090945.00.h5`: **7.55 - 32.30 MHz**,
+against a MUF that had been flat at 24.5 for about seven hours a day. This is
+not a new geometry for this receiver -- `cyprus1_20260204_000010.lfs` recorded
+7.5-32.5 MHz here in February with `cf` 20 MHz and `dur` 250 s
+(`docs/signal-chain.md` sec. 8). It is a return.
+
+**Three caps sat at 25 MHz and only one was ever being moved.** That is why
+`maximum_analysis_frequency = 30e6` produced 24.98 and looked like a hardware
+wall. In order of who binds first: `min_freq`/`max_freq` gate the *stored*
+frequency axis under `manual_freq_extent` (`calc_ionograms.py:296`) and are
+what the UI's sweep column reports -- `0.53-24.98` is those two, one 20.48 kHz
+bin inside each edge; `maximum_analysis_frequency` sets the analysis window;
+and the recorder's 0-25 MHz band is the only one of the three that is about
+signal existing. The paragraph above is right that the config cannot conjure
+spectrum that was never sampled, and wrong to read that as a ceiling.
+
+**Widening really is dead, for a better reason than the one recorded above.**
+The N2x0's master clock is 100 MHz and the rate must divide it: 100/4 = 25
+today, 100/3 = 33.33 next, nothing between -- so "30 MS/s" was never on the
+menu. And 33.33 MS/s needs `sc8` on the wire to fit 1 GbE while the host format
+stays `sc16`, so `B` falls from 140 s to 105 s and the budget at `r = 0.64`
+falls from 24.7 MHz to **18.7 MHz**. It is a recorder rebuild that ends with a
+narrower sweep.
+
+**`minimum_analysis_frequency` already existed**, in the ini and in
+`chirp_config.py:287`. Its only reader was
+`serendipitous_ionogram_queue.py:115`, so on the scheduled path -- the one
+every station with `sounder_timings` runs -- setting it did nothing, and said
+nothing about doing nothing. 0013 is what gives the existing knob meaning.
+
+**Two traps, both of which fired on the day.**
+
+`center_freq` and `set_rx_freq` must carry the same number, because
+`calc_ionograms` builds its downconversion mixer from the former (`f0=-cf`)
+while the samples come from wherever the binary actually tuned. Nothing checks
+them and nothing can: the LO is not in the Digital RF metadata. A mismatch
+dechirps 7.5 MHz off and yields empty products with **no error in any log**. It
+happened twice on 2026-08-19 -- once by applying the ini before the patch
+existed, once by editing `rx_uhd_ext_gps.cpp` and not rebuilding, since editing
+the source looks like it changed the recorder. `ls -l` on the binary is the
+check; sec. 30's plan makes it a precondition.
+
+And `make rx_uhd_ext_gps` without patch 0006 applied produces an **`-O0`
+build**, silently replacing a hand-built optimised binary -- exactly what 0006
+was written to prevent, five days before it happened.
+
+**Still open.** `calc_ionograms.py:562` still computes
+`t1 = maximum_analysis_frequency / chirp_rate + t0`, so it decides a sounding
+is worth analysing from the top of the band while the data it needs now starts
+75 s later; a sounding whose low end has already been overwritten can pass that
+check and produce an ionogram truncated at the bottom. The top bin came out at
+32.30 where the gate would allow ~32.45, three bins short, cause unknown and
+cost 150 kHz. And `Station.band_ceiling_mhz`'s `NIC -> (("DOB", 24.53),)` is
+now definitively stale: the archive spans two eras with different tops, and one
+key cannot describe both.
 
 ### The anchor is fixed (2026-08-13)
 
@@ -363,6 +462,61 @@ one deciding whether a MUF is published as a measurement.
 **Still open: only NIC->DOB is measured.** SGO->DOB has no entry and falls back
 to the sweep stop. It needs a day of SGO data through local noon, which
 section 17 wants anyway.
+
+**Resolved 2026-08-19 -- by moving the band, not widening it.** The receiver
+now records **7.5-32.5 MHz** and a product measures 7.55-32.30. Nothing above
+was needed: same 25 MS/s, same 100 MB/s on the link, same 14 GB of `/dev/shm`,
+same `-np`, and the same 2501 `n_windows` per sounding. `patches/0012` moves
+the LO from `sample_rate/2` to 20 MHz; `patches/0013` makes `calc_ionograms`
+measure `dur`, the downconverter start and the frequency axis from
+`minimum_analysis_frequency` instead of from 0 Hz.
+
+**The table above still binds, and that is exactly why this works.** Every row
+prices a *longer* sweep. Moving the window does not lengthen it: 7.5-32.5 at
+100 kHz/s is 250 s, the same 250 s as 0-25, so `r` never enters. The trade is a
+bottom end nobody used -- LOF sits at 9.5-15.5 and the antenna does not respond
+below a few MHz -- for 7.5 MHz of headroom above where the MUF was being cut.
+
+**24.98 came from `max_freq`, not from the sample rate.** With
+`manual_freq_extent = true`, `calc_ionograms.py:296` gates the stored axis to
+`min_freq < f < max_freq`, and both were 25e6/0.5e6 -- which reproduces
+`0.53-24.98` exactly, one 20.48 kHz bin inside each edge. Two caps sat on 25
+MHz and the `30e6` experiment could not tell them apart, so the conclusion
+above named the wrong one. The sample rate is still a real cap on *content* --
+there is genuinely no signal above the sampled band -- it simply was not what
+produced that number.
+
+**`minimum_analysis_frequency` was already there, and already did nothing.**
+It is in the ini and parsed at `chirp_config.py:287`, but its only reader was
+`serendipitous_ionogram_queue.py:115`. On the scheduled path -- the one every
+station with `sounder_timings` runs -- setting it changed nothing and said
+nothing about it. 0013 is what gives it meaning there.
+
+**Unpatched, the top alone is not enough, and that is what cost soundings on
+2026-08-18.** `dur` was `maximum_analysis_frequency / rate` measured from 0 Hz,
+so asking for 32.5 MHz asks for a 325 s window -- 75 s of it FFTs over spectrum
+that was never digitised -- against `rep = 300` and a ~249 s budget. Same
+failure as the `30e6` attempt, same cause.
+
+**`center_freq` and `set_rx_freq` must agree and nothing checks them.**
+`calc_ionograms` builds its downconversion mixer from `center_freq`
+(`f0=-cf`, line 233) while the samples come from wherever the binary tuned. The
+LO is not in the Digital RF metadata, so no consistency check is even possible
+today. A mismatch dechirps by the difference and yields empty products with no
+error in any log -- observed twice on 2026-08-19, both times because editing
+`rx_uhd_ext_gps.cpp` looks like it changed the recorder when it only changed
+the source. Rebuild between the two edits. Section 28 is the fix for the class.
+
+**Still open.** The top bin lands at 32.30 where the `max_freq` gate would
+allow ~32.45, so the spectrogram finishes about three 50 kHz bins short of the
+configured edge; 150 kHz out of 25 MHz, nothing depends on it, but the gate and
+the FFT disagree. And `t1` at `calc_ionograms.py:562` is still
+`maximum_analysis_frequency / chirp_rate + t0`, so the "is any of this still in
+the buffer" test now judges against t0+325 s while the data actually needed
+starts at t0+75 -- it can elect to analyse a sounding whose low end is already
+overwritten. That shows up as products short at the bottom rather than starting
+at 7.5 MHz.
+
 
 ## 4. Investigate the 71-second truncations
 
@@ -2038,3 +2192,126 @@ routes, twice, with the second pass sending nothing. 951 passed, 34 skipped.
   waits 60 s plus a 900 s timer before ingest. "Now" and "has an id" are
   mutually exclusive states, so the live picture belongs on the console and the
   ingested one on the sounding page.
+
+## 30. Moving the band from the console (2026-08-19)
+
+Today's band change (sec. 3) took two patches, a rebuild, five `sed` lines and
+a restart, and it blinded the station twice on the way -- both times silently,
+with every unit green and every log clean. That is the case for putting it
+behind an interface that checks. The knob is also not a one-off: the useful
+window moves with the season and with which transmitter is being chased.
+
+**Why this is not just two more names in `WEB_EDITABLE`.** `mode` and
+`sounder_timings` live entirely in the ini, so the agent's existing
+validate -> backup -> atomic write -> restart is the whole story. The band does
+not: `center_freq` must carry the same number as the `set_rx_freq` compiled
+into `rx_uhd_ext_gps`, nothing checks them, and nothing can, because the LO is
+not in the Digital RF metadata. Adding `center_freq` to the allow-list as
+things stand would ship a one-click way to blind a station with no error
+anywhere. So the first phase is not interface work.
+
+### Phase 1 -- make the ini the single source of the LO
+
+A patch giving `rx_uhd_ext_gps.cpp` a `--center_freq` option in the
+`boost::program_options` block it already has (`rate` is there at line 346),
+defaulting to `12.5e6` so an un-updated launcher behaves exactly as it does
+now, and `set_rx_freq(center_freq, chan)` at line 187.
+
+Write it knowing the `--rate` trap: `rate` is *already* an option and passing
+it silently corrupts the timebase, because `sample_rate_numerator` at line 173
+is a separate hardcoded constant feeding the Digital RF metadata and the
+timestamp arithmetic. Grep for other uses of `12.5e6` before assuming
+`center_freq` has no such twin.
+
+Then the wiring, which is where the single source of truth is actually made:
+`chirp-rx.service` gains a `RuntimeDirectory=chirp`, an `ExecStartPre` that
+reads `center_freq` out of `my_station.ini` and writes `/run/chirp/band.env`,
+an `EnvironmentFile=/run/chirp/band.env`, and `--center_freq=${CENTER_FREQ}` on
+`ExecStart`. The ini is read at every start; the mismatch stops being a thing
+that can exist. This is upstream's own `TBD: change cpp program so that ini
+file defines USRP setup!`, done from the systemd side because that needs no ini
+parser in C++.
+
+Acceptance: change `center_freq` in the ini alone, restart, and the products
+move. No rebuild. **This phase is worth doing on its own even if the two below
+never happen** -- it takes the compiler out of an operational loop.
+
+### Phase 2 -- the agent learns the band as one operation
+
+`control.py` gains a single `set_band` change rather than five independent
+keys, because five keys that must agree is precisely the shape that failed
+today. Three inputs, five derived ini values:
+
+* `band_start_mhz` -- the radio. Sets `center_freq = band_start + rate/2`, and
+  therefore what is digitised: `[band_start, band_start + rate]`.
+* `analysis_min_mhz`, `analysis_max_mhz` -- the window inside it, defaulting to
+  the full band. These set `minimum_analysis_frequency` /
+  `maximum_analysis_frequency` and, because they are a separate cap that binds
+  first, `min_freq` / `max_freq` as well.
+
+One knob for the hardware and two for the analysis is the honest split: the
+useful window is often narrower than what is sampled, and sec. 3 shows what it
+costs to conflate them.
+
+The validator is the reason to build any of this, because it is where today's
+lessons stop being prose:
+
+1. `analysis_min >= band_start` and `analysis_max <= band_start + rate`. You
+   cannot analyse spectrum that was never digitised. This is the refusal that
+   `maximum_analysis_frequency = 30e6` should have produced and didn't.
+2. `(analysis_max - analysis_min) / chirp_rate < rep` for **every** entry in
+   `sounder_timings`. 30 MHz at Nicosia's 100 kHz/s is 300 s, which is the
+   whole cycle. Refuse with that arithmetic in the message.
+3. Span against the ringbuffer budget `r * B / (1 - r)` from sec. 3. **Warn,
+   do not refuse** -- `r` is measured and it moves.
+4. Alignment: `analysis_min / rate * sample_rate` must be a whole multiple of
+   `downconversion_block_samples * decimation`, or patch 0013's skip lands
+   mid-block and the frequency axis shifts. Today's numbers give 750 blocks
+   exactly. Snap to the nearest aligned frequency and say so in the result,
+   rather than refusing over 20 kHz.
+5. `analysis_min >= 0`, `analysis_max > analysis_min`.
+
+**And one precondition worth more than the whole list above:** before writing
+anything, run the recorder binary with `--help` and refuse if `center_freq` is
+not in its output. That is a direct test of "is the deployed binary one that
+reads the ini", it needs no state, and it is exactly the check that was missing
+both times the station went blind on 2026-08-19.
+
+`apply_and_restart` then runs unchanged -- validate, back up to `.<stamp>.bak`,
+atomic write, stop, start -- so a half-applied band cannot exist.
+
+### Phase 3 -- the console panel
+
+Next to the schedule composer, whose shape it copies (`applyPlan`).
+`WEB_EDITABLE` gains `set_band` only once phase 1 is deployed everywhere; a
+station on an old binary must refuse, and phase 2's `--help` check is what
+makes it refuse rather than the operator remembering.
+
+What it shows for the selected station:
+
+* the configured band and analysis window, from the last health report;
+* the **observed** band from the newest product -- `freq_start`/`freq_stop` are
+  already on the console at `console.html:253`. Printing configured 7.5-32.5
+  beside observed 7.55-32.30 closes the loop: a silent LO mismatch becomes
+  visible within one cycle instead of never, which is the single thing missing
+  today;
+* the derived numbers before anything is pressed -- sweep duration in seconds
+  against `rep`, and the ringbuffer margin;
+* two presets, `0-25 (v2 default)` and `7.5-32.5 (v1, and current)`, plus
+  custom fields.
+
+### What this deliberately does not do
+
+**Not the sample rate.** It has the `sample_rate_numerator` twin at line 173, a
+hardware constraint (must divide the N2x0's 100 MHz clock, so 25 or 33.33 and
+nothing between), and at this site raising it makes the achievable sweep
+*narrower* -- sec. 3. It stays compiled in.
+
+**Not a rollback button.** `apply_config` already writes `.<stamp>.bak`;
+restoring one is a deliberate manual act and should stay one.
+
+### Cost
+
+Phase 1 about half a day and independently valuable. Phase 2 about a day,
+nearly all of it the validator and its tests. Phase 3 about half a day, since
+the panel is the schedule composer with different fields.
