@@ -2882,3 +2882,60 @@ def test_a_short_answer_is_sent_as_it_is(client):
 
     assert got.status_code == 200
     assert "content-encoding" not in got.headers
+
+
+# --- set_band over the wire --------------------------------------------------
+
+def test_the_band_is_queued_as_one_composite_not_five_keys(client):
+    """BACKLOG sec. 30. The web may ask for a band; it may not ask for the
+    five ini values the band is made of."""
+    ok = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"set_band": {"band_start_mhz": 7.5}}}})
+    assert ok.status_code == 200
+
+    pulled = client.get("/stations/SIM/commands", headers=CTL).json()["commands"]
+    assert pulled[0]["params"]["changes"]["set_band"] == {"band_start_mhz": 7.5}
+
+
+@pytest.mark.parametrize("key", [
+    "center_freq", "min_freq", "max_freq",
+    "minimum_analysis_frequency", "maximum_analysis_frequency",
+    "manual_freq_extent",
+])
+def test_the_coupled_band_keys_are_not_individually_settable(client, key):
+    """Each of these alone is a station that reports healthy and records
+    nothing usable. `center_freq` alone is the 2026-08-19 failure exactly."""
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {key: "20e6"}}})
+    assert r.status_code == 400
+    assert key in r.json()["detail"]
+
+
+@pytest.mark.parametrize("payload,expect", [
+    ({"analysis_min_mhz": 8.0}, "band_start_mhz"),
+    ({"band_start_mhz": "wide"}, "not a number"),
+    ({"band_start_mhz": -1}, "below zero"),
+    ({"band_start_mhz": 7.5, "sample_rate": 30e6}, "sample_rate"),
+    ({"band_start_mhz": 7.5, "analysis_min_mhz": 20, "analysis_max_mhz": 10},
+     "not above"),
+    ("7.5-32.5", "object"),
+])
+def test_a_malformed_band_is_refused_while_the_operator_is_watching(
+        client, payload, expect):
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {"set_band": payload}}})
+    assert r.status_code == 400
+    assert expect in r.json()["detail"]
+
+
+def test_the_web_does_not_re_check_what_needs_the_station(client):
+    """A window outside the digitised band depends on `sample_rate` in the
+    station's own ini, which the server does not have. It queues here and the
+    agent refuses it there -- deliberately, so there is one authority for it
+    rather than two that can disagree."""
+    ok = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"set_band": {"band_start_mhz": 0.0,
+                                            "analysis_max_mhz": 30.0}}}})
+    assert ok.status_code == 200

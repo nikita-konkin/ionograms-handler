@@ -69,6 +69,20 @@ class StationConfig:
     #: check rather than failing the command.
     launcher: Path = Path("/home/ionouser/chirpsounder2/examples/marieluise/dombas.sh")
 
+    #: The recorder binary, read-only and only to answer one question: does it
+    #: take the LO from the ini, or is it still the build with ``set_rx_freq``
+    #: compiled in? A band change against the latter tunes nothing and
+    #: dechirps everything by the difference -- which is exactly how this
+    #: station went blind twice on 2026-08-19, with every unit green.
+    #:
+    #: Answered by looking for ``center-freq`` in the file's bytes, patch
+    #: 0014's option string. **Never by running it with ``--help``**: the
+    #: option is declared in ``add_options`` but there is no
+    #: ``vm.count("help")`` branch, so the program falls through to
+    #: ``multi_usrp::make`` and opens the radio. ``--help`` starts a recorder,
+    #: against a USRP the live one already owns.
+    recorder_binary: Path = Path("/home/ionouser/chirpsounder2/rx_uhd_ext_gps")
+
     #: Where products land. Read from ``chirp_config`` when present; this is
     #: the fallback and the thing disk-free is measured against.
     #:

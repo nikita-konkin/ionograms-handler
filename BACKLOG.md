@@ -2223,14 +2223,18 @@ is a separate hardcoded constant feeding the Digital RF metadata and the
 timestamp arithmetic. Grep for other uses of `12.5e6` before assuming
 `center_freq` has no such twin.
 
-Then the wiring, which is where the single source of truth is actually made:
-`chirp-rx.service` gains a `RuntimeDirectory=chirp`, an `ExecStartPre` that
-reads `center_freq` out of `my_station.ini` and writes `/run/chirp/band.env`,
-an `EnvironmentFile=/run/chirp/band.env`, and `--center_freq=${CENTER_FREQ}` on
-`ExecStart`. The ini is read at every start; the mismatch stops being a thing
-that can exist. This is upstream's own `TBD: change cpp program so that ini
-file defines USRP setup!`, done from the systemd side because that needs no ini
-parser in C++.
+Then the wiring, which is where the single source of truth is actually made.
+This is upstream's own `TBD: change cpp program so that ini file defines USRP
+setup!`, done from outside the C++ because that needs no ini parser in it.
+
+**Shipped 2026-08-19, and simpler than planned.** The sketch here was a
+`RuntimeDirectory=chirp`, an `ExecStartPre` writing `/run/chirp/band.env`, and
+an `EnvironmentFile=`. What went in instead is `tools/chirp-rx-launch.sh`: one
+wrapper that reads `center_freq` with the venv python, refuses to start on an
+unreadable ini, echoes the LO it is about to use, and `exec`s the recorder so
+it stays MAINPID and keeps receiving the SIGINT that a USRP must have. No
+runtime directory, no environment file, no second place for the number to
+live. The option is spelled `--center-freq`, not `--center_freq`.
 
 Acceptance: change `center_freq` in the ini alone, restart, and the products
 move. No rebuild. **This phase is worth doing on its own even if the two below
@@ -2272,10 +2276,16 @@ lessons stop being prose:
 5. `analysis_min >= 0`, `analysis_max > analysis_min`.
 
 **And one precondition worth more than the whole list above:** before writing
-anything, run the recorder binary with `--help` and refuse if `center_freq` is
-not in its output. That is a direct test of "is the deployed binary one that
-reads the ini", it needs no state, and it is exactly the check that was missing
-both times the station went blind on 2026-08-19.
+anything, confirm the deployed binary is one that reads the ini, and refuse if
+it is not. That is exactly the check that was missing both times the station
+went blind on 2026-08-19.
+
+**Do not do it by running `rx_uhd_ext_gps --help`,** which is what this section
+said first and what would have made the guard worse than nothing. `--help` is
+declared in `add_options` but never handled -- there is no `vm.count("help")`
+branch -- so the program falls through to `multi_usrp::make` and **opens the
+radio**, against a USRP the live recorder already owns. Read the file's bytes
+for `center-freq` instead: no process, no device, no state.
 
 `apply_and_restart` then runs unchanged -- validate, back up to `.<stamp>.bak`,
 atomic write, stop, start -- so a half-applied band cannot exist.
@@ -2440,9 +2450,15 @@ Two more guards, both cheap and both aimed at yesterday's failure:
    half, which is the live one. Both launchers already had a `CENTER_FREQ`
    variable that nothing read -- eight other launchers under `examples/` still
    do, `aeroauto.sh` at the same `20e6` this station now wants.
-3. `set_band` in the agent, with the four checks and the `--help` precondition.
+3. ~~`set_band` in the agent, with the checks and the binary
+   precondition.~~ **Done 2026-08-19.** `control.plan_band` turns three
+   numbers into the six ini entries of `BAND_INI`, which are reachable
+   no other way; `WEB_EDITABLE` gained the composite and not the keys.
+   The ringbuffer check fires on the band the station is running right
+   now -- a 250.0 s sweep against a 248.9 s budget -- so sec. 3's 8.37%
+   loss is visible before a change is pressed rather than after.
 4. The panel, rendering the census.
-5. `--help` precondition and observed-vs-requested readback.
+5. Observed-vs-requested readback.
 
 Steps 1 and 2 are worth doing whether or not the panel is ever built.
 

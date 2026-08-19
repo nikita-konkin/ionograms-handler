@@ -172,6 +172,46 @@ EDITABLE = {
     "save_raw_voltage": ("lfm", "save_raw_voltage"),
 }
 
+#: Changes that are not a key at all but an operation over several, each with
+#: its cross-checks attached. `set_band` takes ``band_start_mhz`` and
+#: optionally ``analysis_min_mhz`` / ``analysis_max_mhz``, and writes the six
+#: entries of :data:`BAND_INI`. Kept separate from `EDITABLE` so the five
+#: coupled keys have no individual door.
+COMPOSITE = ("set_band",)
+
+#: What `set_band` accepts. `band_start_mhz` is the hardware; the other two
+#: default to the full digitised band.
+BAND_ARGS = ("band_start_mhz", "analysis_min_mhz", "analysis_max_mhz")
+
+
+def _band_kwargs(request: Any) -> dict:
+    """Check the shape of a `set_band` request before any of it is believed."""
+    if not isinstance(request, dict):
+        raise ControlError(
+            f"set_band takes an object with {list(BAND_ARGS)}; "
+            f"got {type(request).__name__}")
+    unknown = set(request) - set(BAND_ARGS)
+    if unknown:
+        raise ControlError(
+            f"set_band: unknown field(s) {sorted(unknown)}; "
+            f"allowed: {list(BAND_ARGS)}. The sample rate is deliberately not "
+            f"among them -- it has a hardcoded twin at "
+            f"rx_uhd_ext_gps.cpp:173 and must divide the N2x0's 100 MHz "
+            f"clock, so it stays compiled in.")
+    if "band_start_mhz" not in request:
+        raise ControlError("set_band: band_start_mhz is required")
+    out = {}
+    for name in BAND_ARGS:
+        if name not in request or request[name] is None:
+            continue
+        try:
+            out[name] = float(request[name])
+        except (TypeError, ValueError):
+            raise ControlError(
+                f"set_band: {name} = {request[name]!r} is not a number") from None
+    return out
+
+
 #: `mode` is friendlier than a bare boolean, and the mapping is the one place
 #: the two vocabularies meet. See architecture.md sec. 2.5.
 MODES = {"search": "true", "serendipitous": "true",
@@ -197,6 +237,307 @@ MODES = {"search": "true", "serendipitous": "true",
 #: screen; this one is the last line, on the station, and must not depend on
 #: the server having been updated.
 SCHEDULE_KEYS = ("chirp-rate", "rep", "chirpt", "id", "transmit_name")
+
+
+# --------------------------------------------------------------------------
+# The band, as one operation
+# --------------------------------------------------------------------------
+
+#: The five ini values a band change writes, plus the flag that makes two of
+#: them bind. Not in :data:`EDITABLE`: they are unreachable individually on
+#: purpose, because "five keys that must agree" is precisely the shape that
+#: failed on 2026-08-19. The only way in is :func:`plan_band`.
+BAND_INI = {
+    "center_freq": ("config", "center_freq"),
+    "minimum_analysis_frequency": ("lfm", "minimum_analysis_frequency"),
+    "maximum_analysis_frequency": ("lfm", "maximum_analysis_frequency"),
+    "min_freq": ("lfm", "min_freq"),
+    "max_freq": ("lfm", "max_freq"),
+    "manual_freq_extent": ("lfm", "manual_freq_extent"),
+}
+
+#: How much wall time the ringbuffer holds, in seconds -- `B` in sec. 3's
+#: `r * B / (1 - r)`. 14 GB of `/dev/shm` at 25 MS/s sc16 (4 bytes/sample,
+#: 100 MB/s) is ~140 s. Measured, not derived: the agent does not know the
+#: tmpfs size at validation time and this is a warning, not a refusal.
+RINGBUFFER_SPAN_S = 140.0
+
+#: What fraction of realtime the analysis actually achieves -- `r`. **0.64,
+#: measured 2026-08-18** from `n=1039 lost=87 (8.37%)`. It moves with load,
+#: which is why the span check below warns and never refuses.
+CONSUMER_REALTIME_FRACTION = 0.64
+
+#: Patch 0014's option string, looked for in the recorder's bytes.
+CENTER_FREQ_OPTION = b"center-freq"
+
+
+@dataclass
+class BandPlan:
+    """What a band change would write, and what it would cost."""
+
+    changes: dict = field(default_factory=dict)   #: ini key -> value, as text
+    warnings: list = field(default_factory=list)  #: shown, never fatal
+    notes: list = field(default_factory=list)     #: what was adjusted, and why
+    band_start_hz: float = 0.0
+    band_stop_hz: float = 0.0
+    analysis_min_hz: float = 0.0
+    analysis_max_hz: float = 0.0
+    sweep_seconds: dict = field(default_factory=dict)  #: transmit_name -> s
+    budget_seconds: float = 0.0
+
+    def summary(self) -> str:
+        return (f"digitise {self.band_start_hz / 1e6:.3f}-"
+                f"{self.band_stop_hz / 1e6:.3f} MHz, analyse "
+                f"{self.analysis_min_hz / 1e6:.3f}-"
+                f"{self.analysis_max_hz / 1e6:.3f} MHz")
+
+
+def recorder_reads_the_ini(binary: str | Path | None) -> tuple[bool, str]:
+    """Does the deployed recorder take its LO from the command line?
+
+    Reads the file and looks for patch 0014's option string. A byte scan
+    rather than an execution, and that distinction is the whole point:
+    ``rx_uhd_ext_gps --help`` **opens the radio**, because the option is
+    declared without a ``vm.count("help")`` branch to handle it.
+
+    Returns ``(False, reason)`` when it cannot tell. Refusing on "cannot tell"
+    is the safe direction: the failure this guards against is silent, produces
+    no error anywhere, and costs every sounding until someone thinks to check
+    the LO against the ini by hand.
+    """
+    if binary is None:
+        return False, "no recorder_binary configured"
+    path = Path(binary)
+    try:
+        blob = path.read_bytes()
+    except OSError as exc:
+        return False, f"{path}: {exc.strerror or exc}"
+    if CENTER_FREQ_OPTION not in blob:
+        return False, (
+            f"{path} has no --center-freq option, so it tunes to whatever "
+            f"set_rx_freq was compiled with and ignores center_freq in the "
+            f"ini. Every product would be dechirped by the difference, with "
+            f"no error in any log. Apply patch 0014 and rebuild first.")
+    return True, "ok"
+
+
+def _float_ini(parser: configparser.ConfigParser, section: str, option: str,
+               *, default: float | None = None) -> float:
+    """chirpsounder2 writes ``25e6`` and reads it with ``json.loads``."""
+    raw = parser.get(section, option, fallback=None)
+    if raw is None or not str(raw).strip():
+        if default is None:
+            raise ControlError(
+                f"[{section}] {option} is missing from the config and has no "
+                f"safe default; a band change cannot be checked without it")
+        return default
+    try:
+        return float(str(raw).strip().strip('"'))
+    except ValueError:
+        raise ControlError(
+            f"[{section}] {option} = {raw!r} is not a number") from None
+
+
+def _schedule_entries(parser: configparser.ConfigParser) -> list[dict]:
+    """Every scheduled transmitter, flattened across ranks."""
+    raw = parser.get("lfm", "sounder_timings", fallback=None)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list) or not parsed:
+        return []
+    ranks = parsed if all(isinstance(x, list) for x in parsed) else [parsed]
+    return [e for rank in ranks if isinstance(rank, list)
+            for e in rank if isinstance(e, dict)]
+
+
+def _alignment_quantum_hz(sample_rate: float, block_samples: float,
+                          decimation: float, chirp_rate: float) -> float:
+    """The frequency grid patch 0013's skip has to land on.
+
+    0013 starts the downconverter at ``minimum_analysis_frequency`` instead of
+    at 0 Hz, and it gets there by skipping whole blocks. The skip is
+    ``analysis_min / chirp_rate * sample_rate`` samples, and a block is
+    ``downconversion_block_samples * decimation`` of them, so an analysis floor
+    that is not a whole number of blocks lands mid-block and shifts the
+    frequency axis under every product.
+
+    Today's numbers give exactly 750 blocks: 7.5 MHz / 100 kHz/s = 75 s,
+    x 25 MS/s = 1.875e9 samples, / (4000 x 625) = 750.
+    """
+    block = block_samples * decimation
+    if block <= 0 or sample_rate <= 0 or chirp_rate <= 0:
+        return 0.0
+    return block * chirp_rate / sample_rate
+
+
+def plan_band(parser: configparser.ConfigParser, *,
+              band_start_mhz: float,
+              analysis_min_mhz: float | None = None,
+              analysis_max_mhz: float | None = None,
+              recorder_binary: str | Path | None = None,
+              check_recorder: bool = True) -> BandPlan:
+    """Turn three numbers into the five the ini needs, or refuse with why.
+
+    ``band_start_mhz`` is the hardware: the bottom of what gets digitised.
+    ``sample_rate`` stays compiled in (it has the ``sample_rate_numerator``
+    twin at ``rx_uhd_ext_gps.cpp:173`` and a 100 MHz clock divisor to respect),
+    so the start alone fixes ``center_freq`` and the passband.
+
+    The analysis window defaults to the whole passband and is usually narrower.
+    Conflating the two is what sec. 3 cost a day to.
+    """
+    plan = BandPlan()
+
+    if check_recorder:
+        ok, reason = recorder_reads_the_ini(recorder_binary)
+        if not ok:
+            raise ControlError(f"refusing to change the band: {reason}")
+
+    sample_rate = _float_ini(parser, "config", "sample_rate")
+    if sample_rate <= 0:
+        raise ControlError(f"sample_rate = {sample_rate} is not usable")
+
+    band_start = float(band_start_mhz) * 1e6
+    band_stop = band_start + sample_rate
+    centre = band_start + sample_rate / 2.0
+
+    analysis_min = (band_start if analysis_min_mhz is None
+                    else float(analysis_min_mhz) * 1e6)
+    analysis_max = (band_stop if analysis_max_mhz is None
+                    else float(analysis_max_mhz) * 1e6)
+
+    # 5 -- the arithmetic ones first, so later messages can assume a real span.
+    if band_start < 0:
+        raise ControlError(
+            f"band_start {band_start / 1e6:.3f} MHz is below zero")
+    if analysis_min < 0:
+        raise ControlError(
+            f"analysis_min {analysis_min / 1e6:.3f} MHz is below zero")
+    if analysis_max <= analysis_min:
+        raise ControlError(
+            f"analysis_max {analysis_max / 1e6:.3f} MHz is not above "
+            f"analysis_min {analysis_min / 1e6:.3f} MHz")
+
+    # 4 -- snap before the containment check, so a snap cannot push the floor
+    # out of the band without being caught.
+    block_samples = _float_ini(parser, "lfm", "downconversion_block_samples",
+                               default=4000.0)
+    decimation = _float_ini(parser, "lfm", "decimation", default=625.0)
+    entries = _schedule_entries(parser)
+    rates = sorted({float(e["chirp-rate"]) for e in entries
+                    if str(e.get("chirp-rate", "")).strip() not in ("", "None")}
+                   ) if entries else []
+
+    if rates:
+        # Snap on the coarsest grid in the schedule, then report any rate the
+        # result does not also suit. One transmitter -- the usual case -- makes
+        # this exact.
+        quanta = [_alignment_quantum_hz(sample_rate, block_samples,
+                                        decimation, r) for r in rates]
+        coarsest = max(q for q in quanta) if any(quanta) else 0.0
+        if coarsest > 0:
+            snapped = round(analysis_min / coarsest) * coarsest
+            if abs(snapped - analysis_min) > 1e-6:
+                plan.notes.append(
+                    f"analysis_min snapped {analysis_min / 1e6:.4f} -> "
+                    f"{snapped / 1e6:.4f} MHz, onto the "
+                    f"{coarsest / 1e3:.3f} kHz block grid; off-grid the "
+                    f"downconverter starts mid-block and the frequency axis "
+                    f"shifts under every product")
+                analysis_min = snapped
+            for rate, quantum in zip(rates, quanta):
+                if quantum > 0 and abs(
+                        analysis_min / quantum
+                        - round(analysis_min / quantum)) > 1e-6:
+                    plan.warnings.append(
+                        f"analysis_min is not a whole number of blocks at "
+                        f"{rate / 1e3:.1f} kHz/s ({quantum / 1e3:.3f} kHz "
+                        f"grid); that transmitter's frequency axis will be "
+                        f"offset. Schedules mixing chirp rates cannot satisfy "
+                        f"every grid at once.")
+
+    # 1 -- you cannot analyse spectrum that was never digitised. The refusal
+    # `maximum_analysis_frequency = 30e6` should have produced and did not.
+    tol = 1.0  # Hz; snapping and float text both land a hair off.
+    if analysis_min < band_start - tol or analysis_max > band_stop + tol:
+        raise ControlError(
+            f"the analysis window {analysis_min / 1e6:.3f}-"
+            f"{analysis_max / 1e6:.3f} MHz reaches outside the digitised band "
+            f"{band_start / 1e6:.3f}-{band_stop / 1e6:.3f} MHz "
+            f"(center_freq {centre / 1e6:.3f} MHz +/- {sample_rate / 2e6:.3f} "
+            f"MHz). The part outside is FFTs over spectrum the radio never "
+            f"sampled: no error, no signal, and the sweep time spent anyway.")
+
+    # 2 -- the sweep has to finish inside the cycle it belongs to.
+    span = analysis_max - analysis_min
+    for entry in entries:
+        try:
+            rate = float(entry["chirp-rate"])
+            rep = float(entry["rep"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if rate <= 0 or rep <= 0:
+            continue
+        sweep = span / rate
+        plan.sweep_seconds[str(entry.get("transmit_name", "?"))] = sweep
+        if sweep >= rep:
+            raise ControlError(
+                f"{entry.get('transmit_name', '?')}: sweeping "
+                f"{span / 1e6:.3f} MHz at {rate / 1e3:.1f} kHz/s takes "
+                f"{sweep:.1f} s, which does not fit the {rep:.0f} s "
+                f"repetition period. The next sounding starts before this one "
+                f"is read out.")
+
+    # 3 -- the ringbuffer budget. Warns: `r` is measured and it moves.
+    r = CONSUMER_REALTIME_FRACTION
+    plan.budget_seconds = r * RINGBUFFER_SPAN_S / (1.0 - r)
+    for name, sweep in plan.sweep_seconds.items():
+        if sweep > plan.budget_seconds:
+            plan.warnings.append(
+                f"{name}: a {sweep:.1f} s sweep is past the "
+                f"{plan.budget_seconds:.0f} s ringbuffer budget "
+                f"(r={r:.2f}, B={RINGBUFFER_SPAN_S:.0f} s), so the oldest "
+                f"samples of a sounding can be pruned before the analysis "
+                f"reaches them. That is sec. 3's 8.37% loss; it degrades, it "
+                f"does not fail.")
+
+    plan.band_start_hz = band_start
+    plan.band_stop_hz = band_stop
+    plan.analysis_min_hz = analysis_min
+    plan.analysis_max_hz = analysis_max
+
+    # `min_freq`/`max_freq` bind only when `manual_freq_extent` is true
+    # (`calc_ionograms.py:326`), so writing them without it stores the whole
+    # analysed span and quietly ignores the narrowing that was asked for.
+    #
+    # They are set *equal* to the analysis bounds, and line 327 selects with
+    # strict inequalities -- `freqs > min_freq` -- so the two edge bins are
+    # dropped and a requested 7.5-32.5 is stored as 7.55-32.30. That is
+    # expected, not drift, and it is why phase 3 prints observed beside
+    # requested rather than asserting they match.
+    plan.changes = {
+        "center_freq": _hz(centre),
+        "minimum_analysis_frequency": _hz(analysis_min),
+        "maximum_analysis_frequency": _hz(analysis_max),
+        "min_freq": _hz(analysis_min),
+        "max_freq": _hz(analysis_max),
+        "manual_freq_extent": "true",
+    }
+    return plan
+
+
+def _hz(value: float) -> str:
+    """``12.5e6``, the way chirpsounder2's own configs write frequencies.
+
+    Nine significant digits, not `%g`'s six: a floor snapped onto the grid of
+    a 500.0084 kHz/s chirp lands on values like 37.50063 MHz, and six digits
+    would round the config away from the frequency that was actually checked.
+    """
+    return f"{value / 1e6:.9g}e6"
 
 
 def read_config(path: str | Path) -> configparser.ConfigParser:
@@ -400,11 +741,11 @@ def apply_config(config: StationConfig, changes: dict, *,
     wants to batch several changes into one restart can. v2 reads its config
     only at process start, so nothing takes effect until something restarts.
     """
-    unknown = set(changes) - set(EDITABLE)
+    unknown = set(changes) - set(EDITABLE) - set(COMPOSITE)
     if unknown:
         raise ControlError(
             f"not editable remotely: {sorted(unknown)}; "
-            f"allowed: {sorted(EDITABLE)}")
+            f"allowed: {sorted(set(EDITABLE) | set(COMPOSITE))}")
     if not changes:
         raise ControlError("no changes given")
 
@@ -412,6 +753,7 @@ def apply_config(config: StationConfig, changes: dict, *,
     parser = read_config(path)
 
     normalized = dict(changes)
+    band_request = normalized.pop("set_band", None)
     if "mode" in normalized:
         raw = str(normalized["mode"]).lower()
         if raw not in MODES:
@@ -423,6 +765,12 @@ def apply_config(config: StationConfig, changes: dict, *,
     _validate(parser, normalized, launcher=getattr(config, "launcher", None))
 
     before = {}
+    locations = {key: EDITABLE[key] for key in normalized}
+    values = dict(normalized)
+
+    # The simple keys go onto the in-memory parser first so that a band change
+    # sent in the same command validates against the schedule that command is
+    # installing, not the one on disk. Nothing has touched the file yet.
     for key, value in normalized.items():
         section, option = EDITABLE[key]
         if not parser.has_section(section):
@@ -430,25 +778,53 @@ def apply_config(config: StationConfig, changes: dict, *,
         before[key] = parser.get(section, option, fallback=None)
         parser.set(section, option, str(value))
 
+    plan = None
+    if band_request is not None:
+        plan = plan_band(parser, recorder_binary=getattr(
+            config, "recorder_binary", None), **_band_kwargs(band_request))
+        for key, value in plan.changes.items():
+            section, option = BAND_INI[key]
+            if not parser.has_section(section):
+                parser.add_section(section)
+            before[key] = parser.get(section, option, fallback=None)
+            parser.set(section, option, str(value))
+            locations[key] = BAND_INI[key]
+            values[key] = value
+
     if backup:
         stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
         shutil.copy2(path, path.with_suffix(path.suffix + f".{stamp}.bak"))
 
     _atomic_write(path, parser)
 
-    return CommandResult(
-        command="apply_config", ok=True,
-        detail="; ".join(f"{k}: {before[k]!r} -> {v!r}"
-                         for k, v in normalized.items()),
-        journal={
-            "station": config.station,
-            "config_path": str(path),
-            "changes": {k: {"from": before[k], "to": str(v)}
-                        for k, v in normalized.items()},
-            "applied_at": time.time(),
-            "requires_restart": True,
-        },
-    )
+    detail = "; ".join(f"{k}: {before[k]!r} -> {v!r}"
+                       for k, v in values.items())
+    journal = {
+        "station": config.station,
+        "config_path": str(path),
+        "changes": {k: {"from": before[k], "to": str(v)}
+                    for k, v in values.items()},
+        "applied_at": time.time(),
+        "requires_restart": True,
+    }
+    if plan is not None:
+        journal["band"] = {
+            "summary": plan.summary(),
+            "band_start_mhz": plan.band_start_hz / 1e6,
+            "band_stop_mhz": plan.band_stop_hz / 1e6,
+            "analysis_min_mhz": plan.analysis_min_hz / 1e6,
+            "analysis_max_mhz": plan.analysis_max_hz / 1e6,
+            "sweep_seconds": plan.sweep_seconds,
+            "budget_seconds": plan.budget_seconds,
+            "warnings": plan.warnings,
+            "notes": plan.notes,
+        }
+        extra = plan.notes + plan.warnings
+        if extra:
+            detail += " | " + " | ".join(extra)
+
+    return CommandResult(command="apply_config", ok=True, detail=detail,
+                         journal=journal)
 
 
 def apply_and_restart(config: StationConfig, changes: dict, **kw) -> list[CommandResult]:

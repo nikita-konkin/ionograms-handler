@@ -1347,3 +1347,252 @@ def test_malformed_config_json_names_the_file(tmp_path):
     with pytest.raises(ValueError) as caught:
         StationConfig.from_json(broken)
     assert str(broken) in str(caught.value)
+
+
+# --- set_band ----------------------------------------------------------------
+#
+# BACKLOG sec. 30, phase 2. The band is five ini keys that must agree with each
+# other and with the compiled recorder, and on 2026-08-19 they disagreed twice
+# in one day -- both times with every unit green, every log clean, and no
+# product worth keeping. These tests are that day, executable.
+
+#: The station's real band configuration as of 2026-08-19, so a test that
+#: passes here describes something that ran.
+BAND_INI_TEXT = (
+    "[config]\n"
+    "sample_rate = 25000000\n"
+    "center_freq = 20e6\n"
+    "[lfm]\n"
+    "decimation = 625\n"
+    "downconversion_block_samples = 4000\n"
+    "frequency_resolution = 50e3\n"
+    "max_freq = 32.5e6\n"
+    "min_freq = 7.5e6\n"
+    "manual_freq_extent = true\n"
+    "maximum_analysis_frequency = 32.5e6\n"
+    "minimum_analysis_frequency = 7.5e6\n"
+    'sounder_timings = [[{"chirp-rate": 100000, "rep": 300, "chirpt": 245,'
+    ' "id": 4, "transmit_name": "NIC3"}]]\n'
+    "serendipitous = false\n"
+)
+
+
+def _band_parser(text: str = BAND_INI_TEXT) -> configparser.ConfigParser:
+    parser = configparser.ConfigParser()
+    parser.read_string(text)
+    return parser
+
+
+def _recorder(tmp_path, *, patched: bool) -> Path:
+    """A stand-in binary that does or does not carry patch 0014's option."""
+    path = tmp_path / ("rx_uhd_ext_gps" if patched else "rx_uhd_old")
+    body = b"\x7fELF..." + (b"center-freq" if patched else b"gps-lock-timeout")
+    path.write_bytes(body + b"\x00usrp_args\x00")
+    return path
+
+
+def test_the_running_band_is_what_the_planner_derives():
+    """band_start 7.5 MHz must reproduce the config the station is running.
+
+    If this drifts, the panel would offer to "change" the band to something
+    other than what is already there, and the operator's first click would be
+    an unintended change.
+    """
+    plan = control.plan_band(_band_parser(), band_start_mhz=7.5,
+                             check_recorder=False)
+    assert plan.changes["center_freq"] == "20e6"
+    assert plan.changes["minimum_analysis_frequency"] == "7.5e6"
+    assert plan.changes["maximum_analysis_frequency"] == "32.5e6"
+    assert plan.changes["min_freq"] == "7.5e6"
+    assert plan.changes["max_freq"] == "32.5e6"
+    assert plan.sweep_seconds == {"NIC3": 250.0}
+
+
+def test_the_lo_is_the_middle_of_the_band_not_its_edge():
+    """The one arithmetic error that would blind the station outright."""
+    plan = control.plan_band(_band_parser(), band_start_mhz=0.0,
+                             check_recorder=False)
+    assert plan.changes["center_freq"] == "12.5e6"      # v2's default
+    assert (plan.band_start_hz, plan.band_stop_hz) == (0.0, 25e6)
+
+
+def test_analysis_outside_the_digitised_band_is_refused():
+    """2026-08-18, exactly: `maximum_analysis_frequency = 30e6` against a
+    0-25 MHz passband. It produced no error and no signal above 25 MHz."""
+    with pytest.raises(control.ControlError, match="never sampled"):
+        control.plan_band(_band_parser(), band_start_mhz=0.0,
+                          analysis_max_mhz=30.0, check_recorder=False)
+
+
+def test_a_sweep_that_outruns_the_repetition_period_is_refused():
+    """A slow transmitter over a wide span: the next sounding starts before
+    this one has been read out. Needs a rate low enough to reach the check --
+    at 100 kHz/s a full 25 MHz passband sweeps in 250 s and always fits."""
+    text = BAND_INI_TEXT.replace('"chirp-rate": 100000', '"chirp-rate": 50000')
+    with pytest.raises(control.ControlError, match="repetition period"):
+        control.plan_band(_band_parser(text), band_start_mhz=7.5,
+                          check_recorder=False)
+
+
+def test_the_ringbuffer_budget_warns_and_does_not_refuse():
+    """`r` is measured and it moves, so this degrades rather than fails --
+    and it fires on the band the station is running today, which is sec. 3's
+    8.37% loss showing up where an operator can see it before pressing."""
+    plan = control.plan_band(_band_parser(), band_start_mhz=7.5,
+                             check_recorder=False)
+    assert plan.sweep_seconds["NIC3"] > plan.budget_seconds
+    assert any("ringbuffer budget" in w for w in plan.warnings)
+    assert plan.changes, "a warning must not suppress the plan"
+
+
+def test_a_narrower_window_comes_in_under_the_budget():
+    """The remedy the panel exists to make visible: analyse less, lose none."""
+    plan = control.plan_band(_band_parser(), band_start_mhz=7.5,
+                             analysis_min_mhz=7.5, analysis_max_mhz=27.5,
+                             check_recorder=False)
+    assert plan.sweep_seconds["NIC3"] == 200.0
+    assert not plan.warnings
+
+
+def test_an_off_grid_floor_is_snapped_and_said_so():
+    """Patch 0013 skips whole blocks to reach `minimum_analysis_frequency`.
+    Off-grid, the downconverter starts mid-block and the frequency axis shifts
+    under every product -- silently. 4000 x 625 samples at 100 kHz/s over
+    25 MS/s is a 10 kHz grid."""
+    plan = control.plan_band(_band_parser(), band_start_mhz=7.5,
+                             analysis_min_mhz=7.503, check_recorder=False)
+    assert plan.changes["minimum_analysis_frequency"] == "7.5e6"
+    assert any("snapped" in note for note in plan.notes)
+
+
+def test_an_on_grid_floor_is_left_alone():
+    plan = control.plan_band(_band_parser(), band_start_mhz=7.5,
+                             analysis_min_mhz=7.51, check_recorder=False)
+    assert plan.changes["minimum_analysis_frequency"] == "7.51e6"
+    assert not plan.notes
+
+
+def test_min_freq_binds_only_with_manual_freq_extent():
+    """`calc_ionograms.py:326` reads min_freq/max_freq only when this is true.
+    Written without it, the narrowing is accepted and silently ignored."""
+    text = BAND_INI_TEXT.replace("manual_freq_extent = true",
+                                 "manual_freq_extent = false")
+    plan = control.plan_band(_band_parser(text), band_start_mhz=7.5,
+                             analysis_max_mhz=27.5, check_recorder=False)
+    assert plan.changes["manual_freq_extent"] == "true"
+
+
+@pytest.mark.parametrize("kw,expect", [
+    (dict(band_start_mhz=-1.0), "below zero"),
+    (dict(band_start_mhz=7.5, analysis_min_mhz=-0.1), "below zero"),
+    (dict(band_start_mhz=7.5, analysis_min_mhz=20.0, analysis_max_mhz=10.0),
+     "not above"),
+])
+def test_the_arithmetic_refusals(kw, expect):
+    with pytest.raises(control.ControlError, match=expect):
+        control.plan_band(_band_parser(), check_recorder=False, **kw)
+
+
+# --- the precondition on the binary -----------------------------------------
+
+def test_a_recorder_without_center_freq_is_refused(tmp_path):
+    """The failure this whole verb exists to prevent. An unpatched recorder
+    tunes to its compiled `set_rx_freq` and ignores the ini, so every product
+    is dechirped by the difference with no error anywhere."""
+    ok, reason = control.recorder_reads_the_ini(_recorder(tmp_path, patched=False))
+    assert not ok
+    assert "patch 0014" in reason
+
+
+def test_a_patched_recorder_is_accepted(tmp_path):
+    ok, _ = control.recorder_reads_the_ini(_recorder(tmp_path, patched=True))
+    assert ok
+
+
+@pytest.mark.parametrize("binary", [None, "/nonexistent/rx_uhd_ext_gps"])
+def test_an_unreadable_recorder_refuses_rather_than_assumes(binary):
+    """"Cannot tell" must fail closed: the failure it guards against is
+    silent and costs every sounding until someone checks the LO by hand."""
+    ok, _ = control.recorder_reads_the_ini(binary)
+    assert not ok
+
+
+def test_the_precondition_runs_before_anything_is_written(tmp_path):
+    with pytest.raises(control.ControlError, match="patch 0014"):
+        control.plan_band(_band_parser(), band_start_mhz=7.5,
+                          recorder_binary=_recorder(tmp_path, patched=False))
+
+
+# --- the composite, through apply_config ------------------------------------
+
+@pytest.fixture
+def band_station(tmp_path) -> StationConfig:
+    ini = tmp_path / "my_station.ini"
+    ini.write_text(BAND_INI_TEXT, encoding="utf-8")
+    return StationConfig(station="TST", chirp_config=ini,
+                         recorder_binary=_recorder(tmp_path, patched=True),
+                         output_dir=tmp_path, ringbuffer_dir=tmp_path)
+
+
+def test_the_five_coupled_keys_have_no_individual_door():
+    """Five keys that must agree is the shape that failed. The only way in is
+    the composite, which checks them together."""
+    for key in control.BAND_INI:
+        assert key not in control.EDITABLE, (
+            f"{key} is individually editable; it can then be changed alone, "
+            f"which is what set_band exists to prevent")
+
+
+def test_set_band_writes_every_coupled_key_at_once(band_station):
+    result = control.apply_config(
+        band_station, {"set_band": {"band_start_mhz": 2.5}})
+    assert result.ok
+    parser = control.read_config(band_station.chirp_config)
+    assert parser.get("config", "center_freq") == "15e6"
+    assert parser.get("lfm", "minimum_analysis_frequency") == "2.5e6"
+    assert parser.get("lfm", "maximum_analysis_frequency") == "27.5e6"
+    assert parser.get("lfm", "min_freq") == "2.5e6"
+    assert parser.get("lfm", "max_freq") == "27.5e6"
+    assert parser.get("lfm", "manual_freq_extent") == "true"
+    assert result.journal["band"]["summary"].startswith("digitise 2.500-27.500")
+
+
+def test_a_refused_band_writes_nothing(band_station):
+    before = band_station.chirp_config.read_text()
+    with pytest.raises(control.ControlError, match="never sampled"):
+        control.apply_config(band_station, {
+            "set_band": {"band_start_mhz": 0.0, "analysis_max_mhz": 30.0}})
+    assert band_station.chirp_config.read_text() == before
+
+
+def test_a_band_is_checked_against_a_schedule_sent_in_the_same_command(
+        band_station):
+    """Both halves of a retune arrive together or the check is on stale data:
+    a slower transmitter installed in the same call must be the one the sweep
+    is measured against."""
+    slow = json.dumps([[dict(ENTRY, **{"chirp-rate": 50000.0,
+                                       "transmit_name": "SLOW"})]])
+    with pytest.raises(control.ControlError, match="repetition period"):
+        control.apply_config(band_station, {
+            "mode": "scheduled", "sounder_timings": slow,
+            "set_band": {"band_start_mhz": 7.5}})
+
+
+def test_set_band_refuses_fields_it_does_not_own(band_station):
+    """The sample rate has a hardcoded twin at rx_uhd_ext_gps.cpp:173 and must
+    divide the N2x0's 100 MHz clock. It stays compiled in."""
+    with pytest.raises(control.ControlError, match="sample_rate"):
+        control.apply_config(band_station, {
+            "set_band": {"band_start_mhz": 7.5, "sample_rate": 30e6}})
+
+
+def test_set_band_requires_a_band_start(band_station):
+    with pytest.raises(control.ControlError, match="band_start_mhz is required"):
+        control.apply_config(band_station, {"set_band": {"analysis_min_mhz": 8.0}})
+
+
+def test_an_unpatched_station_cannot_change_its_band(tmp_path, band_station):
+    station = replace(band_station,
+                      recorder_binary=_recorder(tmp_path, patched=False))
+    with pytest.raises(control.ControlError, match="rebuild"):
+        control.apply_config(station, {"set_band": {"band_start_mhz": 2.5}})

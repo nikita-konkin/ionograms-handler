@@ -64,8 +64,21 @@ router = APIRouter(tags=["control"])
 QUEUEABLE = ("start", "stop", "restart", "set_config")
 
 #: Settings ``set_config`` may carry from the web. A strict subset of
-#: ``control.EDITABLE`` -- see the module docstring for what is left out.
-WEB_EDITABLE = ("mode", "sounder_timings")
+#: ``control.EDITABLE`` plus ``control.COMPOSITE`` -- see the module docstring
+#: for what is left out.
+#:
+#: ``set_band`` is a composite, not a key: it carries ``band_start_mhz`` and
+#: optionally an analysis window, and the agent expands it into the six ini
+#: entries of ``control.BAND_INI``. Those six are deliberately **not** here and
+#: not in ``control.EDITABLE`` either -- the band is five values that must
+#: agree, and offering them as five fields is the exact shape that blinded the
+#: station twice on 2026-08-19.
+#:
+#: Safe to expose only because the agent refuses a band change outright when
+#: the deployed recorder has no ``--center-freq`` (patch 0014). A station on an
+#: older binary rejects the command rather than tuning nowhere, so this does
+#: not have to wait on every station being rebuilt.
+WEB_EDITABLE = ("mode", "sounder_timings", "set_band")
 
 
 @router.post("/stations/{station}/commands")
@@ -112,6 +125,9 @@ def _vet_config(params: dict) -> dict:
             f"{', '.join(unknown)} cannot be set from the web interface; "
             f"allowed: {', '.join(WEB_EDITABLE)}")
 
+    if "set_band" in changes:
+        _vet_band(changes["set_band"])
+
     mode = str(changes.get("mode", "")).lower()
     if "mode" in changes and mode not in control.MODES:
         raise HTTPException(
@@ -143,6 +159,53 @@ def _vet_config(params: dict) -> dict:
                     f"(POST /stations/{{id}}/schedule) rather than straight "
                     f"from the emitter census.")
     return {"changes": changes}
+
+
+def _vet_band(request) -> None:
+    """Shape-check a ``set_band`` payload while the operator is still looking.
+
+    Only the shape and the arithmetic that needs nothing from the station. The
+    checks that matter -- the window against the digitised band, the sweep
+    against every transmitter's ``rep``, the block-grid alignment, and whether
+    the deployed recorder even reads ``center_freq`` -- all need the station's
+    own ini and its own binary, so they belong to the agent and stay there.
+    This is the outer check, and it is the one that catches a typo before it
+    costs a round trip.
+    """
+    from services.agent import control
+
+    if not isinstance(request, dict):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"set_band takes an object with {list(control.BAND_ARGS)}")
+    unknown = sorted(set(request) - set(control.BAND_ARGS))
+    if unknown:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"set_band: unknown field(s) {unknown}; "
+            f"allowed: {list(control.BAND_ARGS)}")
+    if "band_start_mhz" not in request:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "set_band needs band_start_mhz")
+    for name in control.BAND_ARGS:
+        value = request.get(name)
+        if value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"set_band: {name} = {request[name]!r} is not a number") from None
+        if value < 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                f"set_band: {name} is below zero")
+    lo, hi = request.get("analysis_min_mhz"), request.get("analysis_max_mhz")
+    if lo is not None and hi is not None and float(hi) <= float(lo):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"set_band: analysis_max_mhz {hi} is not above "
+            f"analysis_min_mhz {lo}")
 
 
 def _parse_timings(value):
