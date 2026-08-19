@@ -2315,3 +2315,117 @@ restoring one is a deliberate manual act and should stay one.
 Phase 1 about half a day and independently valuable. Phase 2 about a day,
 nearly all of it the validator and its tests. Phase 3 about half a day, since
 the panel is the schedule composer with different fields.
+
+
+## 30. A settings panel has to start with a census, not a form (2026-08-19)
+
+The band change wants a knob, and the obvious shape -- render `my_station.ini`
+as a form -- is the wrong one. The station's own copy of chirpsounder2 is now
+cloned beside this repo, so the ini is no longer something to guess at: it has
+**68 keys**, and a first pass over every reader in the tree says they are not
+one kind of thing. Four classes, each with a different failure mode:
+
+1. **Live.** Read on the path this station actually runs. `sounder_timings`,
+   `storage_snr_threshold`, `decimation`. Safe to edit; two of them already are.
+2. **Dead.** Parsed into a config attribute that nothing anywhere reads:
+   `copy_destination`, `serendipitous_allowed_range_starts_km`,
+   `serendipitous_publish_range_starts_km`. Plus keys that are alive but only
+   off this path -- `serendipitous_ionogram_workers` is read solely by
+   `serendipitous_ionogram_queue.py`, and `serendipitous = false`. This is the
+   class that made `minimum_analysis_frequency` cost a day: a form that renders
+   these as editable fields is lying, and the lie is silent.
+3. **Coupled to something outside the ini.** `center_freq` must equal the
+   compiled `set_rx_freq`, and nothing checks it. See sec. 3.
+4. **Coupled to each other.** `min_freq`/`max_freq` against the analysis
+   bounds; the analysed span against `rep * chirp-rate`; the span against the
+   ringbuffer budget. Any one edited alone is a trap.
+
+So the census is the deliverable and the panel falls out of it. A table of
+key -> attribute -> readers -> path -> constraints, checked in and tested, is
+worth having with no UI attached at all: it is the document that would have
+made 2026-08-19 a fifteen-minute change.
+
+**Do not trust a mechanical pass.** The first one over-reported dead keys four
+different ways, and every miss was in the direction of "looks dead, is live":
+`receiver_station_name` is parsed as `conf.station_name` (the ini key and the
+attribute differ); `minimum_frequency_spacing` is never read directly, only
+through the derived `conf.mfsi`, which `chirp_det.py:251` uses;
+`ringbuffer_max_age_sec` is reached through `getattr(conf, ..., default)` in
+`iono_housekeeping.py:204`; and `require_gps_lock` has no Python reader at all
+because its reader is a **shell script**. Grep finds three of those four only
+if you already know to look. The census needs the careful pass; the script just
+narrows it.
+
+### The plumbing already exists, and upstream wrote it
+
+`examples/marieluise/w2naf.sh:29-36` reads an ini value with an inline
+`python3 - <<PY` that instantiates `chirp_config`, prints one attribute, and
+captures it into a shell variable -- which the launcher then passes to the
+recorder as `--gps-lock-timeout`. `rx_uhd_ext_gps.cpp:348` declares exactly
+that option next to `--rate`.
+
+That is the whole mechanism class 3 needs, in the project's own idiom, already
+working for another key. `center_freq` is the same change:
+
+* **0014** -- one `po::value` line beside `gps-lock-timeout`, defaulting to
+  `12.5e6`, and `set_rx_freq(center_freq, chan)` at line 187. This *supersedes*
+  0012, which hardcodes `20e6`; 0012 stays as the record of what ran first.
+* **0015** -- `dombas.sh` grows the same `python3 - <<PY` block and passes
+  `--center-freq`. Our launcher never picked up w2naf's idiom: line 109 passes
+  neither `--gps-lock-timeout` nor `--rate`.
+
+After that the ini is the single source of truth for the LO, and the mismatch
+that blinded the station twice in one day cannot be expressed. Class 3 collapses
+into class 1, which is the precondition for exposing it at all.
+
+Do **not** extend this to `--rate`. `sample_rate_numerator` at
+`rx_uhd_ext_gps.cpp:173` is a separate hardcoded constant driving the Digital RF
+metadata and the timestamp arithmetic; passing `--rate` alone corrupts the
+timebase silently, and `examples/ringbuffer/*.sh` all do exactly that.
+
+### The panel
+
+Not a form over the ini. A rendering of the census, where **read-only is the
+default and editability is earned per key**:
+
+* class 1 -> a field;
+* class 2 -> shown, greyed, labelled with why it is inert on this path, because
+  the operator needs to know the key exists and does nothing;
+* classes 3 and 4 -> not individual fields but **composite operations** with
+  their cross-checks attached. `set_band` is the first: it carries
+  `center_freq`, `min_freq`, `max_freq` and both analysis bounds as one
+  transaction, and refuses unless the span fits inside `sample_rate`, the
+  stored extent sits inside the analysed one, `(max-min)/chirp-rate < rep` for
+  every scheduled transmitter, and the span clears the `r * B / (1 - r)`
+  ringbuffer budget of sec. 3. Those four checks are the whole of what was
+  learned yesterday, executable.
+
+This rides the control path that already exists rather than a new one:
+`WEB_EDITABLE` (`services/api/control_routes.py:67`) is a strict subset of
+`control.EDITABLE`, the outer check refuses while an operator is watching and
+the agent's own check is the last line, and `apply_and_restart` already makes a
+half-applied change impossible. `set_band` is a new verb in that frame, not a
+new frame.
+
+Two more guards, both cheap and both aimed at yesterday's failure:
+
+* **Precondition on the binary.** Before allowing a band change, run
+  `rx_uhd_ext_gps --help` and require `center-freq` in the output. A station
+  whose recorder predates 0014 then *cannot* be misconfigured from the web --
+  it is refused with "rebuild first" instead of going quietly blind.
+* **Close the loop.** After the restart, report the band the newest product
+  actually covers next to the band that was requested. The console already
+  reads `freq_start`/`freq_stop` per product (`console.html:253`) and already
+  computes a span (line 206). "requested 7.5-32.5, observed 7.55-32.30" is the
+  check that no amount of validation replaces.
+
+### Order
+
+1. Census, checked in as `docs/chirpsounder2-config.md` + a test that fails
+   when a key gains or loses readers. Useful alone.
+2. 0014/0015. Small, and closes class 3.
+3. `set_band` in the agent, with the four checks and the `--help` precondition.
+4. The panel, rendering the census.
+5. `--help` precondition and observed-vs-requested readback.
+
+Steps 1 and 2 are worth doing whether or not the panel is ever built.
