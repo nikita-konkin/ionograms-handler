@@ -2426,7 +2426,12 @@ Two more guards, both cheap and both aimed at yesterday's failure:
    immediately: `copy_to_server` gates seven blocking POSTs to `juha.no` while
    the `copy_destination` the operator configured is read by nothing, which is
    the 8.37% loss of sec. 3 with a one-key remedy.
-2. 0014/0015. Small, and closes class 3.
+2. ~~0014/0015. Small, and closes class 3.~~ **Written 2026-08-19, not yet
+   deployed.** 0014 adds `--center-freq` and prints the LO on every start;
+   0015 does the `dombas.sh` half; `tools/chirp-rx-launch.sh` does the systemd
+   half, which is the live one. Both launchers already had a `CENTER_FREQ`
+   variable that nothing read -- eight other launchers under `examples/` still
+   do, `aeroauto.sh` at the same `20e6` this station now wants.
 3. `set_band` in the agent, with the four checks and the `--help` precondition.
 4. The panel, rendering the census.
 5. `--help` precondition and observed-vs-requested readback.

@@ -293,3 +293,60 @@ def test_a_directory_another_unit_watches_is_emptied_and_not_removed(unit: Path)
             f"{unit.name}:{n}: {key}= removes {watched} itself. Clear its "
             f"contents instead ({watched}/*) so the pruner's watch survives "
             f"the recorder's 24-hour restart.")
+
+
+# --- the recorder's launcher -------------------------------------------------
+#
+# `chirp-rx.service` no longer execs the binary; it runs a wrapper that reads
+# `center_freq` out of my_station.ini and passes `--center-freq`. That removes
+# the split between the compiled LO and the configured one, which blinded the
+# station twice on 2026-08-19 with empty products and no error in any log
+# (BACKLOG sec. 3, patches 0014/0015). The wrapper has two properties that are
+# not decoration, and both fail silently or expensively if they regress.
+
+LAUNCHER = Path(__file__).resolve().parent.parent / "tools/chirp-rx-launch.sh"
+
+
+def test_chirp_rx_runs_the_launcher_that_reads_the_ini():
+    unit = (UNIT_DIR / "chirp-rx.service").read_text()
+    execs = [l for l in unit.splitlines() if l.startswith("ExecStart=")]
+    assert len(execs) == 1, execs
+    assert execs[0].endswith("tools/chirp-rx-launch.sh"), (
+        f"{execs[0]} -- exec'ing the recorder directly puts the LO back in two "
+        f"places with nothing keeping them equal.")
+    assert LAUNCHER.exists()
+
+
+def test_the_launcher_execs_so_the_recorder_stays_mainpid():
+    """Without `exec`, the shell is MAINPID and `KillSignal=SIGINT` stops the
+    shell instead of the recorder. A USRP that never receives SIGINT keeps
+    transmitting UDP to a host that is gone and is recoverable only by removing
+    power -- a site visit. This is the most expensive line in the file."""
+    body = LAUNCHER.read_text()
+    launch = [l for l in body.splitlines() if "rx_uhd_ext_gps" in l
+              and not l.lstrip().startswith("#")]
+    assert launch, "the launcher no longer starts the recorder at all"
+    assert any(l.startswith("exec ") for l in launch), (
+        f"the recorder is started without `exec`: {launch}. systemd's MAINPID "
+        f"would be the shell, and SIGINT would never reach the USRP.")
+
+
+def test_the_launcher_passes_the_configured_lo():
+    body = LAUNCHER.read_text()
+    assert "--center-freq=" in body, (
+        "the whole point of the wrapper; without it the recorder falls back to "
+        "its compiled default and the ini becomes decoration again.")
+    assert "center_freq" in body, "it must read the value from chirp_config"
+
+
+def test_the_launcher_refuses_to_start_on_an_unreadable_ini():
+    """Falling back to the recorder's built-in default is exactly the silent
+    12.5-vs-20 MHz split that caused the damage. An empty read must stop the
+    start; `Restart=always` retries and the journal says why."""
+    body = LAUNCHER.read_text()
+    assert re.search(r'if \[ -z "\$CENTER_FREQ" \]', body), (
+        "no guard on an empty center_freq read")
+    assert "exit 1" in body, "the guard must fail the start, not warn"
+    assert "set -eu" in body, (
+        "without `set -e` a failing python3 leaves CENTER_FREQ empty and the "
+        "guard is the only thing between that and a mistuned radio")

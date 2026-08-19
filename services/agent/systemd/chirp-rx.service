@@ -120,9 +120,25 @@ CPUAffinity=0-1
 # fencing off a whole physical core for a softirq doing ~3,750 interrupts/s is
 # not affordable. Revisit only if the counters implicate it directly.
 
-ExecStart=/home/ionouser/chirpsounder2/rx_uhd_ext_gps \
-    --outdir=/dev/shm/hf25 \
-    --usrp_args=addr0=192.168.10.2,recv_buff_size=500000000
+# **The LO is not compiled in any more, and this line is why.** It used to exec
+# the recorder directly, which left the tuned frequency in two places -- the
+# `set_rx_freq` built into the binary and `center_freq` in my_station.ini --
+# with nothing keeping them equal. calc_ionograms builds its downconversion
+# mixer from the ini key while the samples come from wherever the recorder
+# tuned; nothing checks the two and nothing can, because the LO is not written
+# into the Digital RF metadata. A mismatch dechirps by the difference and
+# yields empty products with **no error in any log**. It blinded this station
+# twice on 2026-08-19 -- once from an ini applied before the rebuild, once from
+# a source edit that was never rebuilt at all.
+#
+# The wrapper reads the ini and passes `--center-freq`, so the ini is the only
+# place the number lives. It requires patch 0014 in the recorder; against an
+# older binary boost::program_options rejects the unknown option and the unit
+# fails loudly, which is the correct outcome and not a bug to work around.
+#
+# The wrapper ends in `exec`, so the recorder is still MAINPID and KillSignal
+# below still reaches it. That property is load-bearing -- see the SIGINT note.
+ExecStart=/home/ionouser/ionograms-handler/tools/chirp-rx-launch.sh
 
 # THE important line. A USRP killed mid-stream keeps transmitting UDP to a host
 # that is gone: it stops answering ARP and discovery, and nothing on the host
