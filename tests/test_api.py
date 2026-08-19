@@ -3040,3 +3040,28 @@ def test_a_station_that_never_reported_a_band_says_that(client):
     page = client.get("/ui").text
     assert "not reported" in page
     assert "0.000&ndash;0.000" not in page
+
+
+def test_an_agent_that_reports_no_band_at_all_fails_closed(client):
+    """The third state, and the one every station is in until the agent that
+    reports `recorder_reads_ini` is deployed.
+
+    Not "patched" and not "unpatched" but *no answer*, which must be read-only
+    for the same reason `recorder_reads_the_ini` refuses on "cannot tell": a
+    band written against a recorder that ignores it produces fresh products
+    from the wrong spectrum and no error anywhere. Silence is not consent.
+    """
+    client.post("/stations/health", json=report(), headers=CTL)
+    page = client.get("/ui").text
+    assert "has not reported whether its recorder reads the ini" in page
+    assert 'id="bandStart-SIM"' not in page
+    assert "applyBand('SIM')" not in page
+
+
+def test_nothing_is_called_a_disagreement_without_a_configured_band(client,
+                                                                    tmp_path):
+    """Products alone cannot disagree with anything. An old agent plus a full
+    archive must not produce a red warning about a band it never reported."""
+    client.post("/stations/health", json=report(), headers=CTL)
+    _sounding(client, tmp_path, lo=7.55, hi=32.30)
+    assert "configured and observed disagree" not in client.get("/ui").text
