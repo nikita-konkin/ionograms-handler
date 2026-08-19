@@ -2939,3 +2939,104 @@ def test_the_web_does_not_re_check_what_needs_the_station(client):
         "params": {"changes": {"set_band": {"band_start_mhz": 0.0,
                                             "analysis_max_mhz": 30.0}}}})
     assert ok.status_code == 200
+
+
+# --- the band panel ----------------------------------------------------------
+
+def band_report(station="SIM", *, centre=20e6, lo=7.5e6, hi=32.5e6,
+                patched=True):
+    """A health report carrying the band, as `health.band` builds it."""
+    body = report(station, healthy=True)
+    body["metrics"] += [
+        {"name": "center_freq_hz", "value": centre, "ok": True, "detail": ""},
+        {"name": "band_start_hz", "value": centre - 12.5e6, "ok": True,
+         "detail": ""},
+        {"name": "band_stop_hz", "value": centre + 12.5e6, "ok": True,
+         "detail": ""},
+        {"name": "analysis_min_hz", "value": lo, "ok": True, "detail": ""},
+        {"name": "analysis_max_hz", "value": hi, "ok": True, "detail": ""},
+        {"name": "recorder_reads_ini",
+         "value": True if patched else None,
+         "ok": True if patched else None,
+         "detail": "carries --center-freq (patch 0014)" if patched else
+                   "/x/rx_uhd_ext_gps has no --center-freq option. "
+                   "Apply patch 0014 and rebuild first."},
+    ]
+    return body
+
+
+def _sounding(client, tmp_path, *, lo, hi, when="2026-08-19 16:24:05"):
+    """One ingested product, which is where the observed band comes from."""
+    from services.api import ingest
+
+    path = tmp_path / "lfm_ionogram-NIC3-SIM-ch000-004-1787145845.00.h5"
+    path.write_bytes(b"x")
+    conn = client.app.state.db
+    ingest.ingest_row(conn, {
+        "file": path.name, "datetime": when, "tx": "NIC3", "rx": "SIM",
+        "freq_start": lo, "freq_stop": hi}, path, tmp_path, ())
+    conn.commit()          # `ingest_row` leaves the commit to its batch
+
+
+def test_the_console_shows_the_configured_band(client):
+    client.post("/stations/health", json=band_report(), headers=CTL)
+    page = client.get("/ui").text
+    assert "receive band" in page
+    assert "7.500&ndash;32.500 MHz" in page or "7.500–32.500 MHz" in page
+
+
+def test_a_station_on_an_old_recorder_gets_a_read_only_panel(client):
+    """Phase 1 is not deployed there, so the band must not be offered. The
+    agent would refuse it anyway; this is so the operator is not invited to
+    try."""
+    client.post("/stations/health", json=band_report(patched=False),
+                headers=CTL)
+    page = client.get("/ui").text
+    assert "read-only" in page
+    assert "patch 0014" in page
+    assert 'id="bandStart-SIM"' not in page, (
+        "the band fields must not be rendered for a recorder that cannot "
+        "read the ini")
+
+
+def test_a_patched_station_gets_the_fields(client):
+    client.post("/stations/health", json=band_report(), headers=CTL)
+    page = client.get("/ui").text
+    assert 'id="bandStart-SIM"' in page
+    assert "applyBand('SIM')" in page
+
+
+def test_configured_and_observed_disagreeing_is_shown(client, tmp_path):
+    """The 2026-08-19 failure, as the console would have caught it: the ini
+    says 7.5-32.5 while the recorder is still on the 2.5-27.5 it was compiled
+    with. Every unit green, products fresh, wrong spectrum."""
+    client.post("/stations/health", json=band_report(), headers=CTL)
+    _sounding(client, tmp_path, lo=2.55, hi=27.30)
+    page = client.get("/ui").text
+    assert "configured and observed disagree" in page
+    assert "wrong spectrum" in page
+
+
+def test_the_expected_edge_trim_is_not_called_a_disagreement(client, tmp_path):
+    """7.5-32.5 configured is stored as 7.55-32.30, because
+    `calc_ionograms.py:327` selects with strict inequalities. That is the
+    normal case and must not cry wolf."""
+    client.post("/stations/health", json=band_report(), headers=CTL)
+    _sounding(client, tmp_path, lo=7.55, hi=32.30)
+    page = client.get("/ui").text
+    assert "configured and observed disagree" not in page
+    assert "agree to" in page
+
+
+def test_the_observed_row_says_so_when_there_are_no_products(client):
+    client.post("/stations/health", json=band_report(), headers=CTL)
+    assert "no products yet" in client.get("/ui").text
+
+
+def test_a_station_that_never_reported_a_band_says_that(client):
+    """Not the same as a band of zero. An older agent reports no band keys at
+    all, and the panel must say so rather than render 0.000-0.000 MHz."""
+    client.post("/stations/health", json=report(), headers=CTL)
+    page = client.get("/ui").text
+    assert "not reported" in page
+    assert "0.000&ndash;0.000" not in page

@@ -2457,8 +2457,20 @@ Two more guards, both cheap and both aimed at yesterday's failure:
    The ringbuffer check fires on the band the station is running right
    now -- a 250.0 s sweep against a 248.9 s budget -- so sec. 3's 8.37%
    loss is visible before a change is pressed rather than after.
-4. The panel, rendering the census.
-5. Observed-vs-requested readback.
+4. ~~The panel, rendering the census.~~ **Done 2026-08-19.** A `receive band`
+   panel on the console beside the schedule composer: band start plus an
+   analysis window, two presets, and a live preview that does the sweep and
+   ringbuffer arithmetic before anything is sent. It is read-only, with the
+   reason printed, on any station whose health report says its recorder has
+   no `--center-freq`.
+5. ~~Observed-vs-requested readback.~~ **Done 2026-08-19.** The panel prints
+   the configured band from the station's health report against the observed
+   band from this database's products. Two sources that cannot agree by
+   accident, so a silent mistune shows up within a cycle instead of never --
+   `configured 0.000-25.000, observed 7.550-32.300` is what 2026-08-19 would
+   have looked like on the screen. The expected 0.2 MHz edge trim is not
+   called a disagreement; the tolerance is 1 MHz, which sits clear of the trim
+   and nowhere near a real mistune.
 
 Steps 1 and 2 are worth doing whether or not the panel is ever built.
 

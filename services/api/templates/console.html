@@ -342,6 +342,90 @@
     <div id="planSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
   </div>
 
+  {# The receive band. Not five fields over five ini keys -- one operation,
+     because five values that must agree is the shape that blinded this
+     station twice on 2026-08-19 (BACKLOG sec. 30). The server derives
+     `center_freq`, both analysis bounds and both storage bounds from what is
+     typed here, and refuses the combinations that record nothing. #}
+  <div style="border:1px solid var(--line); border-radius:6px; padding:.7rem;
+              margin-top:.8rem">
+    <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
+      <b>receive band</b>
+      {% if not s.band.can_change %}
+      <span class="bad" style="font-size:.85rem">read-only</span>
+      {% endif %}
+    </div>
+
+    {# Configured beside observed. The two come from different places -- the
+       station's ini via its health report, the products via this database --
+       so they cannot be made to agree by accident. #}
+    <div class="scroll" style="margin-top:.5rem"><table>
+      <tr><th></th><th>digitised</th><th>analysed</th><th>LO</th></tr>
+      <tr>
+        <td class="muted">configured</td>
+        {% if s.band.configured and s.band.configured.start_mhz is not none %}
+        <td>{{ '%.3f'|format(s.band.configured.start_mhz) }}&ndash;{{ '%.3f'|format(s.band.configured.stop_mhz) }} MHz</td>
+        <td>{{ '%.3f'|format(s.band.configured.analysis_min_mhz) }}&ndash;{{ '%.3f'|format(s.band.configured.analysis_max_mhz) }} MHz</td>
+        <td class="muted">{{ '%.3f'|format(s.band.configured.center_mhz) }} MHz</td>
+        {% else %}
+        <td class="muted" colspan="3">not reported &mdash; this station has not
+          sent a health report carrying its band yet</td>
+        {% endif %}
+      </tr>
+      <tr>
+        <td class="muted">observed</td>
+        <td class="muted">&mdash;</td>
+        {% if s.band.observed %}
+        <td>{{ '%.3f'|format(s.band.observed.start_mhz) }}&ndash;{{ '%.3f'|format(s.band.observed.stop_mhz) }} MHz</td>
+        <td class="muted">from {{ s.band.observed.n }} product(s)</td>
+        {% else %}
+        <td class="muted" colspan="2">no products yet</td>
+        {% endif %}
+      </tr>
+    </table></div>
+
+    {% if s.band.disagreement %}
+    <p class="note bad" style="margin-top:.45rem">
+      <b>configured and observed disagree:</b> {{ s.band.disagreement }}</p>
+    {% elif s.band.configured and s.band.observed %}
+    <p class="note" style="margin-top:.45rem">Configured and observed agree to
+      within {{ '%g'|format(s.band.tolerance_mhz) }} MHz. The small shortfall is
+      expected: <code>calc_ionograms.py</code> selects stored bins with strict
+      inequalities, so both edge bins are dropped.</p>
+    {% endif %}
+
+    {% if s.band.can_change %}
+    <div style="margin-top:.6rem; display:flex; gap:.6rem; align-items:baseline;
+                flex-wrap:wrap">
+      <label class="muted" style="font-size:.85rem">band start
+        <input id="bandStart-{{ s.name }}" type="number" step="0.1" size="7"
+               style="width:6.5rem"
+               value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.start_mhz) }}{% endif %}"
+               oninput="bandChanged('{{ s.name }}')"> MHz</label>
+      <label class="muted" style="font-size:.85rem">analyse from
+        <input id="bandLo-{{ s.name }}" type="number" step="0.01" size="7"
+               style="width:6.5rem"
+               value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.analysis_min_mhz) }}{% endif %}"
+               oninput="bandChanged('{{ s.name }}')"> MHz</label>
+      <label class="muted" style="font-size:.85rem">to
+        <input id="bandHi-{{ s.name }}" type="number" step="0.01" size="7"
+               style="width:6.5rem"
+               value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.analysis_max_mhz) }}{% endif %}"
+               oninput="bandChanged('{{ s.name }}')"> MHz</label>
+      <button onclick="applyBand('{{ s.name }}')">apply band</button>
+    </div>
+    <div style="margin-top:.4rem">
+      <span class="note">presets:</span>
+      <button onclick="bandPreset('{{ s.name }}', 0, 0, 25)">0&ndash;25 (v2 default)</button>
+      <button onclick="bandPreset('{{ s.name }}', 7.5, 7.5, 32.5)">7.5&ndash;32.5 (current)</button>
+    </div>
+    <p class="note" id="bandPlan-{{ s.name }}"></p>
+    <div id="bandSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
+    {% else %}
+    <p class="note" style="margin-top:.5rem">{{ s.band.why_not }}</p>
+    {% endif %}
+  </div>
+
   <div style="margin-top:.8rem">
     <button onclick="send('{{ s.name }}','start')">start</button>
     <button onclick="send('{{ s.name }}','stop')">stop</button>
@@ -399,6 +483,7 @@
 
   const say = (station, text, bad) => write('say-' + station, text, bad);
   const planSay = (station, text, bad) => write('planSay-' + station, text, bad);
+  const bandSay = (station, text, bad) => write('bandSay-' + station, text, bad);
   const forgetSay = (station, text, bad) => write('forgetSay-' + station, text, bad);
 
   // A queued command reloads the page to show its row, which would wipe the
@@ -409,6 +494,8 @@
       say(key.slice(5), sessionStorage.getItem(key));
     } else if (key.startsWith('saidPlan-')) {
       planSay(key.slice(9), sessionStorage.getItem(key));
+    } else if (key.startsWith('saidBand-')) {
+      bandSay(key.slice(9), sessionStorage.getItem(key));
     } else {
       continue;
     }
@@ -635,9 +722,145 @@
   function queued(station, where, message) {
     where(station, message);
     sessionStorage.setItem(
-      (where === planSay ? 'saidPlan-' : 'said-') + station, message);
+      (where === planSay ? 'saidPlan-'
+       : where === bandSay ? 'saidBand-' : 'said-') + station, message);
     setTimeout(() => location.reload(), 900);
   }
+
+  // --- the receive band ----------------------------------------------------
+
+  // What the station reports about itself, so the preview can do the same
+  // arithmetic the agent will and show the cost before anything is sent. The
+  // agent checks all of it again against its own ini -- that is the authority
+  // and it stays. This is the half that fits on the screen.
+  const BAND = { {% for s in stations %}
+    {{ s.name|tojson }}: {{ s.band|tojson }}{{ "," if not loop.last }}
+  {% endfor %} };
+
+  // The schedule drives the sweep arithmetic: span / chirp-rate against rep,
+  // per transmitter. Read from the same verified record the composer uses.
+  const scheduledOf = station => (VERIFIED[station] || [])
+      .filter(t => (t.timings || []).length)
+      .map(t => ({code: t.code, rate: t.timings[0]['chirp-rate'],
+                  rep: t.timings[0].rep}));
+
+  // `r * B / (1 - r)` from BACKLOG sec. 3, with r measured at 0.64 on
+  // 2026-08-18 and B ~140 s for 14 GB of /dev/shm at 25 MS/s sc16.
+  const BUDGET_S = 0.64 * 140 / (1 - 0.64);
+
+  const numOf = id => {
+    const el = document.getElementById(id);
+    if (!el || el.value === '') return null;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) ? v : null;
+  };
+
+  function bandPreset(station, start, lo, hi) {
+    document.getElementById('bandStart-' + station).value = start;
+    document.getElementById('bandLo-' + station).value = lo;
+    document.getElementById('bandHi-' + station).value = hi;
+    bandChanged(station);
+  }
+
+  function bandChanged(station) {
+    // Same hold as the sounding plan: a 15 s refresh must not eat a
+    // half-typed frequency.
+    planning = station;
+    clearTimeout(planningTimer);
+    planningTimer = setTimeout(() => {
+      planning = null;
+      bandSay(station, 'nothing was applied, so the page is live again.');
+      location.reload();
+    }, 120000);
+    bandPreview(station);
+  }
+
+  function bandPreview(station) {
+    const cfg = BAND[station] || {};
+    const start = numOf('bandStart-' + station);
+    if (start === null) {
+      write('bandPlan-' + station, 'Enter a band start to see what would be '
+        + 'sent.');
+      return;
+    }
+    // The sample rate is fixed in the binary, so the start alone fixes the
+    // passband and the LO. Taken from the configured band rather than assumed.
+    const c = cfg.configured || {};
+    const rate = (c.stop_mhz != null && c.start_mhz != null)
+        ? c.stop_mhz - c.start_mhz : null;
+    if (rate === null) {
+      write('bandPlan-' + station, 'This station has not reported its sample '
+        + 'rate, so the passband cannot be shown here. The agent still checks '
+        + 'it before applying anything.');
+      return;
+    }
+    const stop = start + rate;
+    const lo = numOf('bandLo-' + station) ?? start;
+    const hi = numOf('bandHi-' + station) ?? stop;
+
+    const parts = ['LO ' + (start + rate / 2).toFixed(3) + ' MHz, digitising '
+      + start.toFixed(3) + '–' + stop.toFixed(3) + ' MHz'];
+    let bad = false;
+
+    if (hi <= lo) {
+      parts.push('the analysis window is inverted');
+      bad = true;
+    } else if (lo < start - 1e-9 || hi > stop + 1e-9) {
+      parts.push('✗ the analysis window reaches outside the digitised band — '
+        + 'that part is FFTs over spectrum the radio never sampled, and the '
+        + 'server will refuse it');
+      bad = true;
+    } else {
+      for (const tx of scheduledOf(station)) {
+        const sweep = (hi - lo) * 1e6 / tx.rate;
+        if (sweep >= tx.rep) {
+          parts.push('✗ ' + tx.code + ': a ' + sweep.toFixed(0) + ' s sweep '
+            + 'does not fit its ' + tx.rep + ' s cycle');
+          bad = true;
+        } else if (sweep > BUDGET_S) {
+          parts.push('⚠ ' + tx.code + ': ' + sweep.toFixed(0) + ' s sweep, '
+            + 'past the ' + BUDGET_S.toFixed(0) + ' s ringbuffer budget — '
+            + 'soundings will be lost, as they are today');
+        } else {
+          parts.push(tx.code + ': ' + sweep.toFixed(0) + ' s sweep of its '
+            + tx.rep + ' s cycle');
+        }
+      }
+    }
+    write('bandPlan-' + station, parts.join(' — '), bad);
+  }
+
+  async function applyBand(station) {
+    const start = numOf('bandStart-' + station);
+    if (start === null) {
+      bandSay(station, 'Enter a band start first.', true);
+      return;
+    }
+    const changes = {band_start_mhz: start};
+    const lo = numOf('bandLo-' + station);
+    const hi = numOf('bandHi-' + station);
+    if (lo !== null) changes.analysis_min_mhz = lo;
+    if (hi !== null) changes.analysis_max_mhz = hi;
+
+    bandSay(station, 'sending …');
+    const r = await control('/stations/' + encodeURIComponent(station)
+                            + '/commands',
+                            {name: 'set_config', issued_by: 'web',
+                             params: {changes: {set_band: changes}}});
+    if (!r.ok) {
+      bandSay(station, (r.needsToken ? '' : 'refused: ') + r.detail, true);
+      return;
+    }
+    planning = null;
+    clearTimeout(planningTimer);
+    queued(station, bandSay, 'band queued as ' + (r.body.id || '').slice(0, 8)
+      + ' — the station applies it on its next pull and it takes effect when '
+      + 'acquisition restarts, so press restart after it is collected. The '
+      + 'observed row above is how you confirm it landed: it should move to '
+      + 'the new window within one sounding cycle.');
+  }
+
+  for (const station of Object.keys(BAND)) bandPreview(station);
 
   for (const station of Object.keys(VERIFIED)) preview(station);
 

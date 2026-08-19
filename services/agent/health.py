@@ -309,6 +309,73 @@ def sample_rate(config: StationConfig) -> Metric:
                   detail=f"expected {config.expected_sample_rate:.0f}")
 
 
+def band(config: StationConfig) -> list[Metric]:
+    """The band the station is configured for, and whether it can be changed.
+
+    Reported rather than judged: none of these is a fault on its own, so they
+    carry ``ok=True`` when they could be read and ``unknown`` when they could
+    not. Nothing here can turn a station red -- see the console's "only a
+    definite failure makes a station unhealthy".
+
+    They exist because the console has no other way to show the configured
+    band beside the **observed** one. A recorder tuned somewhere other than
+    `center_freq` produces perfectly healthy-looking products from the wrong
+    spectrum, and printing "configured 7.5-32.5, observed 7.55-32.30" is the
+    one thing that would have caught 2026-08-19 within a cycle.
+
+    ``recorder_reads_ini`` is the capability, not a verdict: a station on a
+    pre-0014 binary is fine as long as nobody changes the band, so it is
+    reported and never failed. It is what the console greys the panel on.
+    """
+    import configparser
+
+    from . import control
+
+    out: list[Metric] = []
+    path = Path(config.chirp_config)
+    parser = configparser.ConfigParser()
+    try:
+        if not path.is_file():
+            raise FileNotFoundError(f"{path}: no such file")
+        parser.read(path)
+        centre = float(json.loads(parser.get("config", "center_freq")))
+        rate = float(json.loads(parser.get("config", "sample_rate")))
+        lo = float(json.loads(parser.get("lfm", "minimum_analysis_frequency")))
+        hi = float(json.loads(parser.get("lfm", "maximum_analysis_frequency")))
+    except Exception as exc:
+        why = f"{type(exc).__name__}: {exc}"
+        return [Metric.unknown(name, why) for name in
+                ("center_freq_hz", "band_start_hz", "band_stop_hz",
+                 "analysis_min_hz", "analysis_max_hz")] + [
+            _recorder_metric(config)]
+
+    out.append(Metric("center_freq_hz", centre, ok=True,
+                      detail=f"{centre / 1e6:.3f} MHz"))
+    out.append(Metric("band_start_hz", centre - rate / 2.0, ok=True,
+                      detail="bottom of the digitised passband"))
+    out.append(Metric("band_stop_hz", centre + rate / 2.0, ok=True,
+                      detail="top of the digitised passband"))
+    out.append(Metric("analysis_min_hz", lo, ok=True,
+                      detail=f"{lo / 1e6:.3f} MHz"))
+    out.append(Metric("analysis_max_hz", hi, ok=True,
+                      detail=f"{hi / 1e6:.3f} MHz"))
+    out.append(_recorder_metric(config))
+    return out
+
+
+def _recorder_metric(config: StationConfig) -> Metric:
+    from . import control
+
+    ok, reason = control.recorder_reads_the_ini(
+        getattr(config, "recorder_binary", None))
+    if ok:
+        return Metric("recorder_reads_ini", True, ok=True,
+                      detail="carries --center-freq (patch 0014)")
+    # `unknown`, not False: an unpatched recorder is a limitation, not a
+    # fault, and a station that has never needed a band change is healthy.
+    return Metric.unknown("recorder_reads_ini", reason)
+
+
 def uptime_s() -> Metric:
     """Seconds since boot, for the startup grace period."""
     try:
@@ -610,6 +677,7 @@ def collect(config: StationConfig | None = None, *,
     metrics.append(newest_product_age(config, scan))
     metrics.extend(disk_free(config))
     metrics.append(sample_rate(config))
+    metrics.extend(band(config))
     metrics.append(uptime_s())
     metrics.append(system_clock(config))
     if include_epoch:

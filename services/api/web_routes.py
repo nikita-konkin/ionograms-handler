@@ -60,6 +60,73 @@ def _duration(seconds) -> str:
 templates.env.filters["duration"] = _duration
 
 
+#: How far the observed band may sit inside the configured one before the
+#: console calls it a disagreement, in MHz.
+#:
+#: The legitimate gap is small and known: `calc_ionograms.py:327` selects with
+#: strict inequalities (`freqs > min_freq`), which drops the edge bins, and the
+#: top of the sweep loses a few more -- 7.5-32.5 configured is stored as
+#: 7.55-32.30, a 0.2 MHz shortfall. The failure this is looking for is nothing
+#: like that size: an LO left at 12.5 MHz while the ini said 20 MHz puts the
+#: observed band 7.5 MHz away. One MHz sits clear of the first and nowhere near
+#: the second.
+BAND_TOLERANCE_MHZ = 1.0
+
+
+def _band(metrics: list[dict], acq) -> dict:
+    """The configured band, the observed one, and whether they agree.
+
+    Two independent sources on purpose. The configured half comes from the
+    station's health report, which reads its ini; the observed half comes from
+    the products in this database. Nothing on the station can make them agree
+    by accident, which is exactly what makes the comparison worth printing:
+    on 2026-08-19 the ini said one band and the recorder used another, and
+    every unit stayed green for hours.
+    """
+    values = {m["name"]: m["value"] for m in metrics if m.get("value") is not None}
+
+    def mhz(name):
+        raw = values.get(name)
+        return None if raw is None else float(raw) / 1e6
+
+    configured = {
+        "center_mhz": mhz("center_freq_hz"),
+        "start_mhz": mhz("band_start_hz"),
+        "stop_mhz": mhz("band_stop_hz"),
+        "analysis_min_mhz": mhz("analysis_min_hz"),
+        "analysis_max_mhz": mhz("analysis_max_hz"),
+    }
+    if configured["center_mhz"] is None:
+        configured = None
+
+    recorder = next((m for m in metrics
+                     if m["name"] == "recorder_reads_ini"), None)
+    can_change = bool(recorder and recorder.get("value"))
+    why_not = "" if can_change else (
+        (recorder or {}).get("detail")
+        or "this station has not reported whether its recorder reads the ini")
+
+    observed = getattr(acq, "observed_band", None)
+    disagreement = None
+    if configured and observed:
+        gaps = []
+        if configured["analysis_min_mhz"] is not None:
+            gaps.append(abs(observed["start_mhz"] - configured["analysis_min_mhz"]))
+        if configured["analysis_max_mhz"] is not None:
+            gaps.append(abs(observed["stop_mhz"] - configured["analysis_max_mhz"]))
+        if gaps and max(gaps) > BAND_TOLERANCE_MHZ:
+            disagreement = (
+                f"the products are {max(gaps):.2f} MHz from the configured "
+                f"window. A recorder tuned somewhere other than center_freq "
+                f"produces exactly this: healthy units, fresh products, wrong "
+                f"spectrum.")
+
+    return {"configured": configured, "observed": observed,
+            "can_change": can_change, "why_not": why_not,
+            "disagreement": disagreement,
+            "tolerance_mhz": BAND_TOLERANCE_MHZ}
+
+
 @router.get("/ui")
 def console(request: Request):
     conn = request.app.state.db
@@ -68,18 +135,23 @@ def console(request: Request):
         latest = db.latest_health(conn, station)
         metrics = db.metrics_for(conn, int(latest["id"])) if latest else []
         age = _age_seconds(latest["received_at"]) if latest else None
+        shown_metrics = [{**m, "ok": _tri(m["ok"])} for m in metrics]
+        acq = acquisition.current(conn, station)
         stations.append({
             "name": station,
             "age_s": age,
             "stale": age is None or age > STALE_AFTER_S,
             "healthy": _tri(latest["healthy"]) if latest else None,
             "agent_version": latest["agent_version"] if latest else None,
-            "metrics": [{**m, "ok": _tri(m["ok"])} for m in metrics],
+            "metrics": shown_metrics,
+            # Configured band beside observed band. See `_band`: two sources
+            # that cannot agree by accident, which is the point.
+            "band": _band(shown_metrics, acq),
             "commands": [_command(c) for c in db.recent_commands(conn, station, 8)],
             # What it is sounding this minute, which is the question the unit
             # states cannot answer: every process can be active while the
             # schedule points at a transmitter that stopped months ago.
-            "acquisition": acquisition.current(conn, station),
+            "acquisition": acq,
             # What it *could* sound. Read from the database, not the archive:
             # this is the identify workflow's output, so the console carries
             # the chooser without inheriting the census that made it -- see

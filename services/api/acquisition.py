@@ -401,6 +401,10 @@ class Acquisition:
     slots: list[Slot] = field(default_factory=list)
     arrivals: list[dict] = field(default_factory=list)
     span_mhz: float | None = None
+    #: Where the recent products actually begin and end, in MHz, or ``None``
+    #: before there is one. Shown beside the configured band, never instead of
+    #: it: the two disagreeing is the whole signal.
+    observed_band: dict | None = None
     #: Why the schedule is unknown, when it is. An empty schedule and an
     #: unrecorded one are different situations: the first records nothing, the
     #: second is a station this server has simply never seen configured.
@@ -480,13 +484,14 @@ class Acquisition:
 def describe(station: str, *, timings, mode: str | None = None,
              epoch: dict | None = None, verified: list[dict] | None = None,
              span_mhz: float | None = None, arrivals: list[dict] | None = None,
-             running: dict | None = None,
+             running: dict | None = None, observed_band: dict | None = None,
              now: float | None = None) -> Acquisition:
     """Put a schedule, a band and some arrivals against a clock."""
     now = time_now() if now is None else now
     verified = verified or []
     state = Acquisition(station=station, now=now, mode=mode, epoch=epoch,
-                        span_mhz=span_mhz, arrivals=list(arrivals or []))
+                        span_mhz=span_mhz, observed_band=observed_band,
+                        arrivals=list(arrivals or []))
     if running is not None:
         state.running = running
 
@@ -578,6 +583,35 @@ def observed_span_mhz(conn, station: str, limit: int = 50) -> float | None:
     return float(spans[len(spans) // 2])
 
 
+def observed_band_mhz(conn, station: str, limit: int = 20) -> dict | None:
+    """Where this receiver's recent products actually start and stop.
+
+    The companion to :func:`observed_span_mhz`, and the reason it is separate:
+    a span is unchanged by an LO that is wrong by 5 MHz, while the edges are
+    not. Printing these beside the configured band is what turns a silent
+    mistune into something visible within one cycle -- which on 2026-08-19 was
+    the difference between a fifteen-minute fix and half a day.
+
+    Medians of the last few rather than the newest, so one truncated sweep
+    does not redefine the band. Returns ``None`` until there is a product;
+    a station with no products has no observed band, which is not the same as
+    one observed at zero.
+    """
+    from . import db
+
+    rows = db.rows(
+        conn, "SELECT freq_start AS lo, freq_stop AS hi FROM sounding"
+              " WHERE rx = ? AND freq_stop IS NOT NULL AND freq_start IS NOT NULL"
+              " ORDER BY datetime DESC LIMIT ?", (station, limit))
+    los = sorted(r["lo"] for r in rows if r["lo"] is not None)
+    his = sorted(r["hi"] for r in rows if r["hi"] is not None)
+    if not los or not his:
+        return None
+    return {"start_mhz": float(los[len(los) // 2]),
+            "stop_mhz": float(his[len(his) // 2]),
+            "n": len(rows)}
+
+
 def current(conn, station: str, *, now: float | None = None,
             limit: int = 6, stale_after: float = STALE_AFTER_S) -> Acquisition:
     """Everything the console panel needs for one station."""
@@ -619,6 +653,7 @@ def current(conn, station: str, *, now: float | None = None,
             "changed_by": epoch["changed_by"], "note": epoch["note"]},
         verified=db.transmitters(conn, station),
         span_mhz=observed_span_mhz(conn, station),
+        observed_band=observed_band_mhz(conn, station),
         arrivals=arrivals(conn, station, limit=limit, now=now),
         running=running,
         now=now,
