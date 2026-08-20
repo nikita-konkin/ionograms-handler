@@ -67,7 +67,15 @@ class StationConfig:
     #: parameters, not how the station is started. A path that does not exist,
     #: or a launcher that derives ``-np`` at runtime, simply disables the
     #: check rather than failing the command.
-    launcher: Path = Path("/home/ionouser/chirpsounder2/examples/marieluise/dombas.sh")
+    #: **The installed unit, not the repo's copy and not dombas.sh.** systemd
+    #: reads `/etc/systemd/system/`, so that is the file whose `-np` decides
+    #: how many ranks actually start. Pointed at `dombas.sh` this check found
+    #: no `calc_ionograms.py` line at all, answered None, and disabled itself
+    #: -- which is how a three-transmitter schedule was accepted against
+    #: `-np 1` on 2026-08-20 and two transmitters went unsounded for twelve
+    #: hours. A guard aimed at a file that no longer launches anything reads
+    #: exactly like a guard that passed.
+    launcher: Path = Path("/etc/systemd/system/chirp-ionograms.service")
 
     #: The recorder binary, read-only and only to answer one question: does it
     #: take the LO from the ini, or is it still the build with ``set_rx_freq``

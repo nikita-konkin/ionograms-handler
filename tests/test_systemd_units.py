@@ -394,7 +394,20 @@ def _station_timing_groups() -> int:
 
 def test_ionograms_np_matches_the_number_of_transmitters() -> None:
     """-np greater than len(sounder_timings) wedges a rank; smaller drops a
-    transmitter. Neither shows up as a failed unit."""
+    transmitter. Neither shows up as a failed unit.
+
+    **This compares against a snapshot, and the snapshot goes stale in
+    silence.** `my_station.ini` is untracked on purpose -- the agent rewrites
+    the station's copy in place on every console change -- so the clone beside
+    this repo only matches the station until someone edits the schedule from
+    the web. It did not catch the 2026-08-20 mismatch for exactly that reason:
+    the schedule went to three transmitters on the station while this copy
+    still said one.
+
+    So it is the weaker of the two guards and should be read that way. The one
+    that actually holds is `control._validate` on the station, which scans the
+    installed unit at apply time -- see `StationConfig.launcher`.
+    """
     assert _np("chirp-ionograms.service") == _station_timing_groups()
 
 
