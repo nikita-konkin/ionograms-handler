@@ -85,8 +85,15 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # INGEST_TARGETS narrows what this walks. It defaults to the whole root,
+    # which is right when the root IS an archive -- and wrong when the root is
+    # a general-purpose disk that also holds a recycle bin, a temp folder and
+    # someone's test data. This indexer recurses without asking, so pointed at
+    # such a disk it will happily ingest soundings out of #recycle. Name the
+    # archive folders instead, space separated. --archive-root stays at the
+    # root either way, so stored paths are unaffected by narrowing this.
     command: >
-      python -m services.api.watch /archive
+      python -m services.api.watch ${INGEST_TARGETS:-/archive}
       --db /data/ionograms.sqlite3 --archive-root /archive
       --methods ${INGEST_METHODS:-algo,kmeans,contour}
       --jobs ${INGEST_JOBS:-0}

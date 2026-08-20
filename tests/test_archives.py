@@ -869,3 +869,23 @@ def test_a_survey_in_flight_when_things_change_is_discarded(client,
     stale = [c for c in body["items"]
              if c["path"] == "good" and not c["registered"]]
     assert not stale, "a pre-registration survey was allowed to land"
+
+
+def test_the_ingest_watcher_can_be_pointed_at_folders_not_the_whole_root():
+    """A root that is a general-purpose disk is not an archive.
+
+    The watcher recurses without asking, so aimed at a mount that also holds
+    a recycle bin it will ingest soundings that were deliberately deleted.
+    The default stays the whole root -- correct when the root *is* an archive
+    -- but it has to be narrowable without editing the compose file.
+    """
+    import yaml
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[1]
+         / "deploy" / "docker-compose.hub.yml").read_text())
+    command = compose["services"]["watch"]["command"]
+    assert "${INGEST_TARGETS:-/archive}" in command, command
+    # Narrowing the walk must not change where paths are stored relative to,
+    # or the rows it writes stop matching the ones the api resolves.
+    assert "--archive-root /archive" in command, command
