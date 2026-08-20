@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}archives{% endblock %}
+{% block hint %}{{ archives|length }} folder(s) registered{% endblock %}
+{% block body %}
+
+<div class="panel">
+  <h2>archives</h2>
+  <p>Folders under <code>{{ archive_root }}</code> that this server keeps
+  indexed. A scan runs the pipeline over whatever is new, so every sounding it
+  loads arrives with its characteristics already derived &mdash; MUF, LOF,
+  group range and SNR in the database, and the full scaling behind each
+  sounding's page and its <code>sao.xml</code>. There is no separate step to
+  compute them.</p>
+
+  {% if interval_s %}
+  <p class="note">Enabled folders are re-scanned automatically every
+  {{ '%g'|format(interval_s / 60) }} min. Scans run one at a time: they are
+  CPU-bound and they lock the database, so two would finish later than one
+  after the other.</p>
+  {% else %}
+  <p class="note">Automatic re-scanning is off
+  (<code>ARCHIVE_SCAN_INTERVAL_S=0</code>), so new files appear only when
+  someone presses scan.</p>
+  {% endif %}
+
+  <div id="running" class="note"></div>
+
+  {% if archives %}
+  <div class="scroll"><table>
+    <tr><th>name</th><th>path</th><th>format</th><th>methods</th>
+        <th>soundings</th><th>last scan</th><th>result</th><th></th></tr>
+    {% for a in archives %}
+    <tr{% if not a.enabled %} class="muted"{% endif %}>
+      <td><b>{{ a.name }}</b>{% if not a.enabled %} <span class="note">disabled</span>{% endif %}</td>
+      <td class="muted"><code>{{ a.relpath }}</code></td>
+      <td class="muted">{{ a.format or 'any' }}</td>
+      <td class="muted">
+        <input id="methods-{{ a.id }}" size="22" style="width:11rem"
+               value="{{ a.methods }}">
+        <button onclick="saveMethods({{ a.id }})">set</button></td>
+      {# The count is the point of the page: it links to the numbers rather
+         than stopping at "it scanned". #}
+      <td>{% if a.soundings %}<a href="/ui/soundings">{{ a.soundings }}</a>
+          {%- else %}<span class="muted">0</span>{% endif %}</td>
+      <td class="muted">{{ a.last_scan_at or '&mdash;'|safe }}</td>
+      <td class="wrap {% if a.last_scan_ok == 0 %}bad{% endif %}">
+        {{ a.last_scan_result or '' }}</td>
+      <td style="white-space:nowrap">
+        <button onclick="scan({{ a.id }})">scan now</button>
+        <button onclick="setEnabled({{ a.id }}, {{ 'false' if a.enabled else 'true' }})">
+          {{ 'disable' if a.enabled else 'enable' }}</button>
+        <button onclick="remove({{ a.id }}, {{ a.name|tojson }})">remove</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">Nothing registered yet. Until a folder is here, this server
+  indexes only what someone ran <code>services.api.ingest</code> over by
+  hand.</p>
+  {% endif %}
+  <div id="say" class="note" style="margin-top:.5rem"></div>
+</div>
+
+<div class="panel">
+  <h2>add a folder</h2>
+  <p class="note">The path is relative to
+  <code>{{ archive_root }}</code>. Only folders under that root can be
+  indexed &mdash; in the container it is the single path mounted at
+  <code>/archive</code>, so a folder elsewhere is not merely unreadable, it is
+  invisible, and a scan of it would report success having loaded nothing.</p>
+
+  <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
+    <label class="muted" style="font-size:.85rem">path
+      <input id="path" size="28" placeholder="2026.02.04"></label>
+    <label class="muted" style="font-size:.85rem">name
+      <input id="name" size="16" placeholder="(defaults to the path)"></label>
+    <label class="muted" style="font-size:.85rem">format
+      <select id="format">
+        <option value="">any</option>
+        {% for f in formats %}<option>{{ f }}</option>{% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">methods
+      <input id="methods" size="22" value="{{ methods_default }}"></label>
+    <button onclick="add()">add</button>
+  </div>
+  <p class="note">Available methods: <code>{{ methods_available|join(', ') }}</code>.
+  Adding one later re-scopes the folder's existing soundings on the next scan
+  &mdash; anything already computed is kept.</p>
+  <div id="addSay" class="note" style="margin-top:.45rem"></div>
+</div>
+
+<script>
+// Same contract as the console's start/stop buttons: the control token lives
+// in sessionStorage, put there on the console page, never baked into a page
+// that might be left open.
+const token = () => sessionStorage.getItem('tok') || '';
+
+async function control(url, method, body) {
+  const tok = token();
+  if (!tok) return {ok: false, detail:
+    'No control token. Paste it on the console page first.'};
+  const r = await fetch(url, {
+    method,
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const out = await r.json().catch(() => ({}));
+  return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
+}
+
+const write = (id, text, bad) => {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = text; el.className = 'note' + (bad ? ' bad' : ''); }
+};
+const say = (t, bad) => write('say', t, bad);
+const addSay = (t, bad) => write('addSay', t, bad);
+
+const val = id => (document.getElementById(id) || {}).value || '';
+
+async function add() {
+  const path = val('path').trim();
+  if (!path) { addSay('Enter a path first.', true); return; }
+  addSay('checking …');
+  const r = await control('/archives', 'POST', {
+    path: path, name: val('name').trim(), format: val('format'),
+    methods: val('methods'),
+  });
+  if (!r.ok) { addSay(r.detail, true); return; }
+  const f = r.body.found || {};
+  const kinds = Object.entries(f.by_format || {})
+      .map(([k, n]) => n + ' ' + k).join(', ');
+  addSay(r.body.name + ' registered — ' + f.soundings + ' sounding(s) visible'
+    + (kinds ? ' (' + kinds + ')' : '') + '. Press scan now to index them.');
+  setTimeout(() => location.reload(), 1200);
+}
+
+async function scan(id) {
+  say('starting …');
+  const r = await control('/archives/' + id + '/scan', 'POST');
+  if (!r.ok) { say(r.detail, true); return; }
+  say(r.body.name + ': scanning …');
+  poll();
+}
+
+async function setEnabled(id, enabled) {
+  const r = await control('/archives/' + id + '/enabled', 'POST',
+                          {enabled: enabled});
+  if (!r.ok) { say(r.detail, true); return; }
+  location.reload();
+}
+
+async function saveMethods(id) {
+  const r = await control('/archives/' + id + '/methods', 'POST',
+                          {methods: val('methods-' + id)});
+  say(r.ok ? 'methods set to ' + r.body.methods + ' — ' + r.body.note
+           : r.detail, !r.ok);
+}
+
+async function remove(id, name) {
+  if (!confirm('Unregister ' + name + '?\n\nIts soundings and their '
+      + 'characteristics stay in the database; this only stops the indexing.'))
+    return;
+  const r = await control('/archives/' + id, 'DELETE');
+  if (!r.ok) { say(r.detail, true); return; }
+  say(r.body.note);
+  setTimeout(() => location.reload(), 1200);
+}
+
+// While a scan runs, poll rather than reload: a reload mid-scan would wipe
+// the line saying what is happening, which is the only feedback there is for
+// a pass that can take a long time.
+let polling = null;
+async function poll() {
+  const r = await fetch('/archives').then(x => x.json()).catch(() => null);
+  if (!r) return;
+  const s = r.status || {};
+  if (s.running) {
+    write('running', 'scanning ' + s.name + ' — ' + (s.elapsed_s || 0) + 's elapsed');
+    if (!polling) polling = setInterval(poll, 3000);
+    return;
+  }
+  write('running', '');
+  if (polling) {                       // it just finished: show the result
+    clearInterval(polling);
+    polling = null;
+    if (s.result) say(s.name + ': ' + s.result, s.ok === false);
+    setTimeout(() => location.reload(), 1500);
+  }
+}
+poll();
+</script>
+{% endblock %}

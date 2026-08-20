@@ -222,3 +222,39 @@ CREATE TABLE IF NOT EXISTS station_preview (
     image       BLOB NOT NULL,          -- PNG, as the agent encoded it
     PRIMARY KEY (station, tx)
 );
+
+
+-- Folders that are meant to be indexed, so that "what is in this database"
+-- stops being whatever someone last ran `services.api.ingest` over by hand.
+--
+-- `relpath` is **relative to ARCHIVE_ROOT and never absolute**, for the same
+-- reason `sounding.path` is: one database is read from the host and from
+-- inside a container, which mount the archive at different paths. Storing an
+-- absolute path here would work on exactly one of them and fail silently on
+-- the other, which is the failure mode the whole archive-root convention
+-- exists to prevent.
+--
+-- `methods` is what gets computed for every sounding in the folder --
+-- `muf.extractors.DEFAULT_METHODS` unless someone chose otherwise. Kept per
+-- archive rather than read from a global default so the page can show it: the
+-- answer to "which extractors produced these numbers" should be on screen and
+-- not implied. Widening it needs no migration and no reload flag --
+-- `watch.already_done` counts a sounding finished only when it holds a row
+-- for every requested method, so an added method pulls the older soundings of
+-- that archive back into scope on the next scan.
+CREATE TABLE IF NOT EXISTS archive (
+    id               INTEGER PRIMARY KEY,
+    name             TEXT NOT NULL UNIQUE,
+    relpath          TEXT NOT NULL UNIQUE,
+    format           TEXT,              -- lfs | chirp2 | digisonde; NULL = any
+    methods          TEXT NOT NULL,     -- comma separated
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    added_at         TEXT NOT NULL,
+    -- What the last scan did, kept as the sentence `watch.describe` builds
+    -- rather than as parsed counts: it already says the things worth saying
+    -- ("N too fresh", "FUTURE-DATED", "SKIPPED N") and re-deriving them here
+    -- would be a second vocabulary for the same facts.
+    last_scan_at     TEXT,
+    last_scan_result TEXT,
+    last_scan_ok     INTEGER
+);

@@ -23,7 +23,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent_routes, auth, control_routes, db, net, read_routes, sources
+from . import agent_routes, archive_routes, archives, auth, control_routes
+from . import db, net, read_routes, sources
 from . import web_routes
 
 VERSION = "0.1.0"
@@ -81,6 +82,12 @@ async def lifespan(app: FastAPI):
     # third party can.
     app.state.net_check = net.start()
 
+    # Keeps the registered archives current. Off the request path for the
+    # same reason the census is, and on a loop rather than once because an
+    # archive, unlike a census of write-once files, gains files while the
+    # server runs. ARCHIVE_SCAN_INTERVAL_S=0 turns it off.
+    app.state.archive_scan = archives.start_periodic(app)
+
     app.state.census_warm = None
     if WARM_CENSUS:
         # Daemon, so a slow archive cannot hold up a shutdown: this thread
@@ -108,6 +115,7 @@ app = FastAPI(title="ionograms-handler api", version=VERSION,
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(agent_routes.router)
+app.include_router(archive_routes.router)
 app.include_router(control_routes.router)
 app.include_router(read_routes.router)
 app.include_router(web_routes.router)

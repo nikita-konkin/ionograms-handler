@@ -1,0 +1,396 @@
+"""Registering folders to index, and the scan that indexes them.
+
+The indexer itself is `services.api.watch`, tested elsewhere. What is tested
+here is the registry around it: that a folder this server cannot see is
+refused rather than accepted and silently scanned to no effect, that a scan
+records what it did, that unregistering never destroys a measurement, and
+that two scans cannot run at once.
+
+The scan tests use a **real synthetic `.lfs` archive** rather than a mocked
+pipeline. The whole promise of the page is that indexing a folder produces
+characteristics, and a test that stubs the pipeline would pass just as
+happily on a build where the pipeline was never reached.
+"""
+
+from __future__ import annotations
+
+import sys
+import threading
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from conftest import synth_iq                            # noqa: E402
+from services.api import archives as archives_mod        # noqa: E402
+from services.api import auth, db, main                  # noqa: E402
+
+CTL = {"Authorization": "Bearer ctl"}
+
+
+@pytest.fixture
+def archive_root(tmp_path, make_lfs):
+    """An archive root holding one folder with soundings and one without."""
+    root = tmp_path / "archive"
+    (root / "good").mkdir(parents=True)
+    (root / "empty").mkdir(parents=True)
+    for i in range(2):
+        # `make_lfs` writes into tmp_path; move it under the root so the tree
+        # is the shape `find_soundings` walks.
+        src = make_lfs(synth_iq(n_freq=64, window=256, echo_range_km=2700.0,
+                                half_span_km=60_000.0, echo_last_bin=40),
+                       name=f"synth{i}.lfs", dur=2)
+        src.rename(root / "good" / src.name)
+    return root
+
+
+@pytest.fixture
+def client(tmp_path, archive_root, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from services.api import net
+    from services.api import series as series_mod
+
+    monkeypatch.setattr(auth, "READ_TOKEN", "")
+    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
+    monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
+    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
+    monkeypatch.setenv("ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setattr(main, "WARM_CENSUS", False)
+    monkeypatch.setattr(net, "ENABLED", False)
+    net.reset()
+    monkeypatch.setattr(series_mod, "MODEL", False)
+    series_mod.clear()
+    # The periodic scanner must not fire during a test: it would race the
+    # explicit scans below for the module-wide lock and make them flaky.
+    monkeypatch.setattr(archives_mod, "DEFAULT_INTERVAL_S", 0.0)
+    with TestClient(main.app) as c:
+        yield c
+
+
+def _add(client, path="good", **kw):
+    body = {"path": path}
+    body.update(kw)
+    return client.post("/archives", json=body, headers=CTL)
+
+
+# --- registration -----------------------------------------------------------
+
+def test_a_folder_is_registered_listed_and_removed(client):
+    added = _add(client, name="feb")
+    assert added.status_code == 200, added.text
+    assert added.json()["found"]["soundings"] == 2
+    assert added.json()["found"]["by_format"] == {"lfs": 2}
+
+    listed = client.get("/archives").json()["archives"]
+    assert [a["name"] for a in listed] == ["feb"]
+    assert listed[0]["relpath"] == "good"
+
+    gone = client.delete(f"/archives/{added.json()['id']}", headers=CTL)
+    assert gone.status_code == 200
+    assert client.get("/archives").json()["archives"] == []
+
+
+def test_the_path_is_stored_relative_to_the_root(client, archive_root):
+    """Absolute in, relative out. The same database is read from the host and
+    from inside the container, which mount the archive at different paths."""
+    added = _add(client, path=str(archive_root / "good"))
+    assert added.status_code == 200
+    assert added.json()["path"] == "good"
+
+
+def test_a_folder_outside_the_root_is_refused_and_says_how_to_fix_it(client):
+    r = _add(client, path="/etc")
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "outside the archive root" in detail
+    assert "ARCHIVE_HOST_PATH" in detail, (
+        "under Docker the fix is a volume mount, and the message has to say so")
+
+
+def test_traversal_is_refused(client):
+    assert _add(client, path="../../etc").status_code == 400
+    assert _add(client, path="good/../../..").status_code == 400
+
+
+def test_the_root_itself_is_refused(client):
+    r = _add(client, path=".")
+    assert r.status_code == 400
+    assert "archive root itself" in r.json()["detail"]
+
+
+def test_a_folder_with_nothing_to_index_is_refused_at_registration(client):
+    """Caught while the operator is looking at it, rather than after a scan
+    that truthfully reports having loaded zero."""
+    r = _add(client, path="empty")
+    assert r.status_code == 400
+    assert "no soundings" in r.json()["detail"]
+
+
+def test_a_format_filter_that_matches_nothing_is_refused(client):
+    r = _add(client, format="chirp2")
+    assert r.status_code == 400
+    assert "chirp2" in r.json()["detail"]
+
+
+def test_an_unknown_format_is_refused(client):
+    assert _add(client, format="rinex").status_code == 400
+
+
+def test_the_same_folder_cannot_be_registered_twice(client):
+    assert _add(client, name="one").status_code == 200
+    again = _add(client, name="two")
+    assert again.status_code == 409
+    assert "already registered" in again.json()["detail"]
+
+
+def test_a_duplicate_name_is_refused(client):
+    assert _add(client, name="dup").status_code == 200
+    assert _add(client, path="empty", name="dup").status_code in (400, 409)
+
+
+# --- methods ----------------------------------------------------------------
+
+def test_methods_default_to_the_pipeline_default(client):
+    from muf.extractors import DEFAULT_METHODS
+
+    assert _add(client).json()["methods"] == ",".join(DEFAULT_METHODS)
+
+
+def test_an_unknown_method_is_refused(client):
+    """`watch.already_done` counts a sounding finished only when it holds a row
+    for every *requested* method. A name nothing can produce would make every
+    sounding look permanently unfinished and re-scan the folder forever."""
+    r = _add(client, methods="algo,telepathy")
+    assert r.status_code == 400
+    assert "telepathy" in r.json()["detail"]
+
+
+def test_methods_can_be_narrowed_and_widened(client):
+    archive_id = _add(client, methods="algo").json()["id"]
+    r = client.post(f"/archives/{archive_id}/methods",
+                    json={"methods": "algo,contour"}, headers=CTL)
+    assert r.status_code == 200
+    assert r.json()["methods"] == "algo,contour"
+    assert "revisited" in r.json()["note"]
+
+
+# --- enable / disable -------------------------------------------------------
+
+def test_a_disabled_archive_is_skipped_by_a_sweep(client, archive_root,
+                                                  tmp_path):
+    archive_id = _add(client).json()["id"]
+    assert client.post(f"/archives/{archive_id}/enabled",
+                       json={"enabled": False}, headers=CTL).status_code == 200
+
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        assert db.archives(conn, enabled_only=True) == []
+        assert archives_mod.scan_all(
+            conn, archive_root=archive_root,
+            db_path=tmp_path / "api.sqlite3") == 0
+    finally:
+        conn.close()
+
+
+# --- scanning ---------------------------------------------------------------
+
+def test_a_scan_indexes_the_folder_and_derives_characteristics(
+        client, archive_root, tmp_path):
+    """The whole promise of the page, end to end on real `.lfs` bytes.
+
+    Not just "rows appeared": an `extraction` row is what MUF, LOF and the SAO
+    record are built from, so its absence would mean the page indexed files
+    and produced nothing anyone can use.
+    """
+    archive_id = _add(client, methods="algo").json()["id"]
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        row = db.archive(conn, archive_id)
+        # min_age_s=0: the fixture's files were written moments ago and the
+        # watcher would otherwise, correctly, hold them back as too fresh.
+        result = archives_mod.scan_once(
+            row, archive_root=archive_root, db_path=tmp_path / "api.sqlite3",
+            min_age_s=0)
+        assert result["found"] == 2
+        assert result["loaded"] == 2, result
+
+        assert db.one(conn, "SELECT COUNT(*) AS n FROM sounding")["n"] == 2
+        assert db.one(conn, "SELECT COUNT(*) AS n FROM extraction"
+                            " WHERE method = 'algo'")["n"] == 2
+
+        after = db.archive(conn, archive_id)
+        assert after["last_scan_ok"] == 1
+        assert after["last_scan_at"]
+        assert "2 on disk" in after["last_scan_result"]
+
+        # And the second pass finds nothing to do, which is the difference
+        # between this and re-running `ingest` over the whole folder.
+        again = archives_mod.scan_once(
+            row, archive_root=archive_root, db_path=tmp_path / "api.sqlite3",
+            min_age_s=0)
+        assert again["new"] == 0
+    finally:
+        conn.close()
+
+
+def test_widening_methods_brings_the_old_soundings_back_into_scope(
+        client, archive_root, tmp_path):
+    archive_id = _add(client, methods="algo").json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+    conn = db.connect(db_path)
+    try:
+        archives_mod.scan_once(db.archive(conn, archive_id),
+                               archive_root=archive_root, db_path=db_path,
+                               min_age_s=0)
+        db.set_archive_methods(conn, archive_id, "algo,contour")
+        result = archives_mod.scan_once(db.archive(conn, archive_id),
+                                        archive_root=archive_root,
+                                        db_path=db_path, min_age_s=0)
+        assert result["new"] == 2, "a method nothing has yet must re-scope them"
+        assert db.one(conn, "SELECT COUNT(*) AS n FROM extraction"
+                            " WHERE method = 'contour'")["n"] == 2
+    finally:
+        conn.close()
+
+
+def test_removing_an_archive_keeps_its_soundings(client, archive_root,
+                                                 tmp_path):
+    """Unregistering says "stop indexing this", not "forget what was
+    measured". The soundings are the record; the archive row is the
+    instruction."""
+    archive_id = _add(client).json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+    conn = db.connect(db_path)
+    try:
+        archives_mod.scan_once(db.archive(conn, archive_id),
+                               archive_root=archive_root, db_path=db_path,
+                               min_age_s=0)
+    finally:
+        conn.close()
+
+    before = db.one(client.app.state.db,
+                    "SELECT COUNT(*) AS n FROM sounding")["n"]
+    assert before == 2
+    removed = client.delete(f"/archives/{archive_id}", headers=CTL).json()
+    assert removed["soundings_kept"] == 2
+    assert db.one(client.app.state.db,
+                  "SELECT COUNT(*) AS n FROM sounding")["n"] == 2
+    assert db.one(client.app.state.db,
+                  "SELECT COUNT(*) AS n FROM extraction")["n"] > 0
+
+
+def test_only_one_scan_runs_at_a_time(client, archive_root):
+    """CPU-bound and holding a database lock. Two would finish later than one
+    after the other, so the second is refused rather than queued."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with archives_mod._LOCK:
+            started.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert started.wait(5)
+    archives_mod._set_status(archive_id=1, name="holder",
+                             started_at=1.0, finished_at=None)
+    try:
+        archive_id = _add(client).json()["id"]
+        r = client.post(f"/archives/{archive_id}/scan", headers=CTL)
+        assert r.status_code == 409
+        assert "already running" in r.json()["detail"]
+    finally:
+        release.set()
+        holder.join(5)
+        archives_mod._set_status(started_at=None, finished_at=None, name="")
+
+
+def test_a_folder_that_vanished_is_reported_not_counted_as_clean(
+        client, archive_root, tmp_path):
+    """The failure mode a stored registration has and a CLI target does not.
+
+    `watch.find_new` skips a target holding nothing, which is right when
+    somebody just typed the path -- an archive holds detection trees and empty
+    days beside the ionograms. For a registration that can go stale on its own
+    it is wrong: an unmounted share would scan clean and report "0 on disk"
+    with a green tick for as long as anyone left it running.
+    """
+    archive_id = _add(client).json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+    conn = db.connect(db_path)
+    try:
+        row = db.archive(conn, archive_id)
+        (archive_root / "good").rename(archive_root / "moved")
+        assert archives_mod.scan(row, archive_root=archive_root,
+                                 db_path=db_path, min_age_s=0)
+        after = db.archive(conn, archive_id)
+        assert after["last_scan_ok"] == 0
+        assert "not on disk" in after["last_scan_result"]
+    finally:
+        conn.close()
+
+
+def test_a_scan_that_raises_is_recorded_as_a_failure(client, archive_root,
+                                                     tmp_path, monkeypatch):
+    """A pass that blew up must not leave the previous pass's cheerful summary
+    standing as though it were current."""
+    archive_id = _add(client).json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+
+    def boom(*a, **kw):
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(archives_mod.watch, "run_once", boom)
+    conn = db.connect(db_path)
+    try:
+        assert archives_mod.scan(db.archive(conn, archive_id),
+                                 archive_root=archive_root, db_path=db_path,
+                                 min_age_s=0)
+        after = db.archive(conn, archive_id)
+        assert after["last_scan_ok"] == 0
+        assert "pipeline exploded" in after["last_scan_result"]
+        assert archives_mod.status()["ok"] is False
+    finally:
+        conn.close()
+        archives_mod._set_status(started_at=None, finished_at=None,
+                                 ok=None, error="", result="", name="")
+
+
+# --- auth -------------------------------------------------------------------
+
+@pytest.mark.parametrize("method,url,body", [
+    ("post", "/archives", {"path": "good"}),
+    ("post", "/archives/1/scan", None),
+    ("post", "/archives/1/enabled", {"enabled": False}),
+    ("post", "/archives/1/methods", {"methods": "algo"}),
+    ("delete", "/archives/1", None),
+])
+def test_writes_need_the_control_token(client, method, url, body):
+    call = getattr(client, method)
+    r = call(url, json=body) if body is not None else call(url)
+    assert r.status_code in (401, 403), f"{method} {url} was not protected"
+
+
+def test_reads_are_open(client):
+    assert client.get("/archives").status_code == 200
+
+
+def test_a_missing_archive_is_404_not_500(client):
+    assert client.post("/archives/999/scan", headers=CTL).status_code == 404
+    assert client.delete("/archives/999", headers=CTL).status_code == 404
+
+
+# --- the page ---------------------------------------------------------------
+
+def test_the_page_lists_the_registered_folders(client):
+    _add(client, name="feb")
+    page = client.get("/ui/archives").text
+    assert "feb" in page
+    assert "add a folder" in page
+
+
+def test_the_page_says_what_to_do_when_nothing_is_registered(client):
+    assert "Nothing registered yet" in client.get("/ui/archives").text

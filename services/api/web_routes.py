@@ -330,6 +330,32 @@ SOUNDING_SORTS = {
 }
 
 
+@router.get("/ui/archives")
+def archives_page(request: Request):
+    """The folders this server indexes, and what each pass did.
+
+    Indexing is also where every characteristic comes from -- the pipeline
+    runs per file, so MUF, LOF and the rest land in `extraction` and the
+    sounding page builds the SAO record from them. There is no separate
+    "compute characteristics" step for this page to offer.
+    """
+    from muf import loader
+    from muf.extractors import ALL_METHODS, DEFAULT_METHODS
+
+    from . import archives as archives_mod
+
+    conn = request.app.state.db
+    return templates.TemplateResponse(request, "archives.html", {
+        "archives": db.archives(conn),
+        "archive_root": str(request.app.state.archive_root),
+        "status": archives_mod.status(),
+        "formats": loader.FORMATS,
+        "methods_available": ALL_METHODS,
+        "methods_default": ",".join(DEFAULT_METHODS),
+        "interval_s": archives_mod.DEFAULT_INTERVAL_S,
+    })
+
+
 @router.get("/ui/soundings")
 def soundings(request: Request, limit: int = 200, offset: int = 0,
               sort: str = "time", dir: str = "asc",

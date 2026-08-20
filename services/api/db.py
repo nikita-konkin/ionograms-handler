@@ -525,3 +525,82 @@ def recent_epochs(conn: sqlite3.Connection, station: str,
         row["changes"] = json.loads(row["changes"] or "{}")
         out.append(row)
     return out
+
+
+# --------------------------------------------------------------------------
+# Archives -- the folders that are meant to be indexed
+# --------------------------------------------------------------------------
+
+def archives(conn: sqlite3.Connection, *, enabled_only: bool = False) -> list[dict]:
+    """Every registered archive, with how many soundings came from it.
+
+    The count is derived from `sounding.path` rather than stored, because a
+    stored count is a second source of truth that goes wrong quietly: ingest
+    writes `sounding` and would have to remember to touch a counter here too,
+    and the day it forgets, the page reports a number no query can reproduce.
+    """
+    where = " WHERE enabled = 1" if enabled_only else ""
+    rows_ = rows(conn, f"SELECT * FROM archive{where} ORDER BY name")
+    for row in rows_:
+        # `path` is stored relative to ARCHIVE_ROOT, so an archive's soundings
+        # are the ones whose path sits under its relpath. LIKE with a trailing
+        # separator, not a bare prefix: `2026.02.04` must not also match
+        # `2026.02.045`.
+        prefix = row["relpath"].rstrip("/") + "/"
+        row["soundings"] = (one(
+            conn, "SELECT COUNT(*) AS n FROM sounding WHERE path LIKE ?",
+            (prefix + "%",)) or {"n": 0})["n"]
+    return rows_
+
+
+def archive(conn: sqlite3.Connection, archive_id: int) -> dict | None:
+    return one(conn, "SELECT * FROM archive WHERE id = ?", (archive_id,))
+
+
+def add_archive(conn: sqlite3.Connection, *, name: str, relpath: str,
+                methods: str, format: str | None = None) -> int:
+    cur = conn.execute(
+        "INSERT INTO archive (name, relpath, format, methods, enabled,"
+        " added_at) VALUES (?, ?, ?, ?, 1, ?)",
+        (name, relpath, format, methods, utcnow()))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def set_archive_enabled(conn: sqlite3.Connection, archive_id: int,
+                        enabled: bool) -> bool:
+    cur = conn.execute("UPDATE archive SET enabled = ? WHERE id = ?",
+                       (1 if enabled else 0, archive_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_archive_methods(conn: sqlite3.Connection, archive_id: int,
+                        methods: str) -> bool:
+    cur = conn.execute("UPDATE archive SET methods = ? WHERE id = ?",
+                       (methods, archive_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def record_scan(conn: sqlite3.Connection, archive_id: int, *,
+                result: str, ok: bool) -> None:
+    conn.execute(
+        "UPDATE archive SET last_scan_at = ?, last_scan_result = ?,"
+        " last_scan_ok = ? WHERE id = ?",
+        (utcnow(), result, 1 if ok else 0, archive_id))
+    conn.commit()
+
+
+def remove_archive(conn: sqlite3.Connection, archive_id: int) -> bool:
+    """Unregister a folder. **Never touches its soundings.**
+
+    Removing a row here says "stop indexing this", not "forget what was
+    measured". The soundings and their extractions are the record; the archive
+    row is only the instruction to keep looking. Re-registering the same path
+    picks the existing soundings straight back up, because `watch.already_done`
+    keys on the file name and finds them still there.
+    """
+    cur = conn.execute("DELETE FROM archive WHERE id = ?", (archive_id,))
+    conn.commit()
+    return cur.rowcount > 0
