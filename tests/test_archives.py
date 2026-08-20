@@ -100,13 +100,16 @@ def test_the_path_is_stored_relative_to_the_root(client, archive_root):
     assert added.json()["path"] == "good"
 
 
-def test_a_folder_outside_the_root_is_refused_and_says_how_to_fix_it(client):
+def test_a_folder_under_no_root_is_refused_and_says_how_to_fix_it(client):
     r = _add(client, path="/etc")
     assert r.status_code == 400
     detail = r.json()["detail"]
-    assert "outside the archive root" in detail
-    assert "ARCHIVE_HOST_PATH" in detail, (
-        "under Docker the fix is a volume mount, and the message has to say so")
+    assert "under none of this server's archive roots" in detail
+    assert "ARCHIVE_ROOTS" in detail, (
+        "the fix is a volume plus a root entry, and the message has to say so")
+    assert "redeploy" in detail, (
+        "a container's mounts are fixed at start; no amount of clicking here "
+        "can add one, and the message must not imply otherwise")
 
 
 def test_traversal_is_refused(client):
@@ -117,7 +120,8 @@ def test_traversal_is_refused(client):
 def test_the_root_itself_is_refused(client):
     r = _add(client, path=".")
     assert r.status_code == 400
-    assert "archive root itself" in r.json()["detail"]
+    assert "itself" in r.json()["detail"]
+    assert "Register the folders inside it" in r.json()["detail"]
 
 
 def test_a_folder_with_nothing_to_index_is_refused_at_registration(client):
@@ -500,3 +504,117 @@ def test_methods_can_be_sent_as_a_list(client):
     not have to know that."""
     assert _add(client, methods=["algo", "contour"]).json()["methods"] == \
         "algo,contour"
+
+
+# --- more than one root -----------------------------------------------------
+#
+# The answer to "can I put an array in ARCHIVE_HOST_PATH". Not there -- a
+# variable inside `volumes:` is substituted into one list item, so "/a:/b"
+# becomes the single broken mount "/a:/b:/archive:ro". The array goes in
+# ARCHIVE_ROOTS, which lists *container* paths, and each still needs its own
+# volume line. Neither this list nor any page can create a mount: a
+# container's filesystem is fixed when it starts.
+
+@pytest.fixture
+def second_root(tmp_path, make_lfs):
+    root = tmp_path / "elsewhere"
+    (root / "other").mkdir(parents=True)
+    src = make_lfs(synth_iq(n_freq=64, window=256, echo_range_km=2700.0,
+                            half_span_km=60_000.0, echo_last_bin=40),
+                   name="other0.lfs", dur=2)
+    src.rename(root / "other" / src.name)
+    return root
+
+
+def test_extra_roots_are_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOT", "/archive")
+    monkeypatch.setenv("ARCHIVE_ROOTS", "/archive2:/archive3")
+    assert [str(p) for p in archives_mod.roots()] == [
+        "/archive", "/archive2", "/archive3"]
+
+
+def test_the_primary_root_is_never_duplicated(monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOT", "/archive")
+    monkeypatch.setenv("ARCHIVE_ROOTS", "/archive:/archive2")
+    assert [str(p) for p in archives_mod.roots()] == ["/archive", "/archive2"]
+
+
+def test_an_empty_roots_list_leaves_one_root(monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOT", "/archive")
+    monkeypatch.setenv("ARCHIVE_ROOTS", "")
+    assert [str(p) for p in archives_mod.roots()] == ["/archive"]
+
+
+def test_a_folder_under_a_second_root_can_be_registered(client, second_root,
+                                                        monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
+    r = _add(client, path=str(second_root / "other"), name="elsewhere")
+    assert r.status_code == 200, r.text
+    assert r.json()["found"]["soundings"] == 1
+    # Stored absolute, because there is no root both the host and the
+    # container would agree to measure it against.
+    assert r.json()["path"] == str(second_root / "other")
+
+
+def test_a_folder_under_the_primary_root_stays_relative(client, second_root,
+                                                        monkeypatch):
+    """The portable case must not regress when a second root exists."""
+    monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
+    assert _add(client, path="good").json()["path"] == "good"
+
+
+def test_a_second_root_is_listed_with_its_host_folder(client, second_root,
+                                                      monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
+    monkeypatch.setenv("ARCHIVE_HOST_PATH", "/srv/one")
+    monkeypatch.setenv("ARCHIVE_HOST_PATH_2", "/mnt/two")
+    mount = client.get("/archives").json()["mount"]
+    assert mount["extra"] == 1
+    assert [r["host"] for r in mount["roots"]] == ["/srv/one", "/mnt/two"]
+    assert mount["roots"][0]["primary"] is True
+    assert mount["roots"][1]["primary"] is False
+
+
+def test_candidates_span_every_root(client, second_root, monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
+    cands = client.get("/archives").json()["candidates"]
+    by_path = {c["path"]: c for c in cands}
+    assert "good" in by_path and by_path["good"]["primary"] is True
+    other = by_path[str(second_root / "other")]
+    assert other["primary"] is False
+    assert other["soundings"] == 1
+
+
+def test_a_second_root_scans_and_derives_characteristics(
+        client, second_root, tmp_path, monkeypatch):
+    """The whole point: a folder on another disk indexes like any other."""
+    monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
+    archive_id = _add(client, path=str(second_root / "other"),
+                      methods="algo").json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+    conn = db.connect(db_path)
+    try:
+        row = db.archive(conn, archive_id)
+        result = archives_mod.scan_once(
+            row, archive_root=client.app.state.archive_root,
+            db_path=db_path, min_age_s=0)
+        assert result["loaded"] == 1, result
+        # `sounding.path` is absolute for the same reason the archive's is.
+        stored = db.one(conn, "SELECT path FROM sounding")["path"]
+        assert stored.startswith(str(second_root))
+        assert db.one(conn, "SELECT COUNT(*) AS n FROM extraction")["n"] == 1
+        # And the archive's own count still finds them.
+        listed = next(a for a in db.archives(conn) if a["id"] == archive_id)
+        assert listed["soundings"] == 1
+    finally:
+        conn.close()
+
+
+def test_a_path_under_no_root_still_names_every_root_it_tried(client,
+                                                              second_root,
+                                                              monkeypatch):
+    monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
+    detail = _add(client, path="/nowhere/at/all").json()["detail"]
+    assert str(second_root) in detail, (
+        "the refusal must list the roots it actually checked, not just the "
+        "primary -- otherwise it reads as though the second one is not set up")

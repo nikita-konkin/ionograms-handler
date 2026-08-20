@@ -30,6 +30,17 @@ services:
       # and "/archive" alone does not tell an operator whether the .env they
       # edited took effect. Display only; the mount below is what binds.
       ARCHIVE_HOST_PATH: "${ARCHIVE_HOST_PATH:-./archive}"
+      # Extra roots, beyond ARCHIVE_ROOT. Colon-separated container paths --
+      # the "array" that a volume spec cannot hold, in the one place it can.
+      #
+      # A variable inside `volumes:` is string substitution into a single list
+      # item, so ARCHIVE_HOST_PATH="/a:/b" becomes the one broken mount
+      # "/a:/b:/archive:ro" rather than two mounts. Each extra path therefore
+      # needs its own volume line below AND its container path listed here.
+      # Both, and a redeploy: a container's filesystem is fixed when it starts.
+      ARCHIVE_ROOTS: "${ARCHIVE_ROOTS:-}"
+      ARCHIVE_HOST_PATH_2: "${ARCHIVE_HOST_PATH_2:-}"
+      ARCHIVE_HOST_PATH_3: "${ARCHIVE_HOST_PATH_3:-}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.
@@ -41,6 +52,11 @@ services:
       # Read-only, and it stays read-only. The api renders from the archive and
       # has no business writing to it.
       - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
+      # Extra archives. Unset, these mount the same folder as /archive again,
+      # which is harmless and shows nothing new -- they only come into play
+      # once ARCHIVE_ROOTS names them. Add more pairs the same way.
+      - "${ARCHIVE_HOST_PATH_2:-${ARCHIVE_HOST_PATH:-./archive}}:/archive2:ro"
+      - "${ARCHIVE_HOST_PATH_3:-${ARCHIVE_HOST_PATH:-./archive}}:/archive3:ro"
     labels:
       # Opt-in, not opt-out. Watchtower updates only what carries this.
       com.centurylinklabs.watchtower.enable: "true"
@@ -70,6 +86,17 @@ services:
       # and "/archive" alone does not tell an operator whether the .env they
       # edited took effect. Display only; the mount below is what binds.
       ARCHIVE_HOST_PATH: "${ARCHIVE_HOST_PATH:-./archive}"
+      # Extra roots, beyond ARCHIVE_ROOT. Colon-separated container paths --
+      # the "array" that a volume spec cannot hold, in the one place it can.
+      #
+      # A variable inside `volumes:` is string substitution into a single list
+      # item, so ARCHIVE_HOST_PATH="/a:/b" becomes the one broken mount
+      # "/a:/b:/archive:ro" rather than two mounts. Each extra path therefore
+      # needs its own volume line below AND its container path listed here.
+      # Both, and a redeploy: a container's filesystem is fixed when it starts.
+      ARCHIVE_ROOTS: "${ARCHIVE_ROOTS:-}"
+      ARCHIVE_HOST_PATH_2: "${ARCHIVE_HOST_PATH_2:-}"
+      ARCHIVE_HOST_PATH_3: "${ARCHIVE_HOST_PATH_3:-}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.
@@ -83,6 +110,11 @@ services:
     volumes:
       - api-data:/data
       - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
+      # Extra archives. Unset, these mount the same folder as /archive again,
+      # which is harmless and shows nothing new -- they only come into play
+      # once ARCHIVE_ROOTS names them. Add more pairs the same way.
+      - "${ARCHIVE_HOST_PATH_2:-${ARCHIVE_HOST_PATH:-./archive}}:/archive2:ro"
+      - "${ARCHIVE_HOST_PATH_3:-${ARCHIVE_HOST_PATH:-./archive}}:/archive3:ro"
     labels:
       com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped

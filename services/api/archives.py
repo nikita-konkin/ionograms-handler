@@ -118,48 +118,127 @@ class ArchiveError(ValueError):
 def resolve(relpath: str, archive_root: str | os.PathLike) -> tuple[str, Path]:
     """``(stored relpath, absolute path)``, or refuse with why.
 
-    The stored form is always relative to ``archive_root``. An absolute path
-    is accepted *only* if it already sits inside that root, and is stored
-    relative anyway -- so a database written on the host still resolves inside
-    the container, where the same files live under ``/archive``.
+    Accepts a folder under any root in :func:`roots`, and stores it the way
+    that root is stored: **relative** under the primary, so the row stays
+    readable from the host and from inside the container, and **absolute**
+    under any other, because there is nothing to be relative to that both
+    would agree on. That is the same trade `ingest_row` already makes for a
+    sounding outside the configured root.
 
-    Refusing anything outside the root is not merely tidiness. Under Docker
-    the API container mounts one host path read-only, so a folder outside it
-    is not slow or awkward to read, it is **invisible** -- and a scan of an
-    invisible folder succeeds while loading nothing, which is the shape of
-    failure this whole page exists to end.
+    Refusing anything under none of them is not tidiness. A container's
+    filesystem is fixed when it starts, so an unmounted folder is not slow or
+    awkward to read, it is **invisible** -- and a scan of an invisible folder
+    succeeds while loading nothing, which is the failure this page exists to
+    end.
     """
-    root = Path(archive_root).resolve()
+    primary = Path(archive_root).resolve()
+    every = [primary] + [p.resolve() for p in roots()[1:]]
     raw = (relpath or "").strip()
     if not raw:
         raise ArchiveError("a path is required")
 
     candidate = Path(raw)
-    absolute = (candidate if candidate.is_absolute() else root / candidate)
+    # A bare relative path belongs to the primary root; that is the common
+    # case and the one the field is prefilled for.
+    absolute = (candidate if candidate.is_absolute() else primary / candidate)
     # `resolve` collapses `..` before the containment test, so traversal is
     # caught by the test rather than by pattern-matching the string.
     absolute = absolute.resolve()
 
-    try:
-        stored = absolute.relative_to(root)
-    except ValueError:
-        raise ArchiveError(
-            f"{raw} is outside the archive root ({root}). This server can "
-            f"only index what is under that root -- in the container it is "
-            f"the one path mounted at /archive, so a folder elsewhere is not "
-            f"just unreadable, it is invisible, and a scan of it would report "
-            f"success having loaded nothing. Move the folder under the root, "
-            f"or point ARCHIVE_HOST_PATH at a parent that contains it and "
-            f"redeploy.") from None
+    owner = None
+    for root in every:
+        try:
+            relative = absolute.relative_to(root)
+        except ValueError:
+            continue
+        owner, stored_rel = root, relative
+        break
 
-    if stored == Path("."):
+    if owner is None:
+        listed = ", ".join(str(r) for r in every)
         raise ArchiveError(
-            "that is the archive root itself. Register the folders inside it "
-            "instead, so each can be scanned, disabled and reported on its "
-            "own.")
+            f"{raw} is under none of this server's archive roots ({listed}). "
+            f"A container's filesystem is fixed when it starts, so a folder "
+            f"outside them is not just unreadable, it is invisible, and a "
+            f"scan of it would report success having loaded nothing. Add a "
+            f"volume for it and list its container path in "
+            f"{ROOTS_ENV}, then redeploy.")
+
+    if stored_rel == Path("."):
+        raise ArchiveError(
+            f"that is the archive root {owner} itself. Register the folders "
+            f"inside it instead, so each can be scanned, disabled and "
+            f"reported on its own.")
     if not absolute.is_dir():
         raise ArchiveError(f"{absolute} is not a directory that exists here")
-    return stored.as_posix(), absolute
+
+    # Relative under the primary root, so the row stays portable between host
+    # and container. Absolute under any other, which is the same choice
+    # `ingest_row` already makes for a sounding outside the configured root.
+    stored = (stored_rel.as_posix() if owner == primary
+              else absolute.as_posix())
+    return stored, absolute
+
+
+#: Extra places to look, beyond ``ARCHIVE_ROOT``. Colon-separated **container**
+#: paths, like ``PATH``: ``/archive:/archive2:/archive3``.
+#:
+#: Colons are safe here and would not be in the host variables. Container paths
+#: are always POSIX; ``ARCHIVE_HOST_PATH`` is routinely a Windows path with a
+#: drive letter (``F:/MyData/ND/lfs``), which is why the host side is numbered
+#: variables instead of a list.
+#:
+#: **This does not create mounts.** A container's filesystem is fixed when it
+#: starts, so every root here still needs its own ``volumes:`` line and a
+#: redeploy. What the list buys is that the api will *look* at more than one
+#: place, which one variable in a volume spec could never express.
+ROOTS_ENV = "ARCHIVE_ROOTS"
+
+
+def roots() -> list[Path]:
+    """Every root this server will index, primary first.
+
+    The primary is ``ARCHIVE_ROOT`` and stays special: paths under it are
+    stored relative, which is what keeps one database readable from the host
+    and from inside the container. Paths under the others are stored absolute
+    -- `ingest_row` already does this deliberately for anything outside the
+    configured root, on the grounds that a half-ingested archive is worse than
+    a non-portable row. The trade is real and belongs on the page, not hidden.
+    """
+    primary = Path(os.environ.get("ARCHIVE_ROOT", "."))
+    out = [primary]
+    for raw in (os.environ.get(ROOTS_ENV) or "").split(":"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        path = Path(raw)
+        if path not in out:
+            out.append(path)
+    return out
+
+
+def _root_host(index: int) -> str:
+    """The host folder behind root ``index``, for display.
+
+    Numbered rather than a list because a host path may contain a colon --
+    ``F:/MyData/ND/lfs`` is in `.env.example` -- so the separator that works
+    for container paths would split a Windows path in half.
+    """
+    name = "ARCHIVE_HOST_PATH" if index == 0 else f"ARCHIVE_HOST_PATH_{index + 1}"
+    return os.environ.get(name) or ""
+
+
+def _root_state(path: Path, index: int) -> dict:
+    exists = path.is_dir()
+    entries = None
+    if exists:
+        try:
+            entries = sum(1 for _ in path.iterdir())
+        except OSError:
+            exists = False
+    return {"root": str(path), "host": _root_host(index),
+            "primary": index == 0, "exists": exists, "entries": entries,
+            "empty": exists and entries == 0}
 
 
 def mount() -> dict:
@@ -180,22 +259,16 @@ def mount() -> dict:
     directory. Every scan then reports "0 on disk" truthfully and forever, and
     that is the state this whole page exists to make visible.
     """
-    root = Path(os.environ.get("ARCHIVE_ROOT", "."))
-    host = os.environ.get("ARCHIVE_HOST_PATH") or ""
-    exists = root.is_dir()
-    entries = None
-    if exists:
-        try:
-            entries = sum(1 for _ in root.iterdir())
-        except OSError:
-            exists = False
+    every = [_root_state(path, i) for i, path in enumerate(roots())]
+    primary = every[0]
     return {
-        "root": str(root),
-        "host": host,
+        # The primary, flat, because most of the page and every caller that
+        # predates multi-root asks about it directly.
+        **primary,
         "in_container": Path("/.dockerenv").exists(),
-        "exists": exists,
-        "entries": entries,
-        "empty": exists and entries == 0,
+        # ...and all of them, primary first.
+        "roots": every,
+        "extra": len(every) - 1,
     }
 
 
@@ -211,29 +284,35 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     hundreds of dated day-folders would otherwise turn a page load into a walk
     of the whole archive.
     """
-    root = Path(archive_root)
-    if not root.is_dir():
-        return []
+    primary = Path(archive_root)
+    every = [primary] + [p for p in roots()[1:]]
     registered = {row["relpath"]: row for row in db.archives(conn)}
     out = []
-    try:
-        children = sorted(p for p in root.iterdir() if p.is_dir())
-    except OSError:
-        return []
-    for child in children[:limit]:
-        name = child.name
-        try:
-            found = survey(child)
-        except ArchiveError:
+    for root in every:
+        if not root.is_dir():
             continue
-        row = registered.get(name)
-        out.append({
-            "path": name,
-            "soundings": found["soundings"],
-            "by_format": found["by_format"],
-            "registered": row is not None,
-            "archive_id": row["id"] if row else None,
-        })
+        try:
+            children = sorted(p for p in root.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for child in children[:limit]:
+            try:
+                found = survey(child)
+            except ArchiveError:
+                continue
+            # The key a row is stored under: relative for the primary root,
+            # absolute for the others. Same rule as `resolve`.
+            key = (child.name if root == primary else str(child))
+            row = registered.get(key)
+            out.append({
+                "path": key,
+                "root": str(root),
+                "primary": root == primary,
+                "soundings": found["soundings"],
+                "by_format": found["by_format"],
+                "registered": row is not None,
+                "archive_id": row["id"] if row else None,
+            })
     return out
 
 

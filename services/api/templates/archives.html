@@ -9,23 +9,29 @@
      thing an operator edits. `/archive` alone cannot tell anyone whether the
      .env change took effect. #}
   <div class="scroll"><table>
-    <tr><td class="muted">host folder</td>
-        <td>{% if mount.host %}<code>{{ mount.host }}</code>
-            <span class="note">&mdash; <code>ARCHIVE_HOST_PATH</code> in
-            <code>deploy/.env</code></span>
-            {% else %}<span class="muted">not reported</span>
-            <span class="note">&mdash; add
-            <code>ARCHIVE_HOST_PATH</code> to the service's
-            <code>environment:</code> block to show it here</span>{% endif %}</td></tr>
-    <tr><td class="muted">seen here as</td>
-        <td><code>{{ mount.root }}</code>
-          {%- if mount.in_container %} <span class="note">(in a container)</span>{% endif %}</td></tr>
-    <tr><td class="muted">state</td>
-        <td>{% if not mount.exists %}<span class="bad">not readable</span>
-            {% elif mount.empty %}<span class="bad">mounted but empty</span>
-            {% else %}<span class="ok">ok</span>
-            <span class="muted">{{ mount.entries }} entr{{ 'y' if mount.entries == 1 else 'ies' }}</span>{% endif %}</td></tr>
+    <tr><th>host folder</th><th>seen here as</th><th>state</th></tr>
+    {% for r in mount.roots %}
+    <tr>
+      <td>{% if r.host %}<code>{{ r.host }}</code>
+          {% else %}<span class="muted">not reported</span>{% endif %}</td>
+      <td><code>{{ r.root }}</code>
+        {%- if r.primary %} <span class="note">primary</span>{% endif %}</td>
+      <td>{% if not r.exists %}<span class="bad">not readable</span>
+          {% elif r.empty %}<span class="bad">mounted but empty</span>
+          {% else %}<span class="ok">ok</span>
+          <span class="muted">{{ r.entries }} entr{{ 'y' if r.entries == 1 else 'ies' }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
   </table></div>
+  {% if mount.in_container %}<p class="note">Running in a container, so
+  &ldquo;seen here as&rdquo; is the mount point and the host folder is what
+  <code>deploy/.env</code> set.</p>{% endif %}
+  {% if not mount.extra %}
+  <p class="note">One root. To index a folder on another disk, give it a
+  <code>volumes:</code> line of its own <i>and</i> list its container path in
+  <code>ARCHIVE_ROOTS</code> &mdash; both, then redeploy. A path cannot be
+  added from this page: a container's filesystem is fixed when it starts.</p>
+  {% endif %}
   {% if not mount.exists %}
   <p class="note bad">Nothing is readable at <code>{{ mount.root }}</code>.
   Under Docker that means the bind mount is missing or its source is gone
@@ -115,10 +121,13 @@
      there rather than typing a path and hoping. #}
   {% if candidates %}
   <div class="scroll" style="margin-bottom:.6rem"><table>
-    <tr><th>folder</th><th>holds</th><th></th></tr>
+    <tr><th>folder</th>{% if mount.extra %}<th>root</th>{% endif %}
+        <th>holds</th><th></th></tr>
     {% for c in candidates %}
     <tr>
       <td><code>{{ c.path }}</code></td>
+      {% if mount.extra %}<td class="muted">{{ c.root }}
+        {%- if not c.primary %} <span class="note">stored absolute</span>{% endif %}</td>{% endif %}
       <td class="muted">
         {%- if c.soundings %}{{ c.soundings }} sounding(s)
           ({% for f, n in c.by_format.items() %}{{ n }} {{ f }}{{ ', ' if not loop.last }}{% endfor %})
