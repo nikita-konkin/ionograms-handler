@@ -889,3 +889,53 @@ def test_the_ingest_watcher_can_be_pointed_at_folders_not_the_whole_root():
     # Narrowing the walk must not change where paths are stored relative to,
     # or the rows it writes stop matching the ones the api resolves.
     assert "--archive-root /archive" in command, command
+
+
+def test_the_survey_does_not_walk_into_a_recycle_bin(client, archive_root):
+    """A general-purpose volume is full of things that are not archives.
+
+    `#recycle` is Synology's deleted-files bin and `@eaDir` its sidecar
+    folders, scattered across every directory on the volume. Walking them
+    recursively to count soundings is the difference, on a 16 TB share,
+    between a survey that finishes and one that does not.
+    """
+    for junk in ("#recycle", "@eaDir", "lost+found", ".snapshots"):
+        (archive_root / junk).mkdir()
+    (archive_root / "keepme").mkdir()
+
+    offered = _candidates(client)
+    assert "#recycle" not in offered
+    assert "@eaDir" not in offered
+    assert "lost+found" not in offered
+    assert ".snapshots" not in offered
+    # An ordinary folder holding nothing is still offered, with what it holds
+    # said beside it. Omitting it would hide a folder someone is looking for.
+    assert offered["keepme"]["soundings"] == 0
+
+
+def test_a_registered_folder_is_not_walked_again_to_count_it(client,
+                                                             monkeypatch):
+    """The registered folders are the big ones.
+
+    Their sounding count is already in the database, derived from
+    `sounding.path`; re-deriving it by walking the folder is the most
+    expensive way to learn something already known, and it is what made the
+    survey unable to finish on a 16 TB share.
+    """
+    _add(client, name="feb")
+    walked = []
+    real = archives_mod.survey
+
+    def spy(path, format=None):
+        walked.append(Path(path).name)
+        return real(path, format)
+
+    monkeypatch.setattr(archives_mod, "survey", spy)
+    offered = _candidates(client)
+    assert offered["good"]["registered"] is True
+    assert "good" not in walked, (
+        f"walked an already-registered folder: {walked}")
+    # Still counted -- from the database, and marked as such so the page does
+    # not render it as "nothing this server can read".
+    assert offered["good"]["by_format"] is None
+    assert offered["good"]["soundings"] >= 0

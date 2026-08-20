@@ -157,7 +157,8 @@
       {% if mount.extra %}<td class="muted">{{ c.root }}
         {%- if not c.primary %} <span class="note">stored absolute</span>{% endif %}</td>{% endif %}
       <td class="muted">
-        {%- if c.soundings %}{{ c.soundings }} sounding(s)
+        {%- if c.by_format is none %}{{ c.soundings }} indexed
+        {%- elif c.soundings %}{{ c.soundings }} sounding(s)
           ({% for f, n in c.by_format.items() %}{{ n }} {{ f }}{{ ', ' if not loop.last }}{% endfor %})
         {%- else %}<span class="muted">nothing this server can read</span>{% endif %}</td>
       <td>{% if c.registered %}<span class="muted">registered</span>

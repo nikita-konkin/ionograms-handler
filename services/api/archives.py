@@ -328,6 +328,28 @@ def mount() -> dict:
     }
 
 
+#: Directories a candidate survey will not walk into. Filesystem and NAS
+#: furniture, not anybody's data -- so skipping them cannot hide a folder an
+#: operator meant to index, and walking them is pure cost. `#recycle` and
+#: `@eaDir` are Synology's (deleted files, and thumbnail/index sidecars, the
+#: latter scattered through every folder on the volume); `lost+found` is the
+#: fsck bin. On a 16 TB general-purpose volume this is the difference between
+#: a survey that finishes and one that does not.
+#:
+#: Deliberately NOT a general exclusion list. Folders with ordinary names
+#: stay on offer even when they turn out to hold nothing -- the page reports
+#: "nothing this server can read" beside them, which is an answer. Silently
+#: omitting a folder someone is looking for is not.
+UNWALKABLE = frozenset({"#recycle", "#snapshot", "@eaDir", "lost+found",
+                        ".Trash", ".Trashes", "$RECYCLE.BIN",
+                        "System Volume Information"})
+
+
+def _worth_surveying(path: Path) -> bool:
+    name = path.name
+    return name not in UNWALKABLE and not name.startswith(".")
+
+
 def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     """Folders under the root that could be registered, and what is in them.
 
@@ -348,18 +370,28 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
         if not root.is_dir():
             continue
         try:
-            children = sorted(p for p in root.iterdir() if p.is_dir())
+            children = sorted(p for p in root.iterdir()
+                              if p.is_dir() and _worth_surveying(p))
         except OSError:
             continue
         for child in children[:limit]:
-            try:
-                found = survey(child)
-            except ArchiveError:
-                continue
             # The key a row is stored under: relative for the primary root,
             # absolute for the others. Same rule as `resolve`.
             key = (child.name if root == primary else str(child))
             row = registered.get(key)
+            if row is not None:
+                # Already registered: the count is in the database, derived
+                # from `sounding.path`, and walking the folder again to
+                # recompute it would be the most expensive way to learn
+                # something already known. This matters -- the registered
+                # folders are the big ones, so once they are registered the
+                # survey stops touching them at all.
+                found = {"soundings": row["soundings"], "by_format": None}
+            else:
+                try:
+                    found = survey(child)
+                except ArchiveError:
+                    continue
             out.append({
                 "path": key,
                 "root": str(root),
@@ -381,7 +413,13 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
 #: permanently unfinished and re-scans the whole folder on every pass, forever.
 #: How long a candidate survey stays good for. It is a walk of the archive
 #: tree, so it is priced like one: recomputed on a timer, never on demand.
-CANDIDATE_TTL_S = float(os.environ.get("ARCHIVE_CANDIDATE_TTL_S", "300"))
+#: An hour, not minutes: what folders exist on a mount changes when someone
+#: puts one there, which is rare, while the walk to find out is expensive.
+#: Registering or removing one calls `forget_candidates` and re-surveys at
+#: once, so the slow timer never stands between an operator and a change they
+#: just made -- it only governs folders that appeared behind this server's
+#: back.
+CANDIDATE_TTL_S = float(os.environ.get("ARCHIVE_CANDIDATE_TTL_S", "3600"))
 
 _CAND_LOCK = threading.Lock()
 _CAND: dict[str, tuple[float, list[dict]]] = {}
