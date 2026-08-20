@@ -349,8 +349,12 @@ def archives_page(request: Request):
         "archives": db.archives(conn),
         "archive_root": str(request.app.state.archive_root),
         "mount": archives_mod.mount(),
-        "candidates": archives_mod.candidates(
-            conn, request.app.state.archive_root),
+        # Cached, and refreshed on a background thread -- surveying the
+        # folders here meant the page could not render until a recursive
+        # walk of the whole archive finished, which during an index is
+        # exactly when someone opens it. The list arrives by fetch instead.
+        "candidates": archives_mod.candidates_cached(
+            conn, request.app.state.archive_root)["items"],
         "status": archives_mod.status(),
         "formats": loader.FORMATS,
         "methods": archives_mod.method_availability(),

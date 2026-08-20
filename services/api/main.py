@@ -88,6 +88,13 @@ async def lifespan(app: FastAPI):
     # server runs. ARCHIVE_SCAN_INTERVAL_S=0 turns it off.
     app.state.archive_scan = archives.start_periodic(app)
 
+    # Survey the mounted folders once now, so the archives page can offer them
+    # straight away. It is a walk of the archive tree and it will not run while
+    # a scan holds the disk, so without a warm start the pick-list is missing
+    # for exactly as long as the first index takes -- which is the first time
+    # anyone opens the page.
+    archives.warm_candidates(app.state.archive_root)
+
     app.state.census_warm = None
     if WARM_CENSUS:
         # Daemon, so a slow archive cannot hold up a shutdown: this thread

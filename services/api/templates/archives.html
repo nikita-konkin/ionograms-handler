@@ -139,7 +139,14 @@
   invisible, and a scan of it would report success having loaded nothing.</p>
 
   {# What is actually mounted, so adding a folder is picking from what is
-     there rather than typing a path and hoping. #}
+     there rather than typing a path and hoping.
+
+     Server-rendered when the survey is already cached, and filled in by
+     `loadCandidates` when it is not. It is a walk of the archive tree, so
+     the page must never wait on it: during an index -- which is exactly when
+     someone opens this page -- that wait was long enough to look like a
+     blank page and a dead server. #}
+  <div id="cands">
   {% if candidates %}
   <div class="scroll" style="margin-bottom:.6rem"><table>
     <tr><th>folder</th>{% if mount.extra %}<th>root</th>{% endif %}
@@ -159,7 +166,10 @@
     </tr>
     {% endfor %}
   </table></div>
+  {% else %}
+  <p class="muted" id="candsNote">looking at what is mounted &hellip;</p>
   {% endif %}
+  </div>
 
   <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
     <label class="muted" style="font-size:.85rem">path
@@ -358,9 +368,13 @@ function hideProgress() {
 }
 
 async function poll() {
-  const r = await fetch('/archives').then(x => x.json()).catch(() => null);
-  if (!r) return;
-  const s = r.status || {};
+  // /archives/status, not /archives: this runs once a second, and listing
+  // archives counts soundings per archive and reports the candidate survey.
+  // Polling that walked the archive tree every tick, on the request thread,
+  // while a scan had the same disk -- the page stopped rendering entirely.
+  const s = await fetch('/archives/status').then(x => x.json())
+                   .catch(() => null);
+  if (!s) return;
   if (s.running) {
     showProgress(s);
     write('running', '');
@@ -379,5 +393,43 @@ async function poll() {
   }
 }
 poll();
+
+// The candidate survey is a walk of the archive, done on a background thread.
+// Ask for it after the page is up, and keep asking while it says it has not
+// finished one -- an empty list and "not looked yet" are different answers,
+// and showing the first when the second is true would be a lie about a disk
+// that is mounted and full.
+async function loadCandidates(attempt) {
+  attempt = attempt || 1;
+  const box = document.getElementById('cands');
+  if (!box) return;
+  const r = await fetch('/archives/candidates').then(x => x.json())
+                  .catch(() => null);
+  if (!r) return;
+  const note = document.getElementById('candsNote');
+  if (!r.ready) {
+    if (note) {
+      note.textContent = r.why
+        ? r.why + '.'
+        : 'looking at what is mounted \u2026';
+    }
+    // Backs off: a survey of a large archive takes as long as it takes, and
+    // asking faster does not make the disk quicker.
+    if (attempt < 40) {
+      setTimeout(() => loadCandidates(attempt + 1),
+                 Math.min(1000 * attempt, 10000));
+    }
+    return;
+  }
+  if (!r.items.length) {
+    if (note) note.textContent = 'no unregistered folders under the mount.';
+    return;
+  }
+  // Server-rendered already, and the same data: leave it alone rather than
+  // rebuild it and lose the extra-root column the template knows about.
+  if (box.querySelector('table')) return;
+  location.reload();
+}
+if (!document.querySelector('#cands table')) loadCandidates();
 </script>
 {% endblock %}

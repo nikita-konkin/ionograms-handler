@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -378,6 +379,131 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
 #: sounding finished only when it holds a row for every requested method, so a
 #: method that never produces one leaves every sounding in the archive
 #: permanently unfinished and re-scans the whole folder on every pass, forever.
+#: How long a candidate survey stays good for. It is a walk of the archive
+#: tree, so it is priced like one: recomputed on a timer, never on demand.
+CANDIDATE_TTL_S = float(os.environ.get("ARCHIVE_CANDIDATE_TTL_S", "300"))
+
+_CAND_LOCK = threading.Lock()
+_CAND: dict[str, tuple[float, list[dict]]] = {}
+_CAND_REFRESHING = False
+
+#: Bumped whenever the answer a survey would give has changed underneath one
+#: that is already running -- a folder registered, a root reconfigured. A
+#: refresh records this when it starts and discards its result if it moved,
+#: because `forget_candidates` on its own only empties the cache: a walk that
+#: began before the change lands after it and refills the cache with the old
+#: answer, which then stands for the whole TTL.
+_CAND_GEN = 0
+
+
+def candidates_cached(conn, archive_root, *, limit: int = 60,
+                      db_path=None) -> dict:
+    """`candidates`, but never on the thread serving a request.
+
+    `candidates` walks every unregistered folder under every root to count
+    what is in it. That is a recursive stat of the whole archive -- fine as a
+    one-off, ruinous as part of a page load, and worse than ruinous as part of
+    a poll: this used to be reached from ``GET /archives``, which the page
+    hits once a second while a scan runs, so a work server with three large
+    .lfs folders spent every second of an index re-walking them on the request
+    thread. The page did not render at all.
+
+    So: served from a cache, refreshed in the background, and **never
+    refreshed while a scan is running** -- the scan already has that disk, and
+    a convenience list is not worth competing with it for one.
+
+    Returns the list with `ready`/`age_s` beside it, so a caller that arrives
+    before the first survey finishes can say "looking" instead of "none".
+    """
+    global _CAND_REFRESHING
+    key = str(archive_root)
+    now = time.time()
+    with _CAND_LOCK:
+        hit = _CAND.get(key)
+        busy = _CAND_REFRESHING
+    age = None if hit is None else now - hit[0]
+    fresh = age is not None and age < CANDIDATE_TTL_S
+
+    scanning = is_scanning()
+    if not fresh and not busy and not scanning:
+        with _CAND_LOCK:
+            if not _CAND_REFRESHING:
+                _CAND_REFRESHING = True
+                busy = True
+                _start_candidate_refresh(archive_root, limit,
+                                         db_path, _CAND_GEN)
+
+    return {
+        "items": [] if hit is None else hit[1],
+        "ready": hit is not None,
+        "refreshing": busy,
+        "age_s": None if age is None else round(age, 1),
+        # Why an empty or old list is what it is, so the page can say so
+        # rather than implying the folders are gone.
+        "why": ("a scan is running -- the folder list is not refreshed while "
+                "it has the disk" if scanning and not fresh else ""),
+    }
+
+
+def _start_candidate_refresh(archive_root, limit: int, db_path=None,
+                             started_at_gen: int = 0) -> None:
+    """Walk on a daemon thread, with its own connection.
+
+    Its own because `app.state.db` is shared with every request handler, and
+    a survey holds it for as long as the walk takes.
+
+    `started_at_gen` is read by the caller, which is already inside
+    `_CAND_LOCK` when it decides to refresh -- taking that lock again here
+    would deadlock rather than wait.
+    """
+    def run() -> None:
+        global _CAND_REFRESHING
+        conn = None
+        try:
+            conn = watch.connect(db_path)
+            found = candidates(conn, archive_root, limit=limit)
+            with _CAND_LOCK:
+                if _CAND_GEN == started_at_gen:
+                    _CAND[str(archive_root)] = (time.time(), found)
+        except Exception as exc:                              # noqa: BLE001
+            warnings.warn(f"candidate survey failed: {exc!r}", stacklevel=2)
+        finally:
+            if conn is not None:
+                conn.close()
+            with _CAND_LOCK:
+                _CAND_REFRESHING = False
+
+    threading.Thread(target=run, daemon=True,
+                     name="archive-candidates").start()
+
+
+def warm_candidates(archive_root, *, db_path=None, limit: int = 60) -> None:
+    """Start the first survey at boot, off the request path.
+
+    Nothing waits on it: the page shows "looking" until it lands.
+    """
+    global _CAND_REFRESHING
+    with _CAND_LOCK:
+        if _CAND_REFRESHING:
+            return
+        _CAND_REFRESHING = True
+        _start_candidate_refresh(archive_root, limit, db_path,
+                                 _CAND_GEN)
+
+
+def forget_candidates() -> None:
+    """Drop the cache, so the next look re-walks.
+
+    Called when the set of registered archives changes: a folder that was
+    just registered should stop being offered as a candidate immediately,
+    not in five minutes.
+    """
+    global _CAND_GEN
+    with _CAND_LOCK:
+        _CAND.clear()
+        _CAND_GEN += 1
+
+
 def method_availability() -> dict[str, dict]:
     from muf import extractors
 

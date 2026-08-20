@@ -79,6 +79,33 @@ def _row(request: Request, archive_id: int) -> dict:
     return row
 
 
+@router.get("/archives/status")
+def scan_status() -> dict:
+    """Just the running scan, for the progress bar to poll.
+
+    Its own endpoint because the bar asks once a second and `GET /archives`
+    is not cheap: it counts soundings per archive and reports the candidate
+    list. Polling that was what made the page unusable during an index --
+    every tick re-walked the archive tree on the request thread.
+
+    This one reads a module-level dataclass under a lock. No disk, no
+    database, nothing that grows with the size of the archive.
+    """
+    return archives_mod.status()
+
+
+@router.get("/archives/candidates")
+def list_candidates(request: Request) -> dict:
+    """Registerable folders, surveyed in the background.
+
+    Returns immediately whatever the last survey found, with `ready` false
+    until there has been one. The page asks again while it is false rather
+    than showing "no folders", which would be a lie about a mounted disk.
+    """
+    return archives_mod.candidates_cached(
+        request.app.state.db, request.app.state.archive_root)
+
+
 @router.get("/archives")
 def list_archives(request: Request) -> dict:
     conn = request.app.state.db
@@ -90,8 +117,10 @@ def list_archives(request: Request) -> dict:
         # ARCHIVE_HOST_PATH in, and without it "/archive" alone cannot tell an
         # operator whether the .env they edited took effect.
         "mount": archives_mod.mount(),
-        "candidates": archives_mod.candidates(
-            conn, request.app.state.archive_root),
+        # From cache, never walked here -- see `archives.candidates_cached`.
+        # This endpoint is polled once a second during a scan.
+        "candidates": archives_mod.candidates_cached(
+            conn, request.app.state.archive_root)["items"],
         "status": archives_mod.status(),
         "formats": list(loader.FORMATS),
         "methods": archives_mod.method_availability(),
@@ -139,6 +168,7 @@ def add_archive(request: Request, payload: dict = Body(...),
 
     archive_id = db.add_archive(conn, name=name, relpath=relpath,
                                 methods=methods, format=fmt)
+    archives_mod.forget_candidates()
     return {"ok": True, "id": archive_id, "name": name, "path": relpath,
             "methods": methods, "found": found,
             "note": "registered; press scan to index it"}
@@ -191,6 +221,7 @@ def delete_archive(archive_id: int, request: Request,
     kept = next((a["soundings"] for a in db.archives(conn)
                  if a["id"] == archive_id), 0)
     db.remove_archive(conn, archive_id)
+    archives_mod.forget_candidates()
     return {"ok": True, "id": archive_id, "name": row["name"],
             "soundings_kept": kept,
             "note": f"unregistered. {kept} sounding(s) and their extractions "

@@ -436,11 +436,31 @@ def test_an_unreadable_mount_is_called_out(client, monkeypatch, tmp_path):
     assert mount["exists"] is False
 
 
+
+
+def _candidates(client, timeout: float = 10.0) -> dict:
+    """The candidate list, waited for.
+
+    It is surveyed on a background thread on purpose -- walking the archive
+    on the request thread is what made the page unrenderable during an index
+    -- so the honest way to read it in a test is the way the page reads it:
+    ask, and ask again until `ready`.
+    """
+    import time as _time
+    archives_mod.forget_candidates()
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        body = client.get("/archives/candidates").json()
+        if body["ready"]:
+            return {c["path"]: c for c in body["items"]}
+        _time.sleep(0.05)
+    raise AssertionError("candidate survey never became ready")
+
+
 def test_the_folders_in_the_mount_are_offered(client):
     """Adding a folder should be picking from what is mounted, not typing a
     path and hoping."""
-    body = client.get("/archives").json()
-    paths = {c["path"]: c for c in body["candidates"]}
+    paths = _candidates(client)
     assert paths["good"]["soundings"] == 2
     assert paths["good"]["by_format"] == {"lfs": 2}
     assert paths["good"]["registered"] is False
@@ -451,8 +471,7 @@ def test_the_folders_in_the_mount_are_offered(client):
 
 def test_a_registered_folder_is_marked_in_the_candidate_list(client):
     _add(client, name="feb")
-    body = client.get("/archives").json()
-    good = next(c for c in body["candidates"] if c["path"] == "good")
+    good = _candidates(client)["good"]
     assert good["registered"] is True
     assert good["archive_id"] is not None
 
@@ -578,8 +597,7 @@ def test_a_second_root_is_listed_with_its_host_folder(client, second_root,
 
 def test_candidates_span_every_root(client, second_root, monkeypatch):
     monkeypatch.setenv("ARCHIVE_ROOTS", str(second_root))
-    cands = client.get("/archives").json()["candidates"]
-    by_path = {c["path"]: c for c in cands}
+    by_path = _candidates(client)
     assert "good" in by_path and by_path["good"]["primary"] is True
     other = by_path[str(second_root / "other")]
     assert other["primary"] is False
@@ -756,3 +774,98 @@ def test_the_background_loop_keeps_its_cap(client, archive_root, tmp_path,
         conn.close()
     assert "batch" not in seen, (
         "scan_all must not force a batch; the default cap applies")
+
+
+# --- what a poll is allowed to cost -----------------------------------------
+#
+# The progress bar asks once a second. Everything it touches is therefore on
+# a hot path, and the first version of it polled `GET /archives`, which
+# surveyed every candidate folder: a recursive walk of the whole archive, on
+# the request thread, every second, while a scan had the same disk. On a
+# server with three large .lfs folders the page did not render at all.
+
+def test_polling_the_scan_status_touches_no_disk(client, monkeypatch):
+    def explode(*a, **kw):
+        raise AssertionError("the status poll walked the archive")
+
+    monkeypatch.setattr(archives_mod, "candidates", explode)
+    monkeypatch.setattr(archives_mod, "survey", explode)
+    r = client.get("/archives/status")
+    assert r.status_code == 200
+    assert r.json()["running"] is False
+
+
+def test_listing_archives_never_walks_the_archive(client, monkeypatch):
+    """`GET /archives` is polled and rendered; the walk happens elsewhere."""
+    def explode(*a, **kw):
+        raise AssertionError("a request thread walked the archive")
+
+    monkeypatch.setattr(archives_mod, "candidates", explode)
+    assert client.get("/archives").status_code == 200
+    assert client.get("/ui/archives").status_code == 200
+
+
+def test_the_candidate_list_is_not_refreshed_while_a_scan_runs(client,
+                                                               monkeypatch):
+    """The scan has that disk. A convenience list does not compete for it."""
+    def explode(*a, **kw):
+        raise AssertionError("surveyed candidates during a scan")
+
+    monkeypatch.setattr(archives_mod, "candidates", explode)
+    monkeypatch.setattr(archives_mod, "is_scanning", lambda: True)
+    archives_mod.forget_candidates()
+    body = client.get("/archives/candidates").json()
+    assert body["ready"] is False
+    assert "scan is running" in body["why"]
+
+
+def test_an_empty_candidate_list_says_whether_it_looked_yet(client):
+    """"None found" and "not looked yet" are different answers, and saying the
+    first when the second is true is a lie about a mounted disk."""
+    archives_mod.forget_candidates()
+    first = client.get("/archives/candidates").json()
+    assert first["ready"] is False and first["items"] == []
+    assert _candidates(client)["good"]["soundings"] == 2
+
+
+def test_registering_a_folder_drops_it_from_the_candidate_cache(client):
+    """Otherwise it stays on offer for the whole TTL after it is registered."""
+    assert _candidates(client)["good"]["registered"] is False
+    _add(client, name="feb")
+    assert _candidates(client)["good"]["registered"] is True
+
+
+def test_a_survey_in_flight_when_things_change_is_discarded(client,
+                                                            monkeypatch):
+    """Emptying the cache is not enough on its own.
+
+    A walk that began before a folder was registered lands after it, refills
+    the cache with the pre-registration answer, and that answer then stands
+    for the whole TTL -- so the folder stays on offer as a candidate after it
+    has been taken.
+    """
+    import threading as _threading
+
+    released = _threading.Event()
+    real = archives_mod.candidates
+
+    def slow(conn, root, **kw):
+        found = real(conn, root, **kw)
+        released.wait(5)                 # still walking while things change
+        return found
+
+    monkeypatch.setattr(archives_mod, "candidates", slow)
+    archives_mod.forget_candidates()
+    assert client.get("/archives/candidates").json()["ready"] is False
+
+    _add(client, name="feb")             # bumps the generation mid-walk
+    released.set()
+    for _ in range(100):
+        if not archives_mod._CAND_REFRESHING:
+            break
+        time.sleep(0.05)
+    assert archives_mod.status() is not None
+    body = client.get("/archives/candidates").json()
+    stale = [c for c in body["items"]
+             if c["path"] == "good" and not c["registered"]]
+    assert not stale, "a pre-registration survey was allowed to land"
