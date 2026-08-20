@@ -65,6 +65,22 @@
   someone presses scan.</p>
   {% endif %}
 
+  {# The progress panel. Hidden until a scan runs, because an empty bar on a
+     resting page reads as "something is stuck". #}
+  <div id="progress" style="display:none; margin:.6rem 0">
+    <div style="display:flex; justify-content:space-between; align-items:baseline">
+      <span id="progressLabel"></span>
+      <span id="progressEta" class="note"></span>
+    </div>
+    <div style="height:.55rem; border:1px solid var(--line); border-radius:3px;
+                overflow:hidden; margin-top:.25rem; background:var(--bg)">
+      {# Width animates; the stripes only move while a chunk is in flight, so
+         a stalled bar looks stalled instead of pretending. #}
+      <div id="progressBar" style="height:100%; width:0%;
+           background:var(--ok, #2e7d32); transition:width .4s ease"></div>
+    </div>
+    <div id="progressDetail" class="note" style="margin-top:.25rem"></div>
+  </div>
   <div id="running" class="note"></div>
 
   {% if archives %}
@@ -90,7 +106,12 @@
       <td>{% if a.soundings %}<a href="/ui/soundings">{{ a.soundings }}</a>
           {%- else %}<span class="muted">0</span>{% endif %}</td>
       <td class="muted">{{ a.last_scan_at or '&mdash;'|safe }}</td>
-      <td class="wrap {% if a.last_scan_ok == 0 %}bad{% endif %}">
+      {# A scan result is a sentence, and `table {width:100%}` will squeeze
+         it into whatever the other columns leave -- at a narrow window
+         that was six lines, making every row tall. A floor keeps it a
+         readable measure and lets the enclosing .scroll pan instead. #}
+      <td class="wrap {% if a.last_scan_ok == 0 %}bad{% endif %}"
+          style="min-width:22rem">
         {{ a.last_scan_result or '' }}</td>
       <td style="white-space:nowrap">
         <button onclick="scan({{ a.id }})">scan now</button>
@@ -245,7 +266,9 @@ async function scan(id) {
   say('starting …');
   const r = await control('/archives/' + id + '/scan', 'POST');
   if (!r.ok) { say(r.detail, true); return; }
-  say(r.body.name + ': scanning …');
+  say('');
+  showProgress({running: true, phase: 'reading', name: r.body.name,
+                total: 0, done: 0, loaded: 0, skipped: 0, elapsed_s: 0});
   poll();
 }
 
@@ -276,18 +299,77 @@ async function remove(id, name) {
 }
 
 // While a scan runs, poll rather than reload: a reload mid-scan would wipe
-// the line saying what is happening, which is the only feedback there is for
-// a pass that can take a long time.
+// the bar, which is the only thing distinguishing a long archive from a hung
+// server.
 let polling = null;
+
+const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+
+function duration(s) {
+  if (s == null) return '';
+  if (s < 90) return Math.round(s) + 's';
+  if (s < 5400) return Math.round(s / 60) + ' min';
+  return (s / 3600).toFixed(1) + ' h';
+}
+
+function showProgress(s) {
+  const panel = document.getElementById('progress');
+  if (!panel) return;
+  panel.style.display = '';
+
+  // Two phases, and saying which one matters as much as the number. Before a
+  // single file can be counted, the server walks the whole tree and asks the
+  // database what it already holds — minutes on a large archive, with nothing
+  // to show. Named, that silence is a step; unnamed, it is the part that looks
+  // broken.
+  if (s.phase === 'reading' || !s.total) {
+    document.getElementById('progressLabel').textContent =
+      'reading ' + s.name + ' — listing files and checking what is already indexed';
+    document.getElementById('progressEta').textContent = duration(s.elapsed_s);
+    // No total yet, so no honest fraction. An indeterminate stripe rather
+    // than a bar creeping toward a number nobody has computed.
+    const bar = document.getElementById('progressBar');
+    bar.style.width = '100%';
+    bar.style.opacity = '.35';
+    document.getElementById('progressDetail').textContent =
+      'This step reads the folder before any indexing starts. It is not stuck.';
+    return;
+  }
+
+  const pct = s.percent || 0;
+  const bar = document.getElementById('progressBar');
+  bar.style.opacity = '1';
+  bar.style.width = pct + '%';
+  document.getElementById('progressLabel').textContent =
+    'indexing ' + s.name + ' — ' + s.done + ' of ' + s.total
+    + ' (' + pct.toFixed(0) + '%)';
+  document.getElementById('progressEta').textContent =
+    s.eta_s != null ? '~' + duration(s.eta_s) + ' left' : duration(s.elapsed_s);
+  document.getElementById('progressDetail').textContent =
+    plural(s.loaded, 'sounding') + ' loaded'
+    + (s.skipped ? ', ' + s.skipped + ' skipped' : '')
+    + ' — characteristics are derived as each file is read, so what is done '
+    + 'is already usable.';
+}
+
+function hideProgress() {
+  const panel = document.getElementById('progress');
+  if (panel) panel.style.display = 'none';
+}
+
 async function poll() {
   const r = await fetch('/archives').then(x => x.json()).catch(() => null);
   if (!r) return;
   const s = r.status || {};
   if (s.running) {
-    write('running', 'scanning ' + s.name + ' — ' + (s.elapsed_s || 0) + 's elapsed');
-    if (!polling) polling = setInterval(poll, 3000);
+    showProgress(s);
+    write('running', '');
+    // 1 s while a scan runs: the bar should move visibly. The request is a
+    // single indexed read, and it stops as soon as the scan does.
+    if (!polling) polling = setInterval(poll, 1000);
     return;
   }
+  hideProgress();
   write('running', '');
   if (polling) {                       // it just finished: show the result
     clearInterval(polling);

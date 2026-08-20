@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -347,7 +348,7 @@ def test_a_scan_that_raises_is_recorded_as_a_failure(client, archive_root,
     def boom(*a, **kw):
         raise RuntimeError("pipeline exploded")
 
-    monkeypatch.setattr(archives_mod.watch, "run_once", boom)
+    monkeypatch.setattr(archives_mod.watch, "find_new", boom)
     conn = db.connect(db_path)
     try:
         assert archives_mod.scan(db.archive(conn, archive_id),
@@ -618,3 +619,140 @@ def test_a_path_under_no_root_still_names_every_root_it_tried(client,
     assert str(second_root) in detail, (
         "the refusal must list the roots it actually checked, not just the "
         "primary -- otherwise it reads as though the second one is not set up")
+
+
+# --- progress ---------------------------------------------------------------
+#
+# Elapsed seconds alone are indistinguishable from a hang: "scanning, 240s"
+# tells an operator nothing about whether to wait or go looking. These pin the
+# count, the phase, and the fact that the phase is named before any file can
+# be counted -- which is the part that used to look broken.
+
+def test_a_scan_reports_a_running_count(client, archive_root, tmp_path,
+                                        monkeypatch):
+    archive_id = _add(client, methods="algo").json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+    seen = []
+
+    real = archives_mod._set_status
+
+    def spy(**fields):
+        real(**fields)
+        seen.append(archives_mod.status())
+
+    monkeypatch.setattr(archives_mod, "_set_status", spy)
+    conn = db.connect(db_path)
+    try:
+        archives_mod.scan_once(db.archive(conn, archive_id),
+                               archive_root=archive_root, db_path=db_path,
+                               min_age_s=0, chunk=1)
+    finally:
+        conn.close()
+
+    phases = [s["phase"] for s in seen]
+    assert "reading" in phases, "the enumeration step must name itself"
+    assert "indexing" in phases
+    assert phases[-1] == "done"
+
+    # chunk=1 over two files, so the count has to pass through 1 before 2 --
+    # a bar that only ever showed 0 then 100 would be no better than a spinner.
+    counts = [s["done"] for s in seen if s["phase"] == "indexing"]
+    assert counts == sorted(counts), "progress must not go backwards"
+    assert 1 in counts and 2 in counts, counts
+    assert seen[-1]["total"] == 2 or seen[-2]["total"] == 2
+
+
+def test_the_status_carries_a_percentage_and_an_eta(client):
+    archives_mod._set_status(archive_id=1, name="x", started_at=time.time() - 10,
+                             finished_at=None, phase="indexing", done=25,
+                             total=100, loaded=25, skipped=0)
+    try:
+        s = client.get("/archives").json()["status"]
+        assert s["percent"] == 25.0
+        # 25 files in 10 s -> 75 left at 2.5/s -> about 30 s.
+        assert 25 <= s["eta_s"] <= 35, s
+    finally:
+        archives_mod._set_status(started_at=None, finished_at=None, phase="",
+                                 done=0, total=0, loaded=0, skipped=0, name="")
+
+
+def test_no_eta_is_offered_before_a_single_file_is_done(client):
+    """A rate extrapolated from zero completed files is not an estimate, it is
+    a number shaped like one."""
+    archives_mod._set_status(archive_id=1, name="x", started_at=time.time() - 10,
+                             finished_at=None, phase="indexing", done=0,
+                             total=100)
+    try:
+        s = client.get("/archives").json()["status"]
+        assert s["percent"] == 0.0
+        assert "eta_s" not in s
+    finally:
+        archives_mod._set_status(started_at=None, finished_at=None, phase="",
+                                 done=0, total=0, name="")
+
+
+def test_a_scan_with_nothing_to_do_still_ends_cleanly(client, archive_root,
+                                                      tmp_path):
+    """The second press. No files to index means no bar to fill, and the phase
+    must still reach `done` rather than sitting on `reading` forever."""
+    archive_id = _add(client, methods="algo").json()["id"]
+    db_path = tmp_path / "api.sqlite3"
+    conn = db.connect(db_path)
+    try:
+        row = db.archive(conn, archive_id)
+        archives_mod.scan_once(row, archive_root=archive_root,
+                               db_path=db_path, min_age_s=0)
+        archives_mod.scan_once(row, archive_root=archive_root,
+                               db_path=db_path, min_age_s=0)
+    finally:
+        conn.close()
+    assert archives_mod.status()["phase"] == "done"
+
+
+def test_the_page_carries_the_progress_panel(client):
+    page = client.get("/ui/archives").text
+    assert 'id="progressBar"' in page
+    assert 'id="progress"' in page
+    # Hidden at rest: an empty bar on a resting page reads as "stuck".
+    assert 'id="progress" style="display:none' in page
+
+
+def test_a_press_indexes_the_whole_folder_not_a_batch_of_it(client,
+                                                            monkeypatch):
+    """The cap belongs to the unattended loop. Someone pressing scan has asked
+    for this archive indexed, and 200-at-a-time would answer that by doing an
+    arbitrary fraction and calling the rest "held for the next pass"."""
+    archive_id = _add(client).json()["id"]
+    seen = {}
+
+    def spy(row, *, archive_root, db_path=None, **kw):
+        seen.update(kw)
+        return True
+
+    monkeypatch.setattr(archives_mod, "scan", spy)
+    monkeypatch.setattr(archives_mod, "is_scanning", lambda: False)
+    thread = archives_mod.scan_in_background(
+        {"id": archive_id, "name": "x"}, archive_root=".")
+    if thread is not None:
+        thread.join(5)
+    assert seen.get("batch") == 0, seen
+
+
+def test_the_background_loop_keeps_its_cap(client, archive_root, tmp_path,
+                                           monkeypatch):
+    """It runs unattended on a box that is also serving pages."""
+    _add(client)
+    seen = {}
+
+    def spy(row, *, archive_root, db_path=None, **kw):
+        seen.update(kw)
+        return True
+
+    monkeypatch.setattr(archives_mod, "scan", spy)
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        archives_mod.scan_all(conn, archive_root=archive_root)
+    finally:
+        conn.close()
+    assert "batch" not in seen, (
+        "scan_all must not force a batch; the default cap applies")

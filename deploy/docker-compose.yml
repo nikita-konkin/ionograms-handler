@@ -43,6 +43,18 @@ services:
       ARCHIVE_ROOTS: "${ARCHIVE_ROOTS:-}"
       ARCHIVE_HOST_PATH_2: "${ARCHIVE_HOST_PATH_2:-}"
       ARCHIVE_HOST_PATH_3: "${ARCHIVE_HOST_PATH_3:-}"
+      # Background scanning. The interval is the unattended pass; SCAN_BATCH
+      # caps how much ONE such pass ingests, so the box stays responsive while
+      # a large folder is worked through over several of them. A scan pressed
+      # on the archives page ignores the cap and runs the folder to the end --
+      # that is someone asking, and it reports progress while it goes.
+      # ARCHIVE_SCAN_INTERVAL_S=0 turns the unattended loop off entirely.
+      ARCHIVE_SCAN_INTERVAL_S: "${ARCHIVE_SCAN_INTERVAL_S:-900}"
+      ARCHIVE_SCAN_BATCH: "${ARCHIVE_SCAN_BATCH:-200}"
+      # How often the progress bar advances: a scan commits and reports every
+      # CHUNK soundings. Smaller moves the bar more smoothly at the cost of
+      # more transactions; larger is fractionally faster and looks stuck.
+      ARCHIVE_SCAN_CHUNK: "${ARCHIVE_SCAN_CHUNK:-20}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.

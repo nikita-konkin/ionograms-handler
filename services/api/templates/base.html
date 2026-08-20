@@ -29,7 +29,14 @@
   h2 { margin:.2rem 0 .8rem; font-size:1rem; }
   table { border-collapse:collapse; width:100%; }
   th,td { text-align:left; padding:.3rem .6rem; border-bottom:1px solid var(--line);
-          white-space:nowrap; }
+          white-space:nowrap;
+          /* A row is as tall as its tallest cell, and `td.wrap` below lets one
+             cell run to several lines. Centred, every short cell beside it
+             floats to the middle of that height and the row reads as blank
+             with something stranded in it. Top-aligned, the name stays level
+             with the first line of the text explaining it. No effect on
+             single-line rows, which is most of them. */
+          vertical-align:top; }
   th { color:var(--dim); font-weight:normal; }
   td.wrap { white-space:normal; color:var(--dim); }
   .scroll { overflow-x:auto; }

@@ -15,6 +15,13 @@ other. A press while a scan is running is therefore refused with the name of
 what is running, rather than queued -- a queue here would let an impatient
 operator stack up hours of work behind a button that still says "scan now".
 
+**Why progress is chunked.** `watch.run_once` does enumeration and ingestion
+in one call, which is right for a CLI with a tqdm bar and wrong for a page:
+nothing can be reported until the whole thing returns, and on a large archive
+that is many minutes of a spinner that looks exactly like a hung server. The
+scan here takes `watch.find_new` and `ingest` -- the same two steps, neither
+reimplemented -- and reports between chunks of them.
+
 **Why its own connection.** ``watch.connect`` sets
 ``PRAGMA busy_timeout = 30000``; ``app.state.db`` does not, and the API reads
 on every request. A scan sharing that connection turns an ordinary page load
@@ -37,10 +44,16 @@ from pathlib import Path
 
 from . import db, watch
 
-#: How many soundings one pass may ingest. A first index of a large folder is
-#: hours of pipeline; unbounded, it would hold one transaction open for all of
-#: it and report nothing until the end. Bounded, each pass commits and the page
-#: shows progress, and the periodic loop picks the rest up.
+#: How many soundings one **automatic** pass may ingest. The background loop
+#: runs unattended on a box that is also serving pages, so it takes a bite and
+#: leaves; the next pass gets the rest.
+#:
+#: A pass asked for by hand is **not** capped -- see `scan_in_background`. The
+#: cap once doubled as the progress mechanism, since a bounded pass at least
+#: committed and reported something; now that a scan reports per chunk, that
+#: job is done properly and the cap can go back to meaning what it says.
+#: Applied to a manual press it was simply an obstacle: 5793 files at 200 a
+#: press is 29 presses, or seven hours of waiting on the interval.
 DEFAULT_BATCH = int(os.environ.get("ARCHIVE_SCAN_BATCH", "200"))
 
 #: Seconds between automatic passes over the enabled archives. ``0`` disables
@@ -58,9 +71,30 @@ _LOCK = threading.Lock()
 _STATUS_LOCK = threading.Lock()
 
 
+#: Files handed to the pipeline per chunk. The unit of progress: nothing can
+#: be reported until a chunk returns, so this is the granularity of the bar
+#: and also the most work that can be lost to a restart.
+#:
+#: Not 1. Each chunk is a fresh `ingest` call, and with `jobs > 1` that means
+#: building a process pool -- per file, the pool would cost more than the work
+#: in it.
+DEFAULT_CHUNK = int(os.environ.get("ARCHIVE_SCAN_CHUNK", "20"))
+
+
 @dataclass
 class Status:
-    """What a scan is doing, for a page that cannot see the thread."""
+    """What a scan is doing, for a page that cannot see the thread.
+
+    Elapsed seconds alone were the whole story here once, and they are
+    indistinguishable from a hang: an operator watching "scanning, 240s
+    elapsed" has no way to tell a large archive from a wedged server, and the
+    reasonable guess is the wrong one. So this carries a phase and a count.
+
+    **The phase matters as much as the count.** Before a single file can be
+    reported, `watch.find_new` walks the whole tree and asks the database what
+    it already holds -- minutes on a large archive, with nothing to show. Named,
+    that silence is a step; unnamed, it is the part that looks broken.
+    """
 
     archive_id: int | None = None
     name: str = ""
@@ -69,6 +103,12 @@ class Status:
     result: str = ""
     ok: bool | None = None
     error: str = ""
+    #: "" | "reading" (enumerating the folder) | "indexing" | "done"
+    phase: str = ""
+    done: int = 0
+    total: int = 0
+    loaded: int = 0
+    skipped: int = 0
 
     @property
     def running(self) -> bool:
@@ -82,10 +122,25 @@ class Status:
             "result": self.result,
             "ok": self.ok,
             "error": self.error,
+            "phase": self.phase,
+            "done": self.done,
+            "total": self.total,
+            "loaded": self.loaded,
+            "skipped": self.skipped,
         }
+        elapsed = None
         if self.started_at is not None:
-            out["elapsed_s"] = round(
-                (self.finished_at or time.time()) - self.started_at, 1)
+            elapsed = (self.finished_at or time.time()) - self.started_at
+            out["elapsed_s"] = round(elapsed, 1)
+        if self.total:
+            out["percent"] = round(100.0 * self.done / self.total, 1)
+            # Only once a chunk has actually returned. A rate extrapolated
+            # from zero completed files is not an estimate, it is a number
+            # shaped like one.
+            if self.done and elapsed and self.running:
+                rate = self.done / elapsed
+                if rate > 0:
+                    out["eta_s"] = int((self.total - self.done) / rate)
         return out
 
 
@@ -393,7 +448,8 @@ class ArchiveGone(ArchiveError):
 
 
 def scan_once(row: dict, *, archive_root, db_path=None, batch=None,
-              jobs=None, min_age_s=watch.DEFAULT_MIN_AGE_S) -> dict:
+              jobs=None, chunk=None,
+              min_age_s=watch.DEFAULT_MIN_AGE_S) -> dict:
     """One pass over one archive. Blocking; the caller decides about threads.
 
     **The folder must still exist.** `watch.find_new` treats a target holding
@@ -413,14 +469,53 @@ def scan_once(row: dict, *, archive_root, db_path=None, batch=None,
             f"Nothing was scanned. A share that stopped being mounted looks "
             f"exactly like an empty folder to the indexer, so this is "
             f"reported rather than counted as a clean pass.")
+
+    from muf import pipeline
+
+    from . import ingest as ingest_mod
+
+    methods = methods_of(row)
+    batch = DEFAULT_BATCH if batch is None else batch
+    jobs = DEFAULT_JOBS if jobs is None else jobs
     conn = watch.connect(db_path)
     try:
-        result = watch.run_once(
-            [target], conn,
-            methods=methods_of(row), archive_root=Path(archive_root),
-            jobs=DEFAULT_JOBS if jobs is None else jobs,
-            batch=DEFAULT_BATCH if batch is None else batch,
-            min_age_s=min_age_s, quiet=True)
+        # `watch.run_once` would do all of this in one call, and did until the
+        # progress bar. The loop below is the same two steps it takes --
+        # `find_new` then `ingest` -- split so that the second one reports
+        # between chunks. Neither step is reimplemented; only the seam between
+        # them is new.
+        _set_status(phase="reading", done=0, total=0, loaded=0, skipped=0)
+        new, found, fresh, skewed = watch.find_new(
+            [target], conn, methods, min_age_s)
+
+        held_back = 0
+        if batch and len(new) > batch:
+            held_back = len(new) - batch
+            new = new[:batch]
+
+        result = {"found": found, "new": len(new), "too_fresh": fresh,
+                  "future_dated": skewed, "held_back": held_back,
+                  "loaded": 0, "skipped": 0}
+        if not new:
+            _set_status(phase="done", total=0, done=0)
+            db.record_scan(conn, row["id"], result=watch.describe(result),
+                           ok=True)
+            return result
+
+        _set_status(phase="indexing", total=len(new), done=0)
+        options = pipeline.Options(methods=methods)
+        size = max(1, DEFAULT_CHUNK if chunk is None else chunk)
+        for start in range(0, len(new), size):
+            part = new[start:start + size]
+            counts = ingest_mod.ingest(part, conn, options,
+                                       archive_root=Path(archive_root),
+                                       jobs=jobs, progress=False)
+            result["loaded"] += counts["loaded"]
+            result["skipped"] += counts["skipped"]
+            _set_status(done=start + len(part), loaded=result["loaded"],
+                        skipped=result["skipped"])
+
+        _set_status(phase="done")
         db.record_scan(conn, row["id"], result=watch.describe(result), ok=True)
         return result
     finally:
@@ -467,9 +562,16 @@ def scan_in_background(row: dict, *, archive_root, db_path=None, **kw):
     Daemon so a long pipeline cannot hold up a shutdown. Losing a pass costs
     nothing that is not recoverable: ingest is idempotent on ``(file, method)``
     and the next pass simply finds the same work.
+
+    **Uncapped by default**, unlike the background loop. Someone pressing scan
+    has asked for this archive to be indexed, and stopping at
+    `DEFAULT_BATCH` would answer that by doing an arbitrary fraction and
+    saying "held for the next pass". They can watch the bar, and they can
+    close the tab -- the scan is server-side and survives it.
     """
     if is_scanning():
         return None
+    kw.setdefault("batch", 0)
     thread = threading.Thread(
         target=scan, args=(row,),
         kwargs={"archive_root": archive_root, "db_path": db_path, **kw},
