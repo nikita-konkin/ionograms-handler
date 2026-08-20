@@ -394,3 +394,109 @@ def test_the_page_lists_the_registered_folders(client):
 
 def test_the_page_says_what_to_do_when_nothing_is_registered(client):
     assert "Nothing registered yet" in client.get("/ui/archives").text
+
+
+# --- the mount, and what is in it -------------------------------------------
+
+def test_the_page_shows_which_host_folder_is_mounted(client, monkeypatch):
+    """`/archive` alone cannot tell an operator whether the .env they edited
+    took effect. The container cannot discover the host path either, so
+    compose passes it in and the page prints it."""
+    monkeypatch.setenv("ARCHIVE_HOST_PATH", "/srv/lfs-on-the-host")
+    body = client.get("/archives").json()
+    assert body["mount"]["host"] == "/srv/lfs-on-the-host"
+    assert "/srv/lfs-on-the-host" in client.get("/ui/archives").text
+
+
+def test_a_missing_host_path_says_so_rather_than_inventing_one(client,
+                                                               monkeypatch):
+    monkeypatch.delenv("ARCHIVE_HOST_PATH", raising=False)
+    assert client.get("/archives").json()["mount"]["host"] == ""
+    assert "not reported" in client.get("/ui/archives").text
+
+
+def test_an_empty_mount_is_called_out(client, monkeypatch, tmp_path):
+    """A bind mount whose source was renamed on the host still exists inside
+    the container -- as an empty directory. Every scan then reports "0 on
+    disk" truthfully and forever."""
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    monkeypatch.setenv("ARCHIVE_ROOT", str(empty))
+    assert client.get("/archives").json()["mount"]["empty"] is True
+
+
+def test_an_unreadable_mount_is_called_out(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARCHIVE_ROOT", str(tmp_path / "does-not-exist"))
+    mount = client.get("/archives").json()["mount"]
+    assert mount["exists"] is False
+
+
+def test_the_folders_in_the_mount_are_offered(client):
+    """Adding a folder should be picking from what is mounted, not typing a
+    path and hoping."""
+    body = client.get("/archives").json()
+    paths = {c["path"]: c for c in body["candidates"]}
+    assert paths["good"]["soundings"] == 2
+    assert paths["good"]["by_format"] == {"lfs": 2}
+    assert paths["good"]["registered"] is False
+    # The empty one is listed too -- with what it holds, so the reason it
+    # cannot be used is on the same line as the folder.
+    assert paths["empty"]["soundings"] == 0
+
+
+def test_a_registered_folder_is_marked_in_the_candidate_list(client):
+    _add(client, name="feb")
+    body = client.get("/archives").json()
+    good = next(c for c in body["candidates"] if c["path"] == "good")
+    assert good["registered"] is True
+    assert good["archive_id"] is not None
+
+
+# --- method availability ----------------------------------------------------
+
+def test_a_method_that_cannot_run_here_is_refused_with_its_reason(client,
+                                                                  monkeypatch):
+    """`cnn` imports wherever Keras is installed and still needs a model
+    trained on this geometry. Requested without one it does not merely fail:
+    `already_done` counts a sounding finished only when it holds a row for
+    every requested method, so the archive would be re-scanned forever."""
+    monkeypatch.setattr(archives_mod, "method_availability", lambda: {
+        "algo": {"usable": True, "why": ""},
+        "cnn": {"usable": False, "why": "no autoencoder found"},
+    })
+    monkeypatch.setattr(archives_mod, "usable_methods", lambda: ("algo",))
+    r = _add(client, methods="algo,cnn")
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "no autoencoder found" in detail
+    assert "re-scanned on every pass" in detail
+
+
+def test_the_page_offers_every_method_and_disables_the_unusable(client,
+                                                                monkeypatch):
+    monkeypatch.setattr(archives_mod, "method_availability", lambda: {
+        "algo": {"usable": True, "why": ""},
+        "kmeans": {"usable": True, "why": ""},
+        "contour": {"usable": True, "why": ""},
+        "cnn": {"usable": False, "why": "no autoencoder found"},
+    })
+    page = client.get("/ui/archives").text
+    for name in ("algo", "kmeans", "contour", "cnn"):
+        assert f'value="{name}"' in page
+    # The one that cannot run is rendered so it cannot be chosen at all.
+    assert "disabled" in page
+    assert "no autoencoder found" in page
+
+
+def test_method_availability_reports_the_three_that_always_work():
+    got = archives_mod.method_availability()
+    for name in ("algo", "kmeans", "contour"):
+        assert got[name]["usable"], f"{name} should always be usable"
+    assert set(archives_mod.usable_methods()) >= {"algo", "kmeans", "contour"}
+
+
+def test_methods_can_be_sent_as_a_list(client):
+    """The page sends a joined string; a client that sends the array should
+    not have to know that."""
+    assert _add(client, methods=["algo", "contour"]).json()["methods"] == \
+        "algo,contour"

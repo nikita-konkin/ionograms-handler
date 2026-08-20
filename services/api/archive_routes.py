@@ -47,6 +47,26 @@ def _clean_methods(value) -> str:
             status.HTTP_400_BAD_REQUEST,
             f"unknown extraction method(s): {', '.join(unknown)}; "
             f"available: {', '.join(ALL_METHODS)}")
+
+    # Known but not usable here is the more dangerous case, and the one worth
+    # the longer message: `cnn` imports on a machine with Keras yet still
+    # needs a model trained on this geometry. Requested without one it raises
+    # per file, which by itself would only be noisy -- but `already_done`
+    # counts a sounding finished when it holds a row for *every* requested
+    # method, so a method that can never produce one leaves the whole archive
+    # permanently unfinished and re-scanned on every pass, forever.
+    reasons = archives_mod.method_availability()
+    unusable = [m for m in wanted if not reasons.get(m, {}).get("usable")]
+    if unusable:
+        detail = "; ".join(
+            f"{m} ({reasons.get(m, {}).get('why') or 'unavailable'})"
+            for m in unusable)
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"not usable on this server: {detail}. Requesting it would not "
+            f"merely fail -- every sounding in the archive would stay "
+            f"unfinished and be re-scanned on every pass. Usable here: "
+            f"{', '.join(archives_mod.usable_methods())}.")
     if not wanted:
         return ",".join(DEFAULT_METHODS)
     return ",".join(wanted)
@@ -61,12 +81,21 @@ def _row(request: Request, archive_id: int) -> dict:
 
 @router.get("/archives")
 def list_archives(request: Request) -> dict:
+    conn = request.app.state.db
     return {
-        "archives": db.archives(request.app.state.db),
+        "archives": db.archives(conn),
         "archive_root": str(request.app.state.archive_root),
+        # What is mounted here, and which host folder it came from. See
+        # `archives.mount`: the second half only exists because compose passes
+        # ARCHIVE_HOST_PATH in, and without it "/archive" alone cannot tell an
+        # operator whether the .env they edited took effect.
+        "mount": archives_mod.mount(),
+        "candidates": archives_mod.candidates(
+            conn, request.app.state.archive_root),
         "status": archives_mod.status(),
         "formats": list(loader.FORMATS),
-        "methods_available": list(ALL_METHODS),
+        "methods": archives_mod.method_availability(),
+        "methods_available": list(archives_mod.usable_methods()),
         "methods_default": list(DEFAULT_METHODS),
     }
 

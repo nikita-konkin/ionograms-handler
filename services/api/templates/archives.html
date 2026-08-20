@@ -4,6 +4,42 @@
 {% block body %}
 
 <div class="panel">
+  <h2>mounted archive</h2>
+  {# Two paths, because in a container they differ and only one of them is the
+     thing an operator edits. `/archive` alone cannot tell anyone whether the
+     .env change took effect. #}
+  <div class="scroll"><table>
+    <tr><td class="muted">host folder</td>
+        <td>{% if mount.host %}<code>{{ mount.host }}</code>
+            <span class="note">&mdash; <code>ARCHIVE_HOST_PATH</code> in
+            <code>deploy/.env</code></span>
+            {% else %}<span class="muted">not reported</span>
+            <span class="note">&mdash; add
+            <code>ARCHIVE_HOST_PATH</code> to the service's
+            <code>environment:</code> block to show it here</span>{% endif %}</td></tr>
+    <tr><td class="muted">seen here as</td>
+        <td><code>{{ mount.root }}</code>
+          {%- if mount.in_container %} <span class="note">(in a container)</span>{% endif %}</td></tr>
+    <tr><td class="muted">state</td>
+        <td>{% if not mount.exists %}<span class="bad">not readable</span>
+            {% elif mount.empty %}<span class="bad">mounted but empty</span>
+            {% else %}<span class="ok">ok</span>
+            <span class="muted">{{ mount.entries }} entr{{ 'y' if mount.entries == 1 else 'ies' }}</span>{% endif %}</td></tr>
+  </table></div>
+  {% if not mount.exists %}
+  <p class="note bad">Nothing is readable at <code>{{ mount.root }}</code>.
+  Under Docker that means the bind mount is missing or its source is gone
+  &mdash; set <code>ARCHIVE_HOST_PATH</code> in <code>deploy/.env</code> and
+  redeploy. No folder can be registered until this is fixed.</p>
+  {% elif mount.empty %}
+  <p class="note bad">The mount exists but holds nothing. A bind mount whose
+  source was renamed on the host still appears inside the container, as an
+  empty directory &mdash; every scan would then report &ldquo;0 on disk&rdquo;
+  truthfully and forever.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
   <h2>archives</h2>
   <p>Folders under <code>{{ archive_root }}</code> that this server keeps
   indexed. A scan runs the pipeline over whatever is new, so every sounding it
@@ -34,9 +70,14 @@
       <td><b>{{ a.name }}</b>{% if not a.enabled %} <span class="note">disabled</span>{% endif %}</td>
       <td class="muted"><code>{{ a.relpath }}</code></td>
       <td class="muted">{{ a.format or 'any' }}</td>
-      <td class="muted">
-        <input id="methods-{{ a.id }}" size="22" style="width:11rem"
-               value="{{ a.methods }}">
+      <td class="muted" style="white-space:nowrap">
+        {% for m, info in methods.items() %}
+        <label style="font-size:.85rem; margin-right:.4rem"
+               {% if not info.usable %}title="{{ info.why }}"{% endif %}>
+          <input type="checkbox" class="m-{{ a.id }}" value="{{ m }}"
+                 {% if m in a.methods.split(',') %}checked{% endif %}
+                 {% if not info.usable %}disabled{% endif %}>{{ m }}</label>
+        {% endfor %}
         <button onclick="saveMethods({{ a.id }})">set</button></td>
       {# The count is the point of the page: it links to the numbers rather
          than stopping at "it scanned". #}
@@ -70,6 +111,26 @@
   <code>/archive</code>, so a folder elsewhere is not merely unreadable, it is
   invisible, and a scan of it would report success having loaded nothing.</p>
 
+  {# What is actually mounted, so adding a folder is picking from what is
+     there rather than typing a path and hoping. #}
+  {% if candidates %}
+  <div class="scroll" style="margin-bottom:.6rem"><table>
+    <tr><th>folder</th><th>holds</th><th></th></tr>
+    {% for c in candidates %}
+    <tr>
+      <td><code>{{ c.path }}</code></td>
+      <td class="muted">
+        {%- if c.soundings %}{{ c.soundings }} sounding(s)
+          ({% for f, n in c.by_format.items() %}{{ n }} {{ f }}{{ ', ' if not loop.last }}{% endfor %})
+        {%- else %}<span class="muted">nothing this server can read</span>{% endif %}</td>
+      <td>{% if c.registered %}<span class="muted">registered</span>
+          {%- elif c.soundings %}<button onclick="pick({{ c.path|tojson }})">use</button>
+          {%- endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+
   <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
     <label class="muted" style="font-size:.85rem">path
       <input id="path" size="28" placeholder="2026.02.04"></label>
@@ -80,13 +141,28 @@
         <option value="">any</option>
         {% for f in formats %}<option>{{ f }}</option>{% endfor %}
       </select></label>
-    <label class="muted" style="font-size:.85rem">methods
-      <input id="methods" size="22" value="{{ methods_default }}"></label>
     <button onclick="add()">add</button>
   </div>
-  <p class="note">Available methods: <code>{{ methods_available|join(', ') }}</code>.
-  Adding one later re-scopes the folder's existing soundings on the next scan
-  &mdash; anything already computed is kept.</p>
+
+  <div style="margin-top:.5rem">
+    <span class="muted" style="font-size:.85rem">methods</span>
+    {% for m, info in methods.items() %}
+    <label style="font-size:.85rem; margin-left:.5rem"
+           {% if not info.usable %}title="{{ info.why }}"{% endif %}>
+      <input type="checkbox" class="m-new" value="{{ m }}"
+             {% if m in methods_default %}checked{% endif %}
+             {% if not info.usable %}disabled{% endif %}>{{ m }}
+      {%- if not info.usable %} <span class="muted">({{ info.why }})</span>{% endif %}</label>
+    {% endfor %}
+    <button onclick="allMethods()">all</button>
+  </div>
+  <p class="note">Adding a method later re-scopes the folder's existing
+  soundings on the next scan &mdash; anything already computed is kept.
+  {% if methods.cnn and not methods.cnn.usable %}
+  A method that cannot run here is disabled rather than merely warned about:
+  <code>already_done</code> counts a sounding finished only when it holds a
+  row for <i>every</i> requested method, so choosing one that never produces
+  a row would re-scan the whole folder on every pass, forever.{% endif %}</p>
   <div id="addSay" class="note" style="margin-top:.45rem"></div>
 </div>
 
@@ -118,13 +194,34 @@ const addSay = (t, bad) => write('addSay', t, bad);
 
 const val = id => (document.getElementById(id) || {}).value || '';
 
+// Checkboxes rather than a typed list: the names are a closed set, and a
+// method that cannot run here is rendered disabled, so an unusable one cannot
+// be chosen by accident. The server checks again -- that is the authority --
+// but a control that cannot express the mistake is better than a message
+// explaining it afterwards.
+const ticked = cls => [...document.querySelectorAll('input.' + cls)]
+    .filter(b => b.checked && !b.disabled).map(b => b.value).join(',');
+
+function allMethods() {
+  document.querySelectorAll('input.m-new').forEach(b => {
+    if (!b.disabled) b.checked = true;
+  });
+}
+
+function pick(path) {
+  document.getElementById('path').value = path;
+  document.getElementById('path').focus();
+}
+
 async function add() {
   const path = val('path').trim();
   if (!path) { addSay('Enter a path first.', true); return; }
   addSay('checking …');
+  const methods = ticked('m-new');
+  if (!methods) { addSay('Choose at least one method.', true); return; }
   const r = await control('/archives', 'POST', {
     path: path, name: val('name').trim(), format: val('format'),
-    methods: val('methods'),
+    methods: methods,
   });
   if (!r.ok) { addSay(r.detail, true); return; }
   const f = r.body.found || {};
@@ -151,8 +248,10 @@ async function setEnabled(id, enabled) {
 }
 
 async function saveMethods(id) {
+  const methods = ticked('m-' + id);
+  if (!methods) { say('Choose at least one method.', true); return; }
   const r = await control('/archives/' + id + '/methods', 'POST',
-                          {methods: val('methods-' + id)});
+                          {methods: methods});
   say(r.ok ? 'methods set to ' + r.body.methods + ' — ' + r.body.note
            : r.detail, !r.ok);
 }

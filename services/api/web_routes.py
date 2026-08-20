@@ -340,7 +340,7 @@ def archives_page(request: Request):
     "compute characteristics" step for this page to offer.
     """
     from muf import loader
-    from muf.extractors import ALL_METHODS, DEFAULT_METHODS
+    from muf.extractors import DEFAULT_METHODS
 
     from . import archives as archives_mod
 
@@ -348,10 +348,13 @@ def archives_page(request: Request):
     return templates.TemplateResponse(request, "archives.html", {
         "archives": db.archives(conn),
         "archive_root": str(request.app.state.archive_root),
+        "mount": archives_mod.mount(),
+        "candidates": archives_mod.candidates(
+            conn, request.app.state.archive_root),
         "status": archives_mod.status(),
         "formats": loader.FORMATS,
-        "methods_available": ALL_METHODS,
-        "methods_default": ",".join(DEFAULT_METHODS),
+        "methods": archives_mod.method_availability(),
+        "methods_default": DEFAULT_METHODS,
         "interval_s": archives_mod.DEFAULT_INTERVAL_S,
     })
 

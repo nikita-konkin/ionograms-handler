@@ -162,6 +162,117 @@ def resolve(relpath: str, archive_root: str | os.PathLike) -> tuple[str, Path]:
     return stored.as_posix(), absolute
 
 
+def mount() -> dict:
+    """What folder is actually mounted here, as far as this process can tell.
+
+    Two paths, because under Docker they are different and only one of them is
+    meaningful to the person editing `deploy/.env`:
+
+    * ``root`` -- what this process sees. ``/archive`` in a container.
+    * ``host`` -- the folder the operator mounted there, from
+      ``ARCHIVE_HOST_PATH``. The container cannot discover this; compose has to
+      pass it in, which is why it is now in the ``environment:`` block beside
+      the volume that uses it. Absent, the page says so rather than inventing
+      one.
+
+    ``readable`` is checked rather than assumed. A bind mount whose source was
+    renamed on the host still exists inside the container -- as an empty
+    directory. Every scan then reports "0 on disk" truthfully and forever, and
+    that is the state this whole page exists to make visible.
+    """
+    root = Path(os.environ.get("ARCHIVE_ROOT", "."))
+    host = os.environ.get("ARCHIVE_HOST_PATH") or ""
+    exists = root.is_dir()
+    entries = None
+    if exists:
+        try:
+            entries = sum(1 for _ in root.iterdir())
+        except OSError:
+            exists = False
+    return {
+        "root": str(root),
+        "host": host,
+        "in_container": Path("/.dockerenv").exists(),
+        "exists": exists,
+        "entries": entries,
+        "empty": exists and entries == 0,
+    }
+
+
+def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
+    """Folders under the root that could be registered, and what is in them.
+
+    So that adding one is picking from what is mounted rather than typing a
+    path and hoping. A folder already registered is listed too, marked, so the
+    answer to "is this one indexed?" is on the same screen as the folders.
+
+    Counts come from `loader.find_soundings`, which walks the tree, so this is
+    a directory scan per candidate. Bounded by `limit` because a root with
+    hundreds of dated day-folders would otherwise turn a page load into a walk
+    of the whole archive.
+    """
+    root = Path(archive_root)
+    if not root.is_dir():
+        return []
+    registered = {row["relpath"]: row for row in db.archives(conn)}
+    out = []
+    try:
+        children = sorted(p for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
+    for child in children[:limit]:
+        name = child.name
+        try:
+            found = survey(child)
+        except ArchiveError:
+            continue
+        row = registered.get(name)
+        out.append({
+            "path": name,
+            "soundings": found["soundings"],
+            "by_format": found["by_format"],
+            "registered": row is not None,
+            "archive_id": row["id"] if row else None,
+        })
+    return out
+
+
+#: Why a method cannot be used here, when it cannot. Keyed by method name.
+#:
+#: Checked rather than assumed because requesting an unusable method is not a
+#: loud failure, it is a **silent loop**: `watch.already_done` counts a
+#: sounding finished only when it holds a row for every requested method, so a
+#: method that never produces one leaves every sounding in the archive
+#: permanently unfinished and re-scans the whole folder on every pass, forever.
+def method_availability() -> dict[str, dict]:
+    from muf import extractors
+
+    importable = set(extractors.available())
+    out: dict[str, dict] = {}
+    for name in extractors.ALL_METHODS:
+        if name not in importable:
+            out[name] = {"usable": False,
+                         "why": "not installed on this server"}
+            continue
+        if name == "cnn":
+            # Importable is not the same as usable: the CNN needs a model
+            # trained on this geometry, and without one it raises per file.
+            try:
+                from muf.extractors import cnn as cnn_mod
+
+                cnn_mod.find_model()
+            except Exception as exc:                          # noqa: BLE001
+                out[name] = {"usable": False,
+                             "why": str(exc).split(".")[0] or type(exc).__name__}
+                continue
+        out[name] = {"usable": True, "why": ""}
+    return out
+
+
+def usable_methods() -> tuple[str, ...]:
+    return tuple(n for n, v in method_availability().items() if v["usable"])
+
+
 def survey(path: Path, format: str | None = None) -> dict:
     """What an indexer would find in a folder, before anything is committed.
 

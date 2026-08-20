@@ -26,6 +26,12 @@ services:
     environment:
       API_DB: /data/ionograms.sqlite3
       ARCHIVE_ROOT: /archive
+      # Passed in so the archives page can show *which host folder* is
+      # mounted at ARCHIVE_ROOT. The container cannot discover this on its
+      # own -- a bind mount looks like an ordinary directory from inside --
+      # and "/archive" alone does not tell an operator whether the .env they
+      # edited took effect. Display only; the mount below is what binds.
+      ARCHIVE_HOST_PATH: "${ARCHIVE_HOST_PATH:-./archive}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.
