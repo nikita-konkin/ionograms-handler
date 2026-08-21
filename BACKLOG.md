@@ -1836,6 +1836,21 @@ Three ways out, cheapest first:
    archive mount would stop being on the path at all. This is the same shape
    as the index proposed at the end of section 24, and it subsumes it.
 
+**This recurred (2026-08-21, sec. 32).** A directory count was added to
+`_root_state` on 2026-08-20 and served from `GET /archives`, which the page
+polls once a second during a scan -- reintroducing exactly the cost measured
+above, on the endpoint least able to afford it. Item 2 above is still
+unanswered and is now the load-bearing one: several choices across the tree are
+shaped by this 6.3 ms and none of them can be revisited until somebody runs
+`df -T /archive`.
+
+**Item 2 is answered (2026-08-21, sec. 32): `vers=1.0`.** The mount is SMB 1,
+which is where the 6.3 ms comes from. It is not NFS and not a FUSE layer, and
+the fix is likely a mount option rather than any code here -- exactly as this
+item guessed. **Whether the server will accept SMB2+ is a separate question and
+is still open**; the first attempt to test it was inconclusive. Read sec. 32
+before acting on this.
+
 ## 23. Two measured wins, and a benchmark to keep them (2026-08-16)
 
 Profiled the whole read path and the extraction pipeline against the real
@@ -2533,3 +2548,313 @@ edit the schedule from a browser, and a schedule edit that does not also move
 console that says everything is fine. `set_schedule` needs the same
 cross-check the band verb needs, and the agent has to own it, because the unit
 file is the only place the other half of the constraint lives.
+
+---
+
+## 32. The archive is on SMB, and four design choices are really latency choices (2026-08-21)
+
+**Problem.** Indexing a few days of `.h5` on the work server took about an hour
+and then `/ui/archives` began returning 500. The report was that indexing had
+been normal before, and that the SMB share seemed to drop under the load.
+
+Both halves were right, and they were two separate faults.
+
+**The read pattern.** HDF5's I/O is seek-heavy by design -- it walks the b-tree
+and fetches each chunk where it lies. Measured against `/proc/self/io` over 20
+real products: **184 read syscalls to move 0.68 MB of a 0.70 MB file**, across
+~192 seeks. The pipeline opens each sounding twice (header, then ionogram), so
+368 round trips per sounding. On a local disk that is free; at 5 ms of SMB
+latency it is ~2 s per sounding of nothing but waiting.
+
+`muf.io_chirp.open_h5` now reads the file whole and hands h5py bytes rather
+than a path: **184 syscalls become 4**. Verified byte-identical arrays across
+20 files and 25/25 identical stored MUF values on re-run, at no cost on a local
+disk (17.4 -> 15.4 ms per file). All ten call sites across `io_chirp`,
+`io_digisonde` and `io_detect` go through it, and a lint test fails on a new
+`h5py.File(path)`.
+
+**The regression.** Separately, the multi-root commit (4a1b217, 2026-08-20)
+put `entries = sum(1 for _ in path.iterdir())` in `_root_state` -- a full
+enumeration of the archive root, on `GET /archives`, which the page polls
+**once a second while a scan runs**. On Python 3.12 `Path.iterdir` is
+`os.listdir` underneath, so it reads the whole directory eagerly before
+yielding anything. At **6.3 ms per directory entry** a root of a few thousand
+day-folders is a multi-second listing every second, against the mount the
+indexer is using.
+
+That rate is not a new measurement. **Sec. 25 measured it four days earlier**
+(2026-08-16, 293.8 s for 46,436 entries) and is titled for it. The cost was
+already written down, and a directory count was added to a polled endpoint
+anyway -- which is the more useful lesson than either fix: an enumeration of
+this archive is a network operation, and the number saying so was already in
+this file.
+
+That is what changed between "slow but works" and "an hour, then the share
+drops". The read pattern had always been there. Now a lazy `os.scandir` probe
+of one entry: the panel needs "does the mount answer" and "is anything in it",
+and both are in the first entry. The exact count belonged to the candidates
+table, which is already surveyed on a background thread and cached.
+
+### The mount degraded ~700x in five days, and that dwarfs everything else
+
+Measured on the work server on 2026-08-21, on a freshly mounted read-only copy
+of the same share:
+
+    time ls /mnt/smb3test/ionozond_data2 | wc -l
+    18
+    Executed in 83.22 secs   usr 1.14 millis   sys 5.47 millis
+
+**4.6 seconds per directory entry.** A pure `readdir` of the same directory,
+minutes later, was worse still:
+
+    time python3 -c "import os; print(len(os.listdir(...)))"
+    18
+    Executed in 134.98 secs   usr 22.87 millis   sys 11.42 millis
+
+**7.5 s per entry with no `stat` at all** -- `os.listdir` does strictly less
+work than `ls` and took 63% longer. Two things follow: the cost is in `readdir`
+itself rather than in per-entry attribute lookups, and the share is *erratic*
+rather than uniformly slow, since the same call varies by half again between
+runs minutes apart.
+
+Sec. 25 measured this archive at **6.3 ms per entry** on 2026-08-16 -- a
+~1000x degradation in five days. The user and system times say all of it is
+I/O wait.
+
+At 7.5 s an entry, the 18 day-folders of `ionozond_data2` hold ~450 files each
+(8232 soundings), so listing one day is ~56 minutes and the folder ~17 hours.
+The station's report of "an hour, and it was still reading files" was the
+enumeration running to schedule, not a fault in the scan.
+
+**It also revises up what `e637964` was worth.** The enumeration it removed ran
+over `/archive` itself -- 8 entries, so ~60 s -- on `GET /archives`, which the
+page polls once a second while a scan runs. Sixty-second listings starting
+every second, overlapping without bound, each holding the mount. That is on its
+own enough to drop the session, and it was running during every scan the
+station watched fail.
+
+**Look at the two trash directories first.** The share root holds `#recycle`
+(Synology's own recycle bin) and `.Trash-1000` (the freedesktop trash of a
+Linux client running as uid 1000). Deleted files in either still occupy the
+volume, and on a share carrying 80 MB soundings since 2022 they may hold a
+large part of the missing 16.7 TB. Inspect and empty them from the DSM web
+interface, which reads local metadata -- a `du` over this mount at 7.5 s an
+entry would run for days. Storage Manager will also show whether snapshots are
+holding space.
+
+**This outranks every other finding in this section.** The `open_h5` fix takes
+a sounding from 184 round trips to 4, and at 4.6 s an operation four round
+trips across 8232 soundings is still nine hours. Nothing written in application
+code survives a filesystem in this state, and no conclusion about protocol
+dialects or scan concurrency means anything until it is fixed.
+
+**Prime suspect: the volume is 99% full** -- 331 GB free of 17 TB, against 5.8
+TB free on `/mnt/ionozond_5tb` on the same NAS. That is where a Synology volume
+falls off a cliff, and it is also sec. 1 arriving: raw `.lfs` at 80 MB per
+sounding and 8.4 TB per year has filled a 17 TB volume in about two years.
+Freeing space is the first thing to try and the cheapest to test.
+
+Two things the same session settled, both now secondary:
+
+- **The production mount is not stale.** `/mnt/ionozond_16tb/ionozond_data2`
+  listed normally at the same moment the scans were failing, so the
+  `[Errno 112]` results are the session dropping *intermittently under load*
+  and recovering -- the behaviour of a NAS in the state above, not an outage.
+- **SMB2/3 really is refused** (see below), established by a back-to-back test:
+  SMB1 mounted in under a second, and seconds later `vers=3.0` failed again on
+  the same path. A merely-slow server would have been slow for both. This is a
+  real finding and a small one -- SMB3 against a 99%-full volume would still be
+  unusable.
+
+### What `/archive` actually is (answered 2026-08-21)
+
+Sec. 25 asked this on 2026-08-16 and nobody had looked. `findmnt` on the work
+server:
+
+    //10.10.65.102/ionozond_16tb  cifs  rw,relatime,vers=1.0,sec=ntlmssp,
+      cache=strict,uid=1000,forceuid,gid=1000,forcegid,iocharset=utf8,soft,
+      unix,posixpaths,serverino,mapposix,acl,rsize=1048576
+
+**`vers=1.0`.** The archive is served over **SMB 1**, and that is the whole of
+the 6.3 ms per directory entry. SMB1 has no request compounding, minimal
+credit-based pipelining, and enumerates directories through
+`TRANS2_FIND_NEXT2` with a small buffer -- a listing is a long serial chain of
+round trips, which is the shape of every measurement in sec. 25 and this
+section. SMB2/3 compound and pipeline the same operations.
+
+This reframes the table below. **Most of it may be re-decidable by a mount
+option rather than by moving the archive**, which is a far cheaper experiment
+and should be run first.
+
+**Confirmed by a back-to-back test** (see above), after a first attempt that
+was inconclusive and is kept here because the reasoning matters. Mounting the
+same share read-only with `vers=3.0`, `3.1.1`, `2.1` and `2.0` each failed
+with:
+
+    mount error: Server abruptly closed the connection.
+    mount error(112): Host is down
+
+That message is tempting to read as a dialect rejection. It is not evidence of
+one: cifs prints it for a range of failures including an unreachable host, and
+`dmesg` showed each attempt taking **~21 s** (20.1, 21.6, 21.5, 21.4) between
+"Attempting to mount" and `cifs_mount failed w/return code = -112`. A server
+that refuses a dialect answers the negotiate in milliseconds; 21 s is a
+TCP-level timeout. The share was already reporting `EHOSTDOWN` on the archives
+page at the time, and **no `vers=1.0` control was run at the same moment**, so
+the test cannot distinguish "this server refuses SMB2+" from "this server is
+not answering at all".
+
+**Run properly, it came back positive.** All three at the same moment:
+`nc -zv -w 5 10.10.65.102 445` connected; `vers=1.0` mounted in under a second;
+`vers=3.0` failed again seconds later on the same path. A merely-slow server
+would have been slow for both, so the server does refuse SMB2+.
+
+The lever is therefore server-side -- DSM's Control Panel -> File Services ->
+SMB -> Advanced -> Maximum SMB protocol. But 10.10.65.102 sits on a different
+subnet reached through the 10.30.42.1 gateway, so it may not be ours to change,
+which turns a config edit into a request. **And it is worth little on its own**
+while the mount runs at 4.6 s per entry -- see the section above. Ask for it,
+but do not expect it to be the fix.
+
+**The lesson worth keeping is about the test, not the answer.** The first
+attempt produced the same four failures and looked conclusive; what made it
+worthless was the absence of a control taken at the same moment. Any future
+claim about this mount -- dialect, latency, whether it is "down" -- needs a
+known-good measurement beside it, because this share's behaviour changes by the
+hour.
+
+Three things the same output settles:
+
+- **`soft` is already set**, which is why a dead share surfaces as
+  `[Errno 112] EHOSTDOWN` rather than an unkillable hang. An earlier
+  hypothesis that the hour-long scans were blocked `hard`-mount retries was
+  wrong: the mount is simply that slow -- 4.6 s an entry, per the section
+  above, which is the storage rather than the protocol.
+- **`rsize=1048576` and `cache=strict`** are already right and need nothing.
+- **No `actimeo=`**, so it defaults to 1 s. Every attribute older than a
+  second is re-fetched over the wire, on an archive of write-once products
+  that never change after they are closed.
+
+The SMB1 is very likely vestigial rather than required. The station's
+`mount_shares.sh` sets `vers=1.0` for all four shares under a comment reading
+`# IONO: SMB2`, and its own precheck enables legacy dialects with the note
+"required for //10.0.0.53" -- the RINEX host, a different machine. Nothing
+records the Synology at 10.10.65.102 needing SMB1. The one option that is
+genuinely SMB1-only is `unix,posixpaths` (the CIFS Unix Extensions), and it is
+not needed here because `uid=1000,forceuid,gid=1000,forcegid` already forces
+ownership client-side; `mfsymlinks` replaces it if anything turns out to rely
+on symlinks.
+
+**Also, the volume is 99% full** -- 331 GB free of 17 TB, while
+`/mnt/ionozond_5tb` sits at 5%. A Synology volume above ~90% degrades sharply,
+so this is a candidate cause of the drops in its own right, independent of the
+protocol. It is also sec. 1 arriving on schedule: that entry put raw `.lfs` at
+80 MB per sounding and **8.4 TB per year**, and deferred the sparse-Parquet
+decision. Two years have now filled the volume. The deferral is over.
+
+### A running scan cannot be stopped, and that wedges the container
+
+There is no cancel path. `scan_once`/`scan`/`scan_in_background` check no flag,
+and `archive_routes` exposes no route to abort one -- a scan runs to completion
+or dies with the process. On a fast archive that is a reasonable simplification.
+On this one it is not: a scan walking 8000 files at seconds per directory entry
+holds the mount for hours with no way to call it off.
+
+It also makes the container unkillable. Observed 2026-08-21:
+
+    sudo docker stop ionograms-api-1
+    Error response from daemon: cannot stop container: ionograms-api-1:
+      tried to kill container, but did not receive an exit event
+
+Threads blocked in a CIFS call are in uninterruptible sleep, and neither
+SIGTERM nor SIGKILL reaches them. The only way out is to pull the mount --
+`umount -lf /mnt/ionozond_16tb`, which `mount_shares.sh` already does in
+`ensure_dir` -- so the blocked syscalls fail and the process can exit.
+
+Worth a cancel flag the scan loop checks between files, and a
+`DELETE /archives/{id}/scan` behind the control scope. It would not interrupt a
+syscall already in flight, but it would stop the *next* one, which on this
+archive is the difference between minutes and hours.
+
+**A methodological note, because it invalidated a day of measurement.** Every
+listing time first recorded in this section -- 83 s, 135.0 s, 128.6 s -- was
+taken while a scan was walking the same share. Sec. 25's 6.3 ms baseline was
+almost certainly taken on an idle one, so comparing them and attributing the
+gap to the NAS was not sound.
+
+The clean measurement was then taken, container stopped, mount idle:
+
+    time python3 -c "import os; print(len(os.listdir(.../ionozond_data2)))"
+    18
+    Executed in 12.89 secs
+
+**128.57 s -> 12.89 s: contention with the running scan was a 10x factor.**
+
+**Do not divide that by 18.** An 18-entry directory returns in one or two round
+trips, so 12.89 s is mostly the fixed cost of opening and reading a small
+directory, not a per-entry rate; sec. 25's 6.3 ms came from a directory of
+46,436 files where fixed cost amortises away. The two are different shapes and
+no degradation factor should be derived from the pair. That comparable measurement was then taken -- one **day** directory, idle
+mount, same shape as the baseline:
+
+    time python3 -c "import os; print(len(os.listdir(.../ionozond_data2/2026-08-04)))"
+    142
+    Executed in 90.06 secs
+
+**0.63 s per entry**, or 0.54 s if the whole 12.89 s fixed cost from the
+18-entry run is credited against it. Against sec. 25's 6.3 ms that is **~90-100x
+slower, uncontended**. So the degradation is real; the scan contention was a
+10x factor sitting on top of it, not the explanation for it.
+
+At ~0.6 s an operation, across the 8232 soundings in `h5_data`: the current
+code's 184 round trips a file is ~1.5M operations, or days; `open_h5`'s 4 is
+~33k, or about six hours; and the same 4 against the 6.3 ms baseline is about
+three minutes. Extrapolated rather than measured -- a readdir entry and a file
+read are not the same operation -- but the ratios are the point. **`open_h5` is
+worth deploying and does not rescue this.** The mount is the fix.
+
+**Check for a rebuild before anything else.** The 99% full volume is real but
+does not explain the *suddenness*: a volume does not go from fine to 100x
+slower in five days by filling gradually. A degraded or rebuilding Synology
+storage pool does exactly that -- everything keeps working, nothing reports an
+outage, throughput collapses by one to two orders of magnitude -- and so does a
+data scrubbing run. Both start on their own, which fits a timeline nothing on
+the station's side explains. DSM -> Storage Manager: storage pool status
+(Degraded / Repairing / Verifying), any running background task, then per-drive
+health. If a rebuild is running the answer is to wait it out, and every other
+finding in this section is noise until it finishes.
+
+### If the archive moves off SMB
+
+The point of writing this down. Four things in the tree are shaped by network
+latency and not by anything else, and a move to local disk or a fast server
+makes them re-decidable. **Re-measure before changing any of them** -- the
+numbers below are the baseline to beat, and they were all taken on the real
+archive rather than a fixture.
+
+| What | Why it is like that | On a low-latency store |
+| --- | --- | --- |
+| `_root_state` probes one entry | full enumeration per poll, 6.3 ms/entry | the entry count can come back; it is a real thing to show an operator, and the template comment says where it went |
+| `sources.DEFAULT_MAX_AGE_S = 1800`, serve-stale census | one `scandir` of a day was 293.8 s (sec. 25) | shorten hard, or drop the background refresh and answer on the request path |
+| `archives.candidates_cached` background survey | a recursive walk per page load | same -- the cache exists only because the walk was ruinous |
+| `ARCHIVE_SCAN_JOBS` held at 1 | more workers meant more concurrent pressure on a fragile share | raise it: measured **3.3x at jobs=4**, and `ARCHIVE_SCAN_CHUNK` 20 -> 90 a further 1.6x |
+
+Two things that should **not** be reverted with the mount, because they are
+correct for any storage:
+
+- **`open_h5`.** Neutral on a local disk, measured. Keep it; it costs nothing
+  and it is the difference between usable and unusable if any part of the
+  archive is ever remote again.
+- **The dead-storage guards.** `Path.is_dir`/`is_file` swallow only
+  ENOENT/ENOTDIR/EBADF/ELOOP, so EIO, ESTALE, ETIMEDOUT and EHOSTDOWN
+  propagate out of a request as a 500 -- the server reporting itself broken on
+  behalf of a disk that is the thing at fault. A local disk can still throw
+  EIO. The probe-then-read split matters too: a CIFS client answers `is_file()`
+  from its attribute cache, so the probe can pass and the read a millisecond
+  later fail, which is why the read itself is wrapped and not just the probe.
+
+**What is still not established.** Which URL returned the 500 on the work
+server was never confirmed from logs -- the probe-then-read gap is the
+best-fitting candidate and it is now closed, but that is inference. If a 500
+recurs after both fixes are deployed, get `docker logs` from the moment it
+happens rather than reasoning forward from here again.
