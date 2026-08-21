@@ -58,6 +58,7 @@ import numpy as np
 from . import calibrate
 from .calibrate import Calibration
 from .io_chirp import snr_to_power
+from .io_chirp import open_h5
 from .spectro import Ionogram
 
 #: Speed of light in km/s, as ``receive_digisonde.py`` uses it
@@ -178,10 +179,8 @@ def read_header(path: str | Path,
     the geometry is unavailable and ``path_of`` is meaningless. Unlike a
     serendipitous chirp product, both names are real and resolvable.
     """
-    import h5py
-
     path = Path(path)
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         missing = [k for k in REQUIRED if k not in fh]
         if missing:
             raise ValueError(
@@ -243,12 +242,10 @@ def load(path: str | Path,
     at the usual 10 ms), so nothing was discarded at acquisition and there is
     no wider extent to warn about.
     """
-    import h5py
-
     path = Path(path)
     header = header or read_header(path, stations)
 
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         snr = np.asarray(fh["SNR"][()], dtype=np.float64)
         freqs_hz = np.asarray(fh["freqs"][()], dtype=np.float64)
         ranges_m = np.asarray(fh["ranges"][()], dtype=np.float64)

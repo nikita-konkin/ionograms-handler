@@ -53,6 +53,7 @@ from typing import Iterable, Sequence
 import numpy as np
 
 from .io_chirp import C_M_S, MAX_VIRTUAL_RANGE_KM, _scalar
+from .io_chirp import open_h5
 from .paths import dedupe_paths
 
 #: Default schedule cycle. Chirp transmitters repeat on a human-chosen round
@@ -358,10 +359,8 @@ def find_products(target) -> dict[str, list[Path]]:
 
 def read_detection(path: str | Path) -> Detection:
     """Parse one ``chirp-*.h5``."""
-    import h5py
-
     path = Path(path)
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         missing = {"chirp_time", "chirp_rate", "f0"} - set(fh.keys())
         if missing:
             raise ValueError(
@@ -384,10 +383,8 @@ def read_detection(path: str | Path) -> Detection:
 
 def read_timing(path: str | Path) -> TimingSolution:
     """Parse one ``par-*.h5``."""
-    import h5py
-
     path = Path(path)
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         missing = {"t0", "chirp_rate"} - set(fh.keys())
         if missing:
             raise ValueError(
@@ -430,10 +427,8 @@ def read_cdetections(path: str | Path) -> np.ndarray:
     it instead of the individual ``chirp-*.h5``. Columns are
     :data:`CDETECTION_COLUMNS`.
     """
-    import h5py
-
     path = Path(path)
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         if "data" not in fh:
             raise ValueError(
                 f"{path}: not a chirpsounder2 cdetections file, no 'data'; "

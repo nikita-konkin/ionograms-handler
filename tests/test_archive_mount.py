@@ -221,3 +221,135 @@ def test_a_permission_problem_names_the_uid(client, sick_file):
     sick_file(errno.EACCES)
     detail = client.get(f"/ionogram/{sounding}.png").json()["detail"]
     assert "uid 10001" in detail
+
+
+# --------------------------------------------------------------------------
+# Walking the root, not just probing it
+#
+# `_root_state` probes the root and reports what it finds. `candidates` *walks*
+# it, and did so through a bare `root.is_dir()` -- so the page that reports a
+# dead mount could still 500 one function further along. The fixture above
+# breaks a pinned `/archive`, which the app under test never walks, so these
+# break the root the request path actually uses.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def sick_primary(monkeypatch):
+    """Break the archive root the running app walks, whatever it is."""
+    def go(number: int):
+        root = Path(main.app.state.archive_root).resolve()
+        real = Path.is_dir
+
+        def is_dir(self):
+            if self.resolve() == root:
+                raise OSError(number, "the mount is not answering")
+            return real(self)
+
+        monkeypatch.setattr(Path, "is_dir", is_dir)
+        return root
+    return go
+
+
+@pytest.mark.parametrize("number", SICK, ids=lambda n: errno.errorcode[n])
+def test_listing_candidates_survives_a_dead_root(sick_primary, number):
+    root = sick_primary(number)
+    with db.session(main.app.state.db_path if hasattr(main.app.state, "db_path")
+                    else db.DEFAULT_DB) as conn:
+        assert archives.candidates(conn, root) == []
+
+
+@pytest.mark.parametrize("number", SICK, ids=lambda n: errno.errorcode[n])
+def test_the_archives_page_renders_when_its_own_root_is_dead(client, sick_primary,
+                                                             number):
+    """The regression: the page probed the mount safely and then walked it
+    unsafely, which is a 500 on the one page that explains the outage."""
+    sick_primary(number)
+    assert client.get("/ui/archives").status_code == 200
+
+
+@pytest.mark.parametrize("number", SICK, ids=lambda n: errno.errorcode[n])
+def test_listable_never_raises(number):
+    path = Path("/nowhere-in-particular")
+
+    def is_dir(self):
+        raise OSError(number, "the mount is not answering")
+
+    original = Path.is_dir
+    Path.is_dir = is_dir
+    try:
+        assert archives.listable(path) is False
+    finally:
+        Path.is_dir = original
+
+
+def test_registering_on_a_dead_mount_does_not_call_it_missing(client, monkeypatch):
+    """`is not a directory that exists here` is a lie about a folder on a share
+    that stopped answering, and sends the operator after a path bug they do not
+    have."""
+    def is_dir(self):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    response = client.post("/archives", json={"path": "ionograms"},
+                           headers={"Authorization": "Bearer ctl"})
+    assert response.status_code == 400
+    detail = response.json()["detail"].lower()
+    assert "mount is not answering" in detail
+    assert "is not a directory that exists here" not in detail
+
+
+def test_a_walk_that_dies_is_not_reported_as_an_empty_folder(tmp_path, monkeypatch):
+    """Zero soundings is a measurement. A walk that failed is not one, and
+    registering on the strength of it would schedule a scan of nothing."""
+    from muf import loader
+
+    def blow_up(*args, **kwargs):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(loader, "find_soundings", blow_up)
+    with pytest.raises(archives.ArchiveError) as caught:
+        archives.survey(tmp_path)
+    message = str(caught.value).lower()
+    assert "could not be walked" in message
+    assert "says nothing about what the folder holds" in message
+
+
+# --------------------------------------------------------------------------
+# The probe is not the read
+#
+# A CIFS client answers `is_file()` out of its attribute cache, so on a share
+# that has just gone the probe succeeds and the read a millisecond later does
+# not. That is the shape of a mount dropping under an index, and it reached
+# the request as a 500 -- the server reporting itself broken on behalf of a
+# NAS that is the thing at fault.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def sick_read(monkeypatch):
+    """The file probes fine and then fails to open."""
+    def go(number: int):
+        from muf import loader
+
+        def blow_up(*args, **kwargs):
+            raise OSError(number, "the mount is not answering")
+
+        monkeypatch.setattr(Path, "is_file", lambda self: True)
+        monkeypatch.setattr(loader, "load", blow_up)
+        monkeypatch.setattr(loader, "read_header", blow_up)
+    return go
+
+
+@pytest.mark.parametrize("name", ["EIO", "EHOSTDOWN", "ESTALE", "ETIMEDOUT"])
+@pytest.mark.parametrize("route", ["/ionogram/{id}.png", "/soundings/{id}/sao.xml"])
+def test_a_read_that_dies_mid_request_is_503_not_500(client, sick_read, name, route):
+    number = getattr(errno, name, None)
+    if number is None:
+        pytest.skip(f"{name} is not defined on this platform")
+    sounding = seed_sounding(client.app.state.db)
+    sick_read(number)
+
+    response = client.get(route.format(id=sounding))
+    assert response.status_code == 503, (
+        f"{route} answered {response.status_code} when the read hit "
+        f"{name}; a 500 blames the server for the NAS being down")
+    assert "storage, not data" in response.json()["detail"]

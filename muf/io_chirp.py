@@ -115,7 +115,9 @@ offset, and returns it relative otherwise; see that function and
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
+import io
 import math
 import re
 import warnings
@@ -138,6 +140,68 @@ from .spectro import NOISE_COEF, Ionogram
 #: until the parallel run of ``architecture.md`` sec. 2.4 measures it against v1
 #: output on the same path. Setting it from a guess would defeat its purpose.
 SNR_OFFSET_DB = 0.0
+
+#: Cap on buffering a whole ``.h5`` before handing it to h5py. The station's
+#: products are far under it -- the largest of the 6278 on the archive is
+#: 0.93 MB -- so it never fires on real data. It is here so that a file that is
+#: not a product (a raw capture dropped into a product directory) falls back to
+#: streaming rather than pulling gigabytes into memory, which matters most with
+#: ``ARCHIVE_SCAN_JOBS`` workers each holding one.
+BUFFER_LIMIT_BYTES = 64 * 1024 * 1024
+
+
+@contextlib.contextmanager
+def open_h5(path: str | Path):
+    """Open an ``.h5`` product, reading it in one pass instead of in pieces.
+
+    HDF5's own I/O is seek-heavy by design: opening one 0.68 MB product and
+    pulling its datasets costs 184 read syscalls across ~192 seeks, because the
+    library walks the b-tree and fetches each chunk where it lies. On a local
+    disk those are free. On the station's SMB mount every one is a network
+    round trip, and at 5 ms apiece a few thousand soundings is an hour of
+    latency and nothing else -- which is what it was. Reading the file whole
+    moves the same bytes in two syscalls per open -- four per sounding, since
+    the pipeline reads the header before the ionogram. Measured over 20
+    products against ``/proc/self/io``: 184 read syscalls a file become 4, for
+    byte-identical arrays and no extra cost on a local disk.
+
+    It is also why the scan can take the mount down with it. A scan that asks
+    for a quarter of a million small reads keeps far more requests in flight
+    than one that asks for a few thousand, and a CIFS session that gives up
+    under that surfaces here as ``EIO`` or ``EHOSTDOWN`` -- the archive page's
+    "not readable" state.
+
+    An OSError while reading is deliberately **not** caught. If the file cannot
+    be read whole it cannot be read in pieces either, and the error naming the
+    real fault is more use than the one HDF5 would raise three frames further
+    in.
+    """
+    import h5py
+
+    path = Path(path)
+    size = path.stat().st_size
+    if size > BUFFER_LIMIT_BYTES:
+        with h5py.File(path, "r") as fh:
+            yield fh
+        return
+
+    # Sized from the stat above and filled with one `readinto`, rather than
+    # `read()`, which grows its own buffer in 64 KB steps and turns a single
+    # request back into a dozen. The trailing `read` is what makes reusing the
+    # stat safe: a product still being written is longer than it measured, and
+    # this appends the rest instead of silently truncating it.
+    buffer = bytearray(size)
+    with open(path, "rb") as raw:
+        filled = raw.readinto(buffer)
+        rest = raw.read()
+    if rest:
+        buffer = bytes(buffer[:filled]) + rest
+    elif filled != size:
+        buffer = memoryview(buffer)[:filled]
+
+    with h5py.File(io.BytesIO(buffer), "r") as fh:
+        yield fh
+
 
 #: Datasets ``calc_ionograms.py`` always writes. Anything missing means the file
 #: is not an ionogram product -- a detection file, or a different version.
@@ -432,10 +496,8 @@ def read_header(path: str | Path,
     Cheap enough to run over a whole archive: it touches the small scalar
     datasets and the two axis vectors, never the compressed ionogram.
     """
-    import h5py
-
     path = Path(path)
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         missing = [k for k in REQUIRED if k not in fh]
         if missing:
             present = ", ".join(sorted(fh.keys())) or "<empty>"
@@ -630,10 +692,8 @@ V2_OVERSAMPLE = 13
 
 def read_raw_voltage(path: str | Path) -> np.ndarray:
     """The stored dechirped voltage, or raise if the product has none."""
-    import h5py
-
     path = Path(path)
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         if RAW_VOLTAGE_KEY not in fh:
             raise ValueError(
                 f"{path}: no {RAW_VOLTAGE_KEY!r} dataset. chirpsounder2 writes "
@@ -716,8 +776,7 @@ def reprocess(path: str | Path,
     header = read_header(path, stations)
     z = read_raw_voltage(path)
 
-    import h5py
-    with h5py.File(Path(path), "r") as fh:
+    with open_h5(path) as fh:
         stored_freqs = np.asarray(fh["freqs"][()], dtype=np.float64)
     if stored_freqs.size < 2:
         raise ValueError(f"{path}: cannot recover the frequency step from "
@@ -795,12 +854,10 @@ def load(path: str | Path,
     computed the product, and an ``.h5`` sounding cannot be re-derived at a
     different FFT window (``architecture.md`` sec. 3.4).
     """
-    import h5py
-
     path = Path(path)
     header = header or read_header(path, stations)
 
-    with h5py.File(path, "r") as fh:
+    with open_h5(path) as fh:
         snr = np.asarray(fh["SNR"][()])
         freqs_hz = np.asarray(fh["freqs"][()], dtype=np.float64)
         ranges_m = np.asarray(fh["ranges"][()], dtype=np.float64)
@@ -931,7 +988,7 @@ def describe(path: str | Path) -> dict[str, str]:
     import h5py
 
     out: dict[str, str] = {}
-    with h5py.File(Path(path), "r") as fh:
+    with open_h5(path) as fh:
         def visit(name, obj):
             if isinstance(obj, h5py.Dataset):
                 if obj.shape == ():

@@ -240,7 +240,17 @@ def resolve(relpath: str, archive_root: str | os.PathLike) -> tuple[str, Path]:
             f"that is the archive root {owner} itself. Register the folders "
             f"inside it instead, so each can be scanned, disabled and "
             f"reported on its own.")
-    if not absolute.is_dir():
+    try:
+        present = absolute.is_dir()
+    except OSError as exc:
+        # "not a directory that exists here" would be a lie about a folder that
+        # does exist on a share that stopped answering, and would send the
+        # operator looking for a path problem they do not have.
+        raise ArchiveError(
+            f"{absolute} could not be read -- {exc}. The folder may well be "
+            f"there; the mount is not answering. Fix it on the host and "
+            f"register again.") from None
+    if not present:
         raise ArchiveError(f"{absolute} is not a directory that exists here")
 
     # Relative under the primary root, so the row stays portable between host
@@ -324,6 +334,25 @@ def mount_fault(exc: OSError) -> str:
     if exc.errno in DENIED_ERRNOS:
         return "denied"
     return "missing"
+
+
+def listable(path: Path) -> bool:
+    """``path.is_dir()``, with a dead mount answering False instead of raising.
+
+    ``Path.is_dir()`` swallows ENOENT and ENOTDIR and nothing else, so every
+    way a *mounted* share can fail underneath it -- EIO, ESTALE, EHOSTDOWN --
+    comes back out as an OSError. On a page that walks several roots, one dead
+    share would take the whole page down with it, which is how ``/ui/archives``
+    came to answer 500 at exactly the moment it was the page you needed.
+
+    Answering False rather than reporting the fault is right *here* only
+    because :func:`_root_state` reports it, on the same page, in the panel that
+    exists for it. A caller without that panel should use :func:`mount_fault`.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
 
 
 def _root_state(path: Path, index: int) -> dict:
@@ -432,7 +461,7 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     registered = {row["relpath"]: row for row in db.archives(conn)}
     out = []
     for root in every:
-        if not root.is_dir():
+        if not listable(root):
             continue
         try:
             children = sorted(p for p in root.iterdir()
@@ -455,7 +484,12 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
             else:
                 try:
                     found = survey(child)
-                except ArchiveError:
+                except (ArchiveError, OSError):
+                    # OSError as well as ArchiveError: `survey` walks the
+                    # folder, and a share that dies mid-walk raises from the
+                    # walk rather than from the guard above it. One candidate
+                    # that cannot be counted is a candidate left off the list,
+                    # not a page that fails to render.
                     continue
             out.append({
                 "path": key,
@@ -651,6 +685,14 @@ def survey(path: Path, format: str | None = None) -> dict:
         return {"soundings": 0, "by_format": {}}
     except loader.FormatError as exc:
         raise ArchiveError(str(exc)) from None
+    except OSError as exc:
+        # A walk of a share that stopped answering. Distinct from the
+        # FileNotFoundError above, which means the folder is genuinely not
+        # there: "0 soundings" would be a measurement, and this is not one.
+        raise ArchiveError(
+            f"{path} could not be walked -- {exc}. Nothing was counted, so "
+            f"this says nothing about what the folder holds. Fix the mount on "
+            f"the host and try again.") from None
 
     by_format: dict[str, int] = {}
     for fmt in (loader.LFS, loader.CHIRP2, loader.DIGISONDE):

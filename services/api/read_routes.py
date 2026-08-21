@@ -10,6 +10,7 @@ stored product is about 0.2 s, and the file is on disk anyway.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import time
@@ -398,7 +399,8 @@ def ionogram(sounding_id: int, request: Request,
     data does.
     """
     path = _sounding_path(request, sounding_id)
-    png = _render(path, gate=gate, trace=trace, muf=muf, dpi=dpi, bare=bare)
+    with _serving(path):
+        png = _render(path, gate=gate, trace=trace, muf=muf, dpi=dpi, bare=bare)
     return Response(png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
 
@@ -446,7 +448,8 @@ def sounding_sao(sounding_id: int, request: Request,
     from . import sao as sao_mod
 
     path = _sounding_path(request, sounding_id)
-    scaling = sao_mod.build(path, gate=gate)
+    with _serving(path):
+        scaling = sao_mod.build(path, gate=gate)
     body = saoxml.to_string(scaling.root)
     name = Path(path).stem
     return Response(
@@ -454,6 +457,40 @@ def sounding_sao(sounding_id: int, request: Request,
         headers={"Cache-Control": "public, max-age=3600",
                  "Content-Disposition":
                      f'inline; filename="{name}.SAO.XML"'})
+
+
+def _storage_error(exc: OSError) -> HTTPException:
+    """503 for a read that hit dead storage, with the fix that matches it."""
+    from . import archives as archives_mod
+
+    if archives_mod.mount_fault(exc) == "denied":
+        detail = (f"the archive cannot be read by this process -- {exc}. "
+                  f"The api runs as uid 10001, which needs read access to "
+                  f"the mounted folder.")
+    else:
+        detail = (f"the archive is mounted but not answering -- {exc}. "
+                  f"The database row is intact; this is storage, not data. "
+                  f"Fix the mount on the host and retry.")
+    return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail)
+
+
+@contextlib.contextmanager
+def _serving(path: Path):
+    """Turn an OSError raised while *reading* a product into 503, not 500.
+
+    :func:`_sounding_path` probes the file first, and the probe is not enough
+    on its own. A CIFS client answers ``is_file()`` from its attribute cache,
+    so the probe can succeed against a share that has already gone and the
+    read a millisecond later is the thing that fails -- which is what a mount
+    dropping under an index looks like from here. The probe decides between
+    410 and 503; this covers the read itself, and the distinction matters
+    because a 500 tells the operator the server is broken when the server is
+    fine and the NAS is not.
+    """
+    try:
+        yield
+    except OSError as exc:
+        raise _storage_error(exc) from None
 
 
 def _sounding_path(request: Request, sounding_id: int) -> Path:
@@ -476,15 +513,7 @@ def _sounding_path(request: Request, sounding_id: int) -> Path:
     try:
         present = path.is_file()
     except OSError as exc:
-        from . import archives as archives_mod
-        detail = (f"the archive is mounted but not answering -- {exc}. "
-                  f"The database row is intact; this is storage, not data. "
-                  f"Fix the mount on the host and retry.")
-        if archives_mod.mount_fault(exc) == "denied":
-            detail = (f"the archive cannot be read by this process -- {exc}. "
-                      f"The api runs as uid 10001, which needs read access to "
-                      f"the mounted folder.")
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail) from None
+        raise _storage_error(exc) from None
 
     if not present:
         raise HTTPException(
