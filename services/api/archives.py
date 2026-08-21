@@ -36,6 +36,7 @@ else.
 
 from __future__ import annotations
 
+import errno
 import os
 import threading
 import time
@@ -298,17 +299,67 @@ def _root_host(index: int) -> str:
     return os.environ.get(name) or ""
 
 
+#: Errnos meaning "something is mounted here and the storage behind it is not
+#: answering" -- as opposed to "nothing is mounted here". The distinction is
+#: the whole remedy: a missing bind mount is fixed in `deploy/.env` and a
+#: redeploy, while a NAS that has gone away is fixed on the host and a
+#: redeploy changes nothing. Sending an operator to the wrong one of those
+#: costs an afternoon, and the work server produced both EIO and EHOSTDOWN in
+#: the same minute on 2026-08-21.
+UNREACHABLE_ERRNOS = frozenset(filter(None, (
+    errno.EIO, errno.ESTALE, errno.ETIMEDOUT, errno.ENOTCONN,
+    errno.ECONNABORTED, errno.ECONNRESET,
+    getattr(errno, "EHOSTDOWN", None), getattr(errno, "EHOSTUNREACH", None),
+    getattr(errno, "EREMOTEIO", None), getattr(errno, "ENOLINK", None),
+)))
+
+#: Mounted and readable by somebody, just not by this process.
+DENIED_ERRNOS = frozenset({errno.EACCES, errno.EPERM})
+
+
+def mount_fault(exc: OSError) -> str:
+    """Which kind of unreadable this is, and therefore which fix applies."""
+    if exc.errno in UNREACHABLE_ERRNOS:
+        return "unreachable"
+    if exc.errno in DENIED_ERRNOS:
+        return "denied"
+    return "missing"
+
+
 def _root_state(path: Path, index: int) -> dict:
-    exists = path.is_dir()
+    """What this root looks like, or why it cannot be looked at.
+
+    **Never raises.** This function exists to report the mount's condition, so
+    an unreachable mount is its subject, not an error case -- and it is the
+    condition that most needs reporting, because nothing else on the server
+    notices. `/healthz` answers "is the process up" and deliberately touches no
+    storage, so a NAS that has gone away leaves a container marked healthy
+    while this page 500s.
+
+    ``Path.is_dir()`` is the trap and the reason for the outer guard: it
+    swallows only ENOENT, ENOTDIR, EBADF and ELOOP. A network mount that is
+    present but sick raises EIO, ESTALE, EACCES or ETIMEDOUT, and every one of
+    those propagates. `iterdir` was already guarded; `is_dir` was not, so the
+    page died on the one call that had no reason to be trusted.
+    """
     entries = None
+    error = fault = None
+    try:
+        exists = path.is_dir()
+    except OSError as exc:
+        # Present in the namespace, unreadable in practice: the mount is there
+        # and the filesystem behind it is not answering.
+        exists, error, fault = False, str(exc), mount_fault(exc)
     if exists:
         try:
             entries = sum(1 for _ in path.iterdir())
-        except OSError:
-            exists = False
+        except OSError as exc:
+            exists, error, fault = False, str(exc), mount_fault(exc)
+    elif error is None:
+        fault = "missing"
     return {"root": str(path), "host": _root_host(index),
             "primary": index == 0, "exists": exists, "entries": entries,
-            "empty": exists and entries == 0}
+            "empty": exists and entries == 0, "error": error, "fault": fault}
 
 
 def mount() -> dict:

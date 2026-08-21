@@ -17,6 +17,7 @@
       <td><code>{{ r.root }}</code>
         {%- if r.primary %} <span class="note">primary</span>{% endif %}</td>
       <td>{% if not r.exists %}<span class="bad">not readable</span>
+          {%- if r.error %}<div class="note">{{ r.error }}</div>{% endif %}
           {% elif r.empty %}<span class="bad">mounted but empty</span>
           {% else %}<span class="ok">ok</span>
           <span class="muted">{{ r.entries }} entr{{ 'y' if r.entries == 1 else 'ies' }}</span>{% endif %}</td>
@@ -32,7 +33,22 @@
   <code>ARCHIVE_ROOTS</code> &mdash; both, then redeploy. A path cannot be
   added from this page: a container's filesystem is fixed when it starts.</p>
   {% endif %}
-  {% if not mount.exists %}
+  {# Three different unreadables with three different fixes. Saying "set
+     ARCHIVE_HOST_PATH and redeploy" to someone whose NAS is down sends them
+     to edit a file that is already correct, and a redeploy will not bring the
+     storage back. The errno already knows which case this is. #}
+  {% if not mount.exists and mount.fault == 'unreachable' %}
+  <p class="note bad"><b>The mount is there; the storage behind it is not
+  answering.</b> <code>{{ mount.root }}</code> exists inside the container and
+  every read of it fails &mdash; {{ mount.error }}.
+  <code>ARCHIVE_HOST_PATH</code> is <i>not</i> the problem here and redeploying
+  will not help: fix it on the host, where the volume is mounted, then the
+  scans resume on their own. Nothing can be registered or indexed until then.</p>
+  {% elif not mount.exists and mount.fault == 'denied' %}
+  <p class="note bad">The mount exists but this process may not read it &mdash;
+  {{ mount.error }}. The api runs as uid 10001; that uid needs read access to
+  the host folder. No folder can be registered until this is fixed.</p>
+  {% elif not mount.exists %}
   <p class="note bad">Nothing is readable at <code>{{ mount.root }}</code>.
   Under Docker that means the bind mount is missing or its source is gone
   &mdash; set <code>ARCHIVE_HOST_PATH</code> in <code>deploy/.env</code> and

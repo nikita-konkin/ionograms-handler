@@ -466,7 +466,27 @@ def _sounding_path(request: Request, sounding_id: int) -> Path:
     path = Path(row["path"])
     if not path.is_absolute():
         path = Path(request.app.state.archive_root) / path
-    if not path.is_file():
+    # Guarded, and the two outcomes are genuinely different. `Path.is_file`
+    # swallows only ENOENT/ENOTDIR/EBADF/ELOOP, so a mount that is present but
+    # not answering -- EIO, EHOSTDOWN, ESTALE -- raises straight out of the
+    # request. Reporting that as 410 Gone would be two lies at once: the file
+    # is probably fine, and the suggested fix (check ARCHIVE_ROOT) is for a
+    # different fault entirely. 503 is what "the storage is down, try later"
+    # means, and it keeps a caching client from treating it as permanent.
+    try:
+        present = path.is_file()
+    except OSError as exc:
+        from . import archives as archives_mod
+        detail = (f"the archive is mounted but not answering -- {exc}. "
+                  f"The database row is intact; this is storage, not data. "
+                  f"Fix the mount on the host and retry.")
+        if archives_mod.mount_fault(exc) == "denied":
+            detail = (f"the archive cannot be read by this process -- {exc}. "
+                      f"The api runs as uid 10001, which needs read access to "
+                      f"the mounted folder.")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail) from None
+
+    if not present:
         raise HTTPException(
             status.HTTP_410_GONE,
             f"{row['file']} is in the database but not on disk at {path}. "
