@@ -1,0 +1,43 @@
+# What the inference container installs.
+#
+# The point of this file is what is NOT in it. TensorFlow alone is larger than
+# everything here put together, and it is needed only by the LSTM family and
+# the CNN estimator; hyperopt and pmdarima are search and fitting tools that an
+# inference pass never calls. A container that runs a gradient-boosted model
+# four times a day has no business carrying any of them.
+#
+# Models needing those are registered with `capability = 'deep'` and refused
+# here by name, pointing at Dockerfile.train -- which is a better failure than
+# an ImportError three frames inside a loader.
+#
+# Pinned to majors, as in requirements-api.txt, and to the SAME numpy: one
+# numpy across the estate means an artifact pickled by one service unpickles in
+# another.
+
+numpy>=1.26,<2.0
+scipy>=1.13,<2.0
+pandas>=2.2,<3.0
+
+# The estimator families the archive's artifacts actually hold: every .sav in
+# `experiments/` is an sklearn linear model, a random forest or an XGBRegressor.
+scikit-learn>=1.5,<2.0
+xgboost>=2.1,<3.0
+joblib>=1.4
+
+# `seasonal_decompose`, and it is NOT optional here despite being a fitting
+# library. The archive's models take trend/seasonal/residual columns as inputs,
+# so rebuilding their feature vector at inference time needs the same
+# decomposition that built it at training time. Reimplementing it to save 15 MB
+# would risk the numbers differing from what the model was fitted on, which is
+# exactly the class of error the golden check exists to catch and a silly one
+# to introduce on purpose.
+statsmodels>=0.14
+
+# IRI, as a covariate and as one of the four baselines every model is scored
+# against. Same reasoning as requirements-api.txt: a comparison nobody can see
+# is not a comparison.
+PyIRI>=0.1.7
+
+# The database. psycopg3 rather than psycopg2 for the Postgres cutover; on
+# SQLite this is unused and harmless.
+psycopg[binary]>=3.2

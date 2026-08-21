@@ -50,7 +50,12 @@
   button { font:inherit; background:var(--panel); color:var(--ink);
            border:1px solid var(--line); border-radius:6px;
            padding:.3rem .8rem; cursor:pointer; }
-  button:hover { border-color:var(--accent); color:var(--accent); }
+  button:not(:disabled):hover { border-color:var(--accent); color:var(--accent); }
+  /* A disabled button must *look* disabled. Without this the only difference
+     is that clicking does nothing, which reads as a broken page rather than a
+     refused action -- and these buttons carry their reason in a title, so an
+     operator has to know to hover before the explanation is reachable. */
+  button:disabled { opacity:.45; cursor:not-allowed; color:var(--dim); }
   input { font:inherit; background:var(--bg); color:var(--ink);
           border:1px solid var(--line); border-radius:6px; padding:.3rem .5rem; }
   a { color:var(--accent); }
@@ -67,6 +72,7 @@
     <a href="/ui/soundings">soundings</a>
     <a href="/ui/sources">sources</a>
     <a href="/ui/archives">archives</a>
+    <a href="/ui/forecast">forecast</a>
     <a href="/docs">api</a>
   </nav>
   <span class="note" style="margin-left:auto">{% block hint %}{% endblock %}</span>

@@ -33,6 +33,11 @@ iri = ["PyIRI>=0.1.5"]
 cnn = ["tensorflow>=2.16"]
 # The pre-existing PostgreSQL scripts in data_handler/
 db = ["psycopg2-binary>=2.9"]
+# Running already-trained forecasting models (`services.prediction`). joblib
+# reads the archive's artifacts; statsmodels rebuilds the trend/seasonal
+# columns those models take as inputs, so it is needed at inference and not
+# only at fitting.
+predict = ["joblib>=1.4", "statsmodels>=0.14", "xgboost>=2.1"]
 test = ["pytest>=8"]
 
 [project.scripts]
@@ -42,7 +47,7 @@ muf = "muf.cli:main"
 # Only the pipeline package. The original top-level scripts (MUF.py, stuffr.py,
 # data_handler/, ...) stay in the repository for reference but are not shipped.
 packages = ["muf", "muf.extractors", "muf.reference", "services",
-            "services.agent", "services.api"]
+            "services.agent", "services.api", "services.prediction"]
 
 # The api service ships its schema and its Jinja templates, which are data, not
 # modules -- without this an installed copy starts and then 500s on the first

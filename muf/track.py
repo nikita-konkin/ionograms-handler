@@ -48,11 +48,21 @@ DEFAULT_GATE_SIGMA = 4.0
 MARGINAL_RUN = 8
 
 
+#: Per-parameter column names in a `muf.pipeline` results table. The censoring
+#: flag differs at each end of the band -- `limited` is a pick at the top of
+#: the sweep and a lower bound on MUF, `loflim` one at the floor and an upper
+#: bound on LOF -- and so does the signal level each is measured at.
+PARAMS = {
+    "muf": {"censor": "limited", "snr": "snr"},
+    "lof": {"censor": "loflim", "snr": "lofsnr"},
+}
+
+
 @dataclass
 class Track:
-    """A tracked MUF series."""
+    """A tracked series. The value column is named after the parameter."""
 
-    frame: pd.DataFrame           # datetime, muf, sigma, measured, rejected
+    frame: pd.DataFrame           # datetime, <param>, sigma, measured, rejected
     n_measured: int
     n_filled: int
     n_rejected: int
@@ -66,13 +76,20 @@ def measurement_sigma(
     frame: pd.DataFrame,
     method: str,
     base_sigma: float = DEFAULT_BASE_SIGMA_MHZ,
+    param: str = "muf",
 ) -> np.ndarray:
     """Per-sounding measurement standard deviation, in MHz.
 
     A pick backed by a long continuous trace at good signal-to-noise deserves
     more weight than a marginal one. Both signals are already recorded per
     sounding, so the weighting costs nothing to compute.
+
+    LOF is weighted by ``lofsnr``, which the pipeline measures at the *bottom*
+    of the trace. Reusing the MUF's ``snr`` would scale a LOF's uncertainty by
+    the signal level at the other end of the band, and the two ends routinely
+    differ.
     """
+    snr_column = "lofsnr" if param == "lof" else "snr"
     n = len(frame)
     sigma = np.full(n, base_sigma)
 
@@ -81,8 +98,8 @@ def measurement_sigma(
     marginal = run.to_numpy() < MARGINAL_RUN
     sigma[np.nan_to_num(marginal, nan=False).astype(bool)] *= 3.0
 
-    snr = pd.to_numeric(frame.get(f"snr_{method}"), errors="coerce") \
-        if f"snr_{method}" in frame else pd.Series(np.nan, index=frame.index)
+    snr = pd.to_numeric(frame.get(f"{snr_column}_{method}"), errors="coerce") \
+        if f"{snr_column}_{method}" in frame else pd.Series(np.nan, index=frame.index)
     if snr.notna().any():
         # Scale gently with signal level: a 40 dB weaker echo is ~2x less certain.
         reference = float(snr.median())          # skips NaN without warning
@@ -99,15 +116,22 @@ def track(
     sigma,
     process_noise: float = DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
     gate_sigma: float = DEFAULT_GATE_SIGMA,
+    param: str = "muf",
 ) -> Track:
     """Kalman filter plus RTS smoother over an irregularly sampled series.
 
+    The filter itself knows nothing about which frequency it is tracking -- a
+    random walk in rate is as good a description of the LOF as of the MUF.
+    ``param`` only names the output column, so a tracked LOF is never handed
+    on in a frame whose column says ``muf``.
+
     Args:
         times: timestamps, ascending.
-        values: measured MUF; NaN where no estimator produced a pick.
+        values: measurements; NaN where no estimator produced a pick.
         sigma: per-measurement standard deviation, MHz.
-        process_noise: random-walk rate on dMUF/dt, MHz per hour.
+        process_noise: random-walk rate on d(value)/dt, MHz per hour.
         gate_sigma: reject measurements beyond this many predicted sigma.
+        param: names the value column of the returned frame.
     """
     index = pd.DatetimeIndex(pd.to_datetime(list(times)))
     order = np.argsort(index.to_numpy())
@@ -180,7 +204,7 @@ def track(
     measured = np.isfinite(values) & ~rejected
     frame = pd.DataFrame({
         "datetime": index,
-        "muf": np.round(smoothed_states[:, 0], 3),
+        param: np.round(smoothed_states[:, 0], 3),
         "rate_mhz_per_hour": np.round(smoothed_states[:, 1], 3),
         "sigma": np.round(np.sqrt(np.maximum(smoothed_covs[:, 0, 0], 0.0)), 3),
         "measured": measured,
@@ -202,27 +226,36 @@ def track_results(
     base_sigma: float = DEFAULT_BASE_SIGMA_MHZ,
     process_noise: float = DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
     gate_sigma: float = DEFAULT_GATE_SIGMA,
+    param: str = "muf",
 ) -> Track:
-    """Track the MUF in a results table from :mod:`muf.pipeline`.
+    """Track one parameter in a results table from :mod:`muf.pipeline`.
 
-    Band-limited picks are excluded by default: they are lower bounds, and
-    letting them anchor the state would pull the midday peak down.
+    Band-edge picks are excluded by default: they are bounds, and letting one
+    anchor the state pulls the curve towards the edge it ran into -- the
+    midday MUF down towards the top of the sweep, the dawn LOF up towards the
+    band floor.
     """
     from .compare import flag, usable
     from .pipeline import _first_method
 
+    if param not in PARAMS:
+        raise ValueError(f"unknown parameter {param!r}; expected one of {sorted(PARAMS)}")
+    censor = PARAMS[param]["censor"]
+
     method = method or _first_method(frame)
     frame = frame.sort_values("datetime").reset_index(drop=True)
 
-    values = usable(frame, method, drop_limited=drop_limited).to_numpy(dtype=float)
-    sigma = measurement_sigma(frame, method, base_sigma)
+    values = usable(frame, method, drop_limited=drop_limited,
+                    param=param).to_numpy(dtype=float)
+    sigma = measurement_sigma(frame, method, base_sigma, param=param)
 
     if drop_limited:
         # Not measurements, so not tracked -- but their absence is a gap the
         # filter should fill rather than a hole in the output.
-        values = np.where(flag(frame, f"limited_{method}").to_numpy(), np.nan, values)
+        values = np.where(flag(frame, f"{censor}_{method}").to_numpy(), np.nan, values)
 
     result = track(frame["datetime"], values, sigma,
-                   process_noise=process_noise, gate_sigma=gate_sigma)
+                   process_noise=process_noise, gate_sigma=gate_sigma,
+                   param=param)
     result.frame.insert(1, "method", method)
     return result

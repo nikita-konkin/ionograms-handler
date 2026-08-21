@@ -258,3 +258,148 @@ CREATE TABLE IF NOT EXISTS archive (
     last_scan_result TEXT,
     last_scan_ok     INTEGER
 );
+
+
+-- --------------------------------------------------------------------------
+-- Forecasting (architecture.md sec. 5.2, extended for inference)
+-- --------------------------------------------------------------------------
+
+-- What produced a forecast, and on what. The artifact itself is a file on the
+-- models volume; this row is what makes it identifiable six months later.
+--
+-- **A row is a binding of one artifact to one circuit**, not just a file.
+-- The same artifact serving two circuits is two rows sharing a `sha256`, which
+-- keeps "one active model per circuit and parameter" expressible as an index
+-- rather than as application logic over a JSON list.
+--
+-- `tx`/`rx` NULL means *unbound*: registered and runnable for comparison, but
+-- attached to no circuit. Every legacy import lands here, because a model
+-- trained on the Brisbane MUF(3000)F2 series is not a model of any circuit
+-- this instrument sounds.
+--
+-- Two CHECKs carry the promotion rule, and they are the reason it is a rule
+-- rather than a habit:
+--
+--   * `target_src = 'measured'` -- a model fitted against modelled values (IRI,
+--     or another model's output) may be scored and compared, and may never
+--     become the operational forecast. Structural separation, exactly as
+--     `reference` is a separate table from `extraction`.
+--   * bound to a circuit -- an unbound model has no circuit whose forecast it
+--     could be.
+--
+-- `features` is stored VERBATIM and in order. sklearn's `feature_names_in_`
+-- order is whatever `set` iteration produced at fit time, not sorted, and
+-- feeding the columns back in a different order silently produces wrong
+-- numbers rather than an error.
+CREATE TABLE IF NOT EXISTS model_registry (
+    id             INTEGER PRIMARY KEY,
+    name           TEXT NOT NULL,
+    param          TEXT NOT NULL,          -- muf | lof
+    tx             TEXT, rx TEXT,          -- NULL = unbound, comparison only
+    origin         TEXT NOT NULL,          -- legacy | trained | imported
+    framework      TEXT NOT NULL,          -- sklearn | xgboost | keras | torch
+    loader         TEXT NOT NULL,          -- joblib | keras | torch
+    -- Which image can load it: 'slim' needs only sklearn/xgboost, 'deep' needs
+    -- the training image. Checked before the import is attempted so the failure
+    -- names the remedy instead of surfacing as an ImportError three frames down.
+    capability     TEXT NOT NULL DEFAULT 'slim',
+    artifact       TEXT NOT NULL,
+    sha256         TEXT NOT NULL,
+    features       TEXT NOT NULL,          -- JSON list, ordered, verbatim
+    target_alias   TEXT,                   -- the column name the features name
+    feature_recipe TEXT,                   -- JSON: lag, windows, stats, time cols
+    env            TEXT,                   -- JSON: library versions at fit time
+    -- One feature row and what the model predicted from it at import time.
+    -- Re-run on every load: a library upgrade that changes behaviour silently
+    -- is what this catches, and a version-string comparison cannot.
+    golden_input   TEXT,                   -- JSON list, aligned with `features`
+    golden_output  REAL,
+    target_src     TEXT NOT NULL,          -- measured | modelled
+    metrics        TEXT,                   -- JSON: MAE by horizon, vs baselines
+    note           TEXT,
+    imported_at    TEXT NOT NULL,
+    trained_from   TEXT, trained_to TEXT,
+    active         INTEGER NOT NULL DEFAULT 0,
+    activated_at   TEXT,
+    activated_by   TEXT,
+    CHECK (active = 0 OR target_src = 'measured'),
+    CHECK (active = 0 OR (tx IS NOT NULL AND rx IS NOT NULL))
+);
+
+-- Identity, and the reason it is an expression index rather than a UNIQUE on
+-- the table: `tx` and `rx` are NULL for an unbound model, and NULL is not
+-- equal to NULL in a unique constraint, so two identical unbound imports would
+-- both be accepted. Re-importing a file is the first thing anyone does when an
+-- import looks wrong, and it must update the row rather than accumulate rows.
+CREATE UNIQUE INDEX IF NOT EXISTS model_registry_identity ON model_registry(
+    name, param, COALESCE(tx, ''), COALESCE(rx, ''), sha256);
+
+-- One active model per circuit and parameter. A partial unique index rather
+-- than a trigger: the constraint is declarative, and an activation that would
+-- create a second one fails at the write instead of leaving two live.
+CREATE UNIQUE INDEX IF NOT EXISTS model_registry_one_active
+    ON model_registry(param, tx, rx) WHERE active = 1;
+
+CREATE INDEX IF NOT EXISTS model_registry_param ON model_registry(param, tx, rx);
+
+
+-- One row per (model, issue, valid time, parameter).
+--
+-- Old issues are never deleted -- they are what horizon scoring is computed
+-- from, and a forecast you cannot score is decoration. On Postgres this table
+-- is PARTITION BY RANGE (issued_at) monthly; SQLite has no partitioning, so
+-- here it is one table with the index that matters.
+--
+-- `sigma` is the model's own uncertainty and `lo`/`hi` a prediction interval
+-- where the model produces one. Both nullable: a point estimate that claims a
+-- confidence it does not have is worse than one that admits it has none.
+CREATE TABLE IF NOT EXISTS forecast (
+    model_id   INTEGER NOT NULL REFERENCES model_registry(id) ON DELETE CASCADE,
+    param      TEXT NOT NULL,
+    tx         TEXT NOT NULL, rx TEXT NOT NULL,
+    issued_at  TEXT NOT NULL,
+    valid_at   TEXT NOT NULL,
+    horizon_s  INTEGER NOT NULL,
+    value      REAL, sigma REAL, lo REAL, hi REAL,
+    -- JSON: the solar driver's age and which source answered, the version skew
+    -- if the model was run across one, and whether the input window was short.
+    -- Travels with the value, never separately -- same rule as `extraction`.
+    quality    TEXT,
+    PRIMARY KEY (model_id, param, tx, rx, issued_at, valid_at)
+);
+
+CREATE INDEX IF NOT EXISTS forecast_valid ON forecast(param, tx, rx, valid_at);
+CREATE INDEX IF NOT EXISTS forecast_issue ON forecast(issued_at);
+
+-- Scores: how a model, or a baseline, did against the measurements.
+--
+-- **Models and baselines share this table on purpose.** A leaderboard that can
+-- only hold models invites promoting the best of a bad set; putting
+-- persistence and 27-day recurrence in the same rows, in the same units and
+-- over the same pairs, makes "none of these is worth activating" a visible
+-- answer. `subject` is `model:<id>` or `baseline:<name>` -- deliberately not a
+-- foreign key, because half the rows have nothing to point at.
+--
+-- One row per subject, circuit and horizon: the latest scoring run replaces
+-- the previous one. No history is lost by that -- `forecast` keeps every issue,
+-- so any past window can be rescored.
+--
+-- `mae`/`rmse`/`bias` cover uncensored pairs only, and the band-edge picks are
+-- counted separately in `n_censored`/`mae_censored`. Mixing them would let a
+-- model look accurate by agreeing with a bound that was never a measurement.
+CREATE TABLE IF NOT EXISTS score (
+    subject      TEXT NOT NULL,          -- model:<id> | baseline:<name>
+    param        TEXT NOT NULL,
+    tx           TEXT NOT NULL, rx TEXT NOT NULL,
+    horizon_s    INTEGER NOT NULL,       -- the bucket, not the exact lead
+    scored_at    TEXT NOT NULL,
+    window_from  TEXT, window_to TEXT,
+    n            INTEGER NOT NULL,
+    mae          REAL, rmse REAL, bias REAL,
+    n_censored   INTEGER NOT NULL DEFAULT 0,
+    mae_censored REAL,
+    detail       TEXT,                   -- JSON: why a baseline is missing, etc.
+    PRIMARY KEY (subject, param, tx, rx, horizon_s)
+);
+
+CREATE INDEX IF NOT EXISTS score_circuit ON score(param, tx, rx, horizon_s);

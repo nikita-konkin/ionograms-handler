@@ -534,30 +534,37 @@ def plot_track(
     raw_frame=None,
     method: str = "algo",
     dpi: int = DEFAULT_DPI,
+    param: str = "muf",
 ) -> Path:
-    """Plot a tracked MUF curve with its uncertainty band."""
+    """Plot a tracked curve with its uncertainty band.
+
+    ``param`` names the column and every label. A LOF plot titled "Tracked
+    MUF" is worse than no plot, because it is the kind of thing that gets put
+    in a report.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    label = param.upper()
     plt, (fig, ax) = _figure((14, 6))
 
     times = pd.to_datetime(track_frame["datetime"])
-    muf = track_frame["muf"].to_numpy(dtype=float)
+    muf = track_frame[param].to_numpy(dtype=float)
     sigma = track_frame["sigma"].to_numpy(dtype=float)
 
     ax.fill_between(times, muf - 2 * sigma, muf + 2 * sigma,
                     color="#d1495b", alpha=0.18, linewidth=0, label="+/-2 sigma")
     ax.plot(times, muf, "-", linewidth=2.0, color="#d1495b", label="tracked")
 
-    if raw_frame is not None and f"muf_{method}" in raw_frame:
-        ax.plot(pd.to_datetime(raw_frame["datetime"]), raw_frame[f"muf_{method}"],
+    if raw_frame is not None and f"{param}_{method}" in raw_frame:
+        ax.plot(pd.to_datetime(raw_frame["datetime"]), raw_frame[f"{param}_{method}"],
                 ".", markersize=4, alpha=0.5, color="#3d5a80",
                 label=f"{method} per sounding")
 
     if "rejected" in track_frame:
         rejected = track_frame["rejected"].to_numpy(dtype=bool)
-        if rejected.any() and raw_frame is not None and f"muf_{method}" in raw_frame:
-            raw = pd.to_numeric(raw_frame[f"muf_{method}"], errors="coerce")
+        if rejected.any() and raw_frame is not None and f"{param}_{method}" in raw_frame:
+            raw = pd.to_numeric(raw_frame[f"{param}_{method}"], errors="coerce")
             ax.plot(times[rejected], raw.to_numpy()[rejected], "x", markersize=7,
                     color="#333333", label="rejected")
 
@@ -568,8 +575,8 @@ def plot_track(
                     markerfacecolor="none", color="#ee9b00", label="filled")
 
     ax.set_xlabel("Time (UTC)", fontsize=13)
-    ax.set_ylabel("MUF (MHz)", fontsize=13)
-    ax.set_title("Tracked MUF", fontsize=14)
+    ax.set_ylabel(f"{label} (MHz)", fontsize=13)
+    ax.set_title(f"Tracked {label}", fontsize=14)
     ax.grid(alpha=0.3)
     ax.legend()
     fig.autofmt_xdate()

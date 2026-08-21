@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block title %}forecast{% endblock %}
+{% block hint %}{{ models|length }} model(s) registered, {{ live|selectattr('model')|list|length }} live on {{ live|length }} circuit(s){% endblock %}
+{% block body %}
+
+{# Four bands, in the order the questions get asked: is it running, is it
+   wrong, what does it say, what else could be run. #}
+
+<div class="panel">
+  <h2>live</h2>
+  {% if live %}
+  <div class="scroll"><table>
+    <tr><th>circuit</th><th>param</th><th>model</th><th>last issue</th>
+        <th>state</th></tr>
+    {% for row in live %}
+    <tr>
+      <td><b>{{ row.tx }} &rarr; {{ row.rx }}</b></td>
+      <td class="muted">{{ row.param|upper }}</td>
+      <td>{% if row.model %}{{ row.model.name }}
+          <span class="muted">{{ row.model.origin }}</span>
+          {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
+      <td class="muted">{{ row.issued_at or '—' }}</td>
+      <td>
+        {%- if not row.model %}<span class="pill unk">no model</span>
+        {%- elif row.stale %}<span class="pill warn">stale
+          {{ row.age_s|duration }}</span>
+        {%- else %}<span class="pill ok">ok</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">No circuit has enough extracted data to forecast yet.</p>
+  {% endif %}
+
+  {# Overtaken, not demoted. The service will not swap the model behind a
+     published forecast on its own -- that would change what every consumer
+     receives with nothing in the logs having asked for it -- so the crossing
+     is drawn here and the decision stays with whoever holds the token. #}
+  {% for d in drift %}
+  <p class="note"><span class="pill warn">overtaken</span>
+    {{ chosen[1] }} &rarr; {{ chosen[2] }} / {{ chosen[0]|upper }}:
+    <b>{{ d.model }}</b> scores {{ '%.2f'|format(d.model_mae) }} MHz at
+    {{ d.horizon_s|lead }} where <b>{{ d.baseline }}</b> scores
+    {{ '%.2f'|format(d.baseline_mae) }}, over {{ d.n }} pairs.
+    Surfaced, not demoted.</p>
+  {% endfor %}
+
+  {% if not live|selectattr('model')|list %}
+  <p class="note">Nothing is live. That is the normal state of a fresh
+  deployment, not a fault &mdash; register a model with
+  <code>python -m services.prediction.importer</code>, then promote one below.
+  Until then <code>/forecast</code> returns nothing rather than something
+  unvouched-for.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>models</h2>
+  {% if models %}
+  <div class="scroll"><table>
+    <tr><th>model</th><th>param</th><th>circuit</th><th>origin</th>
+        <th>inputs</th><th>state</th><th></th></tr>
+    {% for m in models %}
+    <tr{% if m.target_src != 'measured' %} class="muted"{% endif %}>
+      <td><b>{{ m.name }}</b>
+        <div class="note">{{ m.framework }}{% if m.env and m.env.sklearn %}
+          {{ m.env.sklearn }}{% endif %} &middot; {{ m.capability }}
+          &middot; golden {{ m.golden }}</div></td>
+      <td class="muted">{{ m.param|upper }}</td>
+      <td class="muted">{% if m.tx %}{{ m.tx }} &rarr; {{ m.rx }}
+          {%- else %}<span class="note">unbound</span>{% endif %}</td>
+      <td class="muted">{{ m.origin }}</td>
+      {# The alias is the provenance fact worth showing: it is the column name
+         this model's features are built around, and when it is not this
+         instrument's own it says whose ionosphere the model actually learned. #}
+      <td class="muted">{{ m.features|length }}
+        {%- if m.target_alias %} <span class="note">of
+          <code>{{ m.target_alias }}</code></span>{% endif %}</td>
+      <td>
+        {%- if m.state == 'active' %}<span class="pill ok">ACTIVE</span>
+        {%- elif m.state == 'comparison' %}<span class="pill unk">comparison</span>
+        {%- else %}<span class="pill">{{ m.state }}</span>{% endif %}</td>
+      <td style="white-space:nowrap">
+        {% if m.target_src != 'measured' %}
+        {# Rendered disabled rather than hidden. An operator should see that
+           these models exist, that they were scored, and exactly why they
+           cannot go live -- a missing button explains nothing. #}
+        <button disabled title="Fitted against a modelled target, so it can be
+compared for ever and never promoted. The schema refuses it, not this page.">
+          activate</button>
+        {% elif not m.tx %}
+        <button disabled title="Bound to no circuit, so there is no forecast it
+could be. Re-import it with --tx and --rx.">activate</button>
+        {% elif m.active %}
+        <button onclick="retire({{ m.id }}, {{ m.name|tojson }})">retire</button>
+        {% else %}
+        <button onclick="activate({{ m.id }}, {{ m.name|tojson }},
+          {{ (m.tx ~ ' -> ' ~ m.rx)|tojson }}, {{ m.param|tojson }})">activate</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">Nothing registered. <code>python -m
+  services.prediction.importer &lt;file&gt; --param muf</code> registers one;
+  there is deliberately no route that does it over HTTP, because registering a
+  model means running code out of a file on a shared volume.</p>
+  {% endif %}
+  <div id="say" class="note" style="margin-top:.5rem"></div>
+</div>
+
+<div class="panel">
+  <h2>leaderboard{% if chosen %}
+    <span class="note">&nbsp;&nbsp;{{ chosen[1] }} &rarr; {{ chosen[2] }}
+      &middot; {{ chosen[0]|upper }} &middot; MAE (MHz)</span>{% endif %}</h2>
+
+  {# A leaderboard is per circuit: MAE in MHz on a 2400 km path is not
+     comparable with MAE on a 700 km one, so there is no combined view here
+     that could be mistaken for one. #}
+  {% if live|length > 1 %}
+  <p class="note">circuit:
+    {%- for row in live %}
+    <a href="/ui/forecast?param={{ row.param }}&amp;tx={{ row.tx }}&amp;rx={{ row.rx }}"
+       {% if chosen and chosen[0] == row.param and chosen[1] == row.tx
+             and chosen[2] == row.rx %}class="on" style="color:var(--accent)"{% endif %}
+       >{{ row.tx }}&rarr;{{ row.rx }} {{ row.param|upper }}</a>{% if not loop.last %} &middot;{% endif %}
+    {%- endfor %}
+  </p>
+  {% endif %}
+
+  {% if board %}
+  {# Baselines sit in the same table, in the same units, over the same pairs.
+     A board showing only models invites promoting the best of a bad set;
+     persistence and 27-day recurrence beside them make "none of these is
+     worth activating" a visible answer rather than one nobody thought to
+     ask for. #}
+  <div class="scroll"><table>
+    <tr><th>subject</th><th>origin</th>
+      {% for h in horizons %}<th style="text-align:right">{{ h|lead }}</th>{% endfor %}
+      <th>pairs</th><th>state</th></tr>
+
+    {% for entry in board if entry.kind == 'model' %}
+    <tr>
+      <td><b>{{ entry.name }}</b></td>
+      <td class="muted">{{ entry.origin }}</td>
+      {% for h in horizons %}
+      <td style="text-align:right; font-variant-numeric:tabular-nums">
+        {%- set mae = entry.mae.get(h|string) -%}
+        {% if mae is not none %}{{ '%.2f'|format(mae) }}
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
+      {% endfor %}
+      <td class="muted">{{ entry.n.values()|sum }}</td>
+      <td>
+        {%- if entry.state == 'active' %}<span class="pill ok">ACTIVE</span>
+        {%- elif entry.state == 'comparison' %}<span class="pill unk">comparison</span>
+        {%- else %}<span class="pill">{{ entry.state }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+
+    <tr><td colspan="{{ horizons|length + 4 }}" class="muted"
+        style="border-bottom:none; padding-top:.8rem">&mdash; baselines
+        &mdash;</td></tr>
+
+    {% for entry in board if entry.kind == 'baseline' %}
+    {% set why = entry.detail.values()|map(attribute='unavailable')|select|first %}
+    <tr{% if why %} class="muted"{% endif %}>
+      <td{% if why %} title="{{ why }}"{% endif %}>{{ entry.name }}</td>
+      <td class="muted">baseline</td>
+      {% for h in horizons %}
+      <td style="text-align:right; font-variant-numeric:tabular-nums">
+        {%- set mae = entry.mae.get(h|string) -%}
+        {% if mae is not none %}{{ '%.2f'|format(mae) }}
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
+      {% endfor %}
+      <td class="muted">{{ entry.n.values()|sum }}</td>
+      {# Unavailable is stated, never blank: a missing row reads as neglect,
+         a row saying why IRI has nothing for LOF is an answer. #}
+      {# Wrapped rather than nowrap: these reasons are sentences, and a
+         sentence held on one line drags the whole table sideways. #}
+      <td class="note wrap" style="max-width:30rem">{{ why or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+
+  <p class="note">Censored hours &mdash; a pick at the top of the sweep or the
+  band floor &mdash; are scored one-sidedly and counted apart, so a bound never
+  dilutes the number above. Rescore with <code>python -m
+  services.prediction.scoring --once</code>.</p>
+
+  {% else %}
+  <p class="note">Nothing scored for this circuit yet. Run <code>python -m
+  services.prediction.scoring --once</code>, or wait for the next
+  <code>infer</code> pass &mdash; scoring runs behind it. Until then the table
+  above reports what a model <i>is</i>, never how good it is.</p>
+  <div class="scroll"><table>
+    <tr><th>baseline</th><th>what it is</th></tr>
+    <tr><td>persistence</td><td class="wrap">the value one lead time ago; at a
+      24 h horizon that is yesterday at the same UTC minute, which captures the
+      diurnal cycle for free</td></tr>
+    <tr><td>recurrence-27d</td><td class="wrap">one solar rotation ago; the
+      standard operational HF baseline</td></tr>
+    <tr><td>iri</td><td class="wrap">the stored IRI reference at the path
+      control point &mdash; already built and validated. MUF only: IRI says
+      nothing about the absorption floor that sets LOF</td></tr>
+    <tr><td>harmonic</td><td class="wrap">diurnal harmonics plus solar zenith
+      angle, fitted strictly before the scored window so it cannot become an
+      oracle on its own leaderboard</td></tr>
+  </table></div>
+  {% endif %}
+</div>
+
+<script>
+// Same contract as the console's start/stop buttons and the archives page:
+// the control token lives in sessionStorage, put there on the console page,
+// never baked into a page that might be left open.
+const token = () => sessionStorage.getItem('tok') || '';
+
+async function control(url, method, body) {
+  const tok = token();
+  if (!tok) return {ok: false, detail:
+    'No control token. Paste it on the console page first.'};
+  const r = await fetch(url, {
+    method,
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const out = await r.json().catch(() => ({}));
+  return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
+}
+
+const say = (text, bad) => {
+  const el = document.getElementById('say');
+  el.textContent = text;
+  el.className = 'note' + (bad ? ' bad' : '');
+};
+
+// Asks once, naming the incumbent: promotion changes what every consumer of
+// /forecast receives from the next request onwards, with no other signal that
+// it happened.
+async function activate(id, name, circuit, param) {
+  if (!confirm('Make ' + name + ' the ' + param.toUpperCase() +
+               ' forecast for ' + circuit + '?\n\n' +
+               'Whatever is live for that circuit is demoted in the same step.')) return;
+  const r = await control('/models/' + id + '/activate', 'POST');
+  say(r.ok ? r.body.detail : r.detail, !r.ok);
+  if (r.ok) setTimeout(() => location.reload(), 700);
+}
+
+async function retire(id, name) {
+  if (!confirm('Retire ' + name + '?\n\n' +
+               'Its rows and its forecasts are kept, so this can be undone by ' +
+               'activating it again.')) return;
+  const r = await control('/models/' + id + '/retire', 'POST');
+  say(r.ok ? r.body.detail : r.detail, !r.ok);
+  if (r.ok) setTimeout(() => location.reload(), 700);
+}
+</script>
+{% endblock %}

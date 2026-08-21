@@ -57,7 +57,21 @@ def _duration(seconds) -> str:
     return f"{sign}{value / 86400:.1f}d"
 
 
+def _lead(seconds) -> str:
+    """A horizon as a column heading: ``1 h``, ``24 h``, ``7 d``.
+
+    Separate from `_duration`, which answers "how long ago" and prints
+    ``1h00m``. A leaderboard column is a label, not a measurement, and the
+    minutes in it are noise.
+    """
+    if seconds is None:
+        return "—"
+    seconds = int(seconds)
+    return f"{seconds // 3600} h" if seconds < 172800 else f"{seconds // 86400} d"
+
+
 templates.env.filters["duration"] = _duration
+templates.env.filters["lead"] = _lead
 
 
 #: How far the observed band may sit inside the configured one before the
@@ -271,8 +285,68 @@ def series(request: Request, method: str = "algo",
         "days": days, "start": start or "", "end": end or "",
         "circuit": circuit, "circuits": circuits,
         "model": model,
-        "frame": series_mod.frame(points, model=model),
+        "frame": series_mod.frame(points, model=model,
+                                  forecasts=_live_forecasts(conn, points)),
     })
+
+
+def _live_forecasts(conn, points) -> dict:
+    """The latest issue of whatever is active, for the circuits on the page.
+
+    **Active models only.** Every registered model may write forecasts -- that
+    is how a comparison is run -- so drawing them all would put a legacy
+    Brisbane import on the same axis as the measurement in the same style as
+    the operational curve. `/forecast` filters the same way for the same
+    reason.
+
+    Failures are swallowed to an empty dict: the series page is the page an
+    operator opens to look at data, and it existed and worked before there was
+    a prediction service at all. A forecast that cannot be read is a missing
+    trace, not a 500.
+    """
+    circuits = {(row["tx"], row["rx"]) for row in points
+                if row.get("tx") and row.get("rx")}
+    if not circuits:
+        return {}
+
+    found: dict = {}
+    for tx, rx in sorted(circuits):
+        for param in ("muf", "lof"):
+            try:
+                rows = db.rows(
+                    conn,
+                    "SELECT f.valid_at, f.value, f.sigma, m.name "
+                    "FROM forecast f JOIN model_registry m ON m.id = f.model_id "
+                    "WHERE m.active = 1 AND f.param = ? AND f.tx = ? AND f.rx = ? "
+                    "AND f.issued_at = (SELECT MAX(issued_at) FROM forecast x "
+                    "  WHERE x.model_id = f.model_id AND x.param = f.param "
+                    "  AND x.tx = f.tx AND x.rx = f.rx) "
+                    "ORDER BY f.valid_at",
+                    (param, tx, rx),
+                )
+            except Exception:                     # pragma: no cover - defensive
+                continue
+            if not rows:
+                continue
+            found[(tx, rx, param)] = {
+                "tx": tx, "rx": rx, "param": param,
+                "model": rows[0]["name"],
+                "t": [_iso_stamp(row["valid_at"]) for row in rows],
+                "value": [row["value"] for row in rows],
+                "sigma": [row["sigma"] for row in rows],
+            }
+    return found
+
+
+def _iso_stamp(text: str) -> str:
+    """`2026-08-13T04:00:00Z` as the page's own spelling of an instant.
+
+    The forecast table stamps with the trailing ``Z`` that `db.utcnow` puts on
+    everything; the soundings are naive UTC. Plotly would place two such axes
+    an offset apart, which draws a forecast that lags its own measurement by
+    the local timezone.
+    """
+    return str(text).rstrip("Z")
 
 
 @router.get("/ui/sources")
@@ -360,6 +434,86 @@ def archives_page(request: Request):
         "methods": archives_mod.method_availability(),
         "methods_default": DEFAULT_METHODS,
         "interval_s": archives_mod.DEFAULT_INTERVAL_S,
+    })
+
+
+@router.get("/ui/forecast")
+def forecast_page(request: Request, param: str | None = None,
+                  tx: str | None = None, rx: str | None = None):
+    """What is live, what is registered, how it scored, and what may be promoted.
+
+    Read scope, like every page here. The buttons post to the control routes
+    with a token the operator pasted on the console page, which is the same
+    contract the start/stop buttons and the archives page already use.
+
+    ``param``/``tx``/``rx`` pick the circuit the leaderboard is drawn for. A
+    leaderboard is only meaningful per circuit -- MAE in MHz on a 2400 km path
+    is not comparable with MAE on a 700 km one -- so there is no "all circuits"
+    view to mistake for one.
+    """
+    from ..prediction import dataset, registry, scoring
+
+    conn = request.app.state.db
+    models = registry.models(conn)
+    for model in models:
+        model.pop("golden_input", None)
+        model["golden"] = "recorded" if model.pop("golden_output", None) is not None \
+            else "absent"
+
+    # One row per circuit and parameter that has data, whether or not anything
+    # is live for it -- "no model" is the answer an operator most needs on a
+    # fresh deployment, and a table built only from the models would omit it.
+    live = []
+    for param in ("muf", "lof"):
+        for circuit in dataset.circuits(conn, param, "contour"):
+            model = registry.active(conn, param, circuit["tx"], circuit["rx"])
+            issued = db.one(
+                conn,
+                "SELECT MAX(issued_at) AS issued_at FROM forecast "
+                "WHERE param = ? AND tx = ? AND rx = ?",
+                (param, circuit["tx"], circuit["rx"]),
+            )
+            issued_at = (issued or {}).get("issued_at")
+            age = _age_seconds(issued_at) if issued_at else None
+            live.append({
+                "tx": circuit["tx"], "rx": circuit["rx"], "param": param,
+                "model": model, "issued_at": issued_at, "age_s": age,
+                # Stale against the default cadence, with slack: a run that is
+                # merely late is not a fault, one that is a whole cycle late is.
+                "stale": bool(age is not None and age > 2 * 21600),
+            })
+
+    # The circuit the leaderboard is drawn for: what was asked for, else the
+    # first one that has actually been scored, else the first with data. A page
+    # that defaulted to circuit one would show an empty board on a deployment
+    # where only circuit four has ever run.
+    scored = {(row["param"], row["tx"], row["rx"])
+              for row in scoring.scores(conn) if row["n"]}
+    chosen = None
+    if param and tx and rx:
+        chosen = (param, tx, rx)
+    else:
+        for row in live:
+            key = (row["param"], row["tx"], row["rx"])
+            if key in scored:
+                chosen = key
+                break
+        else:
+            chosen = ((live[0]["param"], live[0]["tx"], live[0]["rx"])
+                      if live else None)
+
+    board = scoring.leaderboard(conn, *chosen) if chosen else []
+
+    return templates.TemplateResponse(request, "forecast.html", {
+        "models": models,
+        "live": live,
+        "chosen": chosen,
+        "board": board,
+        # Surfaced, not acted on: see `scoring.drift`. The console says the
+        # live model has been overtaken; demoting it stays a human decision.
+        "drift": scoring.drift(board),
+        "horizons": scoring.HORIZONS,
+        "baselines": scoring.BASELINES,
     })
 
 

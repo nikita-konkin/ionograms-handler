@@ -1,0 +1,39 @@
+# The training service: fit models, write artifacts, register them.
+#
+# Everything the inference image has, plus the search and deep-learning stacks.
+# It is much larger, and that is the reason the two are separate images rather
+# than one with a flag: `infer` runs unattended on a timer and is pulled on
+# every update, while this is started by hand for a run that takes minutes to
+# hours.
+#
+# It is also the only image that can load the archive's Keras models, which is
+# what `capability = 'deep'` in the registry selects for.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    # The archive holds Keras 2 SavedModel directories as well as Keras 3
+    # .keras files. With this set, `tf_keras` is tried first and the old ones
+    # load; muf/extractors/cnn.py documents the same trap for the autoencoder.
+    TF_USE_LEGACY_KERAS=1
+
+COPY deploy/requirements-infer.txt deploy/requirements-train.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements-train.txt
+
+COPY muf/ /app/muf/
+COPY services/ /app/services/
+COPY pyproject.toml README.md /app/
+
+# Writes to the models volume, unlike `infer` -- this is the only container
+# that does. Same uid as the api (10001) for the same reason `Dockerfile.infer`
+# gives: this image also registers models, which is a write to the shared
+# database on the `api-data` volume, and that volume is owned by whichever uid
+# created it.
+RUN useradd --create-home --uid 10001 train \
+ && mkdir -p /models /indices && chown -R train:train /models /indices /app
+USER train
+
+# No default command: this image is run with an explicit job, because "train
+# something" is not a thing to do by accident on container start.

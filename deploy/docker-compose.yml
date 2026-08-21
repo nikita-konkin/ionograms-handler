@@ -73,6 +73,50 @@ services:
       - "${ARCHIVE_HOST_PATH_3:-${ARCHIVE_HOST_PATH:-./archive}}:/archive3:ro"
     restart: unless-stopped
 
+  # Inference, built from this checkout. Its own image: the model libraries
+  # stay out of the api image and the web stack stays out of this one.
+  infer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.infer
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      python -m services.prediction.infer
+      --param ${PREDICT_PARAMS:-muf,lof}
+      --method ${PREDICT_METHOD:-contour}
+      --interval ${PREDICT_INTERVAL_S:-21600}
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MUF_INDEX_CACHE: /indices
+    # No server in here, so an inherited healthcheck could only ever fail.
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      - models:/models:ro
+      - indices:/indices
+    restart: unless-stopped
+
+  # Registers a model file that is already on the models volume:
+  #
+  #   docker compose --profile import run --rm importer /models/<file> --param muf
+  importer:
+    profiles: ["import"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.train
+    entrypoint: ["python", "-m", "services.prediction.importer"]
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MUF_INDEX_CACHE: /indices
+    volumes:
+      - api-data:/data
+      - models:/models:ro
+      - indices:/indices
+    restart: "no"
+
   station-sim:
     build:
       context: ..
@@ -99,3 +143,5 @@ services:
 volumes:
   api-data:
   sim-products:
+  models:
+  indices:

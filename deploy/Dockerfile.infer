@@ -1,0 +1,53 @@
+# The inference service: run already-trained models, and nothing else.
+#
+# Deliberately not the api image. `architecture.md` sec. 7 asks that the model
+# libraries stay out of the service image, and the same argument runs the other
+# way: this container has no FastAPI, no matplotlib, no opencv and no archive
+# mount, because it renders nothing, serves nothing and reads the database.
+#
+# Same base tag as Dockerfile.api on purpose -- one image to pull, and a
+# machine that has built one can build the other without a registry.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+COPY deploy/requirements-infer.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements-infer.txt
+
+# `muf` for the tracker, the geometry and the solar indices; `services` for the
+# schema, the registry and the runner. The two travel together because they
+# share a database schema, which is the same reason they share a repository.
+COPY muf/ /app/muf/
+COPY services/ /app/services/
+COPY pyproject.toml README.md /app/
+
+# Non-root, and **the same uid as the api** (10001). Not an oversight: these
+# containers share one SQLite database on the `api-data` volume, and a SQLite
+# write needs write access to the *directory* as well as the file, because it
+# creates the `-wal` and `-shm` siblings beside it. The volume takes its
+# ownership from whichever container populated it first, so a second uid can
+# open the database, read every row, and then fail its first INSERT with
+# "attempt to write a readonly database" -- which reads as a corrupt file
+# rather than as a permission. A separate uid would buy isolation between
+# processes that both have to write the same file, which is no isolation.
+#
+# The models volume is mounted read-only beneath this one: this process runs
+# code out of artifact files, so it should not also be able to replace one.
+RUN useradd --create-home --uid 10001 infer \
+ && mkdir -p /indices && chown -R infer:infer /indices /app
+USER infer
+
+# No EXPOSE and no HEALTHCHECK, and both absences are deliberate.
+#
+# There is no port because there is no server: forecasts are written to the
+# database and served by the api, so nothing needs to reach this container and
+# nothing can.
+#
+# There is no health check because a batch job that sleeps between passes has
+# no endpoint to poll. Its liveness is the line it prints every interval --
+# the same call `watch` makes, for the same reason: an inherited check that can
+# only ever fail teaches everyone to ignore the column.
+CMD ["python", "-m", "services.prediction.infer", "--param", "muf,lof"]

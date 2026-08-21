@@ -203,6 +203,133 @@ def series_muf(request: Request,
             "count": len(points), "points": points}
 
 
+@router.get("/models")
+def models(request: Request,
+           param: str | None = None,
+           tx: str | None = None, rx: str | None = None) -> dict:
+    """Registered forecasting models: what exists, what is live, how it scored.
+
+    Read scope, like every other page here. Promotion is a control-scope POST
+    in ``control_routes`` -- seeing which model is live is public, changing it
+    is not.
+    """
+    from ..prediction import registry
+
+    rows = registry.models(request.app.state.db, param=param, tx=tx, rx=rx)
+    for row in rows:
+        # The stored input row is an implementation detail of the golden check
+        # and is meaningless on a page; the *result* of that check is not.
+        row.pop("golden_input", None)
+        row["golden"] = "recorded" if row.pop("golden_output", None) is not None \
+            else "absent"
+    return {"count": len(rows), "models": rows}
+
+
+@router.get("/forecast")
+def forecast(request: Request,
+             param: str = "muf",
+             tx: str | None = None, rx: str | None = None,
+             model: int | None = None,
+             issued: str | None = None,
+             start: str | None = Query(None, alias="from"),
+             end: str | None = Query(None, alias="to"),
+             limit: int = Query(MAX_LIMIT, ge=1, le=MAX_LIMIT)) -> dict:
+    """Forecast values against time.
+
+    **Active models only, unless one is named.** Every registered model may
+    write forecasts -- that is how a comparison is run -- so an unfiltered
+    query would interleave the live curve with every candidate's and with every
+    legacy import's. ``?model=`` fetches one deliberately.
+
+    Defaults to the **latest issue**: a forecast table holds every issue ever
+    made, because that is what horizon scoring is computed from, and drawing
+    all of them at once is never what a caller means.
+    """
+    sql = ["SELECT f.*, m.name AS model_name, m.origin, m.active",
+           "FROM forecast f JOIN model_registry m ON m.id = f.model_id",
+           "WHERE f.param = ?"]
+    params: list = [param]
+
+    if model is not None:
+        sql.append("AND f.model_id = ?")
+        params.append(model)
+    else:
+        sql.append("AND m.active = 1")
+
+    for column, value in (("f.tx", tx), ("f.rx", rx)):
+        if value:
+            sql.append(f"AND {column} = ?")
+            params.append(value)
+
+    if issued:
+        sql.append("AND f.issued_at = ?")
+        params.append(issued)
+    else:
+        sql.append("AND f.issued_at = (SELECT MAX(issued_at) FROM forecast x "
+                   "WHERE x.model_id = f.model_id AND x.param = f.param "
+                   "AND x.tx = f.tx AND x.rx = f.rx)")
+
+    if start:
+        sql.append("AND f.valid_at >= ?")
+        params.append(db.time_bound(start))
+    if end:
+        sql.append("AND f.valid_at <= ?")
+        params.append(db.time_bound(end, end=True))
+
+    sql.append("ORDER BY f.valid_at LIMIT ?")
+    params.append(limit)
+
+    points = db.rows(request.app.state.db, " ".join(sql), tuple(params))
+    for point in points:
+        if point.get("quality"):
+            try:
+                point["quality"] = json.loads(point["quality"])
+            except json.JSONDecodeError:
+                pass
+    return {"param": param, "model": model, "count": len(points),
+            "points": points}
+
+
+@router.get("/scores")
+def scores(request: Request,
+           param: str = "muf",
+           tx: str | None = None, rx: str | None = None,
+           flat: bool = False) -> dict:
+    """How every model and every baseline did, by horizon.
+
+    **Baselines come back in the same list as the models**, marked by `kind`.
+    They are what makes an MAE mean anything -- 0.94 MHz is good or useless
+    depending on what yesterday's value would have scored -- so a caller cannot
+    fetch the models' numbers without also being handed what they are judged
+    against.
+
+    Folded one row per subject by default, with a column per horizon; `flat=1`
+    returns the stored rows instead, which is what a rescoring diff wants.
+    """
+    from ..prediction import scoring
+
+    conn = request.app.state.db
+    if flat:
+        rows = scoring.scores(conn, param, tx, rx)
+        return {"param": param, "tx": tx, "rx": rx,
+                "horizons": list(scoring.HORIZONS), "count": len(rows),
+                "scores": rows}
+
+    if not (tx and rx):
+        raise HTTPException(
+            status_code=400,
+            detail="a leaderboard is per circuit: pass tx and rx, or flat=1 "
+                   "for the stored rows across all of them.")
+    board = scoring.leaderboard(conn, param, tx, rx)
+    return {"param": param, "tx": tx, "rx": rx,
+            "horizons": list(scoring.HORIZONS), "count": len(board),
+            "leaderboard": board,
+            # Reported, never enforced: a service that demoted a model on its
+            # own would change a published product with nothing in the logs
+            # having asked for it.
+            "drift": scoring.drift(board)}
+
+
 @router.get("/sources")
 def sources(request: Request,
             max_days: int = Query(sources_mod.DEFAULT_MAX_DAYS, ge=1, le=14),

@@ -140,6 +140,87 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
+  # Runs already-trained models forward on a timer and writes `forecast` rows.
+  #
+  # Its own image, not the api's: the model libraries stay out of the service
+  # image (architecture.md sec. 7) and the service stack stays out of this one.
+  # No ports -- forecasts reach the world through the api, so nothing needs to
+  # reach this container.
+  infer:
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-infer:${IMAGE_TAG:-latest}
+    pull_policy: always
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      python -m services.prediction.infer
+      --param ${PREDICT_PARAMS:-muf,lof}
+      --method ${PREDICT_METHOD:-contour}
+      --interval ${PREDICT_INTERVAL_S:-21600}
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MUF_INDEX_CACHE: /indices
+    # Same reasoning as `watch`: this container runs no server, so the image's
+    # healthcheck would sit permanently unhealthy and teach everyone to ignore
+    # the column. Its liveness is the line it prints every interval.
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      # Read-only. `train` writes here; inference runs code out of these files
+      # and must not be able to replace one.
+      - models:/models:ro
+      # Shared with the api rather than duplicated: both want the same ~5 MB of
+      # solar indices, and `indices.py` fetches them from volunteer-run
+      # services. One cache, fetched once.
+      - indices:/indices
+    # Deliberately NOT labelled for watchtower. An unattended restart of this
+    # container is harmless, but an unattended *image* change alters the code
+    # behind a published forecast, and that should be someone's decision.
+    restart: unless-stopped
+
+  # Fits models and registers them. Started by hand:
+  #
+  #   docker compose --profile train run --rm train \
+  #       python -m services.prediction.train --param muf --tx NIC --rx DOB
+  #
+  # A profile rather than a service, because a training job that starts itself
+  # on every `up` is a surprise measured in hours of CPU.
+  train:
+    profiles: ["train"]
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-train:${IMAGE_TAG:-latest}
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MUF_INDEX_CACHE: /indices
+    volumes:
+      - api-data:/data
+      - models:/models          # read-write here, and only here
+      - indices:/indices
+    # A finished job is not a crashed one.
+    restart: "no"
+
+  # Registers a model file that is already on the models volume. Same image as
+  # `train` because it may need to load a Keras artifact to introspect it:
+  #
+  #   docker compose --profile import run --rm importer \
+  #       /models/huber_mae-0.5882_evals-0.sav --param muf
+  #
+  # There is no HTTP route for this on purpose. Registering a model means
+  # running code out of a file on a shared volume, and exposing that would give
+  # the prediction path an inbound surface it otherwise does not have.
+  importer:
+    profiles: ["import"]
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-train:${IMAGE_TAG:-latest}
+    entrypoint: ["python", "-m", "services.prediction.importer"]
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MUF_INDEX_CACHE: /indices
+    volumes:
+      - api-data:/data
+      - models:/models:ro
+      - indices:/indices
+    restart: "no"
+
   # Polls Docker Hub and restarts a container when its image digest changes.
   #
   # OPT-IN, because a host that already runs services probably already runs
@@ -171,3 +252,9 @@ services:
 
 volumes:
   api-data:
+  # Trained artifacts. Written by `train`, read by `infer`, and outliving both.
+  models:
+  # Solar indices, shared by api and infer. On its own volume rather than
+  # inside api-data so that a second consumer does not need write access to
+  # the volume holding the database.
+  indices:

@@ -121,3 +121,46 @@ def test_empty_directory_errors(tmp_path):
 def test_missing_table_errors(tmp_path):
     with pytest.raises(SystemExit, match="no such results table"):
         cli._read_tables([tmp_path / "absent.csv"])
+
+
+# --- track ------------------------------------------------------------------
+
+def _both_ends(n=40, day="2026-02-04"):
+    """A results table carrying both ends of the band, as `run` writes it."""
+    hour = pd.Series(range(n)) / 12.0
+    return pd.DataFrame({
+        "file": [f"s{i}.lfs" for i in range(n)],
+        "datetime": pd.date_range(f"{day} 00:00:00", periods=n, freq="5min"),
+        "muf_algo": 18 + 7 * (hour / 24),
+        "lof_algo": 8 + 3 * (hour / 24),
+        "snr_algo": [55.0] * n,
+        "lofsnr_algo": [40.0] * n,
+        "run_algo": [30] * n,
+        "limited_algo": [False] * n,
+        "loflim_algo": [False] * n,
+        "freq_stop": [32.5] * n,
+    })
+
+
+def test_track_defaults_to_muf():
+    assert cli.build_parser().parse_args(["track", "t.csv"]).param == "muf"
+
+
+def test_tracking_lof_writes_its_own_file(tmp_path):
+    """Both ends of one archive are two curves, not one overwriting the other."""
+    _both_ends().to_csv(tmp_path / "2026-02-04.csv", index=False)
+    args = cli.build_parser().parse_args(
+        ["track", str(tmp_path / "2026-02-04.csv"), "--param", "muf,lof",
+         "--out", str(tmp_path / "out")])
+    assert cli.cmd_track(args) == 0
+
+    written = sorted(p.name for p in (tmp_path / "out").glob("*.csv"))
+    assert written == ["2026-02-04_track_algo.csv",
+                       "2026-02-04_track_lof_algo.csv"]
+
+    # The MUF file keeps the name it has always had: it is referred to by name
+    # in notes and scripts, and adding a word that was always implied would
+    # break those for nothing.
+    lof = pd.read_csv(tmp_path / "out" / "2026-02-04_track_lof_algo.csv")
+    assert "lof" in lof.columns and "muf" not in lof.columns
+    assert lof["lof"].max() < 12

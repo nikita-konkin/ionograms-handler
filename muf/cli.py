@@ -325,40 +325,48 @@ def cmd_daily(args) -> int:
 
 
 def cmd_track(args) -> int:
-    """Kalman-track the MUF through time: fill gaps, reject outliers."""
+    """Kalman-track MUF or LOF through time: fill gaps, reject outliers."""
     from muf import track as tracking
 
     frame = _read_tables(args.table)
     methods = [args.method] if args.method else pipeline.methods_in(frame)
+    params = [p.strip() for p in args.param.split(",") if p.strip()]
     out_dir = args.out or _default_out_dir(args.table[0])
 
-    for method in methods:
-        pieces = []
-        for day, sub in pipeline.split_by_day(frame):
-            try:
-                result = tracking.track_results(
-                    sub, method=method,
-                    process_noise=args.process_noise,
-                    gate_sigma=args.gate_sigma,
-                )
-            except (ValueError, KeyError) as exc:
-                print(f"  {method} {day}: skipped ({exc})", file=sys.stderr)
+    for param in params:
+        for method in methods:
+            # The parameter is in the name only when it is not the MUF. The
+            # existing `*_track_algo.csv` files are referred to by name in
+            # notes and scripts, and renaming them to add a word that was
+            # always implied would break those for nothing.
+            stem = f"track_{method}" if param == "muf" else f"track_{param}_{method}"
+            pieces = []
+            for day, sub in pipeline.split_by_day(frame):
+                try:
+                    result = tracking.track_results(
+                        sub, method=method, param=param,
+                        process_noise=args.process_noise,
+                        gate_sigma=args.gate_sigma,
+                    )
+                except (ValueError, KeyError) as exc:
+                    print(f"  {param} {method} {day}: skipped ({exc})",
+                          file=sys.stderr)
+                    continue
+                print(f"  {param} {method} {day}: {result}", file=sys.stderr)
+                pieces.append(result.frame)
+
+            if not pieces:
                 continue
-            print(f"  {method} {day}: {result}", file=sys.stderr)
-            pieces.append(result.frame)
+            curve = pd.concat(pieces, ignore_index=True)
+            days = pipeline.days_in(frame)
+            label = f"{days[0]}" if len(days) == 1 else f"{days[0]}_{days[-1]}"
+            path = pipeline.write(curve, out_dir / f"{label}_{stem}.csv")
+            print(f"wrote {path}  ({len(curve)} points)", file=sys.stderr)
 
-        if not pieces:
-            continue
-        curve = pd.concat(pieces, ignore_index=True)
-        days = pipeline.days_in(frame)
-        label = f"{days[0]}" if len(days) == 1 else f"{days[0]}_{days[-1]}"
-        path = pipeline.write(curve, out_dir / f"{label}_track_{method}.csv")
-        print(f"wrote {path}  ({len(curve)} points)", file=sys.stderr)
-
-        if args.plot:
-            image = render.plot_track(curve, out_dir / f"{label}_track_{method}.png",
-                                      frame, method)
-            print(f"wrote {image}", file=sys.stderr)
+            if args.plot:
+                image = render.plot_track(curve, out_dir / f"{label}_{stem}.png",
+                                          frame, method, param=param)
+                print(f"wrote {image}", file=sys.stderr)
     return 0
 
 
@@ -934,9 +942,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # track
     trk = sub.add_parser("track",
-                         help="track MUF through time: fill gaps, reject outliers")
+                         help="track MUF or LOF through time: fill gaps, reject outliers")
     trk.add_argument("table", type=Path, nargs="+",
                      help="results table(s) from `run`, or a directory of them")
+    trk.add_argument("--param", default="muf",
+                     help="comma separated: muf,lof (default: %(default)s)")
     trk.add_argument("--method", default=None, help="default: every method present")
     trk.add_argument("--out", type=Path, default=None)
     trk.add_argument("--process-noise", type=float,

@@ -200,3 +200,86 @@ def test_real_day_is_smoothed_and_gaps_filled(real_dir):
     raw_step = raw.diff().abs().max()
     tracked_step = result.frame["muf"].diff().abs().max()
     assert tracked_step < raw_step / 3
+
+
+# --------------------------------------------------------------------------
+# LOF
+# --------------------------------------------------------------------------
+#
+# The filter never cared which frequency it was following -- a random walk in
+# rate describes the LOF as well as the MUF. What was MUF-only was the naming:
+# the column it wrote, the censoring flag it dropped, and the signal level it
+# weighted by. All three differ at the other end of the band, and getting any
+# of them wrong produces a plausible curve of the wrong quantity.
+
+def results_table(n=120, method="algo"):
+    """A `muf.pipeline` results table with both ends of the band in it."""
+    t = times(n)
+    hour = np.arange(n) / 12.0
+    return pd.DataFrame({
+        "datetime": t,
+        f"muf_{method}": 18 + 7 * np.sin(2 * np.pi * hour / 24),
+        f"lof_{method}": 8 + 3 * np.sin(2 * np.pi * (hour - 2) / 24),
+        f"snr_{method}": np.full(n, 55.0),
+        f"lofsnr_{method}": np.full(n, 40.0),
+        f"run_{method}": np.full(n, 30),
+        f"limited_{method}": np.zeros(n, dtype=bool),
+        f"loflim_{method}": np.zeros(n, dtype=bool),
+    })
+
+
+def test_the_value_column_is_named_after_the_parameter():
+    """A tracked LOF handed on in a column called `muf` is how the wrong
+    quantity ends up in a report."""
+    t = times(40)
+    result = track.track(t, np.linspace(5, 9, 40), np.full(40, 0.3), param="lof")
+    assert "lof" in result.frame.columns
+    assert "muf" not in result.frame.columns
+
+
+def test_tracking_lof_reads_the_lof_column():
+    frame = results_table()
+    result = track.track_results(frame, method="algo", param="lof")
+    assert result.n_measured == len(frame)
+    # The LOF curve, not the MUF one that sits beside it in the same table.
+    assert result.frame["lof"].max() < 12
+    assert result.frame["lof"].min() > 4
+
+
+def test_a_pick_at_the_band_floor_is_dropped_not_tracked():
+    """`loflim` is an upper bound on LOF, exactly as `limited` is a lower
+    bound on MUF: letting one anchor the state pulls the curve to the edge it
+    ran into."""
+    frame = results_table()
+    frame.loc[40:59, "loflim_algo"] = True
+    result = track.track_results(frame, method="algo", param="lof")
+    assert result.n_filled == 20
+    assert result.frame["sigma"][40:60].mean() > result.frame["sigma"][:40].mean()
+
+
+def test_the_muf_censoring_flag_does_not_censor_the_lof():
+    """The two ends censor independently -- a sweep that ran out of top has
+    said nothing about its bottom."""
+    frame = results_table()
+    frame.loc[40:59, "limited_algo"] = True
+    assert track.track_results(frame, method="algo", param="lof").n_filled == 0
+    assert track.track_results(frame, method="algo", param="muf").n_filled == 20
+
+
+def test_lof_is_weighted_by_the_signal_at_its_own_end_of_the_band():
+    """`snr` is measured at the top of the trace. Weighting a LOF by it scales
+    the uncertainty by the signal level at the other end of the band."""
+    frame = results_table()
+    frame.loc[:, "lofsnr_algo"] = 40.0
+    frame.loc[50, "lofsnr_algo"] = 5.0          # weak at the bottom only
+
+    sigma = track.measurement_sigma(frame, "algo", param="lof")
+    assert sigma[50] > sigma[0] * 1.5
+    # The MUF's own weighting is untouched by it.
+    assert track.measurement_sigma(frame, "algo", param="muf")[50] == \
+        pytest.approx(track.measurement_sigma(frame, "algo", param="muf")[0])
+
+
+def test_an_unknown_parameter_is_refused():
+    with pytest.raises(ValueError, match="unknown parameter"):
+        track.track_results(results_table(), method="algo", param="fof2")

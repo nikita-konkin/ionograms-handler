@@ -84,6 +84,9 @@
     <label><input type="checkbox" class="family" data-family="lof"> LOF</label>
     <label><input type="checkbox" class="family" data-family="fof2"> foF2</label>
     <label><input type="checkbox" class="family" data-family="model"> IRI</label>
+    {% if frame.any_forecast %}
+    <label><input type="checkbox" class="family" data-family="forecast"> forecast</label>
+    {% endif %}
     <label><input type="checkbox" class="family" data-family="context"> sweep top / hmF2</label>
     <span>&mdash; drag to zoom, double-click to reset, click a point to open its
     ionogram.</span>
@@ -212,6 +215,10 @@
   const PARAM = {
     muf: '#3d8bfd', lof: '#d98b1f', fof2: '#2ea043',
     hmf2: '#8b949e', top: '#8b949e',
+    // Same hue as the parameter it predicts, dashed rather than solid: a
+    // forecast is the same quantity, drawn from a different source, and
+    // giving it a colour of its own would read as a fifth parameter.
+    forecast: '#3d8bfd', forecast_lof: '#d98b1f',
   };
   // With several circuits the hue has to carry the circuit instead -- two
   // paths' MUFs in one colour is exactly the comparison this must not invite.
@@ -352,6 +359,47 @@
       }
     }
 
+    // --- forecast --------------------------------------------------------
+    // Its own x, not the soundings': the part of a forecast worth looking at
+    // is the part past the last measurement, and resampling it onto the picks
+    // would crop off exactly that.
+    (circuit.forecast || []).forEach(f => {
+      if (!some(f.value)) return;
+      const colour = many ? hue('muf') : PARAM[f.param === 'lof' ? 'forecast_lof' : 'forecast'];
+
+      // The band is the *tracker's* sigma at the instant each row was built
+      // from -- the input uncertainty, not an interval the model claims. Drawn
+      // first so the line sits on top of it.
+      if (some(f.sigma)) {
+        // Clamped at zero. Across a long gap the tracker's sigma grows
+        // without bound, and an interval whose lower edge is -20 MHz states
+        // an uncertainty that includes frequencies that cannot exist -- it
+        // also drags the axis down and squashes the measurements into a
+        // third of the panel.
+        const lo = f.value.map((v, k) => v === null || f.sigma[k] === null
+                                         ? null : Math.max(0, v - f.sigma[k]));
+        const hi = f.value.map((v, k) => v === null || f.sigma[k] === null
+                                         ? null : v + f.sigma[k]);
+        add({
+          x: f.t.concat(f.t.slice().reverse()),
+          y: hi.concat(lo.slice().reverse()),
+          name: tag + f.param.toUpperCase() + ' forecast \u00b1\u03c3',
+          legendgroup: group, type: 'scatter', mode: 'lines',
+          fill: 'toself', fillcolor: colour, opacity: 0.13,
+          line: {width: 0}, hoverinfo: 'skip', showlegend: false,
+        }, 'forecast');
+      }
+
+      add({
+        x: f.t, y: f.value,
+        name: tag + f.param.toUpperCase() + ' forecast',
+        legendgroup: group, type: 'scatter', mode: 'lines',
+        line: {width: 1.6, dash: 'dash', color: colour},
+        hovertemplate: '%{y:.2f} MHz<extra>' + circuit.name + '<br>'
+          + f.model + '</extra>',
+      }, 'forecast');
+    });
+
     // --- context ---------------------------------------------------------
     // The sweep's top edge, which is what a `limited` pick is pinned against.
     // Without it on the axis, a flat run of hollow markers looks like a flat
@@ -372,7 +420,12 @@
   // several circuits are overlaid: five paths times two parameters is ten
   // curves before the models, and nothing can be read off that.
   const SHOWN = {muf: true, lof: !many, fof2: false, context: false,
-                 model: {{ 'true' if model != 'off' else 'false' }}};
+                 model: {{ 'true' if model != 'off' else 'false' }},
+                 // On by default: an operator who opened this page while
+                 // something is live wants to see what it said beside what
+                 // arrived, which is the only way the forecast gets judged
+                 // by eye at all.
+                 forecast: true};
   traces.forEach((t, i) => {
     if (!SHOWN[family[i]]) t.visible = 'legendonly';
   });

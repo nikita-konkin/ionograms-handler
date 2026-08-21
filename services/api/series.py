@@ -302,7 +302,7 @@ def _summary(values: list) -> dict:
 # The frame
 # --------------------------------------------------------------------------
 
-def frame(rows, *, model: str = "iri") -> dict:
+def frame(rows, *, model: str = "iri", forecasts: dict | None = None) -> dict:
     """Everything the page draws, grouped by circuit.
 
     Grouped because a circuit is the unit of every parameter here, not just of
@@ -310,6 +310,11 @@ def frame(rows, *, model: str = "iri") -> dict:
     control point the model is evaluated at is the path's, and the band ceiling
     that censors a pick is the recorder's. One array spanning two circuits
     would describe neither.
+
+    ``forecasts`` is keyed by ``(tx, rx, param)`` and carries its **own** time
+    axis rather than being resampled onto the soundings'. A forecast that
+    reaches past the last measurement is the only interesting part of one, and
+    aligning it to the picks would crop off exactly that.
     """
     wanted = model == "iri" and MODEL
 
@@ -361,6 +366,9 @@ def frame(rows, *, model: str = "iri") -> dict:
             "loflim": [1 if row.get("loflim") else 0 for row in group],
             "sweep_top": [_finite(row.get("freq_stop")) for row in group],
             "model": got,
+            "forecast": [entry for entry in (forecasts or {}).values()
+                         if entry["tx"] == group[0]["tx"]
+                         and entry["rx"] == group[0]["rx"]],
             "residual": residual,
             "stats": {
                 "muf": _summary(muf), "lof": _summary(lof),
@@ -376,6 +384,7 @@ def frame(rows, *, model: str = "iri") -> dict:
         "model": model if wanted else "off",
         "hmf2_km": EQUIVALENT_HMF2_KM,
         "any_model": any(c["model"].get("muf") for c in circuits),
+        "any_forecast": any(c["forecast"] for c in circuits),
     }
 
 

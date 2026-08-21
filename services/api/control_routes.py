@@ -428,3 +428,65 @@ def set_schedule(station: str, request: Request,
                  f"takes effect on restart. calc_ionograms.py must be started "
                  f"with -np {len(groups)}."),
     }
+
+
+# --------------------------------------------------------------------------
+# Forecasting models
+# --------------------------------------------------------------------------
+
+@router.post("/models/{model_id}/activate")
+def activate_model(model_id: int, request: Request,
+                   who: str = Depends(require_control)) -> dict:
+    """Make a model the live forecast for its circuit.
+
+    **Control scope, not read scope.** Nothing here touches a radio, so the
+    obvious argument is that read scope would do -- and it would not. This
+    changes what every consumer of ``GET /forecast`` receives from the next
+    request onwards, silently and with no other signal that it happened. That
+    is an operational change to a published product, and it belongs behind the
+    same token as the other operational changes.
+
+    The rules it can fail on live in the schema, not here: a model fitted
+    against a modelled target, or bound to no circuit, is refused by a CHECK
+    constraint that a direct SQL session could not talk its way past either.
+    This route's job is to turn that refusal into a sentence.
+    """
+    from ..prediction import registry
+
+    try:
+        result = registry.activate(request.app.state.db, model_id, by=who)
+    except registry.RegistryError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    activated = result["activated"]
+    deactivated = result["deactivated"]
+    return {
+        "ok": True,
+        "activated": {"id": activated["id"], "name": activated["name"],
+                      "param": activated["param"],
+                      "tx": activated["tx"], "rx": activated["rx"]},
+        "deactivated": ({"id": deactivated["id"], "name": deactivated["name"]}
+                        if deactivated else None),
+        "detail": (f"{activated['name']} is now the {activated['param']} "
+                   f"forecast for {activated['tx']} -> {activated['rx']}"
+                   + (f", replacing {deactivated['name']}" if deactivated else "")),
+    }
+
+
+@router.post("/models/{model_id}/retire")
+def retire_model(model_id: int, request: Request,
+                 who: str = Depends(require_control)) -> dict:
+    """Take a model out of service, keeping its row and its forecasts.
+
+    Retiring is not deleting. The forecasts it issued are what its scores were
+    computed from, and re-activating it is how a promotion is rolled back --
+    both need the history to still be there.
+    """
+    from ..prediction import registry
+
+    row = registry.retire(request.app.state.db, model_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no model {model_id}")
+    return {"ok": True, "retired": {"id": row["id"], "name": row["name"]},
+            "detail": f"{row['name']} is no longer the live forecast; its "
+                      f"rows and its forecasts are kept."}

@@ -112,11 +112,19 @@ def flag(frame: pd.DataFrame, name: str) -> pd.Series:
     return column.astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
 
 
-def usable(frame: pd.DataFrame, method: str, drop_limited: bool = True) -> pd.Series:
-    """A method's MUF series, with band-limited picks removed."""
-    values = frame[f"muf_{method}"].astype(float)
-    if drop_limited and f"limited_{method}" in frame:
-        values = values.mask(flag(frame, f"limited_{method}"))
+def usable(frame: pd.DataFrame, method: str, drop_limited: bool = True,
+           param: str = "muf") -> pd.Series:
+    """A method's series for one parameter, with band-edge picks removed.
+
+    The censoring column differs at each end of the band: `limited` is a pick
+    at the top of the sweep and a *lower* bound on MUF, `loflim` one at the
+    band floor and an *upper* bound on LOF. Both are bounds rather than
+    measurements, and both are dropped for the same reason.
+    """
+    censor = "loflim" if param == "lof" else "limited"
+    values = frame[f"{param}_{method}"].astype(float)
+    if drop_limited and f"{censor}_{method}" in frame:
+        values = values.mask(flag(frame, f"{censor}_{method}"))
     return values
 
 
