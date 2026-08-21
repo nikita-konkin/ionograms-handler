@@ -94,3 +94,85 @@ def test_the_dev_compose_builds_rather_than_pulls():
             assert not IMAGE.match(str(body["image"])), (
                 f"{service} pulls a namespaced image from the dev compose; "
                 f"that file exists so a checkout can run without the registry.")
+
+
+# --------------------------------------------------------------------------
+# Requirements that have to resolve on both architectures
+# --------------------------------------------------------------------------
+#
+# The images are built for linux/amd64 and linux/arm64 from one requirements
+# file, and pip only discovers a missing wheel halfway through a multi-minute
+# cross-build. `tensorflow-cpu` has no aarch64 wheel and never has, so the
+# arm64 leg failed with "from versions: none" -- which reads as a version-range
+# problem rather than an architecture one, and cost a whole publish run.
+
+PLATFORMS = ("x86_64", "aarch64")
+
+REQUIREMENTS = sorted(DEPLOY.glob("requirements-*.txt"))
+
+#: Distributions with no wheel for one of the architectures we build for, and
+#: what to use instead. Checked by name, so a pin, a range or a marker on the
+#: same distribution is all caught.
+NO_WHEEL_FOR = {
+    "tensorflow-cpu": ("aarch64", "tensorflow (the plain package is the CPU "
+                                  "build on aarch64, same size)"),
+    "tensorflow-aarch64": ("x86_64", "tensorflow-cpu"),
+}
+
+
+def requirements_of(path: Path) -> list:
+    packaging = pytest.importorskip("packaging.requirements")
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        out.append(packaging.Requirement(line))
+    return out
+
+
+@pytest.mark.parametrize("path", REQUIREMENTS, ids=lambda p: p.name)
+@pytest.mark.parametrize("arch", PLATFORMS)
+def test_nothing_is_asked_for_on_an_architecture_that_has_no_wheel(path, arch):
+    for req in requirements_of(path):
+        bad_arch, instead = NO_WHEEL_FOR.get(req.name, (None, None))
+        if bad_arch != arch:
+            continue
+        selected = req.marker is None or req.marker.evaluate(
+            {"platform_machine": arch})
+        assert not selected, (
+            f"{path.name} installs {req.name} on {arch}, which publishes no "
+            f"wheel for it -- pip fails the cross-build with 'from versions: "
+            f"none'. Use {instead}, or exclude this architecture with a "
+            f"`platform_machine` marker.")
+
+
+@pytest.mark.parametrize("arch", PLATFORMS)
+def test_exactly_one_tensorflow_is_selected_per_architecture(arch):
+    """Two would conflict over the same import; none would fail at load."""
+    chosen = [r.name for r in requirements_of(DEPLOY / "requirements-train.txt")
+              if r.name.startswith("tensorflow")
+              and (r.marker is None
+                   or r.marker.evaluate({"platform_machine": arch}))]
+    assert len(chosen) == 1, f"{arch}: selected {chosen or 'nothing'}"
+
+
+def test_both_architectures_get_the_same_tensorflow_range():
+    """One TensorFlow, two spellings. Different ranges either side would mean a
+    model trained on one machine meeting a different runtime on the other."""
+    ranges = {str(r.specifier)
+              for r in requirements_of(DEPLOY / "requirements-train.txt")
+              if r.name.startswith("tensorflow")}
+    assert len(ranges) == 1, f"tensorflow pinned differently per arch: {ranges}"
+
+
+def test_one_image_failing_does_not_cancel_the_others():
+    """`fail-fast` defaults to true, and that is how a training-image problem
+    stopped `ionograms-infer` reaching the registry."""
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    for name, job in workflow["jobs"].items():
+        strategy = job.get("strategy")
+        if strategy and "matrix" in strategy:
+            assert strategy.get("fail-fast") is False, (
+                f"job {name}: set `fail-fast: false`, or one image's failure "
+                f"cancels the rest and a deploy blocks on an unrelated build.")

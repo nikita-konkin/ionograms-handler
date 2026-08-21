@@ -63,6 +63,13 @@ jobs:
             || secrets.DOCKERHUB_USERNAME
             || github.repository_owner }}
     strategy:
+      # One image failing must not cancel the others. The default is to cancel
+      # them, and it turned a `tensorflow-cpu` wheel missing on arm64 -- a
+      # problem in the *training* image, which nothing starts automatically --
+      # into `ionograms-infer` never being pushed, which stopped the work
+      # server coming up at all. The images are independent; the matrix should
+      # treat them that way.
+      fail-fast: false
       matrix:
         include:
           - image: ionograms-api

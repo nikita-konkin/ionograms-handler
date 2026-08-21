@@ -14,14 +14,29 @@ hyperopt>=0.2.7
 # SARIMA, and the auto-order search around it.
 pmdarima>=2.0
 
-# Deep models. `tensorflow-cpu` rather than `tensorflow`: there is no GPU on
-# the work server, and the CUDA wheels are several times the size for
-# libraries that would never load.
+# Deep models, and the one requirement here that cannot be spelled the same
+# way on both architectures this image is built for.
 #
-# `tf-keras` alongside it because the archive holds BOTH Keras formats --
-# `nn_tuner.py` writes `save_format="tf"` (a Keras 2 SavedModel, which Keras 3
-# cannot read) while newer files are the Keras 3 `.keras` zip. With
-# TF_USE_LEGACY_KERAS=1 set, the old ones load; without it, the new ones do.
-# See muf/extractors/cnn.py, which documents the same trap for the autoencoder.
-tensorflow-cpu>=2.16,<3.0
+# `tensorflow-cpu` exists **only for x86_64 and Windows**. There has never been
+# an aarch64 wheel of it, so on the arm64 half of the build matrix pip reports
+# "from versions: none" -- which reads like a version-range problem and is not
+# one. `tensorflow-aarch64`, the package that used to fill that gap, stopped at
+# 2.16.1 and is a dead end.
+#
+# On aarch64 the plain `tensorflow` wheel *is* the CPU build: 259 MB, the same
+# as `tensorflow-cpu` on x86_64. On x86_64 it is 621 MB, because it carries GPU
+# kernels the work server would never load. So each architecture takes the
+# package that is CPU-only there, and neither pulls CUDA -- those live behind
+# the `and-cuda` extra, which nothing here asks for.
+#
+# Same version range on both sides on purpose: one TensorFlow, two spellings,
+# so a model trained on either machine behaves the same on the other.
+tensorflow-cpu>=2.16,<3.0 ; platform_machine == "x86_64"
+tensorflow>=2.16,<3.0 ; platform_machine == "aarch64" or platform_machine == "arm64"
+
+# `tf-keras` because the archive holds BOTH Keras formats -- `nn_tuner.py`
+# writes `save_format="tf"` (a Keras 2 SavedModel, which Keras 3 cannot read)
+# while newer files are the Keras 3 `.keras` zip. With TF_USE_LEGACY_KERAS=1
+# set, the old ones load; without it, the new ones do. See
+# muf/extractors/cnn.py, which documents the same trap for the autoencoder.
 tf-keras>=2.16
