@@ -113,7 +113,17 @@
     <tr{% if not a.enabled %} class="muted"{% endif %}>
       <td><b>{{ a.name }}</b>{% if not a.enabled %} <span class="note">disabled</span>{% endif %}</td>
       <td class="muted"><code>{{ a.relpath }}</code></td>
-      <td class="muted">{{ a.format or 'any' }}</td>
+      {# Not a label any more: `scan_once` hands this to `find_new`, so
+         narrowing it stops the other formats being ingested at all. That is
+         what lets a removal stay removed. #}
+      <td class="muted" style="white-space:nowrap">
+        <select id="fmt-{{ a.id }}" onchange="saveFormat({{ a.id }})">
+          <option value="" {% if not a.format %}selected{% endif %}>any</option>
+          {% for f in formats %}
+          <option {% if a.format == f %}selected{% endif %}>{{ f }}</option>
+          {% endfor %}
+        </select>
+        <div id="orphans-{{ a.id }}" class="note"></div></td>
       <td class="muted" style="white-space:nowrap">
         {% for m, info in methods.items() %}
         <label style="font-size:.85rem; margin-right:.4rem"
@@ -333,6 +343,73 @@ async function saveMethods(id) {
            : r.detail, !r.ok);
 }
 
+// Changing the rule and destroying rows are two decisions, so they are two
+// actions. Narrowing the format only reports what fell out of scope; removing
+// it is a second, armed press.
+let armedOrphans = null, armedTimer = null;
+
+function orphanSay(id, html) {
+  const box = document.getElementById('orphans-' + id);
+  if (box) box.innerHTML = html;
+}
+
+function describeOrphans(o) {
+  return Object.entries(o.by_format || {})
+    .map(([f, n]) => n + ' ' + (f || 'unrecognised')).join(', ');
+}
+
+function disarmOrphans() {
+  armedOrphans = null;
+  clearTimeout(armedTimer);
+}
+
+async function saveFormat(id) {
+  disarmOrphans();
+  const sel = document.getElementById('fmt-' + id);
+  const r = await control('/archives/' + id + '/format', 'POST',
+                          {format: sel.value});
+  if (!r.ok) { say(r.detail, true); return; }
+  say(r.body.note);
+  showOrphans(id, r.body.orphans);
+}
+
+function showOrphans(id, o) {
+  if (!o || !o.total) { orphanSay(id, ''); return; }
+  // The count comes from the same query the delete runs, so what is shown
+  // here is exactly what would go.
+  orphanSay(id, describeOrphans(o) + ' out of scope '
+    + '<button onclick="dropOrphans(' + id + ')">remove</button>');
+}
+
+async function refreshOrphans(id) {
+  const o = await fetch('/archives/' + id + '/orphans')
+                  .then(x => x.json()).catch(() => null);
+  if (o) showOrphans(id, o);
+}
+
+async function dropOrphans(id) {
+  if (armedOrphans !== id) {
+    armedOrphans = id;
+    const o = await fetch('/archives/' + id + '/orphans')
+                    .then(x => x.json()).catch(() => null);
+    orphanSay(id, 'Delete ' + (o ? describeOrphans(o) : 'these')
+      + ' sounding(s), with their extractions and modelled values? The files '
+      + 'are not touched — widening the format reads them again. '
+      + '<button onclick="dropOrphans(' + id + ')">press again to confirm</button>');
+    clearTimeout(armedTimer);
+    armedTimer = setTimeout(() => {
+      disarmOrphans();
+      refreshOrphans(id);
+    }, 30000);
+    return;
+  }
+  disarmOrphans();
+  const r = await control('/archives/' + id + '/orphans', 'DELETE');
+  if (!r.ok) { orphanSay(id, ''); say(r.detail, true); return; }
+  say(r.body.note);
+  setTimeout(() => location.reload(), 1200);
+}
+
 async function remove(id, name) {
   if (!confirm('Unregister ' + name + '?\n\nIts soundings and their '
       + 'characteristics stay in the database; this only stops the indexing.'))
@@ -465,6 +542,7 @@ async function loadCandidates(attempt) {
   if (box.querySelector('table')) return;
   location.reload();
 }
+{% for a in archives %}{% if a.format %}refreshOrphans({{ a.id }});{% endif %}{% endfor %}
 if (!document.querySelector('#cands table')) loadCandidates();
 </script>
 {% endblock %}

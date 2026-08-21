@@ -213,6 +213,89 @@ def set_methods(archive_id: int, request: Request, payload: dict = Body(...),
                     "scan; nothing already computed is recomputed"}
 
 
+def _clean_format(value) -> str | None:
+    """A format name, or ``None`` for "any". Mirrors `_clean_methods`."""
+    fmt = (str(value).strip() if value is not None else "")
+    if not fmt or fmt in ("any", "None"):
+        return None
+    if fmt not in loader.FORMATS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"unknown format {fmt!r}; choose from {', '.join(loader.FORMATS)}"
+            f" or leave it empty for any")
+    return fmt
+
+
+@router.post("/archives/{archive_id}/format")
+def set_format(archive_id: int, request: Request, payload: dict = Body(...),
+               _: str = Depends(require_control)) -> dict:
+    """Narrow or widen what this folder may contribute.
+
+    Unlike the method list, this takes effect on the **next scan** as well as
+    retrospectively: `scan_once` hands it to `watch.find_new`, so a narrowed
+    archive stops ingesting the other formats rather than merely declaring a
+    preference. That is deliberate, and it is what makes removal stick.
+
+    Narrowing does not delete anything by itself. The response reports what is
+    now out of scope so the page can offer to remove it as a separate,
+    confirmed act -- changing a rule and destroying rows are different
+    decisions and should not share one button.
+    """
+    _row(request, archive_id)
+    fmt = _clean_format(payload.get("format"))
+    conn = request.app.state.db
+    db.set_archive_format(conn, archive_id, fmt)
+    orphans = db.archive_orphans(conn, archive_id)
+    return {"ok": True, "id": archive_id, "format": fmt,
+            "orphans": orphans,
+            "note": ("every format" if fmt is None else
+                     f"only {fmt} from now on")
+                    + (f"; {orphans['total']} already-indexed sounding(s) no "
+                       f"longer match" if orphans["total"] else "")}
+
+
+@router.get("/archives/{archive_id}/orphans")
+def list_orphans(archive_id: int, request: Request) -> dict:
+    """What this archive holds that its own format no longer allows.
+
+    Open, like the other reads. It counts; it does not remove.
+    """
+    _row(request, archive_id)
+    return {"id": archive_id,
+            **db.archive_orphans(request.app.state.db, archive_id)}
+
+
+@router.delete("/archives/{archive_id}/orphans")
+def delete_orphans(archive_id: int, request: Request,
+                   _: str = Depends(require_control)) -> dict:
+    """Remove exactly what the preview counted.
+
+    The same query decides both, so what was shown is what goes. Their
+    `extraction` and `reference` rows go too, by cascade.
+
+    This is the one destructive act on this page, and it is only safe because
+    the archive's format keeps them gone: `find_new` treats a file with no row
+    as new forever, so without the rule these would be back on the next pass.
+    Widening the format again brings them back on the next scan, which is the
+    honest undo -- the files were never touched, the mount is read-only.
+    """
+    row = _row(request, archive_id)
+    conn = request.app.state.db
+    if not row["format"]:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{row['name']} admits every format, so nothing in it is out of "
+            f"scope. Narrow the format first -- otherwise this would delete "
+            f"soundings that the very next scan would ingest again.")
+    before = db.archive_orphans(conn, archive_id)
+    removed = db.delete_archive_orphans(conn, archive_id)
+    return {"ok": True, "id": archive_id, "removed": removed,
+            "was": before["by_format"],
+            "note": f"{removed} sounding(s) removed, with their extractions "
+                    f"and modelled values. The files are untouched -- widen "
+                    f"the format and the next scan reads them again."}
+
+
 @router.delete("/archives/{archive_id}")
 def delete_archive(archive_id: int, request: Request,
                    _: str = Depends(require_control)) -> dict:

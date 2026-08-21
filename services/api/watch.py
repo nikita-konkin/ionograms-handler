@@ -79,13 +79,25 @@ def already_done(conn: sqlite3.Connection, methods: tuple[str, ...]) -> set[str]
     return {name for name, got in seen.items() if wanted <= got}
 
 
-def find_new(targets, conn, methods, min_age_s: float, now: float | None = None):
+def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
+             *, format: str | None = None):
     """Soundings on disk that the database does not already hold.
 
     Returns ``(new, n_found, n_too_fresh, n_skewed)``. Targets holding no
     soundings at all are skipped rather than fatal: an archive normally
     contains detection trees, digisonde products and empty days beside the
     ionograms, and one of those must not stop the scan.
+
+    ``format`` narrows what counts as a sounding at all, straight through to
+    `loader.find_soundings`. ``None`` -- every caller's default -- means both,
+    which is what a folder of mixed products should give a plain CLI run.
+
+    It matters more than a filter usually does. Anything this returns gets a
+    row, and `already_done` keys on the basename, so a file with no row is
+    new *forever*: delete its row and the next pass puts it straight back.
+    Narrowing here is therefore the only thing that can make a removal stick,
+    which is why `archive.format` is carried down to it rather than merely
+    checked when a folder is registered.
     """
     from muf import loader
 
@@ -95,7 +107,7 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None)
     found, fresh, skewed, new = 0, 0, 0, []
     for target in targets:
         try:
-            paths = loader.find_soundings(target)
+            paths = loader.find_soundings(target, format=format)
         except FileNotFoundError:
             continue                      # nothing this reader recognises
         for path in paths:
@@ -121,12 +133,14 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None)
 
 
 def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
-             min_age_s=DEFAULT_MIN_AGE_S, dry_run=False, quiet=False) -> dict:
+             min_age_s=DEFAULT_MIN_AGE_S, dry_run=False, quiet=False,
+             format: str | None = None) -> dict:
     from muf import pipeline
 
     from . import ingest as ingest_mod
 
-    new, found, fresh, skewed = find_new(targets, conn, methods, min_age_s)
+    new, found, fresh, skewed = find_new(targets, conn, methods, min_age_s,
+                                         format=format)
     held_back = 0
     if batch and len(new) > batch:
         held_back = len(new) - batch

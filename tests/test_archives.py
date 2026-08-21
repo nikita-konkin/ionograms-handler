@@ -939,3 +939,200 @@ def test_a_registered_folder_is_not_walked_again_to_count_it(client,
     # not render it as "nothing this server can read".
     assert offered["good"]["by_format"] is None
     assert offered["good"]["soundings"] >= 0
+
+
+# --- the archive's format is a rule, not a label -----------------------------
+
+@pytest.fixture
+def mixed_root(archive_root, make_lfs, make_digisonde_h5):
+    """A folder holding both formats, as a real day-folder does.
+
+    `find_soundings` returns both unless narrowed, and the work server's
+    archive is exactly this shape: chirp products beside `digisonde_ionogram-*`
+    files from a different instrument.
+    """
+    folder = archive_root / "mixed"
+    folder.mkdir()
+    for i in range(2):
+        src = make_lfs(synth_iq(n_freq=64, window=256, echo_range_km=2700.0,
+                                half_span_km=60_000.0, echo_last_bin=40),
+                       name=f"mix{i}.lfs", dur=2)
+        src.rename(folder / src.name)
+    for i in range(3):
+        src = make_digisonde_h5(t0=1786245496.0 + i * 900,
+                                transmitter="Juliusruh", receiver="DOB")
+        src.rename(folder / src.name)
+    return folder
+
+
+def _scan(archive_id, archive_root, tmp_path, **kw):
+    """Run one pass synchronously, the way the other scan tests do.
+
+    `min_age_s=0` because the fixtures were written moments ago and the
+    watcher would otherwise, correctly, hold them back as too fresh.
+    """
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        return archives_mod.scan_once(
+            db.archive(conn, archive_id), archive_root=archive_root,
+            db_path=tmp_path / "api.sqlite3", min_age_s=0, **kw)
+    finally:
+        conn.close()
+
+
+def _formats(tmp_path) -> dict:
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        return {r["format"]: r["n"] for r in db.rows(
+            conn, "SELECT format, COUNT(*) AS n FROM sounding GROUP BY format")}
+    finally:
+        conn.close()
+
+
+def test_a_format_narrowed_archive_ingests_only_that_format(
+        client, mixed_root, archive_root, tmp_path):
+    """`archive.format` is validated at registration and shown on the page.
+
+    It has to mean something at scan time too, or it is a promise the server
+    does not keep -- and it is the only thing that can keep a deleted
+    sounding deleted, since `find_new` re-ingests any file without a row.
+    """
+    added = client.post("/archives",
+                        json={"path": "mixed", "name": "mixed",
+                              "format": "lfs", "methods": "algo"},
+                        headers=CTL)
+    assert added.status_code == 200, added.text
+    _scan(added.json()["id"], archive_root, tmp_path)
+
+    got = _formats(tmp_path)
+    assert got.get("digisonde", 0) == 0, (
+        f"a folder registered as lfs ingested digisonde products: {got}")
+    assert got.get("lfs", 0) == 2, got
+
+
+def _register_mixed(client, fmt=None):
+    body = {"path": "mixed", "name": "mixed", "methods": "algo"}
+    if fmt is not None:
+        body["format"] = fmt
+    r = client.post("/archives", json=body, headers=CTL)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_narrowing_the_format_reports_what_it_puts_out_of_scope(
+        client, mixed_root, archive_root, tmp_path):
+    archive_id = _register_mixed(client)
+    _scan(archive_id, archive_root, tmp_path)
+    assert _formats(tmp_path) == {"lfs": 2, "digisonde": 3}
+
+    r = client.post(f"/archives/{archive_id}/format",
+                    json={"format": "lfs"}, headers=CTL)
+    assert r.status_code == 200, r.text
+    assert r.json()["orphans"] == {"total": 3, "by_format": {"digisonde": 3}}
+    # Narrowing alone deletes nothing: changing a rule and destroying rows
+    # are different decisions.
+    assert _formats(tmp_path) == {"lfs": 2, "digisonde": 3}
+
+
+def test_removing_them_takes_their_extractions_with_them(
+        client, mixed_root, archive_root, tmp_path):
+    """A measurement whose sounding is gone is one nothing can locate."""
+    archive_id = _register_mixed(client)
+    _scan(archive_id, archive_root, tmp_path)
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        before = db.one(conn, "SELECT COUNT(*) AS n FROM extraction")["n"]
+    finally:
+        conn.close()
+    assert before > 0
+
+    client.post(f"/archives/{archive_id}/format",
+                json={"format": "lfs"}, headers=CTL)
+    r = client.request("DELETE", f"/archives/{archive_id}/orphans",
+                       headers=CTL)
+    assert r.status_code == 200, r.text
+    assert r.json()["removed"] == 3
+
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        assert _formats(tmp_path) == {"lfs": 2}
+        orphaned = db.one(
+            conn, "SELECT COUNT(*) AS n FROM extraction e"
+                  " LEFT JOIN sounding s ON s.id = e.sounding_id"
+                  " WHERE s.id IS NULL")["n"]
+        assert orphaned == 0, "extraction rows outlived their soundings"
+    finally:
+        conn.close()
+
+
+def test_removed_soundings_do_not_come_back_on_the_next_scan(
+        client, mixed_root, archive_root, tmp_path):
+    """The point of the whole design.
+
+    `already_done` keys on the basename, so a file with no row is new
+    forever. Without the format rule the next pass would re-ingest every one
+    of these and the delete button would be a lie that took 15 minutes to
+    expose.
+    """
+    archive_id = _register_mixed(client)
+    _scan(archive_id, archive_root, tmp_path)
+    client.post(f"/archives/{archive_id}/format",
+                json={"format": "lfs"}, headers=CTL)
+    client.request("DELETE", f"/archives/{archive_id}/orphans", headers=CTL)
+
+    again = _scan(archive_id, archive_root, tmp_path)
+    assert again["new"] == 0, again
+    assert _formats(tmp_path) == {"lfs": 2}
+
+
+def test_widening_the_format_brings_them_back(
+        client, mixed_root, archive_root, tmp_path):
+    """It is a rule, not a tombstone.
+
+    Nothing here is unrecoverable: the mount is read-only and the files were
+    never touched, so the undo is to stop excluding them.
+    """
+    archive_id = _register_mixed(client)
+    _scan(archive_id, archive_root, tmp_path)
+    client.post(f"/archives/{archive_id}/format",
+                json={"format": "lfs"}, headers=CTL)
+    client.request("DELETE", f"/archives/{archive_id}/orphans", headers=CTL)
+    assert _formats(tmp_path) == {"lfs": 2}
+
+    client.post(f"/archives/{archive_id}/format",
+                json={"format": ""}, headers=CTL)
+    _scan(archive_id, archive_root, tmp_path)
+    assert _formats(tmp_path) == {"lfs": 2, "digisonde": 3}
+
+
+def test_an_archive_admitting_every_format_refuses_the_delete(
+        client, mixed_root, archive_root, tmp_path):
+    """Otherwise it would delete rows the very next scan re-ingests."""
+    archive_id = _register_mixed(client)
+    _scan(archive_id, archive_root, tmp_path)
+    r = client.request("DELETE", f"/archives/{archive_id}/orphans",
+                       headers=CTL)
+    assert r.status_code == 409
+    assert "Narrow the format first" in r.json()["detail"]
+    assert _formats(tmp_path) == {"lfs": 2, "digisonde": 3}
+
+
+def test_an_unknown_format_is_refused_naming_the_real_ones(client):
+    archive_id = _add(client).json()["id"]
+    from muf import loader
+
+    r = client.post(f"/archives/{archive_id}/format",
+                    json={"format": "digisond"}, headers=CTL)
+    assert r.status_code == 400
+    for name in loader.FORMATS:
+        assert name in r.json()["detail"]
+
+
+def test_the_orphan_preview_is_open_but_removing_needs_the_token(
+        client, mixed_root, archive_root, tmp_path):
+    archive_id = _register_mixed(client, fmt="lfs")
+    assert client.get(f"/archives/{archive_id}/orphans").status_code == 200
+    assert client.post(f"/archives/{archive_id}/format",
+                       json={"format": "lfs"}).status_code == 401
+    assert client.request(
+        "DELETE", f"/archives/{archive_id}/orphans").status_code == 401

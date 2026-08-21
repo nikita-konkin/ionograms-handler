@@ -775,8 +775,11 @@ def scan_once(row: dict, *, archive_root, db_path=None, batch=None,
         # between chunks. Neither step is reimplemented; only the seam between
         # them is new.
         _set_status(phase="reading", done=0, total=0, loaded=0, skipped=0)
+        # The archive's own format, honoured here and not only when the
+        # folder was registered. A folder narrowed to one format must stop
+        # ingesting the others, or nothing removed from it stays removed.
         new, found, fresh, skewed = watch.find_new(
-            [target], conn, methods, min_age_s)
+            [target], conn, methods, min_age_s, format=row.get("format"))
 
         held_back = 0
         if batch and len(new) > batch:

@@ -583,6 +583,64 @@ def set_archive_methods(conn: sqlite3.Connection, archive_id: int,
     return cur.rowcount > 0
 
 
+def set_archive_format(conn: sqlite3.Connection, archive_id: int,
+                       format: str | None) -> bool:
+    """Narrow (or widen) what this folder is allowed to contribute.
+
+    ``None`` means every format the loader recognises. Unlike `methods`, this
+    is not just scope for future work: `archives.scan_once` passes it to
+    `watch.find_new`, so narrowing it also stops the excluded files being
+    re-ingested -- which is what lets soundings removed under
+    `archive_orphans` stay removed.
+    """
+    cur = conn.execute("UPDATE archive SET format = ? WHERE id = ?",
+                       (format, archive_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def archive_orphans(conn: sqlite3.Connection, archive_id: int) -> dict:
+    """Soundings this archive holds that its own format no longer allows.
+
+    ``{"total": n, "by_format": {...}}``. Empty when the archive admits every
+    format, which is the default and the common case.
+
+    Same `path LIKE 'relpath/%'` rule `archives()` counts with -- trailing
+    separator so `2026.02.04` does not also match `2026.02.045`.
+    """
+    row = archive(conn, archive_id)
+    if row is None or not row["format"]:
+        return {"total": 0, "by_format": {}}
+    prefix = row["relpath"].rstrip("/") + "/"
+    counts = {r["format"]: r["n"] for r in rows(
+        conn, "SELECT format, COUNT(*) AS n FROM sounding"
+              " WHERE path LIKE ? AND (format IS NULL OR format != ?)"
+              " GROUP BY format", (prefix + "%", row["format"]))}
+    return {"total": sum(counts.values()), "by_format": counts}
+
+
+def delete_archive_orphans(conn: sqlite3.Connection, archive_id: int) -> int:
+    """Delete exactly what `archive_orphans` counted. Returns the row count.
+
+    `extraction` and `reference` are `ON DELETE CASCADE`, so the derived
+    values go with the soundings -- but only if foreign keys are enforced on
+    this connection, hence the PRAGMA rather than trusting the caller's.
+    Leaving an `extraction` row behind whose sounding is gone would put a
+    measurement in the database that nothing can locate or re-derive.
+    """
+    row = archive(conn, archive_id)
+    if row is None or not row["format"]:
+        return 0
+    conn.execute("PRAGMA foreign_keys = ON")
+    prefix = row["relpath"].rstrip("/") + "/"
+    cur = conn.execute(
+        "DELETE FROM sounding"
+        " WHERE path LIKE ? AND (format IS NULL OR format != ?)",
+        (prefix + "%", row["format"]))
+    conn.commit()
+    return cur.rowcount
+
+
 def record_scan(conn: sqlite3.Connection, archive_id: int, *,
                 result: str, ok: bool) -> None:
     conn.execute(
