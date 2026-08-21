@@ -61,7 +61,15 @@ DEFAULT_BATCH = int(os.environ.get("ARCHIVE_SCAN_BATCH", "200"))
 #: the loop entirely, which is what the tests and a CLI-only deployment want.
 DEFAULT_INTERVAL_S = float(os.environ.get("ARCHIVE_SCAN_INTERVAL_S", "900"))
 
-#: Worker processes for one pass, handed to the pipeline.
+#: Worker processes for one pass, handed to the pipeline. ``0`` means one per
+#: core bar one.
+#:
+#: Still 1 by default: indexing shares this box with the pages it serves, and
+#: taking every core for a background scan makes the console crawl exactly when
+#: someone has opened it to watch the scan. Raising it is now safe -- the
+#: pipeline no longer *forks* its workers
+#: (`muf.pipeline.POOL_START_METHODS`), which is what made `jobs > 1` deadlock
+#: a server that had already rendered an ionogram.
 DEFAULT_JOBS = int(os.environ.get("ARCHIVE_SCAN_JOBS", "1"))
 
 #: One scan at a time, process-wide. See the module docstring.
@@ -79,7 +87,13 @@ _STATUS_LOCK = threading.Lock()
 #: Not 1. Each chunk is a fresh `ingest` call, and with `jobs > 1` that means
 #: building a process pool -- per file, the pool would cost more than the work
 #: in it.
-DEFAULT_CHUNK = int(os.environ.get("ARCHIVE_SCAN_CHUNK", "20"))
+#:
+#: 50 rather than 20 because the pool is rebuilt per chunk and a small chunk
+#: never amortises it. Measured on 90 real soundings at `jobs=4`: 20 gave
+#: 5.1 s, 45 gave 3.8 s, 90 gave 3.2 s, against 14.2 s at `jobs=1`. The pull
+#: the other way is that a chunk is also the unit of progress and the most work
+#: a restart can lose, so this stops well short of "the whole folder".
+DEFAULT_CHUNK = int(os.environ.get("ARCHIVE_SCAN_CHUNK", "50"))
 
 
 @dataclass

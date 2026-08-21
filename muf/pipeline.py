@@ -17,6 +17,7 @@ machine on one day and are only meaningful against that same box later.
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
@@ -375,6 +376,41 @@ _THREAD_VARS = (
 #: with, the threads are free parallelism and taking them away cost 5 %.
 PIN_THREADS = os.environ.get("MUF_PIN_THREADS", "1") not in ("0", "", "false")
 
+#: How worker processes are created, in order of preference. **Never ``fork``**,
+#: which is the platform default on Linux and deadlocks this pipeline outright.
+#:
+#: ``kmeans`` is scikit-learn's, and running it initialises the OpenMP runtime
+#: in whatever process ran it. libgomp is not fork-safe: a child forked from
+#: such a process inherits a thread pool whose threads do not exist on its side
+#: of the fork, and hangs on the first parallel region it reaches. Not slowly --
+#: forever, with no error, holding whatever lock its caller held.
+#:
+#: A short-lived CLI run never meets this, because nothing ran ``kmeans`` before
+#: the pool was built. The api does: ``services.api.read_routes`` renders an
+#: ionogram with its picks in-process, through ``extractors.run``, whose default
+#: methods include ``kmeans``. One such page view arms the deadlock for every
+#: later scan in that process, and the scan holds the archive lock while it
+#: hangs -- so a single ionogram view could stop the server indexing until
+#: someone restarted the container.
+#:
+#: Measured in the deployed image, after a parent-side ``kmeans``, 20 soundings
+#: at ``jobs=4``: fork never returned; forkserver and spawn both took 1.4 s.
+#: forkserver first because it pays the interpreter start once rather than per
+#: worker.
+POOL_START_METHODS = ("forkserver", "spawn")
+
+
+def pool_context():
+    """A multiprocessing context whose workers are not forked. See above."""
+    available = mp.get_all_start_methods()
+    for name in POOL_START_METHODS:
+        if name in available:
+            return mp.get_context(name)
+    # Nothing but fork available. Vanishingly unlikely -- spawn is on every
+    # supported platform -- and better than refusing to run at all, so it is
+    # allowed through rather than raising.
+    return mp.get_context()
+
 
 @contextmanager
 def _pinned_threads(enabled: bool = True):
@@ -433,7 +469,12 @@ def process_many(
         # Around the whole pool, not just its construction: workers are spawned
         # on demand, so the last one can start well after the first task does.
         with _pinned_threads(PIN_THREADS):
-            with ProcessPoolExecutor(max_workers=jobs) as pool:
+            # `mp_context` rather than the platform default: see
+            # `POOL_START_METHODS`. The environment pinned just above is
+            # inherited by the workers either way, because both remaining
+            # start methods pass it to a fresh interpreter.
+            with ProcessPoolExecutor(max_workers=jobs,
+                                     mp_context=pool_context()) as pool:
                 iterator = pool.map(_worker, [(p, options) for p in paths])
                 rows = list(_maybe_progress(iterator, len(paths), progress))
 

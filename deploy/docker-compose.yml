@@ -54,7 +54,11 @@ services:
       # How often the progress bar advances: a scan commits and reports every
       # CHUNK soundings. Smaller moves the bar more smoothly at the cost of
       # more transactions; larger is fractionally faster and looks stuck.
-      ARCHIVE_SCAN_CHUNK: "${ARCHIVE_SCAN_CHUNK:-20}"
+      ARCHIVE_SCAN_CHUNK: "${ARCHIVE_SCAN_CHUNK:-50}"
+      # Worker processes per scan. 1 keeps indexing on one core; 4 was
+      # 2.7x faster on the 10-core work server, and 8 was *slower* than
+      # 4, because each chunk builds its own pool. Raise CHUNK with it.
+      ARCHIVE_SCAN_JOBS: "${ARCHIVE_SCAN_JOBS:-1}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.

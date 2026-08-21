@@ -69,6 +69,15 @@ jobs:
             dockerfile: deploy/Dockerfile.api
           - image: ionograms-station
             dockerfile: deploy/Dockerfile.station
+          # Every image the compose files name has to be here. `infer` is not
+          # behind a profile in docker-compose.hub.yml, so a plain `up -d` on
+          # the work server pulls it -- and an image the matrix does not build
+          # fails that pull with `not found`, taking the whole stack down with
+          # it rather than just the one service.
+          - image: ionograms-infer
+            dockerfile: deploy/Dockerfile.infer
+          - image: ionograms-train
+            dockerfile: deploy/Dockerfile.train
     steps:
       - uses: actions/checkout@v4
 
@@ -110,7 +119,7 @@ jobs:
           elif [ -n "$FROM_SECRET" ]; then src="repository secret DOCKERHUB_NAMESPACE"
           else                             src="DOCKERHUB_USERNAME"
           fi
-          echo "::notice title=Pushing as::namespace from ${src}; images ${NAMESPACE}/ionograms-{api,station}"
+          echo "::notice title=Pushing as::namespace from ${src}; images ${NAMESPACE}/ionograms-{api,station,infer,train}"
           # The token can only push to a namespace it owns or is a member of.
           # Saying so here turns `insufficient_scope` from a registry mystery
           # into a one-line mismatch.
