@@ -117,7 +117,11 @@
         <button onclick="scan({{ a.id }})">scan now</button>
         <button onclick="setEnabled({{ a.id }}, {{ 'false' if a.enabled else 'true' }})">
           {{ 'disable' if a.enabled else 'enable' }}</button>
-        <button onclick="remove({{ a.id }}, {{ a.name|tojson }})">remove</button>
+        {# Single-quoted, and it has to be: `tojson` escapes `<`, `>`, `&` and `'`
+           but deliberately not `"`, so a double-quoted handler ends at the first
+           quote of the string and leaves the browser a syntax error. Same
+           pattern as `sources.html`'s `data-row`. #}
+        <button onclick='remove({{ a.id }}, {{ a.name|tojson }})'>remove</button>
       </td>
     </tr>
     {% endfor %}
@@ -162,7 +166,7 @@
           ({% for f, n in c.by_format.items() %}{{ n }} {{ f }}{{ ', ' if not loop.last }}{% endfor %})
         {%- else %}<span class="muted">nothing this server can read</span>{% endif %}</td>
       <td>{% if c.registered %}<span class="muted">registered</span>
-          {%- elif c.soundings %}<button onclick="pick({{ c.path|tojson }})">use</button>
+          {%- elif c.soundings %}<button onclick='pick({{ c.path|tojson }})'>use</button>
           {%- endif %}</td>
     </tr>
     {% endfor %}
@@ -249,9 +253,17 @@ function allMethods() {
   });
 }
 
+// `use` fills the form; `add` is what registers. Two steps because format and
+// methods are real choices, and a folder registered with the wrong method set
+// re-scans itself forever. But the form sits below a table that can run to
+// twenty rows, so on its own the fill happens off-screen and the button looks
+// dead -- hence scrolling to it and saying what happened.
 function pick(path) {
-  document.getElementById('path').value = path;
-  document.getElementById('path').focus();
+  const field = document.getElementById('path');
+  field.value = path;
+  field.scrollIntoView({block: 'center', behavior: 'smooth'});
+  field.focus();
+  addSay('path set to ' + path + ' \u2014 check the methods below, then press add.');
 }
 
 async function add() {

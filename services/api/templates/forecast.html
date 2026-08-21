@@ -92,10 +92,13 @@ compared for ever and never promoted. The schema refuses it, not this page.">
         <button disabled title="Bound to no circuit, so there is no forecast it
 could be. Re-import it with --tx and --rx.">activate</button>
         {% elif m.active %}
-        <button onclick="retire({{ m.id }}, {{ m.name|tojson }})">retire</button>
+        <button onclick='retire({{ m.id }}, {{ m.name|tojson }})'>retire</button>
         {% else %}
-        <button onclick="activate({{ m.id }}, {{ m.name|tojson }},
-          {{ (m.tx ~ ' -> ' ~ m.rx)|tojson }}, {{ m.param|tojson }})">activate</button>
+        {# Single-quoted: see the note in archives.html. `tojson` does not escape
+           `"`, so a double-quoted handler carrying a model name is truncated to
+           a syntax error and the button silently does nothing. #}
+        <button onclick='activate({{ m.id }}, {{ m.name|tojson }},
+          {{ (m.tx ~ " -> " ~ m.rx)|tojson }}, {{ m.param|tojson }})'>activate</button>
         {% endif %}
       </td>
     </tr>
