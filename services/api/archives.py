@@ -371,7 +371,7 @@ def _root_state(path: Path, index: int) -> dict:
     those propagates. `iterdir` was already guarded; `is_dir` was not, so the
     page died on the one call that had no reason to be trusted.
     """
-    entries = None
+    populated = None
     error = fault = None
     try:
         exists = path.is_dir()
@@ -381,14 +381,33 @@ def _root_state(path: Path, index: int) -> dict:
         exists, error, fault = False, str(exc), mount_fault(exc)
     if exists:
         try:
-            entries = sum(1 for _ in path.iterdir())
+            # One entry, not a count, and `os.scandir` rather than `iterdir`.
+            # This runs on `GET /archives`, which the page polls once a second
+            # while a scan is running. Counting was `sum(1 for _ in
+            # path.iterdir())` -- a full enumeration of the root, and on
+            # Python 3.12 `Path.iterdir` is `os.listdir` underneath, so it
+            # reads the whole directory eagerly before yielding anything. On a
+            # local disk with nineteen day-folders that is 0.1 ms. On an SMB
+            # share it is 6.3 ms per entry (`sources.DEFAULT_MAX_AGE_S` records
+            # 293.8 s for 46,436), once a second, competing with the indexer
+            # for the very mount this panel exists to report on -- which is how
+            # polling the page could take the share down.
+            #
+            # `os.scandir` is lazy, so the first entry costs one round trip and
+            # the rest are never fetched. What the panel needs is whether the
+            # mount answers and whether anything is in it; both are in that
+            # first entry. The exact count belonged to the candidates panel,
+            # which already has it and already caches it.
+            with os.scandir(path) as entries_it:
+                populated = next(entries_it, None) is not None
         except OSError as exc:
             exists, error, fault = False, str(exc), mount_fault(exc)
     elif error is None:
         fault = "missing"
     return {"root": str(path), "host": _root_host(index),
-            "primary": index == 0, "exists": exists, "entries": entries,
-            "empty": exists and entries == 0, "error": error, "fault": fault}
+            "primary": index == 0, "exists": exists, "populated": populated,
+            "empty": exists and populated is False, "error": error,
+            "fault": fault}
 
 
 def mount() -> dict:

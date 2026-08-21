@@ -20,7 +20,13 @@
           {%- if r.error %}<div class="note">{{ r.error }}</div>{% endif %}
           {% elif r.empty %}<span class="bad">mounted but empty</span>
           {% else %}<span class="ok">ok</span>
-          <span class="muted">{{ r.entries }} entr{{ 'y' if r.entries == 1 else 'ies' }}</span>{% endif %}</td>
+          {# No entry count: reading one meant enumerating the whole root on
+             an endpoint the page polls once a second, which on an SMB share
+             was minutes of listing per poll against the mount the indexer was
+             using. "ok" and "mounted but empty" are the two answers this
+             panel is for; the folder counts are in the candidates table
+             below, which is surveyed on a background thread and cached. #}
+          {% endif %}</td>
     </tr>
     {% endfor %}
   </table></div>

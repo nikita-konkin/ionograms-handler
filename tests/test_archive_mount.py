@@ -71,7 +71,7 @@ def test_the_mount_state_reports_rather_than_raises(sick_mount, number):
     sick_mount(number)
     state = archives._root_state(ROOT, 0)
     assert state["exists"] is False
-    assert state["entries"] is None
+    assert state["populated"] is None
 
 
 @pytest.mark.parametrize("number", SICK, ids=lambda n: errno.errorcode[n])
@@ -353,3 +353,70 @@ def test_a_read_that_dies_mid_request_is_503_not_500(client, sick_read, name, ro
         f"{route} answered {response.status_code} when the read hit "
         f"{name}; a 500 blames the server for the NAS being down")
     assert "storage, not data" in response.json()["detail"]
+
+
+# --------------------------------------------------------------------------
+# The mount panel is on a polled endpoint
+#
+# `GET /archives` is polled once a second while a scan runs -- the code that
+# serves it says so. Reading an entry *count* for the panel meant enumerating
+# the whole root on every one of those polls, and on Python 3.12 `iterdir` is
+# `os.listdir` underneath, so it read the entire directory eagerly. On a local
+# disk that is 0.1 ms; on the station's SMB share it is 6.3 ms per entry,
+# against the same mount the indexer is reading. The panel that exists to
+# report the mount's health was helping to take it down.
+# --------------------------------------------------------------------------
+
+def test_the_mount_panel_does_not_enumerate_the_root(tmp_path, monkeypatch):
+    import os as os_mod
+
+    root = tmp_path / "archive"
+    root.mkdir()
+    for day in range(200):
+        (root / f"2026-08-{day:03d}").mkdir()
+
+    consumed = []
+    real_scandir = os_mod.scandir
+
+    class Counting:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            consumed.append(1)
+            return next(self._inner)
+
+    monkeypatch.setattr(os_mod, "scandir", lambda p: Counting(real_scandir(p)))
+    monkeypatch.setattr(os_mod, "listdir",
+                        lambda p: pytest.fail("read the whole root with listdir"))
+
+    state = archives._root_state(root, 0)
+
+    assert state["exists"] is True
+    assert state["populated"] is True
+    assert state["empty"] is False
+    assert len(consumed) <= 1, (
+        f"pulled {len(consumed)} of 200 entries; on a share polled once a "
+        f"second at 6.3 ms an entry that is the outage, not a page render")
+
+
+def test_an_empty_root_is_still_reported_as_empty(tmp_path):
+    """The one thing the count was load-bearing for. A mounted-but-empty root
+    means every scan will truthfully report "0 on disk", and saying so is the
+    whole point of the panel."""
+    root = tmp_path / "archive"
+    root.mkdir()
+    state = archives._root_state(root, 0)
+    assert state["exists"] is True
+    assert state["populated"] is False
+    assert state["empty"] is True
