@@ -633,20 +633,6 @@ def _start_candidate_refresh(archive_root, limit: int, db_path=None,
                      name="archive-candidates").start()
 
 
-def warm_candidates(archive_root, *, db_path=None, limit: int = 60) -> None:
-    """Start the first survey at boot, off the request path.
-
-    Nothing waits on it: the page shows "looking" until it lands.
-    """
-    global _CAND_REFRESHING
-    with _CAND_LOCK:
-        if _CAND_REFRESHING:
-            return
-        _CAND_REFRESHING = True
-        _start_candidate_refresh(archive_root, limit, db_path,
-                                 _CAND_GEN)
-
-
 def forget_candidates() -> None:
     """Drop the cache, so the next look re-walks.
 

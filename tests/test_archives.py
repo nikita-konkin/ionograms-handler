@@ -1136,3 +1136,30 @@ def test_the_orphan_preview_is_open_but_removing_needs_the_token(
                        json={"format": "lfs"}).status_code == 401
     assert client.request(
         "DELETE", f"/archives/{archive_id}/orphans").status_code == 401
+
+
+def test_starting_the_server_does_not_walk_the_archive(tmp_path, archive_root,
+                                                       monkeypatch):
+    """A restart must not survey the mount on its own.
+
+    The survey is a recursive walk. Doing it at boot means every restart
+    walks the whole archive unprompted -- which on a share with per-file
+    latency competes with the indexer for the one mount, and on a
+    cloud-backed folder triggers mass materialisation. Measured: warming a
+    Nextcloud-backed archive from a container drove the file provider to
+    130-150% CPU and wedged the Docker daemon.
+    """
+    from fastapi.testclient import TestClient
+
+    walked = []
+    monkeypatch.setattr(archives_mod, "candidates",
+                        lambda *a, **kw: walked.append(1) or [])
+    monkeypatch.setenv("API_DB", str(tmp_path / "boot.sqlite3"))
+    monkeypatch.setenv("ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "boot.sqlite3")
+    archives_mod.forget_candidates()
+
+    from services.api.main import app
+    with TestClient(app):
+        pass
+    assert not walked, "starting the server surveyed the archive"

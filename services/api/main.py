@@ -88,12 +88,17 @@ async def lifespan(app: FastAPI):
     # server runs. ARCHIVE_SCAN_INTERVAL_S=0 turns it off.
     app.state.archive_scan = archives.start_periodic(app)
 
-    # Survey the mounted folders once now, so the archives page can offer them
-    # straight away. It is a walk of the archive tree and it will not run while
-    # a scan holds the disk, so without a warm start the pick-list is missing
-    # for exactly as long as the first index takes -- which is the first time
-    # anyone opens the page.
-    archives.warm_candidates(app.state.archive_root)
+    # No candidate survey here, deliberately. It is a recursive walk of the
+    # archive, and doing it at boot means every restart walks the whole mount
+    # unprompted -- on a share with per-file latency that competes with the
+    # indexer for the one mount, and on a cloud-backed folder it triggers mass
+    # materialisation. Measured: warming a Nextcloud-backed archive from a
+    # container drove the file provider to 130-150% CPU and wedged the daemon.
+    #
+    # `archives.candidates_cached` starts one on first view instead, on a
+    # background thread, and the page says "looking" until it lands. The cost
+    # is a pick-list that arrives a moment after the first page load; the
+    # saving is that nothing walks the mount unless somebody asked to see it.
 
     app.state.census_warm = None
     if WARM_CENSUS:
