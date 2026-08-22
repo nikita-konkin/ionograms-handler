@@ -146,6 +146,33 @@ def add_archive(request: Request, payload: dict = Body(...),
     except archives_mod.ArchiveError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
 
+    # Refused rather than warned. A scan is recursive, so overlapping rows
+    # walk the same files twice on every pass and the only symptom is that
+    # indexing takes twice as long -- invisible unless you already suspect it.
+    # Registering the root over folders already registered inside it is the
+    # obvious move once the root is allowed, so it is the one to catch.
+    clashes = archives_mod.overlapping(request.app.state.db, relpath, root)
+    if clashes and not payload.get("replace"):
+        inside = [c["relpath"] for c in clashes if c["relation"] == "inside"]
+        outside = [c["relpath"] for c in clashes if c["relation"] == "contains"]
+        if outside:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{relpath} is already covered by {', '.join(outside)}, which "
+                f"is registered and scanned recursively. Registering both "
+                f"walks these files twice on every pass. Remove the other "
+                f"registration first, or register something outside it.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{relpath} contains {len(inside)} folder(s) that are already "
+            f"registered on their own: {', '.join(inside[:6])}"
+            + (" and others" if len(inside) > 6 else "")
+            + ". Scanning is recursive, so keeping both walks every file "
+              "twice. Send replace=true to register this folder and drop "
+              "those rows -- the soundings they already indexed stay in the "
+              "database, because they are keyed by file rather than by "
+              "archive.")
+
     if not found["soundings"]:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -166,12 +193,28 @@ def add_archive(request: Request, payload: dict = Body(...),
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"an archive named {name!r} already exists")
 
+    # `replace` got this far only by being explicit, and the refusal above
+    # said what it would do. The rows go; the soundings they indexed stay,
+    # because `sounding` is keyed by file and has no archive_id -- which is
+    # what makes consolidating fifteen day folders into one root a bookkeeping
+    # change rather than a reindex.
+    dropped = []
+    if payload.get("replace"):
+        for clash in archives_mod.overlapping(conn, relpath, root):
+            if clash["relation"] == "inside":
+                db.remove_archive(conn, clash["id"])
+                dropped.append(clash["relpath"])
+
     archive_id = db.add_archive(conn, name=name, relpath=relpath,
                                 methods=methods, format=fmt)
     archives_mod.forget_candidates()
+    note = "registered; press scan to index it"
+    if dropped:
+        note = (f"registered, and dropped {len(dropped)} folder(s) now covered "
+                f"by it; their soundings stay indexed")
     return {"ok": True, "id": archive_id, "name": name, "path": relpath,
-            "methods": methods, "found": found,
-            "note": "registered; press scan to index it"}
+            "methods": methods, "found": found, "replaced": dropped,
+            "note": note}
 
 
 @router.post("/archives/{archive_id}/scan")

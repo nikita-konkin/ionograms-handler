@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import errno
 import os
+import re
 import threading
 import time
 import warnings
@@ -235,11 +236,16 @@ def resolve(relpath: str, archive_root: str | os.PathLike) -> tuple[str, Path]:
             f"volume for it and list its container path in "
             f"{ROOTS_ENV}, then redeploy.")
 
-    if stored_rel == Path("."):
-        raise ArchiveError(
-            f"that is the archive root {owner} itself. Register the folders "
-            f"inside it instead, so each can be scanned, disabled and "
-            f"reported on its own.")
+    # The root itself is allowed, and is the right answer whenever the day
+    # directories sit directly under it. Refusing it used to force one archive
+    # row per day -- fifteen of them on the station's own rig -- and made every
+    # new day the receiver created into a manual registration. `find_soundings`
+    # is recursive, so registering the folder that *contains* the days is what
+    # makes new ones arrive on their own.
+    #
+    # It is stored as "." rather than "": that is what `Path.relative_to`
+    # returns, `archive_root / "."` is `archive_root`, and a row with an empty
+    # string in it reads like a bug.
     try:
         present = absolute.is_dir()
     except OSError as exc:
@@ -463,6 +469,85 @@ def _worth_surveying(path: Path) -> bool:
     return name not in UNWALKABLE and not name.startswith(".")
 
 
+#: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
+#: The same shape `sources._DAY_RE` matches, and for the same reason -- the
+#: station and the archive server disagree about separators.
+_DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
+
+#: How far below a root to look for a dataset folder. Two is enough for both
+#: layouts seen in service -- day directories at the root, and day directories
+#: one folder down -- and the bound is what stops discovery walking an archive
+#: of 46,000 files looking for a third.
+DISCOVERY_DEPTH = 2
+
+#: How many day folders to probe before concluding one holds no soundings.
+#: A dataset is recognised by its *first* day with data, so this only bites on
+#: a folder that is not a dataset, where the answer is "no" either way.
+PROBE_DAYS = 8
+
+
+def _is_day(path: Path) -> bool:
+    return _DAY_RE.match(path.name) is not None
+
+
+def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
+    """Folders that hold daily sounding data, shallowest first.
+
+    **What the archives page should be offering.** Listing a root's immediate
+    subdirectories offers whatever happens to be one level down, which for the
+    station's layout is 18 day folders -- so registering an archive means
+    registering every day by hand, and every new day the receiver creates
+    needs another one. It also offers folders with nothing in them, because
+    nothing filtered on whether a candidate held soundings at all.
+
+    A folder is a **dataset** when its day-named children hold soundings, or
+    when it holds sounding files directly. That single rule covers both
+    layouts in service:
+
+    * ``/archive/2026-08-04/*.h5`` -- the root itself is the dataset. One
+      registration, and a new day appears inside it with no action at all,
+      because `find_soundings` is recursive.
+    * ``/archive/ionozond_data2/2026-08-04/*.h5`` -- the root's children are
+      not days, so it descends and offers ``ionozond_data2`` and its siblings
+      separately, which is what keeps a `.lfs` folder and a `chirp2` folder on
+      their own formats and their own estimators.
+
+    A dataset is never descended into, so a folder and the day directories
+    under it are never both offered. That is the property that makes the list
+    a set of choices rather than an inventory.
+    """
+    from muf import loader
+
+    found: list[Path] = []
+    queue: list[tuple[Path, int]] = [(Path(root), 0)]
+
+    while queue:
+        path, depth = queue.pop(0)
+        try:
+            children = sorted(p for p in path.iterdir()
+                              if p.is_dir() and _worth_surveying(p))
+        except OSError:
+            # One unreadable folder is one folder left off the list, never a
+            # discovery pass that fails. See `listable`.
+            continue
+
+        # Newest first: a dataset is recognised by its first day with data,
+        # and the newest day is the one most likely to have any.
+        days = sorted((c for c in children if _is_day(c)), reverse=True)
+        if days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS]):
+            found.append(path)
+            continue
+
+        if loader.has_soundings(path, recursive=False):
+            found.append(path)
+            continue
+
+        if depth < max_depth:
+            queue.extend((child, depth + 1) for child in children)
+
+    return found
+
+
 def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     """Folders under the root that could be registered, and what is in them.
 
@@ -482,27 +567,26 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     for root in every:
         if not listable(root):
             continue
-        try:
-            children = sorted(p for p in root.iterdir()
-                              if p.is_dir() and _worth_surveying(p))
-        except OSError:
-            continue
-        for child in children[:limit]:
+        for path in datasets(root)[:limit]:
             # The key a row is stored under: relative for the primary root,
             # absolute for the others. Same rule as `resolve`.
-            key = (child.name if root == primary else str(child))
+            if root == primary:
+                try:
+                    key = path.relative_to(root).as_posix()
+                except ValueError:
+                    continue
+            else:
+                key = str(path)
             row = registered.get(key)
             if row is not None:
                 # Already registered: the count is in the database, derived
                 # from `sounding.path`, and walking the folder again to
                 # recompute it would be the most expensive way to learn
-                # something already known. This matters -- the registered
-                # folders are the big ones, so once they are registered the
-                # survey stops touching them at all.
+                # something already known.
                 found = {"soundings": row["soundings"], "by_format": None}
             else:
                 try:
-                    found = survey(child)
+                    found = survey(path)
                 except (ArchiveError, OSError):
                     # OSError as well as ArchiveError: `survey` walks the
                     # folder, and a share that dies mid-walk raises from the
@@ -514,12 +598,27 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
                 "path": key,
                 "root": str(root),
                 "primary": root == primary,
+                "days": _day_count(path),
                 "soundings": found["soundings"],
                 "by_format": found["by_format"],
                 "registered": row is not None,
                 "archive_id": row["id"] if row else None,
             })
     return out
+
+
+def _day_count(path: Path) -> int:
+    """How many day directories this dataset covers, for the page to say so.
+
+    The number that makes a single row legible as "and every day inside it",
+    which is the whole difference between this list and the one that offered
+    the days themselves.
+    """
+    try:
+        return sum(1 for child in path.iterdir()
+                   if _is_day(child) and child.is_dir())
+    except OSError:
+        return 0
 
 
 #: Why a method cannot be used here, when it cannot. Keyed by method name.
@@ -673,6 +772,43 @@ def method_availability() -> dict[str, dict]:
 
 def usable_methods() -> tuple[str, ...]:
     return tuple(n for n, v in method_availability().items() if v["usable"])
+
+
+def overlapping(conn, relpath: str, archive_root) -> list[dict]:
+    """Registered archives that already cover this folder, or that it covers.
+
+    Scanning is recursive, so a folder and its parent both being registered
+    means every sounding under the child is walked, hashed and looked up twice
+    on every pass. Nothing breaks -- dedup is by name, so no row is doubled --
+    which is exactly why it needs saying out loud: the only symptom is a scan
+    that takes twice as long for no reason anybody can see.
+
+    This became reachable the moment the root stopped being refused. The
+    station's own rig had fifteen day folders registered individually, and
+    registering the root over the top of them is the obvious next move and the
+    one that would silently double the work.
+    """
+    root = Path(archive_root)
+    try:
+        target = (root / relpath).resolve()
+    except OSError:
+        return []
+
+    clashes = []
+    for row in db.archives(conn):
+        stored = Path(row["relpath"])
+        other = stored if stored.is_absolute() else root / stored
+        try:
+            other = other.resolve()
+        except OSError:
+            continue
+        if other == target:
+            continue
+        if other.is_relative_to(target):
+            clashes.append(dict(row, relation="inside"))
+        elif target.is_relative_to(other):
+            clashes.append(dict(row, relation="contains"))
+    return clashes
 
 
 def survey(path: Path, format: str | None = None) -> dict:

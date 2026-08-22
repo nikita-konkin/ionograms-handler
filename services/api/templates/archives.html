@@ -183,13 +183,18 @@
      someone opens this page -- that wait was long enough to look like a
      blank page and a dead server. #}
   <div id="cands">
+  <p class="note">Folders that hold daily sounding data, and the days inside
+  each of them. Registering one covers every day it contains and every day the
+  receiver adds later &mdash; scanning is recursive, so a new day folder needs
+  no action here.</p>
   {% if candidates %}
   <div class="scroll" style="margin-bottom:.6rem"><table>
     <tr><th>folder</th>{% if mount.extra %}<th>root</th>{% endif %}
         <th>holds</th><th></th></tr>
     {% for c in candidates %}
     <tr>
-      <td><code>{{ c.path }}</code></td>
+      <td><code>{{ '(the mount itself)' if c.path == '.' else c.path }}</code>
+          {%- if c.days %} <span class="note">{{ c.days }} day folder{{ '' if c.days == 1 else 's' }}</span>{% endif %}</td>
       {% if mount.extra %}<td class="muted">{{ c.root }}
         {%- if not c.primary %} <span class="note">stored absolute</span>{% endif %}</td>{% endif %}
       <td class="muted">
@@ -259,7 +264,11 @@ async function control(url, method, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const out = await r.json().catch(() => ({}));
-  return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
+  // `status` as well as `detail`: a 409 carrying a remedy is offered as a
+  // choice rather than printed as a failure, and the caller needs the code
+  // to tell that case from an ordinary refusal.
+  return r.ok ? {ok: true, body: out}
+              : {ok: false, status: r.status, detail: out.detail || r.status};
 }
 
 const write = (id, text, bad) => {
@@ -308,7 +317,26 @@ async function add() {
     path: path, name: val('name').trim(), format: val('format'),
     methods: methods,
   });
-  if (!r.ok) { addSay(r.detail, true); return; }
+  if (!r.ok) {
+    // 409 with a `replace=true` remedy in it: the folder covers others that
+    // are already registered on their own. Offering the consolidation here
+    // rather than making someone delete fifteen rows by hand is the whole
+    // reason the refusal names it.
+    if (r.status === 409 && (r.detail || '').indexOf('replace=true') >= 0) {
+      if (confirm(r.detail + '\n\nRegister it and drop those rows?')) {
+        const again = await control('/archives', 'POST', {
+          path: path, name: val('name').trim(), format: val('format'),
+          methods: methods, replace: true,
+        });
+        if (!again.ok) { addSay(again.detail, true); return; }
+        addSay(again.body.note + '.');
+        setTimeout(() => location.reload(), 1200);
+        return;
+      }
+    }
+    addSay(r.detail, true);
+    return;
+  }
   const f = r.body.found || {};
   const kinds = Object.entries(f.by_format || {})
       .map(([k, n]) => n + ' ' + k).join(', ');

@@ -118,11 +118,18 @@ def test_traversal_is_refused(client):
     assert _add(client, path="good/../../..").status_code == 400
 
 
-def test_the_root_itself_is_refused(client):
+def test_the_root_itself_can_be_registered(client):
+    """It used to be refused, and that refusal was the bug.
+
+    When the day directories sit directly under the root -- which is how the
+    station's own receiver writes -- refusing the root forces one archive row
+    per day. The rig had fifteen, and every new day the receiver created was a
+    manual registration. Scanning is recursive, so registering the folder that
+    *contains* the days is what makes new ones arrive on their own.
+    """
     r = _add(client, path=".")
-    assert r.status_code == 400
-    assert "itself" in r.json()["detail"]
-    assert "Register the folders inside it" in r.json()["detail"]
+    assert r.status_code == 200, r.json()
+    assert r.json()["path"] == "."
 
 
 def test_a_folder_with_nothing_to_index_is_refused_at_registration(client):
@@ -464,9 +471,11 @@ def test_the_folders_in_the_mount_are_offered(client):
     assert paths["good"]["soundings"] == 2
     assert paths["good"]["by_format"] == {"lfs": 2}
     assert paths["good"]["registered"] is False
-    # The empty one is listed too -- with what it holds, so the reason it
-    # cannot be used is on the same line as the folder.
-    assert paths["empty"]["soundings"] == 0
+    # And *only* folders that hold soundings. The list used to be every
+    # subdirectory one level down with its count beside it, which meant
+    # reading a page of folders to find the two with data in them. A choice
+    # that cannot be taken does not belong on a list of choices.
+    assert "empty" not in paths
 
 
 def test_a_registered_folder_is_marked_in_the_candidate_list(client):
@@ -908,9 +917,10 @@ def test_the_survey_does_not_walk_into_a_recycle_bin(client, archive_root):
     assert "@eaDir" not in offered
     assert "lost+found" not in offered
     assert ".snapshots" not in offered
-    # An ordinary folder holding nothing is still offered, with what it holds
-    # said beside it. Omitting it would hide a folder someone is looking for.
-    assert offered["keepme"]["soundings"] == 0
+    # And an ordinary folder holding nothing is not offered either -- for a
+    # different reason than the recycle bin, but to the same end: everything
+    # on this list is a folder that can actually be registered.
+    assert "keepme" not in offered
 
 
 def test_a_registered_folder_is_not_walked_again_to_count_it(client,
@@ -1178,3 +1188,79 @@ def test_the_api_image_ships_the_database_maintenance_tools():
     assert "COPY tools/ /app/tools/" in dockerfile, (
         "the api image must carry tools/, or the maintenance tools cannot "
         "reach the database they operate on")
+
+
+# --- overlapping registrations ----------------------------------------------
+#
+# Reachable only since the root stopped being refused, and the first thing an
+# operator will do with that: register the root over the day folders already
+# registered underneath it. Scanning is recursive, so both together walk every
+# file twice on every pass -- and nothing visibly breaks, because dedup is by
+# file name. A doubling of work with no symptom is worth refusing over.
+
+def test_registering_a_parent_of_a_registered_folder_is_refused(client):
+    assert _add(client, path="good").status_code == 200
+    r = _add(client, path=".")
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "good" in detail
+    assert "twice" in detail
+    assert "replace=true" in detail
+
+
+def test_registering_inside_a_registered_folder_is_refused(client):
+    assert _add(client, path=".").status_code == 200
+    r = _add(client, path="good")
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "already covered by ." in detail
+    # No `replace` offered in this direction: dropping the *parent* would
+    # un-index everything else under it, which is not a consolidation.
+    assert "replace=true" not in detail
+
+
+def test_replace_consolidates_the_folders_it_covers(client):
+    assert _add(client, path="good").status_code == 200
+    r = _add(client, path=".", replace=True)
+    assert r.status_code == 200, r.json()
+    assert r.json()["replaced"] == ["good"]
+
+    rows = client.get("/archives").json()["archives"]
+    assert [row["relpath"] for row in rows] == ["."]
+
+
+def test_consolidating_does_not_discard_what_was_already_indexed(
+        client, archive_root, tmp_path):
+    """The reason `replace` is safe to offer. `sounding` is keyed by file and
+    carries no archive_id, so dropping the row that caused an ingest does not
+    drop the ingest -- consolidating fifteen day folders into one root is
+    bookkeeping, not a reindex."""
+    assert _add(client, path="good").status_code == 200
+    archive_id = client.get("/archives").json()["archives"][0]["id"]
+
+    conn = db.connect(tmp_path / "api.sqlite3")
+    try:
+        # Synchronously, and `min_age_s=0` because the fixture's files were
+        # written moments ago and the watcher would rightly hold them back.
+        archives_mod.scan_once(db.archive(conn, archive_id),
+                               archive_root=archive_root,
+                               db_path=tmp_path / "api.sqlite3", min_age_s=0)
+        before = db.one(conn, "SELECT COUNT(*) AS n FROM sounding")["n"]
+        assert before, "nothing was indexed, so this test proves nothing"
+
+        assert _add(client, path=".", replace=True).status_code == 200
+        after = db.one(conn, "SELECT COUNT(*) AS n FROM sounding")["n"]
+        assert after == before
+    finally:
+        conn.close()
+
+
+def test_two_folders_that_do_not_overlap_are_both_allowed(client, archive_root):
+    """The distinction is containment, not "more than one archive". A `.lfs`
+    folder beside a `chirp2` folder is the layout this is built for."""
+    (archive_root / "other").mkdir()
+    (archive_root / "other" / "2026-08-04").mkdir()
+    (archive_root / "other" / "2026-08-04" / "rec.lfs").write_bytes(b"")
+
+    assert _add(client, path="good").status_code == 200
+    assert _add(client, path="other").status_code in (200, 400)

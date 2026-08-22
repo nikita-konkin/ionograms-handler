@@ -50,6 +50,52 @@ DIGISONDE = "digisonde"
 
 FORMATS = (LFS, CHIRP2, DIGISONDE)
 
+#: The glob each finder uses, by format. Exposed because a caller that only
+#: needs to know *whether* a tree holds soundings should not have to build the
+#: whole list to find out -- `find_soundings` on a year of `.lfs` is a full
+#: `rglob` of the tree, and on a network archive that is minutes. Kept honest
+#: by `tests/test_archive_discovery.py`, which asserts each pattern matches
+#: exactly what its finder matches.
+PATTERNS = {
+    LFS: "*.lfs",
+    CHIRP2: "lfm_ionogram-*.h5",
+    DIGISONDE: f"{io_digisonde.FILE_PREFIX}*.h5",
+}
+
+
+def has_soundings(target: str | Path, *, format: str | None = None,
+                  recursive: bool = True) -> bool:
+    """Whether *any* sounding lives under ``target``, stopping at the first.
+
+    The question discovery actually asks. ``find_soundings`` answers a
+    different and far more expensive one -- how many, and which -- and
+    answering it to then check `> 0` is what made surveying a candidate cost a
+    recursive walk per page load.
+
+    ``recursive=False`` looks only at files directly in ``target``, which is
+    how a folder of soundings is told apart from a folder *of folders* of
+    soundings. Both are real layouts here: the station writes day directories
+    under one root, and the archive server nests them one level deeper.
+    """
+    if format is not None and format not in FORMATS:
+        raise FormatError(
+            f"unknown format {format!r}; choose from {', '.join(FORMATS)}")
+
+    target = Path(target)
+    glob = target.rglob if recursive else target.glob
+    for fmt, pattern in PATTERNS.items():
+        if format is not None and fmt != format:
+            continue
+        try:
+            if next(glob(pattern), None) is not None:
+                return True
+        except OSError:
+            # A tree that cannot be walked has not been shown to hold
+            # soundings, and discovery must not raise on one bad folder.
+            continue
+    return False
+
+
 #: Extension to format, for the cases an extension settles. ``.h5`` is not one
 #: of them: chirpsounder2 writes chirp ionograms, digisonde ionograms and three
 #: kinds of detection file into one tree with that suffix, so the ``.h5`` entry
