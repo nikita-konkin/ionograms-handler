@@ -44,6 +44,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +66,14 @@ IRI_APF107 = "https://irimodel.org/indices/apf107.dat"
 DEFAULT_CACHE = Path(os.environ.get("MUF_INDEX_CACHE")
                      or Path.home() / ".cache" / "muf" / "indices")
 CACHE_MAX_AGE_DAYS = 7
+
+#: Shorter than this, a cached copy is not a document -- it is a failed
+#: download that got written anyway. The smallest real source here is
+#: `silso_monthly.csv` at tens of kilobytes, so the threshold only has to
+#: separate "a file" from "nothing"; it is deliberately not tuned per source,
+#: because a source that legitimately shrinks to 64 bytes has broken in a way
+#: this module should not paper over either.
+MIN_USEFUL_BYTES = 64
 TIMEOUT_S = 60
 
 #: Identifying the client is good manners -- these are volunteer-run services
@@ -187,12 +196,25 @@ class SolarIndices:
         return "  ".join(parts)
 
 
+def _usable(path: Path) -> bool:
+    """Whether a cached file is worth reading.
+
+    An empty file is not a cache hit, it is the wreckage of a failed fetch.
+    Treating it as absent is what lets the retry actually retry, and what
+    stops `cache_state` reporting a destroyed cache as a fresh one.
+    """
+    try:
+        return path.stat().st_size >= MIN_USEFUL_BYTES
+    except OSError:
+        return False
+
+
 def _fetch(url: str, cache_dir: Path, name: str, offline: bool = False) -> str:
     """Download ``url``, caching it. Falls back to a stale cache on failure."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / name
 
-    if cached.exists():
+    if _usable(cached):
         age = dt.datetime.now() - dt.datetime.fromtimestamp(cached.stat().st_mtime)
         if offline or age.days < CACHE_MAX_AGE_DAYS:
             return cached.read_text(encoding="utf-8", errors="replace")
@@ -203,13 +225,62 @@ def _fetch(url: str, cache_dir: Path, name: str, offline: bool = False) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+            status = getattr(response, "status", None) or response.getcode()
             text = response.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        if cached.exists():       # stale beats nothing
+        if _usable(cached):       # stale beats nothing
             return cached.read_text(encoding="utf-8", errors="replace")
         raise IndexUnavailable(f"could not fetch {url}: {exc}") from exc
 
-    cached.write_text(text, encoding="utf-8")
+    # Every source here is a static file, so 200 is the only correct answer and
+    # `urlopen` raises for none of the others in the 2xx range. A station met
+    # **202 Accepted with an empty body** from `services.swpc.noaa.gov` -- not
+    # something NOAA sends, but exactly what an intercepting proxy returns when
+    # it swallows a request. Treated as success, that emptied two cached files
+    # and left the ionospheric model with no solar driver.
+    if status != 200:
+        if _usable(cached):
+            return cached.read_text(encoding="utf-8", errors="replace")
+        raise IndexUnavailable(
+            f"{url} answered {status} with {len(text)} byte(s). Only 200 is a "
+            f"document here; a 2xx that is not 200 -- especially 202 with an "
+            f"empty body -- is usually a proxy or filtering appliance "
+            f"intercepting the request rather than the host itself. Check "
+            f"whether this host is reachable un-proxied from the container.")
+
+    # An empty 200 is not an exception, so it used to reach the write below and
+    # replace a good file with nothing. That is how a station lost 42 days of
+    # daily F10.7 while `cache_state` went on reporting the cache as fresh --
+    # mtime had been updated by the very write that destroyed it, so nothing
+    # anywhere said the model had stopped having a solar driver.
+    if len(text.encode("utf-8")) < MIN_USEFUL_BYTES:
+        if _usable(cached):
+            return cached.read_text(encoding="utf-8", errors="replace")
+        raise IndexUnavailable(
+            f"{url} answered with {len(text)} byte(s), which is not a "
+            f"document; nothing cached to fall back to")
+
+    # Written beside the target and moved into place, so a fetch interrupted
+    # half way leaves the previous copy intact rather than a truncated one
+    # that would pass every check above.
+    #
+    # A cache that cannot be written is not a failed fetch: the document is in
+    # hand and the caller can have it. Raising here instead cost a station its
+    # ionospheric model, because a `docker cp` had left two cache files owned
+    # by another uid and every later refresh died on the write rather than on
+    # the download it had already completed.
+    temporary = cached.with_name(cached.name + ".partial")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        temporary.replace(cached)
+    except OSError as exc:
+        warnings.warn(f"fetched {url} but could not cache it at {cached}: "
+                      f"{exc}. The value is correct and will be re-fetched "
+                      f"every time until the cache is writable.", stacklevel=2)
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
     return text
 
 
@@ -226,8 +297,10 @@ def cache_state(cache_dir: Path | None = None) -> dict[str, float | None]:
     out: dict[str, float | None] = {}
     for source in SOURCES:
         path = cache_dir / source.filename
+        # An unusable file reports as absent, which is what it is. Reporting
+        # its age instead is how an empty cache looked healthy for two days.
         try:
-            out[source.key] = now - path.stat().st_mtime
+            out[source.key] = now - path.stat().st_mtime if _usable(path) else None
         except OSError:
             out[source.key] = None
     return out

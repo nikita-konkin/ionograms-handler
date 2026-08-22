@@ -2487,7 +2487,10 @@ def test_an_http_error_still_means_reachable(monkeypatch):
 def test_cache_age_is_reported_beside_reachability(tmp_path):
     """Unreachable-with-a-cache and reachable-without-one are opposite faults."""
     key = indices.SOURCES[0]
-    (tmp_path / key.filename).write_text("cached")
+    # A plausible document, not a stub: a file under `MIN_USEFUL_BYTES` is
+    # reported as absent on purpose, because that is what an empty one written
+    # by a failed download actually is. See `tests/test_indices_cache.py`.
+    (tmp_path / key.filename).write_text("cached\n" * 64)
 
     got = net.check(probe_fn=_reachable(*[False] * len(net.hosts())),
                     cache_dir=tmp_path)
@@ -2495,6 +2498,20 @@ def test_cache_age_is_reported_beside_reachability(tmp_path):
     assert got.state == "offline"
     assert got.cache[key.key] is not None and got.cache[key.key] < 60
     assert got.cache[indices.SOURCES[-1].key] is None      # never fetched
+
+
+def test_an_emptied_cache_is_reported_as_absent_not_as_fresh(tmp_path):
+    """The indicator said "47 h old, all six sources" while the file behind it
+    was zero bytes -- the write that destroyed it had refreshed the mtime the
+    indicator reads. Reachability was fine, the cache looked fine, and the
+    model had silently lost its solar driver."""
+    for source in indices.SOURCES:
+        (tmp_path / source.filename).write_text("")
+
+    got = net.check(probe_fn=_reachable(*[False] * len(net.hosts())),
+                    cache_dir=tmp_path)
+
+    assert all(age is None for age in got.cache.values()), got.cache
 
 
 def test_a_reading_nobody_refreshed_decays_to_unknown(monkeypatch):

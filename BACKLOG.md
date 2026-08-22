@@ -2858,3 +2858,124 @@ server was never confirmed from logs -- the probe-then-read gap is the
 best-fitting candidate and it is now closed, but that is inference. If a 500
 recurs after both fixes are deployed, get `docker logs` from the moment it
 happens rather than reasoning forward from here again.
+
+---
+
+## 33. Registering an archive meant registering every day of it (2026-08-22)
+
+**Problem.** Adding an archive was "identify every folder with data by hand",
+and a folder the receiver created tomorrow needed doing again. The rig had
+**fifteen archive rows, one per day directory**, and the candidate list that
+was meant to help offered every subdirectory one level down -- which for that
+layout *is* the days, empty folders included.
+
+The cause was one refusal. `resolve` rejected the archive root itself, on the
+reasoning that each folder should be scannable, disableable and reportable on
+its own. That is right when datasets sit in sibling folders and wrong when the
+receiver writes day directories straight into the root, which is what it does:
+there is then nothing *but* days to register.
+
+Scanning was never the problem. `find_soundings` is `rglob`, so a registered
+folder has always picked up new subdirectories on its own. Registering the
+folder that *contains* the days was simply not allowed.
+
+**The rule now.** A folder is a **dataset** when its day-named children hold
+soundings, or when it holds sounding files directly. Discovery walks from each
+root, emits datasets, and never offers the day folders under one it has
+emitted. Two bounded depths and a first-match probe keep it cheap:
+`loader.has_soundings` stops at the first file instead of building the list, so
+a candidate costs one hit rather than a recursive walk -- which on the archive
+in sec. 32 is the difference between a page and an outage.
+
+That covers both layouts in service:
+
+* `/archive/2026-08-04/*.h5` -- the root is the dataset. One row, and a new day
+  needs no action at all.
+* `/archive/ionozond_data2/2026-08-04/*.h5` -- the root's children are not
+  days, so it descends and offers `ionozond_data2` and `ionograms`
+  separately, which is what keeps a `.lfs` folder and a `chirp2` folder on
+  their own formats and their own estimators.
+
+**A dataset does not hide its siblings.** The first cut stopped at the first
+dataset it found, which made a folder of older `.lfs` recordings placed *beside*
+the day directories invisible -- registrable only by typing its path from
+memory. Discovery now descends past a dataset into its non-day children, so
+both are offered, and a candidate contained by another says so on the page.
+
+**Overlap is refused, not warned.** Registering the root over folders already
+registered inside it is the obvious first move once the root is allowed, and
+scanning is recursive, so both together walk every file twice on every pass.
+Nothing visibly breaks -- dedup is by file name -- so the only symptom is an
+index that takes twice as long for no reason anybody can see. `replace=true`
+consolidates instead: the covered rows go, and the soundings they indexed stay,
+because `sounding` is keyed by file and carries no archive_id.
+
+**Still open.** One registration means one set of estimators, so on a flat
+layout there is no way to give a `.lfs` subtree different methods from the
+`.h5` days around it without splitting the root registration. Keeping each
+dataset in its own folder avoids the question, and that is the layout to
+prefer; a per-folder method override would be the alternative if it ever
+matters.
+
+---
+
+## 34. A 202 emptied the solar index cache, and the indicator called it fresh (2026-08-23)
+
+**Problem.** The IRI trace on `/ui/series` stopped two days short of the
+measurements -- 261 picks with no reference on one circuit -- and the model
+reported `no solar driver available`.
+
+The chain, in the order it had to be taken apart:
+
+1. `services.swpc.noaa.gov` answers the work server **202 Accepted with an
+   empty body**, for both of its sources. That is not something NOAA sends; it
+   is what an intercepting proxy returns. SILSO and irimodel.org pass through
+   untouched, and the same URLs answer **200 with 23 KB and 512 KB** from a
+   machine on a different network.
+2. `urllib.request.urlopen` raises for no 2xx, so `_fetch` read that as a
+   successful fetch of an empty document and **wrote it over 42 days of daily
+   F10.7**. The "stale beats nothing" fallback below it could never fire,
+   because the stale copy had already been destroyed.
+3. It happened during a restart-triggered refresh. The station's report that
+   "IRI worked before the deploy" was exactly right, and was dismissed twice
+   before the file timestamps confirmed it: all six sources written in one
+   pass, four with data and two empty.
+4. `cache_state` reports **mtime**, so the write that destroyed the cache also
+   refreshed the number the indicator reads. Every source showed "47 h old"
+   and healthy. A destroyed cache looked better than a merely stale one.
+5. With only `apf107.dat` left -- which lags, and ended 2026-07-28 -- the
+   ±40-day window held 16-18 daily values against the 30 that
+   `_daily_window_mean` requires, so `f107_81` was `None`.
+6. And `f107_driver`'s remaining rungs were empty too, so there was no floor:
+   `f107_monthly` misses because SWPC's monthly file ends the previous month,
+   `f107_smoothed` is the `-1.0` sentinel, and the day's own `f107` is not
+   published yet. **Only `f107_81` ever produces a driver.**
+
+**Fixed in `muf/reference/indices.py`**, four changes, each of which alone
+would have prevented or surfaced this:
+
+- A non-200 is refused, and the message names interception rather than
+  blaming the host -- a 2xx that is not 200 is almost never the origin.
+- A response under `MIN_USEFUL_BYTES` is never written.
+- An unusable cached file counts as **absent**, on reads, on the error
+  fallback and in `cache_state`, so retries retry and the indicator stops
+  lying.
+- A write that fails no longer sinks a fetch that already succeeded. That one
+  came from the recovery: a `sudo docker cp` left two cache files owned by
+  another uid, and every later refresh downloaded the document and then died
+  on the write.
+
+**Still open, and the reason this will recur.** The immediate repair was
+writing 42 days of flux into the container from a command, which is a ~10-day
+patch -- that file is a rolling 42-day window, and once its newest value is ten
+days back the ±40-day window drops under 30 again. The real fixes are getting
+`services.swpc.noaa.gov` past whatever returns 202 on that network, and
+**a fourth F10.7 source**. Only NOAA is blocked; NRCan publishes the same
+Penticton measurement, and sec. 19 already carries "three more sources" as open
+work. One blocked host currently takes the ionospheric model down, and the
+fallback chain that exists to prevent exactly that has three empty rungs.
+
+**Operationally.** `sudo docker cp` into a container volume writes files owned
+by the copying uid, not the service's. Two cache files ended up owned by 1002
+where everything around them was 10001, and the service could no longer manage
+its own cache. Prefer writing through the container's own user.
