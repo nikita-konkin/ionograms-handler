@@ -28,6 +28,21 @@ COPY muf/ /app/muf/
 COPY services/ /app/services/
 COPY pyproject.toml README.md /app/
 
+# Maintenance tools that operate on the database, which lives on the `api-data`
+# volume and is therefore reachable only from inside this container. Leaving
+# them out made `relabel_station` -- whose entire purpose is to correct rows in
+# that database -- impossible to run against the database it exists to fix:
+#
+#   docker compose exec api python -m tools.relabel_station \
+#       --db /data/ionograms.sqlite3 --from DOB --to Yoshkar-Ola
+#
+# 124 KB of Python, no extra dependencies: it imports `muf.geometry`,
+# `muf.stations` and `services.api.db`, all already here. The shell scripts in
+# that folder belong to the station and are inert in this image; they come
+# along rather than being enumerated, so a tool added later is not silently
+# undeployed the way this one was.
+COPY tools/ /app/tools/
+
 # Non-root. This process is reachable from the sounding laptop; there is no
 # reason for it to be able to write anything outside its own volume.
 RUN useradd --create-home --uid 10001 api \

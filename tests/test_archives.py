@@ -1163,3 +1163,18 @@ def test_starting_the_server_does_not_walk_the_archive(tmp_path, archive_root,
     with TestClient(app):
         pass
     assert not walked, "starting the server surveyed the archive"
+
+
+def test_the_api_image_ships_the_database_maintenance_tools():
+    """`relabel_station` corrects rows in the api's database.
+
+    That database lives on the `api-data` volume, reachable only from inside
+    the container, so a tool left out of the image cannot be run against the
+    thing it exists to fix. It was left out: `python -m tools.relabel_station`
+    inside the container answered `No module named 'tools'`.
+    """
+    dockerfile = (Path(__file__).resolve().parents[1]
+                  / "deploy" / "Dockerfile.api").read_text()
+    assert "COPY tools/ /app/tools/" in dockerfile, (
+        "the api image must carry tools/, or the maintenance tools cannot "
+        "reach the database they operate on")
