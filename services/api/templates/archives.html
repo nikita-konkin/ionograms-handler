@@ -194,7 +194,8 @@
     {% for c in candidates %}
     <tr>
       <td><code>{{ '(the mount itself)' if c.path == '.' else c.path }}</code>
-          {%- if c.days %} <span class="note">{{ c.days }} day folder{{ '' if c.days == 1 else 's' }}</span>{% endif %}</td>
+          {%- if c.days %} <span class="note">{{ c.days }} day folder{{ '' if c.days == 1 else 's' }}</span>{% endif %}
+          {%- if c.inside %} <span class="note">inside <code>{{ '(the mount itself)' if c.inside == '.' else c.inside }}</code> &mdash; register one or the other, not both</span>{% endif %}</td>
       {% if mount.extra %}<td class="muted">{{ c.root }}
         {%- if not c.primary %} <span class="note">stored absolute</span>{% endif %}</td>{% endif %}
       <td class="muted">

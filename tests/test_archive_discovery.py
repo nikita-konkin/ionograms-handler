@@ -20,6 +20,11 @@ import pytest
 from muf import loader
 from services.api import archives
 
+# The api-backed tests below reuse `test_archives`'s client, archive root
+# and helpers rather than standing up a second copy of the same fixtures.
+from tests.test_archives import (  # noqa: F401
+    _add, _candidates, archive_root, client)
+
 
 def sounding(path: Path, name: str) -> Path:
     path.mkdir(parents=True, exist_ok=True)
@@ -184,3 +189,55 @@ def test_the_probe_can_be_asked_about_this_folder_only(tmp_path):
 
     assert loader.has_soundings(root, recursive=True) is True
     assert loader.has_soundings(root, recursive=False) is False
+
+
+# --------------------------------------------------------------------------
+# A folder beside the days, not under them
+#
+# The receiver writes day directories into the root. Adding an archive of
+# older `.lfs` recordings means putting a folder next to those days -- and
+# discovery used to stop at the first dataset it found, which was the root,
+# so the new folder was never offered and could only be registered by typing
+# its path from memory.
+# --------------------------------------------------------------------------
+
+def test_a_sibling_folder_beside_the_days_is_also_offered(flat):
+    sounding(flat / "old_lfs" / "2025-03-01", "rec-1.lfs")
+    assert names(flat, archives.datasets(flat)) == {".", "old_lfs"}
+
+
+def test_the_days_are_still_not_offered_alongside_it(flat):
+    """The original bug must not come back through the new descent: day
+    folders are covered by their parent and are never separate choices."""
+    sounding(flat / "old_lfs" / "2025-03-01", "rec-1.lfs")
+    offered = names(flat, archives.datasets(flat))
+    assert not any(name.startswith("2026-08") for name in offered)
+    assert "old_lfs/2025-03-01" not in offered
+
+
+def test_a_sibling_with_nothing_in_it_is_still_not_offered(flat):
+    (flat / "scratch" / "notes").mkdir(parents=True)
+    assert names(flat, archives.datasets(flat)) == {"."}
+
+
+def test_the_list_says_which_offer_contains_which(client, archive_root):
+    """Two ways to register one tree -- the root, or the folders in it -- are
+    both legitimate, and which is which belongs on the page rather than in the
+    409 an operator meets after filling in the form."""
+    (archive_root / "good" / "extra").mkdir(parents=True)
+    (archive_root / "good" / "extra" / "rec.lfs").write_bytes(b"")
+
+    offered = _candidates(client)
+    assert offered["good"]["inside"] is None
+    assert offered["good/extra"]["inside"] == "good"
+
+
+def test_a_covered_folder_can_still_be_registered_on_its_own(client, archive_root):
+    """`inside` is a note, not a refusal. Registering the inner folder alone
+    is a real choice -- it is how a `.lfs` subtree gets its own estimators --
+    and only registering *both* is the mistake."""
+    (archive_root / "good" / "extra").mkdir(parents=True)
+    (archive_root / "good" / "extra" / "rec.lfs").write_bytes(b"")
+
+    assert _add(client, path="good/extra", format="lfs").status_code == 200
+    assert _add(client, path="good").status_code == 409

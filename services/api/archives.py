@@ -534,16 +534,24 @@ def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
         # Newest first: a dataset is recognised by its first day with data,
         # and the newest day is the one most likely to have any.
         days = sorted((c for c in children if _is_day(c)), reverse=True)
-        if days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS]):
+        if (days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS])
+                or loader.has_soundings(path, recursive=False)):
             found.append(path)
-            continue
 
-        if loader.has_soundings(path, recursive=False):
-            found.append(path)
-            continue
-
+        # Descend into the children that are *not* days, whether or not this
+        # folder was itself a dataset. A dataset's day folders are covered by
+        # it and must never be offered separately -- that was the original
+        # bug -- but a folder sitting *beside* those days is a different
+        # archive that happens to share a parent, and stopping here made it
+        # invisible. That is the exact case of adding a folder of older `.lfs`
+        # recordings next to a receiver writing `.h5` days into the same root.
+        #
+        # A folder offered alongside an ancestor that is also offered is not a
+        # contradiction: they are two ways to register the same tree, one row
+        # or several, and `overlapping` refuses taking both by accident.
         if depth < max_depth:
-            queue.extend((child, depth + 1) for child in children)
+            queue.extend((child, depth + 1)
+                         for child in children if not _is_day(child))
 
     return found
 
@@ -567,7 +575,8 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     for root in every:
         if not listable(root):
             continue
-        for path in datasets(root)[:limit]:
+        discovered = datasets(root)
+        for path in discovered[:limit]:
             # The key a row is stored under: relative for the primary root,
             # absolute for the others. Same rule as `resolve`.
             if root == primary:
@@ -598,6 +607,14 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
                 "path": key,
                 "root": str(root),
                 "primary": root == primary,
+                # Which other offered folder already contains this one, if
+                # any. Both are legitimate choices -- one row or several --
+                # and saying so beats letting the operator find out from a
+                # 409 after filling in the form.
+                "inside": next(
+                    (str(other.relative_to(root).as_posix())
+                     for other in discovered
+                     if other != path and path.is_relative_to(other)), None),
                 "days": _day_count(path),
                 "soundings": found["soundings"],
                 "by_format": found["by_format"],
