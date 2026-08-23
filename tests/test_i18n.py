@@ -100,7 +100,7 @@ DELIBERATELY_SAME = {
     "series.trace.muf", "series.trace.lof", "sources.js.col.id",
     # Nothing in them but placeholders, punctuation and markup.
     "archives.day_folders", "archives.js.result", "archives.js.why",
-    "console.js.sending",
+    "console.js.sending", "series.js.trace.forecast_compare",
 }
 
 #: The handful of English messages that legitimately name a plural slot,
@@ -456,3 +456,37 @@ def test_the_mid_phrase_list_has_no_stale_entries():
     """A key removed from the catalog should leave this list, not sit in it."""
     missing = sorted(MID_PHRASE - set(en.MESSAGES))
     assert not missing, f"MID_PHRASE names keys that no longer exist: {missing}"
+
+
+def test_every_key_the_browser_looks_up_is_shipped_to_the_browser():
+    """`T('...')` in a template must name a key `js_catalog` actually sends.
+
+    Two different lookups live in these files and they are not
+    interchangeable. `{{ t('k') }}` is resolved by Jinja at render time and may
+    name any key; `T('k')` is resolved by JavaScript against the catalog
+    inlined in `base.html`, which carries only the `*.js.*` keys -- so a
+    non-`js` key handed to `T` silently renders as the key itself.
+
+    This is not hypothetical. `series.trace.forecast` and
+    `series.trace.forecast_band` were written that way during the bilingual
+    release and shipped broken: the plot legend read
+    "series.trace.forecast_band" verbatim. Nobody saw it because no forecast
+    had ever been drawn on that page, and the first one that was drew it in
+    both languages.
+    """
+    import re
+
+    shipped = set(i18n.js_catalog("en")["messages"])
+    wrong: list[str] = []
+    for path in sorted(TEMPLATES.glob("*.html")):
+        # Comments first. `base.html` documents the helper with a literal
+        # `T('key', ...)` in prose, which is an example and not a call --
+        # exactly the false positive the template-key scanner above strips for.
+        source = re.sub(r"\{#.*?#\}|/\*.*?\*/|//[^\n]*", " ",
+                        path.read_text(encoding="utf-8"), flags=re.S)
+        for key in re.findall(r"\bT\(\s*['\"]([a-z][a-z0-9_.]*)['\"]", source):
+            if key not in shipped:
+                wrong.append(f"{path.name}: T({key!r})")
+    assert not wrong, (
+        "handed to the browser's T() but not in the js catalog, so it renders "
+        "as the bare key: " + ", ".join(sorted(wrong)))

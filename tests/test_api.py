@@ -11,6 +11,7 @@ different.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 from pathlib import Path
@@ -1144,6 +1145,152 @@ def test_the_frame_is_json_a_browser_will_parse(client, api_db, tmp_path):
     circuit = got["circuits"][0]
     assert circuit["muf"] == [None] and circuit["fof2"] == [None]
     assert circuit["t"] == ["2026-02-04T00:00:00.009"], "milliseconds, and a T"
+
+
+# --------------------------------------------------------------------------
+# Drawing a forecast against the measurement it is meant to predict
+#
+# The plot could already draw a forecast trace; what it could not do is reach
+# a model that is not live. Every legacy import is `comparison` and can never
+# be promoted (registry.activate refuses a modelled target), so on a rig where
+# the only models are legacy the overlay was permanently empty -- which is the
+# state the local OrbStack rig was in with 9,352 forecast rows in the table.
+# --------------------------------------------------------------------------
+
+def _register(conn, name, *, param="muf", tx="cyprus1", rx="rx", active=0):
+    cur = conn.execute(
+        "INSERT INTO model_registry (name, param, tx, rx, origin, framework, "
+        "loader, capability, artifact, sha256, features, target_alias, "
+        "target_src, imported_at, active) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (name, param, tx, rx, "legacy", "sklearn", "joblib", "slim",
+         f"/models/{name}.sav", name, '["muf_lag_288"]', "muf",
+         "modelled" if not active else "measured", db.utcnow(), active))
+    return int(cur.lastrowid)
+
+
+def _forecast(conn, model_id, *, param="muf", tx="cyprus1", rx="rx",
+              issued="2026-02-04T12:00:00Z", stamps=(), value=21.0):
+    for stamp in stamps:
+        conn.execute(
+            "INSERT INTO forecast (model_id, param, tx, rx, issued_at, "
+            "valid_at, horizon_s, value, sigma) VALUES (?,?,?,?,?,?,?,?,?)",
+            (model_id, param, tx, rx, issued, stamp, 86400, value, 0.4))
+
+
+def test_a_comparison_model_is_not_drawn_unless_it_is_named(client, api_db,
+                                                            tmp_path):
+    """The default is still active-only, exactly as `/forecast` behaves."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "huber_lag288", active=0)
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    frame = _frame(client.get("/ui/series?method=algo").text)
+    assert frame["any_forecast"] is False, (
+        "a comparison model was drawn without being asked for; the operational "
+        "curve and a candidate would then be indistinguishable")
+
+
+def test_naming_a_model_draws_it_beside_the_picks(client, api_db, tmp_path):
+    """The comparison this page exists to make."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "huber_lag288", active=0)
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z",
+                                   "2026-02-05T07:00:00Z"])
+    conn.commit()
+
+    frame = _frame(client.get(f"/ui/series?method=algo&forecast={model}").text)
+    assert frame["any_forecast"] is True
+    drawn = frame["circuits"][0]["forecast"]
+    assert len(drawn) == 1
+    assert drawn[0]["model"] == "huber_lag288"
+    assert drawn[0]["value"] == [21.0, 21.0]
+    # Its own x axis, not the soundings'. The forecast reaches a day past the
+    # single pick, and that overhang is the only part worth looking at.
+    #
+    # No trailing Z: `_iso_stamp` strips it so the forecast and the picks
+    # land on one plotly axis. The soundings are naive UTC, and a mixed
+    # axis draws the forecast lagging its own measurement by the local
+    # timezone.
+    assert drawn[0]["t"] == ["2026-02-05T06:00:00", "2026-02-05T07:00:00"]
+
+
+def test_a_named_comparison_says_it_is_one(client, api_db, tmp_path):
+    """`comparison` is what makes the plot dot the line instead of dashing it.
+
+    A candidate drawn in the operational style is the failure this whole
+    distinction exists to prevent.
+    """
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "huber_lag288", active=0)
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    page = client.get(f"/ui/series?method=algo&forecast={model}").text
+    assert _frame(page)["circuits"][0]["forecast"][0]["comparison"] is True
+
+
+def test_an_active_model_is_not_labelled_a_comparison(client, api_db, tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "operational", active=1)
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    # Drawn with no `forecast=` at all, because it is live.
+    frame = _frame(client.get("/ui/series?method=algo").text)
+    assert frame["circuits"][0]["forecast"][0]["comparison"] is False
+
+
+def test_only_models_that_wrote_rows_are_offered(client, api_db, tmp_path):
+    """A chooser entry that draws nothing is indistinguishable from a bug."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    ran = _register(conn, "has_run")
+    _register(conn, "never_run")
+    _forecast(conn, ran, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    page = client.get("/ui/series?method=algo").text
+    assert "has_run" in page
+    assert "never_run" not in page
+
+
+def test_a_stale_forecast_link_renders_the_page_anyway(client, api_db,
+                                                       tmp_path):
+    """An id that no longer exists is a dead bookmark, not a 404.
+
+    Models are retired and re-imported; a link in somebody's notes outliving
+    one is ordinary, and losing the whole page over it is not.
+    """
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    conn.commit()
+
+    response = client.get("/ui/series?method=algo&forecast=9999")
+    assert response.status_code == 200
+    assert _frame(response.text)["any_forecast"] is False
+
+
+def test_the_chosen_model_survives_a_day_or_method_click(client, api_db,
+                                                         tmp_path):
+    """Losing the overlay on the next click is how a comparison gets abandoned."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "huber_lag288")
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    page = client.get(f"/ui/series?method=algo&forecast={model}").text
+    links = re.findall(r'href="(/ui/series\?[^"]+)"', page)
+    days = [href for href in links if "from=" in href]
+    assert days, "no day links on the page to check"
+    assert all(f"forecast={model}" in href for href in days), (
+        "a day link dropped the chosen model")
 
 
 def _frame(page: str) -> dict:

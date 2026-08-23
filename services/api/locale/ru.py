@@ -389,6 +389,12 @@ MESSAGES: dict[str, str] = {
     "series.bare_date":
         "Одна дата без времени охватывает весь этот день с любого конца.",
     "series.family.forecast": "Прогноз",
+    "series.forecast": "Модель:",
+    "series.forecast_note":
+        "Рисует последний выпуск одной модели на той же оси, что и отсчёты, "
+        "которые она должна предсказывать. Предлагаются только модели, "
+        "записавшие строки для этой трассы. Кандидат — пунктиром, "
+        "рабочий прогноз, если он есть, — штрихами.",
     "series.family.context": "Верх полосы / hmF2",
     "series.drag_hint":
         "&mdash; Протяните, чтобы приблизить, двойной щелчок сбрасывает, "
@@ -888,8 +894,9 @@ MESSAGES: dict[str, str] = {
     "series.trace.residual": "Измерено &minus; IRI",
     "series.trace.residual_bound": "Невязка (граница)",
     "series.trace.sweep_top": "Верх развёртки",
-    "series.trace.forecast": "Прогноз {param}",
-    "series.trace.forecast_band": "Прогноз {param} \u00b1\u03c3",
+    "series.js.trace.forecast": "Прогноз {param}",
+    "series.js.trace.forecast_band": "Прогноз {param} \u00b1\u03c3",
+    "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
     "series.hover.muf_ceiling": "MUF на верхнем краю полосы",
     "series.hover.muf_smooth": "MUF, сглаженный трекером",
     "series.hover.lof_floor": "LOF на дне полосы",

@@ -6,7 +6,13 @@
 
 {%- set window = ('&from=' ~ start if start else '') ~ ('&to=' ~ end if end else '') -%}
 {%- set mod = '&model=off' if model == 'off' else '' -%}
-{%- set tail = window ~ mod -%}
+{%- set fc = '&forecast=' ~ forecast if forecast else '' -%}
+{#- `keep` is everything a link must carry that it is not itself setting.
+    The day and reference rows used to rebuild their hrefs from one
+    fragment each, so clicking a day silently dropped the chosen model --
+    which is how a comparison gets abandoned halfway through making it. -#}
+{%- set keep = mod ~ fc -%}
+{%- set tail = window ~ keep -%}
 {%- set circ = '&circuit=' ~ (circuit|urlencode) -%}
 
 <div class="panel">
@@ -39,10 +45,10 @@
      once with the days as unreadable vertical stripes. #}
   <div style="margin-top:.5rem">
     <span class="muted" style="font-size:.85rem">{{ t('series.day') }}</span>
-    <a href="/ui/series?method={{ method }}{{ circ }}{{ mod }}"
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ keep }}"
        class="pill {% if not start and not end %}ok{% endif %}">{{ t('series.all') }}</a>
     {% for d in days %}
-      <a href="/ui/series?method={{ method }}{{ circ }}&from={{ d }}&to={{ d }}{{ mod }}"
+      <a href="/ui/series?method={{ method }}{{ circ }}&from={{ d }}&to={{ d }}{{ keep }}"
          class="pill {% if start == d %}ok{% endif %}">{{ d }}</a>
     {% endfor %}
   </div>
@@ -52,17 +58,35 @@
      the environment. #}
   <div style="margin-top:.5rem">
     <span class="muted" style="font-size:.85rem">{{ t('series.reference') }}</span>
-    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}"
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}{{ fc }}"
        class="pill {% if model != 'off' %}ok{% endif %}">IRI</a>
-    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}&model=off"
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}{{ fc }}&model=off"
        class="pill {% if model == 'off' %}ok{% endif %}">{{ t('series.off') }}</a>
     <span class="note">{{ t('series.off_note') }}</span>
   </div>
+
+  {# The comparison this page exists to make: a model's curve on the same axis
+     as the measurement it is meant to predict. Only models that have actually
+     written rows for this circuit are offered -- see `candidates`. #}
+  {% if candidates %}
+  <div style="margin-top:.5rem">
+    <span class="muted" style="font-size:.85rem">{{ t('series.forecast') }}</span>
+    <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}{{ mod }}"
+       class="pill {% if not forecast %}ok{% endif %}">{{ t('series.off') }}</a>
+    {% for c in candidates %}
+      <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}{{ mod }}&forecast={{ c.id }}"
+         class="pill {% if forecast == c.id %}ok{% endif %}"
+         >{{ c.name }} <span class="muted">{{ c.param|upper }}</span></a>
+    {% endfor %}
+    <span class="note">{{ t('series.forecast_note') }}</span>
+  </div>
+  {% endif %}
 
   <form method="get" action="/ui/series" style="margin-top:.5rem">
     <input type="hidden" name="method" value="{{ method }}">
     <input type="hidden" name="circuit" value="{{ circuit }}">
     <input type="hidden" name="model" value="{{ model }}">
+    {% if forecast %}<input type="hidden" name="forecast" value="{{ forecast }}">{% endif %}
     <label class="muted" style="font-size:.85rem">{{ t('common.from') }}
       <input type="text" name="from" value="{{ start }}" placeholder="2026-08-09"
              size="19"></label>
@@ -358,7 +382,7 @@
         add({
           x: f.t.concat(f.t.slice().reverse()),
           y: hi.concat(lo.slice().reverse()),
-          name: tag + T('series.trace.forecast_band',
+          name: tag + T('series.js.trace.forecast_band',
                         {param: f.param.toUpperCase()}),
           legendgroup: group, type: 'scatter', mode: 'lines',
           fill: 'toself', fillcolor: colour, opacity: 0.13,
@@ -366,13 +390,21 @@
         }, 'forecast');
       }
 
+      // A candidate and the operational forecast are not the same claim, so
+      // they are not the same line. Dotted and named for the model that made
+      // it when it is being judged; dashed and named for the parameter when it
+      // *is* the answer -- at which point which model produced it is a
+      // property of the deployment, not of the reading.
       add({
         x: f.t, y: f.value,
-        name: tag + T('series.trace.forecast', {param: f.param.toUpperCase()}),
+        name: tag + (f.comparison
+          ? T('series.js.trace.forecast_compare',
+              {param: f.param.toUpperCase(), model: f.model})
+          : T('series.js.trace.forecast', {param: f.param.toUpperCase()})),
         legendgroup: group, type: 'scatter', mode: 'lines',
-        line: {width: 1.6, dash: 'dash', color: colour},
+        line: {width: 1.6, dash: f.comparison ? 'dot' : 'dash', color: colour},
         hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}<extra>' + circuit.name + '<br>'
-          + f.model + '</extra>',
+          + f.model + (f.alias ? ' \u00b7 ' + f.alias : '') + '</extra>',
       }, 'forecast');
     });
 

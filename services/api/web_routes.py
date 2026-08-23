@@ -233,6 +233,7 @@ HAS_A_PICK = "(e.muf IS NOT NULL OR e.lof IS NOT NULL)"
 def series(request: Request, method: str = "algo",
            circuit: str | None = None,
            model: str = "iri",
+           forecast: int | None = None,
            start: str | None = Query(None, alias="from"),
            end: str | None = Query(None, alias="to")):
     """MUF, LOF, equivalent foF2 and a model, against time, for one circuit.
@@ -260,6 +261,13 @@ def series(request: Request, method: str = "algo",
     ``model=off`` drops the reference. It is the only part of this page that
     can reach the network -- IRI needs a solar driver -- so it has to be
     refusable from the query string and not only from the environment.
+
+    ``forecast=<model_id>`` overlays one registered model's latest issue on the
+    measured curve, which is the comparison this page exists to make possible.
+    Without it only an *active* model is drawn -- see `_live_forecasts`. The
+    two are not the same trace and are not drawn the same: an operational
+    forecast is the answer, a named one is a candidate being judged against the
+    measurement beside it.
     """
     conn = request.app.state.db
     methods = [r["method"] for r in
@@ -301,24 +309,50 @@ def series(request: Request, method: str = "algo",
     sql.append("ORDER BY s.datetime LIMIT 5000")
 
     points = db.rows(conn, " ".join(sql), tuple(params))
+
+    # Every model that has actually written a forecast for a circuit on this
+    # page. Registered-but-never-run is deliberately not offered: it would be
+    # a chooser entry that draws nothing, and "I picked it and no line
+    # appeared" is indistinguishable from a broken page.
+    candidates = db.rows(
+        conn,
+        "SELECT DISTINCT m.id, m.name, m.param, m.active, f.tx, f.rx "
+        "FROM forecast f JOIN model_registry m ON m.id = f.model_id "
+        + ("WHERE f.tx = ? AND f.rx = ? " if circuit != "all" else "")
+        + "ORDER BY m.active DESC, m.name",
+        (circuit.partition(" -> ")[0], circuit.partition(" -> ")[2])
+        if circuit != "all" else ())
+
+    if forecast is not None and not any(c["id"] == forecast for c in candidates):
+        forecast = None                    # a stale link, not a reason to 404
+
     return templates.TemplateResponse(request, "series.html", {
         "method": method, "methods": methods, "points": points,
         "days": days, "start": start or "", "end": end or "",
         "circuit": circuit, "circuits": circuits,
         "model": model,
-        "frame": series_mod.frame(points, model=model,
-                                  forecasts=_live_forecasts(conn, points)),
+        "forecast": forecast, "candidates": candidates,
+        "frame": series_mod.frame(
+            points, model=model,
+            forecasts=_live_forecasts(conn, points, forecast)),
     })
 
 
-def _live_forecasts(conn, points) -> dict:
-    """The latest issue of whatever is active, for the circuits on the page.
+def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
+    """The latest issue for the circuits on the page.
 
-    **Active models only.** Every registered model may write forecasts -- that
-    is how a comparison is run -- so drawing them all would put a legacy
-    Brisbane import on the same axis as the measurement in the same style as
-    the operational curve. `/forecast` filters the same way for the same
-    reason.
+    **Active models only, unless one is named** -- the rule `/forecast`
+    already states and for the same reason. Every registered model may write
+    forecasts, that being how a comparison is run, so drawing them all would
+    put a legacy import on the same axis as the measurement in the same style
+    as the operational curve. Naming one is a deliberate act and is marked as
+    such: `comparison` rides along on the entry so the plot can draw it as a
+    candidate rather than as the forecast.
+
+    A named model is fetched **whatever its state**, including one bound to
+    another circuit. That is not an oversight: running somebody else's model
+    against this path is exactly what a comparison is, `infer --model` already
+    allows it, and the alias in the hover says whose data it learned.
 
     Failures are swallowed to an empty dict: the series page is the page an
     operator opens to look at data, and it existed and worked before there was
@@ -330,20 +364,27 @@ def _live_forecasts(conn, points) -> dict:
     if not circuits:
         return {}
 
+    # The only difference between the two modes, kept to one line so the
+    # issued_at correlation below cannot drift between them.
+    where, key = (("m.id = ?", model_id) if model_id is not None
+                  else ("m.active = 1", None))
+
     found: dict = {}
     for tx, rx in sorted(circuits):
         for param in ("muf", "lof"):
             try:
                 rows = db.rows(
                     conn,
-                    "SELECT f.valid_at, f.value, f.sigma, m.name "
+                    "SELECT f.valid_at, f.value, f.sigma, m.name, m.id, "
+                    "       m.active, m.target_alias "
                     "FROM forecast f JOIN model_registry m ON m.id = f.model_id "
-                    "WHERE m.active = 1 AND f.param = ? AND f.tx = ? AND f.rx = ? "
+                    f"WHERE {where} AND f.param = ? AND f.tx = ? AND f.rx = ? "
                     "AND f.issued_at = (SELECT MAX(issued_at) FROM forecast x "
                     "  WHERE x.model_id = f.model_id AND x.param = f.param "
                     "  AND x.tx = f.tx AND x.rx = f.rx) "
                     "ORDER BY f.valid_at",
-                    (param, tx, rx),
+                    ((key, param, tx, rx) if key is not None
+                     else (param, tx, rx)),
                 )
             except Exception:                     # pragma: no cover - defensive
                 continue
@@ -352,6 +393,9 @@ def _live_forecasts(conn, points) -> dict:
             found[(tx, rx, param)] = {
                 "tx": tx, "rx": rx, "param": param,
                 "model": rows[0]["name"],
+                "model_id": rows[0]["id"],
+                "alias": rows[0]["target_alias"],
+                "comparison": not rows[0]["active"],
                 "t": [_iso_stamp(row["valid_at"]) for row in rows],
                 "value": [row["value"] for row in rows],
                 "sigma": [row["sigma"] for row in rows],

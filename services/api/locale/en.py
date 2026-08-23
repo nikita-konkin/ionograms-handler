@@ -382,6 +382,12 @@ MESSAGES: dict[str, str] = {
     "series.off_note": "Off skips the model, and the network it may need.",
     "series.bare_date": "A bare date covers that whole day at either end.",
     "series.family.forecast": "Forecast",
+    "series.forecast": "Model:",
+    "series.forecast_note":
+        "Draws one model's latest issue on the same axis as the picks it "
+        "is meant to predict. Only models that have written rows for this "
+        "circuit are offered. A candidate is dotted; the operational "
+        "forecast, when there is one, is dashed.",
     "series.family.context": "Sweep top / hmF2",
     "series.drag_hint":
         "&mdash; Drag to zoom, double-click to reset, click a point to open "
@@ -867,8 +873,9 @@ MESSAGES: dict[str, str] = {
     "series.trace.residual": "Measured &minus; IRI",
     "series.trace.residual_bound": "Residual (bound)",
     "series.trace.sweep_top": "Sweep top",
-    "series.trace.forecast": "{param} forecast",
-    "series.trace.forecast_band": "{param} forecast \u00b1\u03c3",
+    "series.js.trace.forecast": "{param} forecast",
+    "series.js.trace.forecast_band": "{param} forecast \u00b1\u03c3",
+    "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
     "series.hover.muf_ceiling": "MUF at the top of the sweep",
     "series.hover.muf_smooth": "MUF, smoothed by track",
     "series.hover.lof_floor": "LOF at the band floor",
