@@ -182,3 +182,11 @@ deploy/.env
 
 # Claude Code preview config -- machine-specific paths
 .claude/launch.json
+
+# macOS Finder metadata. Was tracked until the inherited scripts were removed.
+.DS_Store
+
+# The inherited PostgreSQL helpers are gone, but their credential files were
+# tracked from the init commit -- a .gitignore entry never applies to a file
+# already in the index. Kept as a rule so a restored copy cannot re-enter.
+data_handler/
