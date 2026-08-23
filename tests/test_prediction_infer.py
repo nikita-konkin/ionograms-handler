@@ -24,17 +24,11 @@ joblib = pytest.importorskip("joblib")
 sklearn_linear = pytest.importorskip("sklearn.linear_model")
 pytest.importorskip("statsmodels")
 
-ALIAS = "MUF(3000)F2"
-LAG = 288
-
-
-def feature_names() -> list[str]:
-    names = [f"{ALIAS}_lag_{LAG}"]
-    names += [f"{ALIAS}_{c}_lag_{LAG}" for c in ("trend", "seasonal", "residual")]
-    names += [f"{ALIAS}_rolling_{w}_{s}_lag_{LAG}"
-              for w in (12, 48) for s in ("mean", "std")]
-    names += ["hour", "minute"]
-    return names
+# The alias, the lag and the recipe that builds column names from them are
+# in conftest: the other prediction module asserts against the same two
+# constants, and a feature list that disagreed between the two would have
+# one of them testing an artifact the other cannot load.
+from conftest import ALIAS, LAG, feature_names  # noqa: E402
 
 
 @pytest.fixture

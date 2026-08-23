@@ -24,10 +24,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from services.api import auth, db, main, net
-from services.api import series as series_mod
+from services.api import db
 
 HANDLER = re.compile(r"^on[a-z]+$")
 
@@ -78,20 +76,6 @@ def test_no_double_quoted_handler_carries_a_tojson_value(template):
             f"own opening quote and the browser gets a syntax error. Use "
             f"single quotes, as `sources.html` does for `data-row`.")
 
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth, "READ_TOKEN", "")
-    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
-    monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
-    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
-    monkeypatch.setattr(main, "WARM_CENSUS", False)
-    monkeypatch.setattr(net, "ENABLED", False)
-    net.reset()
-    monkeypatch.setattr(series_mod, "MODEL", False)
-    series_mod.clear()
-    with TestClient(main.app) as c:
-        yield c
 
 
 def seed(conn):

@@ -35,36 +35,6 @@ def conn(tmp_path):
         yield c
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth, "READ_TOKEN", "")
-    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
-    monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
-    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
-
-    # The startup warm-up reads an archive in a background thread and writes
-    # to the census cache, which is module state every test shares -- left on,
-    # its result lands in whichever test happens to be running when it
-    # finishes. The test that owns it turns it back on deliberately.
-    monkeypatch.setattr(main, "WARM_CENSUS", False)
-
-    # Same hazard, worse: the reachability checker makes real HEAD requests to
-    # three third-party hosts. A unit suite that reaches the internet is slow,
-    # fails on a train, and quietly tests somebody else's uptime.
-    monkeypatch.setattr(net, "ENABLED", False)
-    net.reset()
-
-    # Third of the same: the series page runs IRI, and IRI wants a solar
-    # driver it may have to fetch. It is off by default here so that seeding a
-    # sounding with real coordinates -- which is otherwise the most natural
-    # thing to do -- cannot silently put a download in the middle of a test.
-    # The tests that own the model turn it back on deliberately.
-    monkeypatch.setattr(series_mod, "MODEL", False)
-    series_mod.clear()
-
-    with TestClient(main.app) as c:
-        yield c
-
 
 CTL = {"Authorization": "Bearer ctl"}
 

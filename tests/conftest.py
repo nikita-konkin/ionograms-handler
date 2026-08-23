@@ -527,3 +527,84 @@ def make_digisonde_h5(tmp_path):
         return path
 
     return _make
+
+
+# --------------------------------------------------------------------------
+# The api under test
+#
+# One copy. This fixture existed four times over -- test_api, test_archives'
+# mount tests, test_prediction_api and test_web_handlers -- byte for byte
+# identical, and only the first copy carried the comments saying why each
+# background reader has to be off.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """A `TestClient` over the api, with nothing reading the world behind it.
+
+    **The imports are inside the body deliberately.** This conftest is loaded
+    for the whole suite, the pure-`muf` tests included, and fastapi is not a
+    dependency of this package -- importing it at module scope would turn a
+    pipeline-only install from "the api tests skip themselves" into "nothing
+    collects at all". A fixture body runs only when a test asks for it.
+    """
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from services.api import auth, db, main, net
+    from services.api import series as series_mod
+
+    monkeypatch.setattr(auth, "READ_TOKEN", "")
+    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
+    monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
+    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
+
+    # The startup warm-up reads an archive in a background thread and writes
+    # to the census cache, which is module state every test shares -- left on,
+    # its result lands in whichever test happens to be running when it
+    # finishes. The test that owns it turns it back on deliberately.
+    monkeypatch.setattr(main, "WARM_CENSUS", False)
+
+    # Same hazard, worse: the reachability checker makes real HEAD requests to
+    # three third-party hosts. A unit suite that reaches the internet is slow,
+    # fails on a train, and quietly tests somebody else's uptime.
+    monkeypatch.setattr(net, "ENABLED", False)
+    net.reset()
+
+    # Third of the same: the series page runs IRI, and IRI wants a solar
+    # driver it may have to fetch. It is off by default here so that seeding a
+    # sounding with real coordinates -- which is otherwise the most natural
+    # thing to do -- cannot silently put a download in the middle of a test.
+    # The tests that own the model turn it back on deliberately.
+    monkeypatch.setattr(series_mod, "MODEL", False)
+    series_mod.clear()
+
+    with TestClient(main.app) as c:
+        yield c
+
+
+# --------------------------------------------------------------------------
+# Forecasting artifacts
+#
+# `ALIAS` and `LAG` are module-level rather than fixtures because both
+# prediction test modules assert against them directly. `from conftest import
+# ALIAS, LAG` resolves because pytest's default `prepend` import mode puts
+# `tests/` on `sys.path`.
+#
+# The `artifact` fixtures themselves stay where they are: they differ in the
+# filename they write, and test_prediction_infer reads its metrics back out of
+# that name.
+# --------------------------------------------------------------------------
+
+ALIAS = "MUF(3000)F2"
+LAG = 288
+
+
+def feature_names() -> list[str]:
+    """The column names a legacy forecasting artifact was fitted on."""
+    names = [f"{ALIAS}_lag_{LAG}"]
+    names += [f"{ALIAS}_{c}_lag_{LAG}" for c in ("trend", "seasonal", "residual")]
+    names += [f"{ALIAS}_rolling_{w}_{s}_lag_{LAG}"
+              for w in (12, 48) for s in ("mean", "std")]
+    names += ["hour", "minute"]
+    return names

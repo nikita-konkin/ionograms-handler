@@ -18,30 +18,14 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from services.api import archives, auth, db, main, net
-from services.api import series as series_mod
+from services.api import archives, db, main
 
 #: What a mount that is present but not answering raises. ENOENT is in the
 #: list as the control: it is the one `Path.is_dir` already handled, so a test
 #: that only used it would have passed against the bug.
 SICK = [errno.EIO, errno.ESTALE, errno.EACCES, errno.ETIMEDOUT, errno.ENOENT]
 
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth, "READ_TOKEN", "")
-    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
-    monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
-    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
-    monkeypatch.setattr(main, "WARM_CENSUS", False)
-    monkeypatch.setattr(net, "ENABLED", False)
-    net.reset()
-    monkeypatch.setattr(series_mod, "MODEL", False)
-    series_mod.clear()
-    with TestClient(main.app) as c:
-        yield c
 
 
 #: The root the fixture pretends is mounted. Pinned rather than taken from the

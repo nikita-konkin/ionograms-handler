@@ -11,28 +11,21 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 
-from services.api import auth, db, main, net
-from services.api import series as series_mod
+from services.api import auth, db
 from services.prediction import importer, infer, registry
 
 joblib = pytest.importorskip("joblib")
 sklearn_linear = pytest.importorskip("sklearn.linear_model")
 pytest.importorskip("statsmodels")
 
-ALIAS = "MUF(3000)F2"
-LAG = 288
+# The alias, the lag and the recipe that builds column names from them are
+# in conftest: the other prediction module asserts against the same two
+# constants, and a feature list that disagreed between the two would have
+# one of them testing an artifact the other cannot load.
+from conftest import ALIAS, LAG, feature_names  # noqa: E402
+
 CTL = {"Authorization": "Bearer ctl"}
-
-
-def feature_names() -> list[str]:
-    names = [f"{ALIAS}_lag_{LAG}"]
-    names += [f"{ALIAS}_{c}_lag_{LAG}" for c in ("trend", "seasonal", "residual")]
-    names += [f"{ALIAS}_rolling_{w}_{s}_lag_{LAG}"
-              for w in (12, 48) for s in ("mean", "std")]
-    names += ["hour", "minute"]
-    return names
 
 
 @pytest.fixture
@@ -45,20 +38,6 @@ def artifact(tmp_path):
     joblib.dump(model, path)
     return path
 
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth, "READ_TOKEN", "")
-    monkeypatch.setattr(auth, "CONTROL_TOKEN", "ctl")
-    monkeypatch.setenv("API_DB", str(tmp_path / "api.sqlite3"))
-    monkeypatch.setattr(db, "DEFAULT_DB", tmp_path / "api.sqlite3")
-    monkeypatch.setattr(main, "WARM_CENSUS", False)
-    monkeypatch.setattr(net, "ENABLED", False)
-    net.reset()
-    monkeypatch.setattr(series_mod, "MODEL", False)
-    series_mod.clear()
-    with TestClient(main.app) as c:
-        yield c
 
 
 def seed(conn, tx="NIC", rx="DOB", days=4):
