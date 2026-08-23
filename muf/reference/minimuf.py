@@ -2,9 +2,10 @@
 
 MINIMUF-3.5 (Rose & Martin, NOSC TD 201, 1978; DTIC ADA066256) is a compact
 empirical MUF algorithm, and a good reference to have: it is published, widely
-used, and its error statistics are documented. ``MUF_plot_day_by_day.py:10`` and
-``MUF_spectre.py:10`` already import a ``mini_muf`` module, which is not in the
-repository.
+used, and its error statistics are documented. The inherited
+``MUF_plot_day_by_day.py:10`` and ``MUF_spectre.py:10`` both imported a
+``mini_muf`` module that was never in this repository; those two files were
+themselves removed in ``f94f561``, so nothing here reaches for it any more.
 
 **Why there is no implementation here.** The authoritative coefficients could
 not be obtained. The DTIC scan's OCR degrades exactly the lines that matter --
