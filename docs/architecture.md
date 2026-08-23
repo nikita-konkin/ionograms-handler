@@ -578,16 +578,22 @@ One surface across acquisition, extraction and forecasting — but **separate
 auth scopes**. Public read of soundings and forecasts must not share a scope
 with anything that can stop an acquisition.
 
-### 4.4 prediction **[settled in principle]**
+### 4.4 prediction **[built 2026-08-23]**
 
-Reads the smoothed/tracked series, writes forecast rows. Carries the `N:\muf`
-models.
+Reads the tracked series, writes forecast rows, scores them against four
+baselines. Carries the `N:\muf` models. **`docs/prediction.md` is the
+reference**; this section is the design constraint it satisfies.
 
-Must read `muf_smooth` from `track`/`daily`, not raw picks — **and must still
-see `limited`/`loflim`**. Otherwise it trains on midday lower bounds, which per
-`BACKLOG.md` §3 are biased ~5 MHz low for 82 of 288 soundings.
+Must read the *tracked* series rather than raw picks — **and must still see
+`limited`/`loflim`**. Otherwise it trains on midday lower bounds, which per
+`BACKLOG.md` §3 are biased ~5 MHz low for 82 of 288 soundings. `dataset` passes
+a censored pick to the tracker as a gap and returns it flagged, and `scoring`
+charges it one-sidedly.
 
-**[blocked]** — see §8.
+**No longer blocked.** §8's blocker is `N:\muf\config_enum.py` calling
+`input()` at import, which stops the *research* project running unattended and
+never gated this service: the artifacts are read as files, not imported as a
+package. Registering and running one is `docs/prediction.md` §4.
 
 ---
 
@@ -818,8 +824,34 @@ this is infrastructure for what comes next, not a deliverable in itself.
 - Retire v1 **only once the web client covers what operators actually use** —
   watch usage over M4 rather than building for feature parity
 
-### M6 — Prediction service
-- Retrain on the accumulated multi-station record
+### M6 — Prediction service **[built 2026-08-23; retraining outstanding]**
+
+The thin service above `N:\muf`, not a home for models: it reads the database,
+rebuilds the frame an artifact expects, runs it *without* refitting, and writes
+`forecast` rows. See **`docs/prediction.md`**.
+
+- `dataset` resamples with `muf.track` rather than interpolating, so every
+  filled point carries a sigma and no point is invented
+- `legacy_features` recovers a fitted model's input recipe from its column
+  names, and takes the alias as an argument rather than inferring it — renaming
+  a column to make a model accept it is how somebody else's ionosphere becomes
+  "the forecast"
+- `artifacts` records a golden input/output at import and re-checks it on every
+  load, which catches a library upgrade that changes behaviour silently
+- **Nothing calls `fit`.** The code this replaces refits on load, so its
+  "predictions" come from a model trained seconds earlier;
+  `tests/test_prediction_infer.py` makes `fit` raise to keep it that way
+- `scoring` runs the model and four baselines through the same code, over the
+  same pairs, into the same table. Truth is measured picks, never the tracked
+  grid
+- Promotion is a schema constraint, not a warning: a model fitted against a
+  modelled target, or bound to no circuit, cannot be made active
+
+*Exit:* a registered model runs unattended and its forecast is on the console
+beside the measurement, with a leaderboard saying whether it beats persistence.
+**Outstanding:** retrain on the accumulated multi-station record — every model
+run so far is a legacy import fitted on another circuit, and all four lose to
+persistence at 24 h (`docs/prediction.md` §5).
 
 ### M7 — Bilingual console **[done 2026-08-23]**
 
