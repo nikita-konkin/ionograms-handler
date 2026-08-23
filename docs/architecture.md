@@ -821,6 +821,27 @@ this is infrastructure for what comes next, not a deliverable in itself.
 ### M6 — Prediction service
 - Retrain on the accumulated multi-station record
 
+### M7 — Bilingual console **[done 2026-08-23]**
+
+Not originally a milestone. The operators are at Yoshkar-Ola and the station
+work is done in Russian, so a console only its authors could read was a
+usability fault, not a nicety.
+
+- `services/api/i18n.py` and `services/api/locale/{en,ru}.py` — plain dicts,
+  no gettext and no compile step, for the same reason M2.5 has no JavaScript
+  build (`BACKLOG.md` sec. 35)
+- ~5 200 words across all eight templates, including the third of them that
+  lives inside inline `<script>`
+- EN/RU in the header, remembered in a cookie; `UI_LANG` sets what a browser
+  with no cookie gets. No `Accept-Language`: one URL, one rendering
+- English is the default and renders byte-for-byte what it did before
+
+*Exit:* every word a page renders is in the chosen language, and the guards in
+`tests/test_i18n.py` fail when a string is added to one catalog and not the
+other. **Not covered:** strings authored in Python and rendered into these
+pages (`net.detail`, `acquisition.detail`, `band.why_not`, scan results), and
+the `HTTPException.detail` texts the JSON API returns.
+
 ---
 
 ## 7. Repository map

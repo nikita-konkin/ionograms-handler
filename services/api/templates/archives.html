@@ -181,7 +181,7 @@
     {% endfor %}
   </table></div>
   {% else %}
-  <p class="muted" id="candsNote">{{ t('archives.looking') }}</p>
+  <p class="muted" id="candsNote">{{ t('archives.js.looking') }}</p>
   {% endif %}
   </div>
 
@@ -224,8 +224,7 @@ const token = () => sessionStorage.getItem('tok') || '';
 
 async function control(url, method, body) {
   const tok = token();
-  if (!tok) return {ok: false, detail:
-    'No control token. Paste it on the console page first.'};
+  if (!tok) return {ok: false, detail: T('common.js.no_token')};
   const r = await fetch(url, {
     method,
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
@@ -272,15 +271,15 @@ function pick(path) {
   field.value = path;
   field.scrollIntoView({block: 'center', behavior: 'smooth'});
   field.focus();
-  addSay('path set to ' + path + ' \u2014 check the methods below, then press add.');
+  addSay(T('archives.js.path_set', {path: path}));
 }
 
 async function add() {
   const path = val('path').trim();
-  if (!path) { addSay('Enter a path first.', true); return; }
-  addSay('checking …');
+  if (!path) { addSay(T('archives.js.enter_path'), true); return; }
+  addSay(T('archives.js.checking'));
   const methods = ticked('m-new');
-  if (!methods) { addSay('Choose at least one method.', true); return; }
+  if (!methods) { addSay(T('archives.js.choose_method'), true); return; }
   const r = await control('/archives', 'POST', {
     path: path, name: val('name').trim(), format: val('format'),
     methods: methods,
@@ -291,7 +290,7 @@ async function add() {
     // rather than making someone delete fifteen rows by hand is the whole
     // reason the refusal names it.
     if (r.status === 409 && (r.detail || '').indexOf('replace=true') >= 0) {
-      if (confirm(r.detail + '\n\nRegister it and drop those rows?')) {
+      if (confirm(T('archives.js.replace_confirm', {detail: r.detail}))) {
         const again = await control('/archives', 'POST', {
           path: path, name: val('name').trim(), format: val('format'),
           methods: methods, replace: true,
@@ -308,13 +307,14 @@ async function add() {
   const f = r.body.found || {};
   const kinds = Object.entries(f.by_format || {})
       .map(([k, n]) => n + ' ' + k).join(', ');
-  addSay(r.body.name + ' registered — ' + f.soundings + ' sounding(s) visible'
-    + (kinds ? ' (' + kinds + ')' : '') + '. Press scan now to index them.');
+  addSay(T('archives.js.registered', {
+    name: r.body.name, n: f.soundings, unit: T.plural(f.soundings, 'sounding'),
+    kinds: kinds ? ' (' + kinds + ')' : ''}));
   setTimeout(() => location.reload(), 1200);
 }
 
 async function scan(id) {
-  say('starting …');
+  say(T('archives.js.starting'));
   const r = await control('/archives/' + id + '/scan', 'POST');
   if (!r.ok) { say(r.detail, true); return; }
   say('');
@@ -332,10 +332,11 @@ async function setEnabled(id, enabled) {
 
 async function saveMethods(id) {
   const methods = ticked('m-' + id);
-  if (!methods) { say('Choose at least one method.', true); return; }
+  if (!methods) { say(T('archives.js.choose_method'), true); return; }
   const r = await control('/archives/' + id + '/methods', 'POST',
                           {methods: methods});
-  say(r.ok ? 'methods set to ' + r.body.methods + ' — ' + r.body.note
+  say(r.ok ? T('archives.js.methods_set',
+              {methods: r.body.methods, note: r.body.note})
            : r.detail, !r.ok);
 }
 
@@ -351,7 +352,7 @@ function orphanSay(id, html) {
 
 function describeOrphans(o) {
   return Object.entries(o.by_format || {})
-    .map(([f, n]) => n + ' ' + (f || 'unrecognised')).join(', ');
+    .map(([f, n]) => n + ' ' + (f || T('archives.js.unrecognised'))).join(', ');
 }
 
 function disarmOrphans() {
@@ -373,8 +374,9 @@ function showOrphans(id, o) {
   if (!o || !o.total) { orphanSay(id, ''); return; }
   // The count comes from the same query the delete runs, so what is shown
   // here is exactly what would go.
-  orphanSay(id, describeOrphans(o) + ' out of scope '
-    + '<button onclick="dropOrphans(' + id + ')">remove</button>');
+  orphanSay(id, T('archives.js.out_of_scope', {what: describeOrphans(o)})
+    + ' <button onclick="dropOrphans(' + id + ')">'
+    + T('archives.js.remove') + '</button>');
 }
 
 async function refreshOrphans(id) {
@@ -388,10 +390,11 @@ async function dropOrphans(id) {
     armedOrphans = id;
     const o = await fetch('/archives/' + id + '/orphans')
                     .then(x => x.json()).catch(() => null);
-    orphanSay(id, 'Delete ' + (o ? describeOrphans(o) : 'these')
-      + ' sounding(s), with their extractions and modelled values? The files '
-      + 'are not touched — widening the format reads them again. '
-      + '<button onclick="dropOrphans(' + id + ')">press again to confirm</button>');
+    orphanSay(id, T('archives.js.drop_confirm', {
+        what: o ? describeOrphans(o) : T('archives.js.these'),
+        unit: T.plural(o ? o.total : 0, 'sounding')})
+      + ' <button onclick="dropOrphans(' + id + ')">'
+      + T('archives.js.press_again') + '</button>');
     clearTimeout(armedTimer);
     armedTimer = setTimeout(() => {
       disarmOrphans();
@@ -407,9 +410,7 @@ async function dropOrphans(id) {
 }
 
 async function remove(id, name) {
-  if (!confirm('Unregister ' + name + '?\n\nIts soundings and their '
-      + 'characteristics stay in the database; this only stops the indexing.'))
-    return;
+  if (!confirm(T('archives.js.unregister_confirm', {name: name}))) return;
   const r = await control('/archives/' + id, 'DELETE');
   if (!r.ok) { say(r.detail, true); return; }
   say(r.body.note);
@@ -421,13 +422,15 @@ async function remove(id, name) {
 // server.
 let polling = null;
 
-const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
-
+// Unit words come from the catalog through Jinja rather than through `T`:
+// they are fixed at render time, so they need not travel in the JSON. The
+// letters must match `web_routes._duration`, which formats the same quantity
+// on the server side of this page.
 function duration(s) {
   if (s == null) return '';
-  if (s < 90) return Math.round(s) + 's';
-  if (s < 5400) return Math.round(s / 60) + ' min';
-  return (s / 3600).toFixed(1) + ' h';
+  if (s < 90) return Math.round(s) + {{ t('unit.s')|tojson }};
+  if (s < 5400) return Math.round(s / 60) + ' ' + {{ t('unit.min')|tojson }};
+  return (s / 3600).toFixed(1) + ' ' + {{ t('unit.h')|tojson }};
 }
 
 function showProgress(s) {
@@ -442,7 +445,7 @@ function showProgress(s) {
   // broken.
   if (s.phase === 'reading' || !s.total) {
     document.getElementById('progressLabel').textContent =
-      'reading ' + s.name + ' — listing files and checking what is already indexed';
+      T('archives.js.reading', {name: s.name});
     document.getElementById('progressEta').textContent = duration(s.elapsed_s);
     // No total yet, so no honest fraction. An indeterminate stripe rather
     // than a bar creeping toward a number nobody has computed.
@@ -450,7 +453,7 @@ function showProgress(s) {
     bar.style.width = '100%';
     bar.style.opacity = '.35';
     document.getElementById('progressDetail').textContent =
-      'This step reads the folder before any indexing starts. It is not stuck.';
+      T('archives.js.reading_detail');
     return;
   }
 
@@ -459,15 +462,15 @@ function showProgress(s) {
   bar.style.opacity = '1';
   bar.style.width = pct + '%';
   document.getElementById('progressLabel').textContent =
-    'indexing ' + s.name + ' — ' + s.done + ' of ' + s.total
-    + ' (' + pct.toFixed(0) + '%)';
+    T('archives.js.indexing', {name: s.name, done: s.done, total: s.total,
+                               pct: pct.toFixed(0)});
   document.getElementById('progressEta').textContent =
-    s.eta_s != null ? '~' + duration(s.eta_s) + ' left' : duration(s.elapsed_s);
+    s.eta_s != null ? T('archives.js.left', {time: duration(s.eta_s)})
+                    : duration(s.elapsed_s);
   document.getElementById('progressDetail').textContent =
-    plural(s.loaded, 'sounding') + ' loaded'
-    + (s.skipped ? ', ' + s.skipped + ' skipped' : '')
-    + ' — characteristics are derived as each file is read, so what is done '
-    + 'is already usable.';
+    T('archives.js.loaded', {n: s.loaded, unit: T.plural(s.loaded, 'sounding')})
+    + (s.skipped ? T('archives.js.skipped', {n: s.skipped}) : '')
+    + T('archives.js.loaded_note');
 }
 
 function hideProgress() {
@@ -496,7 +499,8 @@ async function poll() {
   if (polling) {                       // it just finished: show the result
     clearInterval(polling);
     polling = null;
-    if (s.result) say(s.name + ': ' + s.result, s.ok === false);
+    if (s.result) say(T('archives.js.result',
+                       {name: s.name, result: s.result}), s.ok === false);
     setTimeout(() => location.reload(), 1500);
   }
 }
@@ -517,9 +521,8 @@ async function loadCandidates(attempt) {
   const note = document.getElementById('candsNote');
   if (!r.ready) {
     if (note) {
-      note.textContent = r.why
-        ? r.why + '.'
-        : 'looking at what is mounted \u2026';
+      note.textContent = r.why ? T('archives.js.why', {why: r.why})
+                               : T('archives.js.looking');
     }
     // Backs off: a survey of a large archive takes as long as it takes, and
     // asking faster does not make the disk quicker.
@@ -530,7 +533,7 @@ async function loadCandidates(attempt) {
     return;
   }
   if (!r.items.length) {
-    if (note) note.textContent = 'no unregistered folders under the mount.';
+    if (note) note.textContent = T('archives.js.no_unregistered');
     return;
   }
   // Server-rendered already, and the same data: leave it alone rather than

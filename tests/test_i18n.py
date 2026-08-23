@@ -96,10 +96,18 @@ DELIBERATELY_SAME = {
     "sounding.col.muf", "sounding.col.lof", "sounding.show_marks",
     # Statistical symbols, which are symbols in both languages: n is a count,
     # r is a correlation coefficient.
-    "series.col.n", "series.col.r",
+    "series.col.n", "series.col.r", "sources.col.n", "sources.col.snr",
+    "series.trace.muf", "series.trace.lof", "sources.js.col.id",
     # Nothing in them but placeholders, punctuation and markup.
-    "archives.day_folders",
+    "archives.day_folders", "archives.js.result", "archives.js.why",
+    "console.js.sending",
 }
+
+#: The handful of English messages that legitimately name a plural slot,
+#: because English already pluralised them properly by hand before any catalog
+#: existed. Everywhere else English keeps its `(s)`, which is what stops this
+#: change from altering a single rendered English page.
+ENGLISH_PLURALISED = {"archives.day_folders", "archives.js.loaded"}
 
 #: Placeholders a translation may use where English does not.
 #:
@@ -110,7 +118,7 @@ DELIBERATELY_SAME = {
 #: name, and why English keeps rendering byte-for-byte what it rendered before
 #: any of this existed.
 PLURAL_SLOTS = {"unit", "trace_unit", "point_unit", "model_unit",
-                "circuit_unit", "pair_unit"}
+                "circuit_unit", "pair_unit", "day_unit", "file_unit"}
 
 
 def test_no_message_is_left_as_its_english_self_by_accident():
@@ -151,9 +159,7 @@ def test_english_still_needs_no_plural_form_at_the_count_sites():
     slot = re.compile(r"\{(\w+)\}")
     for key, text in en.MESSAGES.items():
         named = set(slot.findall(text)) & PLURAL_SLOTS
-        # `archives.day_folders` is the exception, and only because English
-        # already pluralised it properly by hand before any catalog existed.
-        assert not named or key == "archives.day_folders", key
+        assert not named or key in ENGLISH_PLURALISED, key
 
 
 def test_a_message_may_carry_markup_but_a_value_substituted_into_it_may_not():
@@ -177,6 +183,48 @@ def test_the_strings_javascript_writes_carry_no_markup():
                 assert "<" not in text and "&" not in text, key
 
 
+def test_no_template_shadows_the_translation_helpers():
+    """`t` is a one-letter global, and Jinja will happily let a loop bury it.
+
+    `console.html` had `{% for t in s.verified %}` around a row that then
+    called `t('console.khz_s')` and got `'dict' object is not callable`. That
+    one failed loudly because the row happened to need a string; a loop that
+    shadows `t` and calls nothing simply renders, and the next person to add a
+    string inside it gets the error instead.
+    """
+    import re
+    declare = re.compile(r"\{%-?\s*(?:for|set)\s+([\w,\s]+?)\s*(?:in|=)")
+    clashes = []
+    for template in sorted(TEMPLATES.glob("*.html")):
+        for names in declare.findall(template.read_text()):
+            for name in (n.strip() for n in names.split(",")):
+                if name in {"t", "plural", "lang", "locales", "lang_urls"}:
+                    clashes.append(f"{template.name}: {name}")
+    assert not clashes, f"shadows an i18n helper: {clashes}"
+
+
+def test_the_russian_catalog_is_actually_russian():
+    """Catches the character that got in by accident.
+
+    Writing several thousand words of Cyrillic turns up exactly one class of
+    typo that no reviewer reliably sees and no other test would: a character
+    from a third script, sitting inside a word, rendering as a box. This found
+    a CJK ideograph in `sources.identify_note` on the first run.
+    """
+    # Greek letters are mathematical notation in either language: σ is the
+    # tracker's standard deviation, not a word.
+    # Greek letters are mathematical notation in either language: σ is the
+    # tracker's standard deviation, not a word. ✗ and ⚠ are status glyphs.
+    allowed = set("—–…‑ «»±≥≤−→σ✗⚠")
+    strays = {}
+    for key, text in ru.MESSAGES.items():
+        for ch in text:
+            code = ord(ch)
+            if code > 0x24F and not (0x400 <= code <= 0x4FF) and ch not in allowed:
+                strays.setdefault(key, set()).add(f"{ch!r} U+{code:04X}")
+    assert not strays, f"not Cyrillic, not punctuation: {strays}"
+
+
 def test_no_message_smuggles_a_script_into_a_page():
     """Messages render unescaped, so the catalogs are held to the same rule a
     template is: no script, no handler attribute, no javascript: URL."""
@@ -197,11 +245,11 @@ def test_a_missing_key_renders_english_and_is_recorded():
     i18n.MISSES.clear()
     try:
         i18n.CATALOGS["ru"].pop("common.apply")
-        assert i18n.t("common.apply", "ru") == "apply"
+        assert i18n.t("common.apply", "ru") == "Apply"
         assert ("ru", "common.apply") in i18n.MISSES
     finally:
         i18n.CATALOGS["ru"]["common.apply"] = ru.MESSAGES.get(
-            "common.apply", "применить")
+            "common.apply", "Применить")
         i18n.MISSES.clear()
 
 
@@ -246,18 +294,18 @@ def test_a_fresh_browser_gets_english(client):
     testing what they were written to test."""
     page = client.get("/ui/soundings").text
     assert 'lang="en"' in page
-    assert ">soundings<" in page
-    assert "зондирования" not in page
+    assert ">Soundings<" in page
+    assert "Зондирования" not in page
 
 
 def test_asking_for_russian_renders_it_and_remembers(client):
     page = client.get("/ui/soundings?lang=ru")
     assert 'lang="ru"' in page.text
-    assert "зондирования" in page.text
+    assert "Зондирования" in page.text
     assert client.cookies.get(i18n.COOKIE) == "ru"
 
     # The cookie alone, with nothing in the query string.
-    assert "зондирования" in client.get("/ui/soundings").text
+    assert "Зондирования" in client.get("/ui/soundings").text
 
     # And back again, which must also update the cookie -- a toggle that can
     # only be moved one way is not a toggle.

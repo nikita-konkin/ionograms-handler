@@ -207,7 +207,7 @@ const token = () => sessionStorage.getItem('tok') || '';
 
 async function control(url, method, body) {
   const tok = token();
-  if (!tok) return {ok: false, detail: T('forecast.js.no_token')};
+  if (!tok) return {ok: false, detail: T('common.js.no_token')};
   const r = await fetch(url, {
     method,
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},

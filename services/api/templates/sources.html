@@ -1,102 +1,77 @@
 {% extends "base.html" %}
-{% block title %}sources{% endblock %}
-{% block hint %}{{ census.count }} emitter(s){% endblock %}
+{% block title %}{{ t('sources.title') }}{% endblock %}
+{% block hint %}{{ t('sources.hint', n=census.count,
+   unit=plural(census.count, 'emitter')) }}{% endblock %}
 {% block body %}
 
 <div class="panel">
-  <h2>receiver</h2>
+  <h2>{{ t('sources.receiver') }}</h2>
   {% if not stations %}
-  <p class="muted">No station has reported yet, so there is nothing to identify
-  a transmitter <i>for</i>.</p>
+  <p class="muted">{{ t('sources.no_station') }}</p>
   {% else %}
   <p>
-    <label class="muted" style="font-size:.85rem">station
+    <label class="muted" style="font-size:.85rem">{{ t('sources.station') }}
       <select id="station">
         {% for s in stations %}<option>{{ s }}</option>{% endfor %}
       </select></label>
-    <span class="note">Everything on this page is per receiver.</span>
+    <span class="note">{{ t('sources.per_receiver') }}</span>
   </p>
-  <p class="note">
-    A slot second is a <b>reception</b> second &mdash; the transmit second plus
-    the one-way travel time plus this receiver's own epoch offset. The same
-    transmitter heard at two receivers has two different <code>chirpt</code>
-    values, so an identification made here belongs to this circuit and not to
-    the transmitter alone. (The band ceiling is keyed the same way, and for the
-    same reason.)
-  </p>
+  <p class="note">{{ t('sources.slot_note') }}</p>
   {% endif %}
 </div>
 
 <div class="panel">
-  <h2>transmitters heard</h2>
-  <p class="note">
-    From <b>{{ census.kind }}</b> files over the last {{ max_days }} day(s), grouped
-    by chirp rate and arrival phase on a {{ '%.0f'|format(census.cycle_s) }} s cycle.
-    This is what <b>search</b> mode is for: it finds who is transmitting, and each
-    row is a candidate to be identified and then sounded on purpose.
-  </p>
+  <h2>{{ t('sources.heard') }}</h2>
+  <p class="note">{{ t('sources.census_note', kind=census.kind, days=max_days,
+    day_unit=plural(max_days, 'day'),
+    cycle='%.0f'|format(census.cycle_s)) }}</p>
 
   {% set c = census.cost %}
   {% set age_s = census.get('age_s') %}
   {% if census.get('building') %}
-  <p class="note"><span class="pill warn">first census running</span>
-  <b>No census has finished yet, so this is not "no transmitters heard".</b>
-  Listing one day of this archive costs minutes before a file is opened, so the
-  census runs in the background and the page never waits for it. Reload in a
-  few minutes. If it never completes, the archive mount is the thing to look
-  at, not this page.</p>
+  <p class="note"><span class="pill warn">{{ t('sources.building_pill') }}</span>
+  {{ t('sources.building') }}</p>
   {% elif age_s and age_s > 60 %}
-  <p class="note"><span class="pill muted">as of
-  {{ '%.0f'|format(age_s / 60) }} min ago</span>
-  {% if census.get('refreshing') %}A newer one is being read now.{% else %}
-  A newer one starts when this passes
-  {{ '%.0f'|format(max_age_s / 60) }} min.{% endif %}
-  The archive is too slow to census while you wait, so the page shows the last
-  completed one and its age rather than blocking on a new one.</p>
+  <p class="note"><span class="pill muted">{{ t('sources.as_of',
+    minutes='%.0f'|format(age_s / 60)) }}</span>
+  {% if census.get('refreshing') %}{{ t('sources.refreshing') }}{% else %}{{
+    t('sources.next_at', minutes='%.0f'|format(max_age_s / 60)) }}{% endif %}
+  {{ t('sources.stale_note') }}</p>
   {% endif %}
   <p class="note">
-    {% if c.unchanged %}<span class="pill ok">cached</span>{% endif %}
-    Read {{ c.files }} file(s) from {{ c.days|join(', ') if c.days else 'the
-    archive root' }} in {{ '%.2f'|format(c.seconds) }} s
-    {%- if c.opened %} &mdash; opened {{ c.opened }}, {{ c.cached }} already
-    known{% else %} &mdash; nothing re-opened{% endif %}.
-    {% if c.unreadable %}<b>{{ c.unreadable }} file(s) could not be read</b>
-    and were skipped; a detector caught mid-write is normal, a steady count is
-    not.{% endif %}
-    <a href="?max_days=1&amp;min_count={{ min_count }}">1 day</a> &middot;
+    {% if c.unchanged %}<span class="pill ok">{{ t('sources.cached') }}</span>{% endif %}
+    {{ t('sources.read', files=c.files, file_unit=plural(c.files, 'file'),
+       where=c.days|join(', ') if c.days else t('sources.archive_root'),
+       seconds='%.2f'|format(c.seconds)) }}
+    {%- if c.opened %} {{ t('sources.opened', opened=c.opened, cached=c.cached)
+    }}{% else %} {{ t('sources.nothing_reopened') }}{% endif %}.
+    {% if c.unreadable %}{{ t('sources.unreadable', n=c.unreadable,
+      file_unit=plural(c.unreadable, 'file')) }}{% endif %}
+    <a href="?max_days=1&amp;min_count={{ min_count }}">{{ t('sources.one_day') }}</a> &middot;
     <a href="?max_days=3&amp;min_count={{ min_count }}">3</a> &middot;
     <a href="?max_days=7&amp;min_count={{ min_count }}">7</a>
   </p>
   {% if c.capped %}
-  <p class="note"><span class="pill warn">capped</span>
-  <b>This is the newest {{ c.files }} of {{ c.found }} file(s), not all of
-  them.</b> The census stops at {{ c.budget }} because opening the rest would
-  take hours on this archive, and a page that never answers is worse than one
-  that answers about the recent end of it. It trims time, not quality: the same
-  detection product, newest days first, so today is whole and the oldest day is
-  the one that lost files. An emitter that only ever transmitted in the part
-  that was trimmed will be missing &mdash; ask for
-  <a href="?max_days=1&amp;min_count={{ min_count }}">1 day</a> to spend the
-  whole budget on today, and prune the archive if this stays capped.</p>
+  <p class="note"><span class="pill warn">{{ t('sources.capped_pill') }}</span>
+  {{ t('sources.capped', files=c.files, found=c.found,
+     file_unit=plural(c.found, 'file'), budget=c.budget,
+     url='?max_days=1&min_count=%s'|format(min_count)) }}</p>
   {% endif %}
   {% if c.seconds > 10 %}
-  <p class="note"><b>That is slow, and it is the archive, not the arithmetic.</b>
-  A census opens one HDF5 file per detection, and each open costs a round trip
-  on a network archive. Every file read here is remembered &mdash; these
-  products are written once and never change &mdash; so the next load should
-  open only what has arrived since. If it stays slow, the process was restarted
-  or the archive is being rewritten under it.</p>
+  <p class="note">{{ t('sources.slow') }}</p>
   {% endif %}
 
   {% if census.emitters %}
   <div class="scroll"><table>
-    <tr><th></th><th>rate</th><th>heard at (s into cycle)</th><th>n</th>
-        <th title="detections divided by distinct slots: how often it came back">/slot</th>
-        <th>phase ms</th><th>SNR</th><th>span h</th><th>identified as</th></tr>
+    <tr><th></th><th>{{ t('sources.col.rate') }}</th><th>{{ t('sources.col.heard_at') }}</th>
+        <th>{{ t('sources.col.n') }}</th>
+        <th title="{{ t('sources.col.per_slot_title') }}">{{ t('sources.col.per_slot') }}</th>
+        <th>{{ t('sources.col.phase') }}</th><th>{{ t('sources.col.snr') }}</th>
+        <th>{{ t('sources.col.span') }}</th><th>{{ t('sources.col.identified_as') }}</th></tr>
     {% for e in census.emitters %}
     <tr>
-      <td><button class="identify" data-row='{{ e|tojson }}'>identify</button></td>
-      <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
+      <td><button class="identify" data-row='{{ e|tojson }}'>{{ t('sources.identify') }}</button></td>
+      <td>{{ t('sources.khz_s', rate='%.1f'|format(e.rate / 1000)) }}</td>
       <td>{{ e.observed_seconds|join(', ') }}</td>
       <td>{{ e.count }}</td>
       <td>{{ e.repeats_per_slot }}</td>
@@ -110,36 +85,25 @@
     {% endfor %}
   </table></div>
 
-  <p class="note">
-    <b>Seconds are as received, not as transmitted.</b> A slot is the transmit
-    second plus the one-way travel time plus this receiver's epoch offset. For
-    scheduling that is the number you want &mdash; the station needs to know when to
-    <i>listen</i> &mdash; but it is not a transmit time and not a range.
-  </p>
+  <p class="note">{{ t('sources.seconds_note') }}</p>
   {% else %}
-  <p class="muted">No repeating emitter found in the last {{ max_days }} day(s)
-     with at least {{ min_count }} detections. Search mode has to be running, and
-     its detection files have to be reaching this archive.</p>
+  <p class="muted">{{ t('sources.no_emitter', days=max_days,
+     day_unit=plural(max_days, 'day'), min_count=min_count) }}</p>
   {% endif %}
 
   {% if census.rejected %}
   <details>
-    <summary>{{ census.rejected|length }} group(s) rejected as interference</summary>
-    <p class="note">
-      Rejected on <b>shape, not strength</b>. The loudest group in this archive was
-      the least real: 500 kHz/s at a higher median SNR than cyprus1, claiming every
-      one of the 300 seconds in the cycle with its arrival phase scattering
-      &plusmn;274&nbsp;ms. A transmitter is silent in most seconds and arrives at the
-      same instant within the few it uses.
-      Shown so the list can be checked &mdash; if the row you came for is down here,
-      the thresholds are wrong, not the transmitter.
-    </p>
+    <summary>{{ t('sources.rejected_summary', n=census.rejected|length,
+      unit=plural(census.rejected|length, 'group')) }}</summary>
+    <p class="note">{{ t('sources.rejected_note') }}</p>
     <div class="scroll"><table>
-      <tr><th>rate</th><th>n</th><th>/slot</th><th>phase ms</th><th>SNR</th>
-          <th>rejected because</th></tr>
+      <tr><th>{{ t('sources.col.rate') }}</th><th>{{ t('sources.col.n') }}</th>
+          <th>{{ t('sources.col.per_slot') }}</th><th>{{ t('sources.col.phase') }}</th>
+          <th>{{ t('sources.col.snr') }}</th>
+          <th>{{ t('sources.col.rejected_because') }}</th></tr>
       {% for e in census.rejected %}
       <tr class="muted">
-        <td>{{ '%.1f'|format(e.rate / 1000) }} kHz/s</td>
+        <td>{{ t('sources.khz_s', rate='%.1f'|format(e.rate / 1000)) }}</td>
         <td>{{ e.count }}</td>
         <td>{{ e.repeats_per_slot }}</td>
         <td>{{ '%.2f'|format(e.fraction_s * 1000) if e.fraction_s is not none else '—' }}
@@ -155,66 +119,42 @@
 
 {% if stations %}
 <div class="panel" id="identify-panel" hidden>
-  <h2>identify this emitter</h2>
-  <p class="note">
-    Nothing in a detection says who is transmitting. The name you give here is
-    a <b>judgement</b>, made the way <code>cyprus1</code> was resolved to
-    <code>NIC</code> &mdash; and it is load-bearing: it is written into the
-    schedule as <code>transmit_name</code>, which
-    <code>calc_ionograms.py</code> puts in the product's <i>file name</i> and in
-    <code>txname</code>. This pipeline reads that back as the transmitter's
-    identity and looks up its coordinates and band ceiling by it. An emitter you
-    cannot name can still be scheduled &mdash; call it what you know it as
-    &mdash; but that string is what every product from it will be called.
-  </p>
+  <h2>{{ t('sources.identify_panel') }}</h2>
+  <p class="note">{{ t('sources.identify_note') }}</p>
 
   <p class="note" id="from-row"></p>
 
   <p>
-    <label class="muted" style="font-size:.85rem">code
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.code') }}
       <input id="code" size="12" placeholder="NIC"></label>
-    <label class="muted" style="font-size:.85rem">full name
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.txname') }}
       <input id="txname" size="24" placeholder="Nicosia"></label>
-    <label class="muted" style="font-size:.85rem">rep (s)
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.rep') }}
       <input id="rep" size="6"></label>
   </p>
-  <p class="note">Letters, digits, underscore and dot &mdash; <b>no dash</b>.
-  The product file name is dash-delimited
-  (<code>lfm_ionogram-{tx}-{rx}-{ch}-{id}-{t0}.h5</code>), so a dash inside the
-  code does not fail to parse, it shifts every field after it.</p>
+  <p class="note">{{ t('sources.name_rule') }}</p>
 
   <p>
-    <span class="muted" style="font-size:.85rem">slots to sound:</span>
+    <span class="muted" style="font-size:.85rem">{{ t('sources.slots_label') }}</span>
     <span id="slots"></span>
   </p>
-  <p class="note">One entry per ticked slot. Each is another sounding per
-  cycle competing for the ringbuffer window &mdash; see the README on reading
-  <code>find_timings.log</code> before ticking many.</p>
+  <p class="note">{{ t('sources.slots_note') }}</p>
 
   <p>
-    <label class="muted" style="font-size:.85rem">note
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.note') }}
       <input id="note" size="60"
-             placeholder="how you know -- what settled it"></label>
+             placeholder="{{ t('sources.note_placeholder') }}"></label>
   </p>
   <p>
-    <button class="pill" id="save">save transmitter</button>
-    <button class="pill" id="cancel">cancel</button>
+    <button class="pill" id="save">{{ t('sources.save') }}</button>
+    <button class="pill" id="cancel">{{ t('sources.cancel') }}</button>
     <span id="save-result" class="note"></span>
   </p>
 </div>
 
 <div class="panel">
-  <h2>verified transmitters</h2>
-  <p class="note">
-    Identified once, kept with the census row that settled it. These are what a
-    schedule is composed from &mdash; a raw census row cannot be scheduled,
-    because it has no name and no id, and
-    <code>calc_ionograms.py</code> reads both without a default.
-    <b>Choosing which of them to sound, and starting the sounding, is on the
-    <a href="/ui">console</a></b>, beside the station that would do it: the
-    schedule and the recorder are one decision, and this page has to read the
-    archive before it can render at all.
-  </p>
+  <h2>{{ t('sources.verified') }}</h2>
+  <p class="note">{{ t('sources.verified_note') }}</p>
   <div id="verified"></div>
 </div>
 {% endif %}
@@ -234,7 +174,7 @@ const token = () => sessionStorage.getItem('tok') || '';
 async function control(url, method, body) {
   const tok = token();
   if (!tok) return {ok: false, detail:
-    'No control token. Paste it on the console page first.'};
+    T('common.js.no_token')};
   const r = await fetch(url, {
     method,
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
@@ -318,10 +258,10 @@ if (save) save.addEventListener('click', async () => {
   const rep = parseFloat(document.getElementById('rep').value);
   const seconds = [...document.querySelectorAll('.slot:checked')]
     .map(c => parseFloat(c.value));
-  if (!code) { out.textContent = 'A code is required.'; return; }
-  if (!seconds.length) { out.textContent = 'Tick at least one slot.'; return; }
+  if (!code) { out.textContent = T('sources.js.code_required'); return; }
+  if (!seconds.length) { out.textContent = T('sources.js.tick_a_slot'); return; }
 
-  out.textContent = 'saving...';
+  out.textContent = T('sources.js.saving');
   const r = await control(`/stations/${station()}/transmitters`, 'POST', {
     code: code,
     name: document.getElementById('txname').value.trim() || null,
@@ -331,7 +271,7 @@ if (save) save.addEventListener('click', async () => {
     evidence: editing,
     timings: seconds.map(s => ({'chirp-rate': editing.rate, rep: rep, chirpt: s})),
   });
-  if (!r.ok) { out.textContent = 'refused: ' + r.detail; return; }
+  if (!r.ok) { out.textContent = T('sources.js.refused', {detail: r.detail}); return; }
   // Re-identifying replaces rather than appends, exactly as the upsert on the
   // server does; two rows for one code here would offer the operator a choice
   // the database cannot hold.
@@ -362,8 +302,7 @@ function renderVerified() {
   if (!host) return;
   const list = VERIFIED[station()] || [];
   if (!list.length) {
-    host.innerHTML = '<p class="muted">Nothing identified at this receiver yet.'
-      + ' Pick a row above and name it.</p>';
+    host.innerHTML = '<p class="muted">' + T('sources.js.none_identified') + '</p>';
     markClaims();
     return;
   }
@@ -372,27 +311,30 @@ function renderVerified() {
       <td>${t.code}</td>
       <td class="muted">${t.name || ''}</td>
       <td class="muted">${t.sounder_id}</td>
-      <td class="muted">${(t.timings[0] || {})['chirp-rate'] / 1000} kHz/s</td>
+      <td class="muted">${T('sources.js.khz_s',
+          {rate: (t.timings[0] || {})['chirp-rate'] / 1000})}</td>
       <td>${t.timings.map(e => e.chirpt + 's').join(', ')}
-          <span class="muted">of ${(t.timings[0] || {}).rep}s</span></td>
+          <span class="muted">${T('sources.js.of_rep',
+            {rep: (t.timings[0] || {}).rep})}</span></td>
       <td class="muted">${t.verified_at}${t.verified_by ? ' &middot; ' + t.verified_by : ''}</td>
       <td class="wrap">${t.note || ''}</td>
-      <td><button class="forget" data-code="${t.code}">forget</button></td>
+      <td><button class="forget" data-code="${t.code}">${T('sources.js.forget')}</button></td>
     </tr>`).join('');
   host.innerHTML = `<div class="scroll"><table>
-      <tr><th>code</th><th>name</th><th>id</th><th>rate</th>
-          <th>slots</th><th>verified</th><th>note</th><th></th></tr>
+      <tr><th>${T('sources.js.col.code')}</th><th>${T('sources.js.col.name')}</th>
+          <th>${T('sources.js.col.id')}</th><th>${T('sources.js.col.rate')}</th>
+          <th>${T('sources.js.col.slots')}</th><th>${T('sources.js.col.verified')}</th>
+          <th>${T('sources.js.col.note')}</th><th></th></tr>
       ${rows}</table></div>`;
 
   host.querySelectorAll('.forget').forEach(b =>
     b.addEventListener('click', async () => {
       const code = b.dataset.code;
-      if (!confirm(`Forget ${code} at ${station()}?\n\n`
-          + 'Products already recorded keep the name; only the identification '
-          + 'and its evidence are dropped.')) return;
+      if (!confirm(T('sources.js.forget_confirm',
+          {code: code, station: station()}))) return;
       const r = await control(
         `/stations/${station()}/transmitters/${encodeURIComponent(code)}`, 'DELETE');
-      if (!r.ok) { alert('refused: ' + r.detail); return; }
+      if (!r.ok) { alert(T('sources.js.refused', {detail: r.detail})); return; }
       VERIFIED[station()] = (VERIFIED[station()] || []).filter(t => t.code !== code);
       renderVerified();
     }));

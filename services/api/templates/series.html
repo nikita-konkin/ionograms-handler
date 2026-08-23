@@ -213,7 +213,7 @@
     if (some(mask(circuit.muf, circuit.limited, false))) {
       add({
         x: circuit.t, y: mask(circuit.muf, circuit.limited, false),
-        name: tag + 'MUF', legendgroup: group, type: 'scatter',
+        name: tag + {{ t('series.trace.muf')|tojson }}, legendgroup: group, type: 'scatter',
         mode: 'markers', marker: {size: 5.5, color: hue('muf')},
         customdata: circuit.id,
         hovertemplate: '%{y:.2f} MHz' + of('MUF'),
@@ -222,19 +222,22 @@
     if (some(mask(circuit.muf, circuit.limited, true))) {
       add({
         x: circuit.t, y: mask(circuit.muf, circuit.limited, true),
-        name: tag + 'MUF (lower bound)', legendgroup: group,
+        name: tag + {{ t('series.trace.muf_bound')|tojson }}, legendgroup: group,
         type: 'scatter', mode: 'markers', customdata: circuit.id,
         marker: {size: 7, color: 'rgba(0,0,0,0)',
                  line: {width: 1.3, color: hue('muf')}},
-        hovertemplate: '&ge; %{y:.2f} MHz' + of('MUF at the top of the sweep'),
+        hovertemplate: '&ge; %{y:.2f} {{ t('unit.mhz') }}'
+          + of({{ t('series.hover.muf_ceiling')|tojson }}),
       }, 'muf');
     }
     if (some(circuit.muf_smooth)) {
       add({
-        x: circuit.t, y: circuit.muf_smooth, name: tag + 'MUF smoothed',
+        x: circuit.t, y: circuit.muf_smooth,
+        name: tag + {{ t('series.trace.muf_smooth')|tojson }},
         legendgroup: group, type: 'scatter', mode: 'lines',
         line: {width: 1.4, color: hue('muf')}, opacity: 0.65,
-        hovertemplate: '%{y:.2f} MHz' + of('MUF, smoothed by track'),
+        hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}'
+          + of({{ t('series.hover.muf_smooth')|tojson }}),
       }, 'muf');
     }
 
@@ -242,7 +245,7 @@
     if (some(circuit.lof)) {
       add({
         x: circuit.t, y: mask(circuit.lof, circuit.loflim, false),
-        name: tag + 'LOF', legendgroup: group, type: 'scatter',
+        name: tag + {{ t('series.trace.lof')|tojson }}, legendgroup: group, type: 'scatter',
         mode: 'markers', marker: {size: 5, symbol: 'diamond', color: hue('lof')},
         customdata: circuit.id,
         hovertemplate: '%{y:.2f} MHz' + of('LOF'),
@@ -250,11 +253,12 @@
       if (some(mask(circuit.lof, circuit.loflim, true))) {
         add({
           x: circuit.t, y: mask(circuit.lof, circuit.loflim, true),
-          name: tag + 'LOF (at band floor)', legendgroup: group,
+          name: tag + {{ t('series.trace.lof_bound')|tojson }}, legendgroup: group,
           type: 'scatter', mode: 'markers', customdata: circuit.id,
           marker: {size: 6.5, symbol: 'diamond', color: 'rgba(0,0,0,0)',
                    line: {width: 1.3, color: hue('lof')}},
-          hovertemplate: '&le; %{y:.2f} MHz' + of('LOF at the band floor'),
+          hovertemplate: '&le; %{y:.2f} {{ t('unit.mhz') }}'
+            + of({{ t('series.hover.lof_floor')|tojson }}),
         }, 'lof');
       }
     }
@@ -262,46 +266,55 @@
     // --- foF2 ------------------------------------------------------------
     if (some(circuit.fof2)) {
       add({
-        x: circuit.t, y: circuit.fof2, name: tag + 'foF2 (equivalent)',
+        x: circuit.t, y: circuit.fof2,
+        name: tag + {{ t('series.trace.fof2')|tojson }},
         legendgroup: group, type: 'scatter', mode: 'markers',
         marker: {size: 4, symbol: 'square', color: hue('fof2')},
         customdata: circuit.id,
-        hovertemplate: '%{y:.2f} MHz' + of('foF2 implied by the measured MUF'),
+        hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}'
+          + of({{ t('series.hover.fof2')|tojson }}),
       }, 'fof2');
     }
 
     // --- the model -------------------------------------------------------
     if (model.muf) {
       add({
-        x: circuit.t, y: model.muf, name: tag + 'IRI MUF', legendgroup: group,
+        x: circuit.t, y: model.muf,
+        name: tag + {{ t('series.trace.iri_muf')|tojson }}, legendgroup: group,
         type: 'scatter', mode: 'lines',
         line: {width: 1.8, dash: 'dash', color: hue('muf')},
-        hovertemplate: '%{y:.2f} MHz' + of('IRI MUF'),
+        hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}'
+          + of({{ t('series.trace.iri_muf')|tojson }}),
       }, 'model');
       if (some(model.fof2)) {
         add({
-          x: circuit.t, y: model.fof2, name: tag + 'IRI foF2',
+          x: circuit.t, y: model.fof2,
+          name: tag + {{ t('series.trace.iri_fof2')|tojson }},
           legendgroup: group, type: 'scatter', mode: 'lines',
           line: {width: 1.5, dash: 'dot', color: hue('fof2')},
-          hovertemplate: '%{y:.2f} MHz' + of('IRI foF2'),
+          hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}'
+            + of({{ t('series.trace.iri_fof2')|tojson }}),
         }, 'fof2');
       }
       if (some(model.hmf2)) {
         add({
-          x: circuit.t, y: model.hmf2, name: tag + 'IRI hmF2', yaxis: 'y3',
+          x: circuit.t, y: model.hmf2,
+          name: tag + {{ t('series.trace.iri_hmf2')|tojson }}, yaxis: 'y3',
           legendgroup: group, type: 'scatter', mode: 'lines',
           line: {width: 1.2, dash: 'dashdot', color: hue('hmf2')},
-          hovertemplate: '%{y:.0f} km' + of('IRI hmF2, right axis'),
+          hovertemplate: '%{y:.0f} {{ t('unit.km') }}'
+            + of({{ t('series.hover.iri_hmf2')|tojson }}),
         }, 'context');
       }
       if (some(circuit.residual)) {
         residuals = true;
         add({
           x: circuit.t, y: mask(circuit.residual, circuit.limited, false),
-          name: tag + 'measured − IRI', legendgroup: group, yaxis: 'y2',
+          name: tag + {{ t('series.trace.residual')|tojson }}, legendgroup: group, yaxis: 'y2',
           type: 'scatter', mode: 'markers', showlegend: false,
           marker: {size: 4, color: hue('muf')}, customdata: circuit.id,
-          hovertemplate: '%{y:+.2f} MHz' + of('measured − IRI'),
+          hovertemplate: '%{y:+.2f} {{ t('unit.mhz') }}'
+            + of({{ t('series.trace.residual')|tojson }}),
         }, 'model');
         // The bounds get their own residual trace rather than being dropped:
         // they are excluded from the statistics, and a reader has to be able
@@ -309,13 +322,13 @@
         if (some(mask(circuit.residual, circuit.limited, true))) {
           add({
             x: circuit.t, y: mask(circuit.residual, circuit.limited, true),
-            name: tag + 'residual (bound)', legendgroup: group, yaxis: 'y2',
+            name: tag + {{ t('series.trace.residual_bound')|tojson }}, legendgroup: group, yaxis: 'y2',
             type: 'scatter', mode: 'markers', showlegend: false,
             marker: {size: 5, color: 'rgba(0,0,0,0)',
                      line: {width: 1.1, color: hue('muf')}},
             customdata: circuit.id,
             hovertemplate: '&ge; %{y:+.2f} MHz'
-              + of('lower bound: not in the statistics'),
+              + of({{ t('series.hover.residual_bound')|tojson }}),
           }, 'model');
         }
       }
@@ -345,7 +358,8 @@
         add({
           x: f.t.concat(f.t.slice().reverse()),
           y: hi.concat(lo.slice().reverse()),
-          name: tag + f.param.toUpperCase() + ' forecast \u00b1\u03c3',
+          name: tag + T('series.trace.forecast_band',
+                        {param: f.param.toUpperCase()}),
           legendgroup: group, type: 'scatter', mode: 'lines',
           fill: 'toself', fillcolor: colour, opacity: 0.13,
           line: {width: 0}, hoverinfo: 'skip', showlegend: false,
@@ -354,10 +368,10 @@
 
       add({
         x: f.t, y: f.value,
-        name: tag + f.param.toUpperCase() + ' forecast',
+        name: tag + T('series.trace.forecast', {param: f.param.toUpperCase()}),
         legendgroup: group, type: 'scatter', mode: 'lines',
         line: {width: 1.6, dash: 'dash', color: colour},
-        hovertemplate: '%{y:.2f} MHz<extra>' + circuit.name + '<br>'
+        hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}<extra>' + circuit.name + '<br>'
           + f.model + '</extra>',
       }, 'forecast');
     });
@@ -368,10 +382,12 @@
     // ionosphere rather than like a ceiling.
     if (some(circuit.sweep_top)) {
       add({
-        x: circuit.t, y: circuit.sweep_top, name: tag + 'sweep top',
+        x: circuit.t, y: circuit.sweep_top,
+        name: tag + {{ t('series.trace.sweep_top')|tojson }},
         legendgroup: group, type: 'scatter', mode: 'lines',
         line: {width: 1, dash: 'dot', color: hue('top')}, opacity: 0.7,
-        hovertemplate: '%{y:.2f} MHz' + of('top of the sweep'),
+        hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}'
+          + of({{ t('series.hover.sweep_top')|tojson }}),
       }, 'context');
     }
   });
@@ -404,9 +420,9 @@
     font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
     xaxis: {type: 'date', anchor: residuals ? 'y2' : 'y',
             gridcolor: grid, zeroline: false,
-            title: {text: 'time (UTC)'}},
+            title: {text: {{ t('series.axis.time')|tojson }}}},
     yaxis: {domain: top, gridcolor: grid, zeroline: false, rangemode: 'tozero',
-            title: {text: 'frequency (MHz)'}},
+            title: {text: {{ t('series.axis.frequency')|tojson }}}},
     hovermode: 'closest', dragmode: 'zoom',
     legend: {orientation: 'h', y: -0.14, x: 0, font: {size: 10}},
     shapes: [], annotations: [],
@@ -414,7 +430,7 @@
   if (residuals) {
     layout.yaxis2 = {
       domain: [0, 0.20], gridcolor: grid, zeroline: true, zerolinecolor: dim,
-      zerolinewidth: 1, title: {text: 'meas − IRI (MHz)'},
+      zerolinewidth: 1, title: {text: {{ t('series.axis.residual')|tojson }}},
     };
   }
   if (heights) {
@@ -424,7 +440,7 @@
     // beside a frequency plot and invites someone to believe it.
     layout.yaxis3 = {domain: top, overlaying: 'y', side: 'right',
                      showgrid: false, zeroline: false, visible: SHOWN.context,
-                     title: {text: 'hmF2 (km)'},
+                     title: {text: {{ t('series.axis.hmf2')|tojson }}},
                      titlefont: {color: PARAM.hmf2},
                      tickfont: {color: PARAM.hmf2}};
   }

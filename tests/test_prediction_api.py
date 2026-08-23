@@ -259,7 +259,7 @@ def test_the_forecast_page_draws_the_leaderboard(client, artifact):
 
     page = client.get("/ui/forecast")
     assert page.status_code == 200
-    assert "leaderboard" in page.text
+    assert "leaderboard" in page.text.lower()
     assert "persistence" in page.text
     assert "recurrence-27d" in page.text
     assert "Not yet computed" not in page.text

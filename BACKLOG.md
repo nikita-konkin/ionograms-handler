@@ -2979,3 +2979,110 @@ fallback chain that exists to prevent exactly that has three empty rungs.
 by the copying uid, not the service's. Two cache files ended up owned by 1002
 where everything around them was 10001, and the service could no longer manage
 its own cache. Prefer writing through the container's own user.
+
+---
+
+## 35. Two languages, and the four places English was hiding (2026-08-23)
+
+**Problem.** Every page this server renders was in English. The operators are
+at Yoshkar-Ola and the station work is done in Russian, so the console was
+readable by the people who wrote it and not by everyone who runs it.
+
+Measured before starting, because the shape of the job was not what "add
+translations" suggests:
+
+| surface | volume |
+|---|---|
+| Jinja markup prose, 8 templates | ~3 470 words |
+| String literals inside inline `<script>` blocks | ~1 750 words |
+| **Translated** | **~5 200 words, 521 keys** |
+
+**A third of the text was inside JavaScript** -- confirmations, refusals, the
+schedule preview, every Plotly axis title and hovertemplate. An approach that
+only handled Jinja would have left the console half-translated in exactly the
+places an operator reads when something has gone wrong. And most of the rest is
+explanatory prose, not labels: the `.note` paragraphs that say what
+`NO PRODUCTS` means, why reachable and cached are different questions, why a
+stale panel offers a *forget* button. That prose is most of the console's
+value, so it is in scope and the labels alone would not have been.
+
+**Plain Python catalogs, not gettext.** `services/api/locale/{en,ru}.py` hold
+ordinary dicts. `web_routes` opens by explaining why this deployment has no
+JavaScript toolchain -- "it adds an install, a lockfile and a second thing that
+can fail to start" -- and a `.po`/`.mo` workflow adds exactly that on the
+Python side, with a `pybabel compile` step whose failure mode is a silently
+missing catalog and a console that reverts to English without saying so.
+
+What that costs is `pybabel extract`. `tests/test_i18n.py` replaces it with
+guards that fit this project better, and each one has already caught something:
+
+- **key parity** between the catalogs, so a Russian translation cannot fall
+  behind an edited English string;
+- **no lookup miss** when every page is rendered in every language;
+- **a static scan of the templates**, because the render sweep only reaches the
+  branches a data-less fixture exercises -- it never opens a sounding page;
+- **no template may shadow `t`**. `console.html` had `{% for t in s.verified %}`
+  around a row that then called `t(...)`. That one failed loudly; a loop that
+  shadows `t` and calls nothing simply renders, and traps the next person;
+- **the Russian catalog must be Cyrillic**. Found a CJK ideograph inside a word
+  in `sources.identify_note` on the first run -- a typo that renders as a box
+  and that no reviewer reliably sees;
+- **no `*.js.*` message may carry markup**, since those are written with
+  `textContent`; an `&mdash;` in one shows on screen as `&mdash;`.
+
+**Four decisions worth keeping.**
+
+1. **`t()` returns `Markup`, and interpolated values are escaped.** Most of
+   this console's text is prose carrying a `<b>`, a `<code>` or a link, and a
+   message chopped into fragments around them cannot be translated at all --
+   Russian does not put the words in English's order. The catalog is repository
+   source and is trusted as far as a template is; station names and folder
+   paths substituted into it are not, and `Markup.format` escapes them.
+2. **English keeps `(s)`; Russian takes a plural form.** 26 sites used the
+   `sounding(s)` dodge, which Russian cannot: `1 зондирование`,
+   `2 зондирования`, `5 зондирований` are three words chosen by the last digit
+   and the last two digits. Rather than convert English too -- which would have
+   changed a dozen pre-existing assertions that grep those exact strings -- the
+   template passes both the count and the plural form, and each language uses
+   what it needs. English renders byte-for-byte what it rendered before.
+3. **Static strings go through Jinja, not through the browser catalog.** Only
+   messages the browser assembles from live values are `*.js.*`; a Plotly axis
+   title is fixed at render time, so `{{ t('key')|tojson }}` writes it into the
+   script and it never travels in the JSON. 75 keys ship to the browser instead
+   of 521.
+4. **No `Accept-Language`.** `?lang=` then a cookie then `UI_LANG`, and nothing
+   else. The same URL has to render the same page for everyone, or a screenshot
+   in a bug report stops being evidence of what the operator saw.
+
+**One layout bug, and it was structural.** Flexbox breaks lines on hypothetical
+sizes and never shrinks an item to avoid a break, so the language toggle
+dropped to a second row the moment the header hint grew -- which Russian does
+by about 15%. Grouping the hint and the toggle into one flex item fixed it:
+English and Russian now produce identical header heights at every width.
+
+**Sentence case, both languages** (asked for mid-change). Applied by a script
+that skips tags, entities, `\uXXXX` escapes and leading placeholders, with two
+hand-held exclusions: strings that are *appended* to another message inside one
+sentence, where a capital lands mid-sentence; and terms whose case is part of
+their meaning. The second caught `foF2` becoming `FoF2` -- fo is the
+ordinary-ray critical frequency and a capital F is a different symbol, not a
+style choice. `MUF`, `LOF`, `tx`, `rx`, `n`, `r` and the units are held the same
+way. This did change English rendering, which is why ten assertions elsewhere
+moved to case-insensitive greps -- they were asserting that an element rendered,
+and case was never the thing they were testing.
+
+**Still open: the strings Python writes into pages.** `net.detail`,
+`acquisition.running.detail`, `band.why_not`, `archives.method_availability`'s
+`why`, and scan results are authored in Python and rendered into these pages,
+so a Russian console still shows one English sentence per affected panel --
+measured on a live page, `/ui` shows exactly one. Translating them means
+threading a per-request language into `control_routes`, `archive_routes` and
+`archives.py`, and it changes what the JSON API returns to anything that parses
+it, so it needs its own contract decision: translate `detail`, or add a stable
+machine `code` and translate in the browser. The ~840 words of
+`HTTPException.detail` are the same question and are deliberately untouched --
+the API is a machine contract before it is a user interface.
+
+`/docs` is also untouched: FastAPI generates it from route docstrings, which are
+developer documentation that happens to be rendered, and translating them would
+make them worse at their main job.

@@ -1,50 +1,49 @@
 {% extends "base.html" %}
-{% block title %}station console{% endblock %}
-{% block hint %}auto-refresh 15 s{% endblock %}
+{% block title %}{{ t('console.title') }}{% endblock %}
+{% block hint %}{{ t('console.hint') }}{% endblock %}
 {% block body %}
 
 <div class="panel">
-  <h2>archive</h2>
-  <span class="muted">{{ n_soundings }} sounding(s) ingested.</span>
+  <h2>{{ t('console.archive') }}</h2>
+  <span class="muted">{{ t('console.ingested', n=n_soundings,
+    unit=plural(n_soundings, 'sounding')) }}</span>
   {% for m in methods %}
-    <span class="pill">{{ m.method }} &middot; {{ m.picks }}/{{ m.n }} picks</span>
+    <span class="pill">{{ t('console.method_picks', method=m.method,
+      picks=m.picks, n=m.n) }}</span>
   {% endfor %}
-  {% if not methods %}<span class="muted">no extractions yet &mdash;
-    register a folder on <a href="/ui/archives">archives</a> and scan it</span>{% endif %}
+  {% if not methods %}<span class="muted">{{ t('console.no_extractions') }}</span>{% endif %}
 </div>
 
 <div class="panel">
   <h2>
-    upstream
+    {{ t('console.upstream') }}
     {% if net.state == 'online' %}
-      <span class="pill ok">INTERNET OK</span>
+      <span class="pill ok">{{ t('console.net.online') }}</span>
     {% elif net.state == 'degraded' %}
-      <span class="pill fail">PARTIAL</span>
+      <span class="pill fail">{{ t('console.net.degraded') }}</span>
     {% elif net.state == 'offline' %}
-      <span class="pill fail">NO INTERNET</span>
+      <span class="pill fail">{{ t('console.net.offline') }}</span>
     {% else %}
-      <span class="pill unk">INTERNET?</span>
+      <span class="pill unk">{{ t('console.net.unknown') }}</span>
     {% endif %}
     <span class="muted" style="font-weight:normal">
-      {% if net.age_s is not none %}checked {{ net.age_s|duration }} ago{% endif %}
+      {% if net.age_s is not none %}{{ t('console.checked_ago',
+        age=net.age_s|duration) }}{% endif %}
     </span>
   </h2>
 
-  <p class="note">{{ net.detail }}. These are the servers the solar indices
-  come from, not the internet at large &mdash; a host that reaches them through
-  a mirror is green here and a host behind a proxy that blocks
-  <code>sidc.be</code> is not, which is the distinction that decides whether
-  the IRI values on a sounding page can be refreshed.</p>
+  <p class="note">{{ t('console.net_note', detail=net.detail) }}</p>
 
   {% if net.probes %}
   <div class="scroll"><table>
-    <tr><th></th><th>host</th><th>rtt</th><th>provides</th>
-        <th>cached</th><th>detail</th></tr>
+    <tr><th></th><th>{{ t('console.col.host') }}</th><th>{{ t('console.col.rtt') }}</th>
+        <th>{{ t('console.col.provides') }}</th>
+        <th>{{ t('console.col.cached') }}</th><th>{{ t('console.col.detail') }}</th></tr>
     {% for p in net.probes %}
     <tr>
       <td>{% if p.ok is none %}<span class="pill unk">?</span>
-          {% elif p.ok %}<span class="pill ok">ok</span>
-          {% else %}<span class="pill fail">FAIL</span>{% endif %}</td>
+          {% elif p.ok %}<span class="pill ok">{{ t('console.ok') }}</span>
+          {% else %}<span class="pill fail">{{ t('console.fail') }}</span>{% endif %}</td>
       <td>{{ p.host }}</td>
       <td class="muted">{% if p.ms is not none %}{{ '%.0f'|format(p.ms) }} ms{% endif %}</td>
       {# One line per file rather than a comma list: sidc.be alone serves
@@ -54,28 +53,21 @@
         <div>{{ sources[key].what }}</div>{% endfor %}</td>
       <td class="muted">{% for key in p.provides %}
         {%- set age = net.cache.get(key) %}
-        <div>{% if age is none %}<span class="pill unk">never</span>
+        <div>{% if age is none %}<span class="pill unk">{{ t('console.never') }}</span>
              {% else %}{{ age|duration }}{% endif %}</div>{% endfor %}</td>
       <td class="wrap">{{ p.detail }}</td>
     </tr>
     {% endfor %}
   </table></div>
 
-  <p class="note"><b>Reachable and cached are different questions.</b>
-  Unreachable with a fresh cache is a model still answering correctly;
-  reachable with <span class="pill unk">never</span> is a model that has never
-  had a driver. A cached file older than seven days is re-fetched on the next
-  use, and a stale one is served anyway if the fetch fails &mdash; so an index
-  can be months old without anything else on this console saying so.</p>
+  <p class="note">{{ t('console.cache_note') }}</p>
   {% endif %}
 </div>
 
 {% if not stations %}
 <div class="panel">
-  <h2>no stations</h2>
-  <p class="muted">Nothing has pushed a health report yet. Start the agent with
-  <code>server_url</code> pointing here and it will appear within one push
-  interval.</p>
+  <h2>{{ t('console.no_stations') }}</h2>
+  <p class="muted">{{ t('console.no_stations_note') }}</p>
 </div>
 {% endif %}
 
@@ -84,33 +76,31 @@
   <h2>
     {{ s.name }}
     {% if s.stale %}
-      <span class="pill fail">STALE</span>
+      <span class="pill fail">{{ t('console.stale') }}</span>
     {% elif s.healthy %}
-      <span class="pill ok">HEALTHY</span>
+      <span class="pill ok">{{ t('console.healthy') }}</span>
     {% else %}
-      <span class="pill fail">UNHEALTHY</span>
+      <span class="pill fail">{{ t('console.unhealthy') }}</span>
     {% endif %}
     <span class="muted" style="font-weight:normal">
-      {% if s.age_s is not none %}last report {{ '%.0f'|format(s.age_s) }} s ago{%
-      else %}never reported{% endif %}
-      {% if s.agent_version %} &middot; agent {{ s.agent_version }}{% endif %}
+      {% if s.age_s is not none %}{{ t('console.last_report',
+        age='%.0f'|format(s.age_s)) }}{%
+      else %}{{ t('console.never_reported') }}{% endif %}
+      {% if s.agent_version %} &middot; {{ t('console.agent',
+        version=s.agent_version) }}{% endif %}
     </span>
   </h2>
 
   {% if s.stale %}
-  <p class="note">Nothing has arrived for more than {{ '%.0f'|format(stale_after) }} s.
-  Health is pushed, so silence is itself the alert &mdash; the metrics below are
-  the last ones received, not the current state.</p>
+  <p class="note">{{ t('console.stale_note',
+    seconds='%.0f'|format(stale_after)) }}</p>
   {# Offered only on a stale panel, and the server refuses a receiver still
      pushing at the same threshold -- so the button appears exactly where it
      would be accepted. A renamed receiver is STALE for good otherwise, and a
      red that is always red is a red nobody reads. #}
   <p class="note">
-    <button onclick="forget('{{ s.name }}')">forget this receiver</button>
-    For one that was <b>renamed or retired</b>. Drops its health history and
-    queued commands, which is what this panel is made of. Identifications and
-    configuration epochs are kept &mdash; they are the provenance of products
-    already on disk.
+    <button onclick="forget('{{ s.name }}')">{{ t('console.forget') }}</button>
+    {{ t('console.forget_note') }}
   </p>
   <div id="forgetSay-{{ s.name }}" class="note" style="margin-bottom:.6rem"></div>
   {% endif %}
@@ -119,96 +109,89 @@
   <div style="border:1px solid var(--line); border-radius:6px; padding:.7rem;
               margin-bottom:.8rem">
     <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
-      <b>acquisition</b>
+      <b>{{ t('console.acquisition') }}</b>
       {# The observation, first and largest: everything after it is the ini
          read against a clock, which stays true with the recorder dead. #}
       {% if a.running.state == 'running' %}
-        <span class="pill ok">ACQUIRING</span>
+        <span class="pill ok">{{ t('console.acquiring') }}</span>
       {% elif a.running.state == 'stopped' %}
-        <span class="pill fail">NOT ACQUIRING</span>
+        <span class="pill fail">{{ t('console.not_acquiring') }}</span>
       {% elif a.running.state == 'silent' %}
-        <span class="pill fail">NO PRODUCTS</span>
+        <span class="pill fail">{{ t('console.no_products') }}</span>
       {% else %}
-        <span class="pill unk">ACQUIRING?</span>
+        <span class="pill unk">{{ t('console.acquiring_unknown') }}</span>
       {% endif %}
-      {% if a.mode == 'scheduled' %}<span class="pill">scheduled</span>
-      {% elif a.mode == 'search' %}<span class="pill">search</span>
-      {% else %}<span class="pill unk">mode not recorded</span>{% endif %}
+      {% if a.mode == 'scheduled' %}<span class="pill">{{ t('console.mode.scheduled') }}</span>
+      {% elif a.mode == 'search' %}<span class="pill">{{ t('console.mode.search') }}</span>
+      {% else %}<span class="pill unk">{{ t('console.mode.unrecorded') }}</span>{% endif %}
       {% if a.sounding_now %}
         <span class="pill {{ 'ok' if a.is_running else 'unk' }}">
-          {%- if a.is_running %}SOUNDING{% else %}SLOT DUE{% endif %}
+          {%- if a.is_running %}{{ t('console.sounding_pill') }}{% else %}{{ t('console.slot_due') }}{% endif %}
           {{ a.sounding_now|map(attribute='who')|unique|join(', ') }}</span>
       {% elif a.slots %}
-        <span class="pill unk">between slots</span>
+        <span class="pill unk">{{ t('console.between_slots') }}</span>
       {% endif %}
       {% if a.contended %}
-        <span class="pill fail">RANK {{ a.contended|join(', ') }} OVERSUBSCRIBED</span>
+        <span class="pill fail">{{ t('console.oversubscribed',
+          ranks=a.contended|join(', ')) }}</span>
       {% endif %}
       <span class="muted" style="font-size:.85rem">
-        {% if a.epoch %}configured {{ a.epoch.valid_from }}
-          {% if a.epoch.changed_by %}by {{ a.epoch.changed_by }}{% endif %}
+        {% if a.epoch %}{{ t('console.configured_at', when=a.epoch.valid_from) }}
+          {% if a.epoch.changed_by %}{{ t('console.changed_by',
+            who=a.epoch.changed_by) }}{% endif %}
         {% endif %}
       </span>
     </div>
 
     <p class="note">{{ a.running.detail }}.
-    {%- if not a.is_running and a.sounding_now %} <b>The slot marked due is
-    the schedule against the clock, not an observation:</b> it says a chirp is
-    expected this second, not that one is being recorded.{% endif %}</p>
+    {%- if not a.is_running and a.sounding_now %} {{ t('console.due_note') }}{% endif %}</p>
 
     {% if a.unknown %}
     <p class="note">{{ a.unknown }}</p>
     {% endif %}
 
     {% if a.mode == 'search' and a.slots %}
-    <p class="note">The station is in <b>search</b> mode, so this schedule is
-    what the ini holds, not what it is doing: search records whatever sweeps
-    past and infers the timing afterwards.</p>
+    <p class="note">{{ t('console.search_note') }}</p>
     {% endif %}
 
     {% if a.slots %}
     <div class="scroll"><table>
-      <tr><th>rank</th><th>transmitter</th><th>rate</th><th>slot</th>
-          <th>state</th><th>next</th></tr>
+      <tr><th>{{ t('console.col.rank') }}</th><th>{{ t('console.col.transmitter') }}</th>
+          <th>{{ t('console.col.rate') }}</th><th>{{ t('console.col.slot') }}</th>
+          <th>{{ t('console.col.state') }}</th><th>{{ t('console.col.next') }}</th></tr>
       {% for slot in a.slots %}
       <tr>
         <td class="muted">{{ slot.rank }}</td>
         <td>{% if slot.transmitter %}{{ slot.transmitter }}
-            {% else %}<span class="muted">unidentified</span>{% endif %}</td>
-        <td class="muted">{{ '%.1f'|format(slot.rate_hz_s / 1000) }} kHz/s</td>
-        <td class="muted">{{ '%g'|format(slot.chirpt_s) }}s of {{ '%g'|format(slot.rep_s) }}s</td>
+            {% else %}<span class="muted">{{ t('console.unidentified') }}</span>{% endif %}</td>
+        <td class="muted">{{ t('console.khz_s', rate='%.1f'|format(slot.rate_hz_s / 1000)) }}</td>
+        <td class="muted">{{ t('console.slot_of', chirpt='%g'|format(slot.chirpt_s),
+          rep='%g'|format(slot.rep_s)) }}</td>
         <td>{% if slot.in_progress %}
               <span class="pill {{ 'ok' if a.is_running else 'unk' }}"
-                >{{ 'sounding' if a.is_running else 'due' }}</span>
-              <span class="muted">{{ slot.seconds_in|duration }} in,
-                sweep ends {{ slot.ends_at_utc if slot.ends_at_utc else '' }}</span>
+                >{{ t('console.sounding_state') if a.is_running else t('console.due_state') }}</span>
+              <span class="muted">{{ t('console.seconds_in',
+                age=slot.seconds_in|duration,
+                ends=slot.ends_at_utc if slot.ends_at_utc else '') }}</span>
             {% elif slot.sweep_s is none %}
               <span class="pill unk">?</span>
-              <span class="muted">sweep length unknown</span>
+              <span class="muted">{{ t('console.sweep_unknown') }}</span>
             {% else %}
-              <span class="muted">idle</span>
+              <span class="muted">{{ t('console.idle') }}</span>
             {% endif %}</td>
-        <td class="muted">in {{ slot.seconds_until|duration }}</td>
+        <td class="muted">{{ t('console.in', age=slot.seconds_until|duration) }}</td>
       </tr>
       {% endfor %}
     </table></div>
     {% if a.contended %}
-    <p class="note"><b>Rank {{ a.contended|join(', ') }} has more slots in
-    progress than it has processes.</b> A rank sounds one chirp at a time: it
-    takes the slot with the shortest wait and is busy for the whole sweep, so
-    the overlapping one is skipped that cycle without anything saying so. Give
-    the transmitters their own ranks, or move the slots more than one sweep
-    apart.</p>
+    <p class="note">{{ t('console.contended', ranks=a.contended|join(', ')) }}</p>
     {% endif %}
 
     {% if a.span_mhz %}
-    <p class="note">A sweep is timed from the band this receiver's recent
-    products actually cover ({{ '%.2f'|format(a.span_mhz) }} MHz) and the
-    entry's chirp rate &mdash; measured, not configured.</p>
+    <p class="note">{{ t('console.span_note',
+      span='%.2f'|format(a.span_mhz)) }}</p>
     {% else %}
-    <p class="note">No product has been ingested for this receiver, so the
-    sweep length is unknown and no slot can be called in progress. The slot
-    times themselves are still exact.</p>
+    <p class="note">{{ t('console.no_span_note') }}</p>
     {% endif %}
     {% endif %}
 
@@ -219,61 +202,53 @@
         {# `image-rendering:pixelated` on purpose: this is 128x96 of real
            cells, and a browser smoothing them would invent a trace between
            two noise bins. #}
-        <img class="iono" src="{{ p.url }}" alt="newest sounding from {{ p.tx }}"
+        <img class="iono" src="{{ p.url }}" alt="{{ t('console.preview_alt', tx=p.tx) }}"
              width="{{ p.width or 128 }}" height="{{ p.height or 96 }}"
              style="width:180px;height:auto;image-rendering:pixelated">
-        <div><b>{{ p.tx }}</b> <span class="muted">{{ p.age_s|duration }} old</span></div>
-        <div class="muted">{{ p.freq_mhz }} MHz{% if p.range_km %} &middot;
-          {{ p.range_km }} km{% if p.cropped %}*{% endif %}{% endif %}</div>
+        <div><b>{{ p.tx }}</b> <span class="muted">{{ t('console.old',
+          age=p.age_s|duration) }}</span></div>
+        <div class="muted">{{ p.freq_mhz }} {{ t('unit.mhz') }}{% if p.range_km %} &middot;
+          {{ p.range_km }} {{ t('unit.km') }}{% if p.cropped %}*{% endif %}{% endif %}</div>
       </div>
       {% endfor %}
     </div>
-    <p class="note">The newest product on <b>this station's own disk</b>, one
-    per transmitter, encoded there and pushed with the health report &mdash; so
-    it is current even when the archive transfer is hours behind. Age is the
-    sounding's own start time. Colours are the same 20&ndash;75 dB
-    <code>jet</code> scale as a full ionogram{% if s.previews|selectattr('cropped')|list %};
-    an asterisk marks a range axis narrowed to fit the echoes{% endif %}.</p>
+    <p class="note">{{ t('console.preview_note') }}{%
+      if s.previews|selectattr('cropped')|list %}{{
+      t('console.preview_note.cropped') }}{% endif %}.</p>
     {% else %}
-    <p class="note">This station sends no preview. Either its agent predates
-    the feature or <code>preview</code> is <code>false</code> in its
-    <code>agent.json</code>; whether it has products to show at all is what
-    <code>newest_product_age_s</code> below answers.</p>
+    <p class="note">{{ t('console.no_preview_note') }}</p>
     {% endif %}
 
     {% if a.arrivals %}
     <div class="scroll" style="margin-top:.6rem"><table>
-      <tr><th>arrived</th><th>from</th><th>age</th><th>sweep</th><th></th></tr>
+      <tr><th>{{ t('console.col.arrived') }}</th><th>{{ t('console.col.from') }}</th>
+          <th>{{ t('console.col.age') }}</th><th>{{ t('console.col.sweep') }}</th><th></th></tr>
       {% for row in a.arrivals %}
       <tr>
         <td class="muted">{{ row.datetime }}</td>
         <td>{{ row.tx }}</td>
         <td>{{ row.age_s|duration }}</td>
         <td class="muted">{% if row.freq_start is not none %}
-          {{ '%.2f'|format(row.freq_start) }}&ndash;{{ '%.2f'|format(row.freq_stop) }} MHz
+          {{ '%.2f'|format(row.freq_start) }}&ndash;{{ '%.2f'|format(row.freq_stop) }} {{ t('unit.mhz') }}
           {% endif %}</td>
-        <td><a href="/ui/sounding/{{ row.id }}">open</a></td>
+        <td><a href="/ui/sounding/{{ row.id }}">{{ t('common.open') }}</a></td>
       </tr>
       {% endfor %}
     </table></div>
-    <p class="note">Last products <b>ingested</b> for this receiver. A stalled
-    transfer shows old arrivals while the recorder is fine &mdash; the
-    <code>newest_product_age_s</code> metric below is the one that speaks for
-    the station itself, and it is what the indicator at the top of this panel
-    reads.</p>
+    <p class="note">{{ t('console.arrivals_note') }}</p>
     {% else %}
-    <p class="note">Nothing ingested under the receiver name
-    <code>{{ s.name }}</code>.</p>
+    <p class="note">{{ t('console.nothing_ingested_for', name=s.name) }}</p>
     {% endif %}
   </div>
 
   <div class="scroll"><table>
-    <tr><th></th><th>metric</th><th>value</th><th>detail</th></tr>
+    <tr><th></th><th>{{ t('console.col.metric') }}</th>
+        <th>{{ t('console.col.value') }}</th><th>{{ t('console.col.detail') }}</th></tr>
     {% for m in s.metrics %}
     <tr>
       <td>{% if m.ok is none %}<span class="pill unk">?</span>
-          {% elif m.ok %}<span class="pill ok">ok</span>
-          {% else %}<span class="pill fail">FAIL</span>{% endif %}</td>
+          {% elif m.ok %}<span class="pill ok">{{ t('console.ok') }}</span>
+          {% else %}<span class="pill fail">{{ t('console.fail') }}</span>{% endif %}</td>
       <td>{{ m.name }}</td>
       <td>{{ m.value if m.value is not none else '&mdash;'|safe }}</td>
       <td class="wrap">{{ m.detail }}</td>
@@ -281,10 +256,7 @@
     {% endfor %}
   </table></div>
 
-  <p class="note" style="margin-top:.8rem">
-    Grey <span class="pill unk">?</span> is <b>unknown</b>, not fine: the agent
-    could not measure it. Only a definite failure makes a station unhealthy.
-  </p>
+  <p class="note" style="margin-top:.8rem">{{ t('console.unknown_note') }}</p>
 
   {# What this receiver *could* sound, beside what it is sounding. The list
      comes from the database -- the identify workflow's output -- so choosing
@@ -293,51 +265,50 @@
   <div style="border:1px solid var(--line); border-radius:6px; padding:.7rem;
               margin-top:.8rem">
     <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
-      <b>sounding plan</b>
-      <label class="muted" style="font-size:.85rem">mode
+      <b>{{ t('console.plan') }}</b>
+      <label class="muted" style="font-size:.85rem">{{ t('console.mode') }}
         <select data-station="{{ s.name }}" id="mode-{{ s.name }}"
                 onchange="planChanged('{{ s.name }}')">
           {# No mode recorded is not the same as search. Defaulting the box to
              the first entry would put a mode this server never observed one
              click from being applied, so the unrecorded case selects nothing
              and `applyPlan` refuses it. #}
-          {% if not a.mode %}<option value="" selected>&mdash; not recorded &mdash;</option>{% endif %}
+          {% if not a.mode %}<option value="" selected>{{ t('console.not_recorded') }}</option>{% endif %}
           {% for m in modes %}
           <option{% if m == a.mode %} selected{% endif %}>{{ m }}</option>
           {% endfor %}
         </select></label>
-      <button onclick="applyPlan('{{ s.name }}')">apply</button>
-      <span class="note">queued now; the station applies it on its next pull
-        and it takes effect when acquisition restarts</span>
+      <button onclick="applyPlan('{{ s.name }}')">{{ t('console.apply') }}</button>
+      <span class="note">{{ t('console.queued_note') }}</span>
     </div>
 
     {% if s.verified %}
     <div class="scroll" style="margin-top:.6rem"><table>
-      <tr><th></th><th>code</th><th>name</th><th>rate</th><th>slots</th>
-          <th>identified</th><th>note</th></tr>
-      {% for t in s.verified %}
+      <tr><th></th><th>{{ t('console.col.code') }}</th><th>{{ t('console.col.name') }}</th>
+          <th>{{ t('console.col.rate') }}</th><th>{{ t('console.col.slots') }}</th>
+          <th>{{ t('console.col.identified') }}</th><th>{{ t('console.col.note') }}</th></tr>
+      {% for tx in s.verified %}
       <tr>
         <td><input type="checkbox" class="use" data-station="{{ s.name }}"
-                   value="{{ t.code }}"
-                   {% if t.code in a.scheduled %}checked{% endif %}
+                   value="{{ tx.code }}"
+                   {% if tx.code in a.scheduled %}checked{% endif %}
                    onchange="planChanged('{{ s.name }}')"></td>
-        <td>{{ t.code }}</td>
-        <td class="muted">{{ t.name or '' }}</td>
-        <td class="muted">{% if t.timings %}
-          {{ '%.1f'|format(t.timings[0]['chirp-rate'] / 1000) }} kHz/s{% endif %}</td>
-        <td class="muted">{{ t.timings|map(attribute='chirpt')|join('s, ') }}s
-          {%- if t.timings %} of {{ '%g'|format(t.timings[0]['rep']) }}s{% endif %}</td>
-        <td class="muted">{{ t.verified_at }}</td>
-        <td class="wrap muted">{{ t.note or '' }}</td>
+        <td>{{ tx.code }}</td>
+        <td class="muted">{{ tx.name or '' }}</td>
+        <td class="muted">{% if tx.timings %}{{ t('console.khz_s',
+          rate='%.1f'|format(tx.timings[0]['chirp-rate'] / 1000)) }}{% endif %}</td>
+        <td class="muted">{% if tx.timings %}{{ t('console.slots_of',
+            slots=tx.timings|map(attribute='chirpt')|join('s, '),
+            rep='%g'|format(tx.timings[0]['rep'])) }}
+          {%- else %}{{ tx.timings|map(attribute='chirpt')|join('s, ') }}s{% endif %}</td>
+        <td class="muted">{{ tx.verified_at }}</td>
+        <td class="wrap muted">{{ tx.note or '' }}</td>
       </tr>
       {% endfor %}
     </table></div>
     <p class="note" id="plan-{{ s.name }}"></p>
     {% else %}
-    <p class="note">Nothing identified at this receiver yet, so there is no
-    schedule to compose. A census row cannot be scheduled &mdash; it has no name
-    and no id, and <code>calc_ionograms.py</code> reads both without a default.
-    Name one on <a href="/ui/sources">sources</a> and it appears here.</p>
+    <p class="note">{{ t('console.nothing_identified') }}</p>
     {% endif %}
     <div id="planSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
   </div>
@@ -350,9 +321,9 @@
   <div style="border:1px solid var(--line); border-radius:6px; padding:.7rem;
               margin-top:.8rem">
     <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
-      <b>receive band</b>
+      <b>{{ t('console.band') }}</b>
       {% if not s.band.can_change %}
-      <span class="bad" style="font-size:.85rem">read-only</span>
+      <span class="bad" style="font-size:.85rem">{{ t('console.read_only') }}</span>
       {% endif %}
     </div>
 
@@ -360,64 +331,63 @@
        station's ini via its health report, the products via this database --
        so they cannot be made to agree by accident. #}
     <div class="scroll" style="margin-top:.5rem"><table>
-      <tr><th></th><th>digitised</th><th>analysed</th><th>LO</th></tr>
+      <tr><th></th><th>{{ t('console.col.digitised') }}</th>
+          <th>{{ t('console.col.analysed') }}</th><th>{{ t('console.col.lo') }}</th></tr>
       <tr>
-        <td class="muted">configured</td>
+        <td class="muted">{{ t('console.configured') }}</td>
         {% if s.band.configured and s.band.configured.start_mhz is not none %}
-        <td>{{ '%.3f'|format(s.band.configured.start_mhz) }}&ndash;{{ '%.3f'|format(s.band.configured.stop_mhz) }} MHz</td>
-        <td>{{ '%.3f'|format(s.band.configured.analysis_min_mhz) }}&ndash;{{ '%.3f'|format(s.band.configured.analysis_max_mhz) }} MHz</td>
-        <td class="muted">{{ '%.3f'|format(s.band.configured.center_mhz) }} MHz</td>
+        <td>{{ '%.3f'|format(s.band.configured.start_mhz) }}&ndash;{{ '%.3f'|format(s.band.configured.stop_mhz) }} {{ t('unit.mhz') }}</td>
+        <td>{{ '%.3f'|format(s.band.configured.analysis_min_mhz) }}&ndash;{{ '%.3f'|format(s.band.configured.analysis_max_mhz) }} {{ t('unit.mhz') }}</td>
+        <td class="muted">{{ '%.3f'|format(s.band.configured.center_mhz) }} {{ t('unit.mhz') }}</td>
         {% else %}
-        <td class="muted" colspan="3">not reported &mdash; this station has not
-          sent a health report carrying its band yet</td>
+        <td class="muted" colspan="3">{{ t('console.band_not_reported') }}</td>
         {% endif %}
       </tr>
       <tr>
-        <td class="muted">observed</td>
+        <td class="muted">{{ t('console.observed') }}</td>
         <td class="muted">&mdash;</td>
         {% if s.band.observed %}
-        <td>{{ '%.3f'|format(s.band.observed.start_mhz) }}&ndash;{{ '%.3f'|format(s.band.observed.stop_mhz) }} MHz</td>
-        <td class="muted">from {{ s.band.observed.n }} product(s)</td>
+        <td>{{ '%.3f'|format(s.band.observed.start_mhz) }}&ndash;{{ '%.3f'|format(s.band.observed.stop_mhz) }} {{ t('unit.mhz') }}</td>
+        <td class="muted">{{ t('console.from_products', n=s.band.observed.n,
+          unit=plural(s.band.observed.n, 'product')) }}</td>
         {% else %}
-        <td class="muted" colspan="2">no products yet</td>
+        <td class="muted" colspan="2">{{ t('console.no_products_yet') }}</td>
         {% endif %}
       </tr>
     </table></div>
 
     {% if s.band.disagreement %}
     <p class="note bad" style="margin-top:.45rem">
-      <b>configured and observed disagree:</b> {{ s.band.disagreement }}</p>
+      {{ t('console.disagree', detail=s.band.disagreement) }}</p>
     {% elif s.band.configured and s.band.observed %}
-    <p class="note" style="margin-top:.45rem">Configured and observed agree to
-      within {{ '%g'|format(s.band.tolerance_mhz) }} MHz. The small shortfall is
-      expected: <code>calc_ionograms.py</code> selects stored bins with strict
-      inequalities, so both edge bins are dropped.</p>
+    <p class="note" style="margin-top:.45rem">{{ t('console.agree',
+      tolerance='%g'|format(s.band.tolerance_mhz)) }}</p>
     {% endif %}
 
     {% if s.band.can_change %}
     <div style="margin-top:.6rem; display:flex; gap:.6rem; align-items:baseline;
                 flex-wrap:wrap">
-      <label class="muted" style="font-size:.85rem">band start
+      <label class="muted" style="font-size:.85rem">{{ t('console.band_start') }}
         <input id="bandStart-{{ s.name }}" type="number" step="0.1" size="7"
                style="width:6.5rem"
                value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.start_mhz) }}{% endif %}"
-               oninput="bandChanged('{{ s.name }}')"> MHz</label>
-      <label class="muted" style="font-size:.85rem">analyse from
+               oninput="bandChanged('{{ s.name }}')"> {{ t('unit.mhz') }}</label>
+      <label class="muted" style="font-size:.85rem">{{ t('console.analyse_from') }}
         <input id="bandLo-{{ s.name }}" type="number" step="0.01" size="7"
                style="width:6.5rem"
                value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.analysis_min_mhz) }}{% endif %}"
-               oninput="bandChanged('{{ s.name }}')"> MHz</label>
-      <label class="muted" style="font-size:.85rem">to
+               oninput="bandChanged('{{ s.name }}')"> {{ t('unit.mhz') }}</label>
+      <label class="muted" style="font-size:.85rem">{{ t('common.to') }}
         <input id="bandHi-{{ s.name }}" type="number" step="0.01" size="7"
                style="width:6.5rem"
                value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.analysis_max_mhz) }}{% endif %}"
-               oninput="bandChanged('{{ s.name }}')"> MHz</label>
-      <button onclick="applyBand('{{ s.name }}')">apply band</button>
+               oninput="bandChanged('{{ s.name }}')"> {{ t('unit.mhz') }}</label>
+      <button onclick="applyBand('{{ s.name }}')">{{ t('console.apply_band') }}</button>
     </div>
     <div style="margin-top:.4rem">
-      <span class="note">presets:</span>
-      <button onclick="bandPreset('{{ s.name }}', 0, 0, 25)">0&ndash;25 (v2 default)</button>
-      <button onclick="bandPreset('{{ s.name }}', 7.5, 7.5, 32.5)">7.5&ndash;32.5 (current)</button>
+      <span class="note">{{ t('console.presets') }}</span>
+      <button onclick="bandPreset('{{ s.name }}', 0, 0, 25)">{{ t('console.preset_v2') }}</button>
+      <button onclick="bandPreset('{{ s.name }}', 7.5, 7.5, 32.5)">{{ t('console.preset_current') }}</button>
     </div>
     <p class="note" id="bandPlan-{{ s.name }}"></p>
     <div id="bandSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
@@ -427,24 +397,26 @@
   </div>
 
   <div style="margin-top:.8rem">
-    <button onclick="send('{{ s.name }}','start')">start</button>
-    <button onclick="send('{{ s.name }}','stop')">stop</button>
-    <button onclick="send('{{ s.name }}','restart')">restart</button>
-    <span class="note">queued now, collected on the station's next pull</span>
+    <button onclick="send('{{ s.name }}','start')">{{ t('console.start') }}</button>
+    <button onclick="send('{{ s.name }}','stop')">{{ t('console.stop') }}</button>
+    <button onclick="send('{{ s.name }}','restart')">{{ t('console.restart') }}</button>
+    <span class="note">{{ t('console.queued_pull') }}</span>
     <div id="say-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
   </div>
 
   {% if s.commands %}
   <div class="scroll" style="margin-top:.8rem"><table>
-    <tr><th>command</th><th>state</th><th>issued</th><th>acked</th><th>result</th></tr>
+    <tr><th>{{ t('console.col.command') }}</th><th>{{ t('console.col.state') }}</th>
+        <th>{{ t('console.col.issued') }}</th><th>{{ t('console.col.acked') }}</th>
+        <th>{{ t('console.col.result') }}</th></tr>
     {% for c in s.commands %}
     <tr>
       <td>{{ c.name }}</td>
       <td>{% if c.state == 'acked' %}
-            {% if c.ok %}<span class="pill ok">acked</span>
-            {% else %}<span class="pill fail">failed</span>{% endif %}
-          {% elif c.state == 'delivered' %}<span class="pill unk">delivered</span>
-          {% else %}<span class="pill">pending</span>{% endif %}</td>
+            {% if c.ok %}<span class="pill ok">{{ t('console.acked') }}</span>
+            {% else %}<span class="pill fail">{{ t('console.failed') }}</span>{% endif %}
+          {% elif c.state == 'delivered' %}<span class="pill unk">{{ t('console.delivered') }}</span>
+          {% else %}<span class="pill">{{ t('console.pending') }}</span>{% endif %}</td>
       <td class="muted">{{ c.issued_at }}</td>
       <td class="muted">{{ c.acked_at or '&mdash;'|safe }}</td>
       {# The agent's reason first. A refusal echoing back the request is not a
@@ -459,11 +431,10 @@
 {% endfor %}
 
 <div class="panel">
-  <h2>control token</h2>
+  <h2>{{ t('console.token') }}</h2>
   <input id="tok" type="password" size="40" placeholder="CONTROL_TOKEN"
          oninput="sessionStorage.setItem('tok', this.value)">
-  <span class="note">Held in this tab only (sessionStorage), never baked into
-  the page. Required for start/stop/restart.</span>
+  <span class="note">{{ t('console.token_note') }}</span>
 </div>
 
 <script>
@@ -525,7 +496,7 @@
     // Flagged rather than worded as a refusal: nothing was sent, so "refused"
     // would blame the server for a field the operator has not filled in yet.
     if (!token) return {ok: false, needsToken: true,
-                        detail: 'Paste the control token below first.'};
+                        detail: T('console.js.paste_token')};
     let r, out;
     try {
       r = await fetch(url, {
@@ -552,37 +523,34 @@
 
   async function send(station, name) {
     const token = tokField.value.trim();
-    if (!token) { say(station, 'Paste the control token below first.', true); return; }
+    if (!token) { say(station, T('console.js.paste_token'), true); return; }
 
     if (name === 'stop' && armed !== station) {
       armed = station;
-      say(station, 'Stop acquisition on ' + station + '? The recorder is '
-        + 'stopped with SIGINT so the USRP is released cleanly, and nothing '
-        + 'is recorded until it is started again. Press stop again to '
-        + 'confirm; the page will not refresh until you do.');
+      say(station, T('console.js.stop_confirm', {station: station}));
       // An armed question that is never answered would hold the refresh for
       // good, and a health console frozen at one moment is worse than a
       // missed keystroke -- it reads as a live station. Expire the arming.
       clearTimeout(armedTimer);
       armedTimer = setTimeout(() => {
         disarm();
-        say(station, 'stop was not confirmed, so nothing was sent.');
+        say(station, T('console.js.stop_cancelled'));
       }, 30000);
       return;
     }
     disarm();
 
-    say(station, name + ' …');
+    say(station, T('console.js.sending', {name: name}));
     const r = await control('/stations/' + encodeURIComponent(station)
                             + '/commands', {name: name, issued_by: 'web'});
-    if (!r.ok) { say(station, 'refused: ' + r.detail, true); return; }
+    if (!r.ok) { say(station, T('console.js.refused', {detail: r.detail}), true); return; }
 
     // Queued is not done. The station pulls on its own cycle, so the row below
     // stays `pending` until an agent collects it -- if none is running, it
     // stays pending for good, and saying so here is the difference between a
     // slow command and a command nobody will ever execute.
-    queued(station, say, name + ' queued as ' + (r.body.id || '').slice(0, 8)
-           + ' — pending until the station\'s agent collects it.');
+    queued(station, say, T('console.js.queued',
+           {name: name, id: (r.body.id || '').slice(0, 8)}));
   }
 
   // Two-step like stop, and for the same reason: this deletes the record of
@@ -592,29 +560,27 @@
   async function forget(station) {
     if (armed !== 'forget-' + station) {
       armed = 'forget-' + station;
-      forgetSay(station, 'Forget ' + station + '? Its health history and '
-        + 'queued commands are deleted -- including when its reports stopped. '
-        + 'Identifications and configuration epochs are kept. Press again to '
-        + 'confirm; the page will not refresh until you do.');
+      forgetSay(station, T('console.js.forget_confirm', {station: station}));
       clearTimeout(armedTimer);
       armedTimer = setTimeout(() => {
         disarm();
-        forgetSay(station, 'forget was not confirmed, so nothing was deleted.');
+        forgetSay(station, T('console.js.forget_cancelled'));
       }, 30000);
       return;
     }
     disarm();
 
-    forgetSay(station, 'forgetting ' + station + ' …');
+    forgetSay(station, T('console.js.forgetting', {station: station}));
     const r = await control('/stations/' + encodeURIComponent(station),
                             null, 'DELETE');
     if (!r.ok) {
-      forgetSay(station, (r.needsToken ? '' : 'refused: ') + r.detail, true);
+      forgetSay(station, r.needsToken ? r.detail
+                : T('console.js.refused', {detail: r.detail}), true);
       return;
     }
     // No carried message: the panel it would have been written in is the
     // thing that just went away, and its absence is the confirmation.
-    forgetSay(station, r.body.note || 'forgotten');
+    forgetSay(station, r.body.note || T('console.js.forgotten'));
     setTimeout(() => location.reload(), 900);
   }
 
@@ -642,7 +608,7 @@
     clearTimeout(planningTimer);
     planningTimer = setTimeout(() => {
       planning = null;
-      planSay(station, 'nothing was applied, so the page is live again.');
+      planSay(station, T('console.js.live_again'));
       location.reload();
     }, 120000);
     preview(station);
@@ -651,15 +617,11 @@
   function preview(station) {
     const mode = modeOf(station);
     if (!mode) {
-      write('plan-' + station, 'This server has no record of the mode this '
-        + 'station is in, so nothing is pre-selected. Choose one to see what '
-        + 'would be sent.');
+      write('plan-' + station, T('console.js.no_mode'));
       return;
     }
     if (mode !== 'scheduled') {
-      write('plan-' + station, 'Search mode needs no schedule: it records '
-        + 'whatever sweeps past and infers the timing afterwards. The ticks '
-        + 'are ignored until the mode is scheduled.');
+      write('plan-' + station, T('console.js.search_no_schedule'));
       return;
     }
     const groups = ticked(station)
@@ -669,25 +631,20 @@
     // arrangement: the launcher must start calc_ionograms.py with that many
     // ranks, and the agent refuses the command when it does not match.
     write('plan-' + station, groups.length
-      ? groups.length + ' transmitter(s): ' + groups.map(t => t.code).join(', ')
-        + ' — ' + groups.length + ' rank group(s), so calc_ionograms.py must '
-        + 'run with -np ' + groups.length + '.'
-      : 'Tick at least one transmitter. Scheduled mode with an empty schedule '
-        + 'records nothing while every process reports healthy.', !groups.length);
+      ? T('console.js.plan', {n: groups.length,
+                              codes: groups.map(g => g.code).join(', ')})
+      : T('console.js.tick_one'), !groups.length);
   }
 
   async function applyPlan(station) {
     const mode = modeOf(station);
     const codes = ticked(station);
     if (!mode) {
-      planSay(station, 'Choose a mode first. This server has no record of the '
-        + 'one the station is in, and applying a default would configure it '
-        + 'from an assumption rather than from what you know.', true);
+      planSay(station, T('console.js.choose_mode'), true);
       return;
     }
     if (mode === 'scheduled' && !codes.length) {
-      planSay(station, 'Tick at least one transmitter first — the server '
-        + 'refuses scheduled mode without a schedule, and it is right to.', true);
+      planSay(station, T('console.js.tick_one_first'), true);
       return;
     }
     planSay(station, 'sending …');
@@ -709,12 +666,11 @@
     planning = null;
     clearTimeout(planningTimer);
     queued(station, planSay, mode === 'scheduled'
-      ? 'schedule queued as ' + (r.body.id || '').slice(0, 8) + ' — '
-        + r.body.ranks + ' rank(s) for ' + (r.body.transmitters || []).join(', ')
-        + '. It reaches the station on its next pull and takes effect when '
-        + 'acquisition restarts, so press restart after it is collected.'
-      : 'mode ' + mode + ' queued as ' + (r.body.id || '').slice(0, 8)
-        + ' — applied on the station\'s next pull, effective on restart.');
+      ? T('console.js.schedule_queued', {
+          id: (r.body.id || '').slice(0, 8), ranks: r.body.ranks,
+          transmitters: (r.body.transmitters || []).join(', ')})
+      : T('console.js.mode_queued', {
+          mode: mode, id: (r.body.id || '').slice(0, 8)}));
   }
 
   // Both fetches end the same way: show what was queued, keep it across the
@@ -779,8 +735,7 @@
     const cfg = BAND[station] || {};
     const start = numOf('bandStart-' + station);
     if (start === null) {
-      write('bandPlan-' + station, 'Enter a band start to see what would be '
-        + 'sent.');
+      write('bandPlan-' + station, T('console.js.enter_band'));
       return;
     }
     // The sample rate is fixed in the binary, so the start alone fixes the
@@ -789,41 +744,38 @@
     const rate = (c.stop_mhz != null && c.start_mhz != null)
         ? c.stop_mhz - c.start_mhz : null;
     if (rate === null) {
-      write('bandPlan-' + station, 'This station has not reported its sample '
-        + 'rate, so the passband cannot be shown here. The agent still checks '
-        + 'it before applying anything.');
+      write('bandPlan-' + station, T('console.js.no_sample_rate'));
       return;
     }
     const stop = start + rate;
     const lo = numOf('bandLo-' + station) ?? start;
     const hi = numOf('bandHi-' + station) ?? stop;
 
-    const parts = ['LO ' + (start + rate / 2).toFixed(3) + ' MHz, digitising '
-      + start.toFixed(3) + '–' + stop.toFixed(3) + ' MHz'];
+    const parts = [T('console.js.band_plan', {
+      lo: (start + rate / 2).toFixed(3),
+      start: start.toFixed(3), stop: stop.toFixed(3)})];
     let bad = false;
 
     if (hi <= lo) {
-      parts.push('the analysis window is inverted');
+      parts.push(T('console.js.window_inverted'));
       bad = true;
     } else if (lo < start - 1e-9 || hi > stop + 1e-9) {
-      parts.push('✗ the analysis window reaches outside the digitised band — '
-        + 'that part is FFTs over spectrum the radio never sampled, and the '
-        + 'server will refuse it');
+      parts.push(T('console.js.window_outside'));
       bad = true;
     } else {
       for (const tx of scheduledOf(station)) {
         const sweep = (hi - lo) * 1e6 / tx.rate;
         if (sweep >= tx.rep) {
-          parts.push('✗ ' + tx.code + ': a ' + sweep.toFixed(0) + ' s sweep '
-            + 'does not fit its ' + tx.rep + ' s cycle');
+          parts.push(T('console.js.sweep_too_long',
+            {code: tx.code, sweep: sweep.toFixed(0), rep: tx.rep}));
           bad = true;
         } else if (sweep > BUDGET_S) {
-          parts.push('⚠ ' + tx.code + ': ' + sweep.toFixed(0) + ' s sweep, '
-            + 'past the ' + BUDGET_S.toFixed(0) + ' s ringbuffer budget — '
-            + 'soundings will be lost, as they are today');
+          parts.push(T('console.js.sweep_over_budget',
+            {code: tx.code, sweep: sweep.toFixed(0),
+             budget: BUDGET_S.toFixed(0)}));
         } else {
-          parts.push(tx.code + ': ' + sweep.toFixed(0) + ' s sweep of its '
-            + tx.rep + ' s cycle');
+          parts.push(T('console.js.sweep_ok',
+            {code: tx.code, sweep: sweep.toFixed(0), rep: tx.rep}));
         }
       }
     }
@@ -833,7 +785,7 @@
   async function applyBand(station) {
     const start = numOf('bandStart-' + station);
     if (start === null) {
-      bandSay(station, 'Enter a band start first.', true);
+      bandSay(station, T('console.js.enter_band_first'), true);
       return;
     }
     const changes = {band_start_mhz: start};
@@ -842,22 +794,20 @@
     if (lo !== null) changes.analysis_min_mhz = lo;
     if (hi !== null) changes.analysis_max_mhz = hi;
 
-    bandSay(station, 'sending …');
+    bandSay(station, T('console.js.band_sending'));
     const r = await control('/stations/' + encodeURIComponent(station)
                             + '/commands',
                             {name: 'set_config', issued_by: 'web',
                              params: {changes: {set_band: changes}}});
     if (!r.ok) {
-      bandSay(station, (r.needsToken ? '' : 'refused: ') + r.detail, true);
+      bandSay(station, r.needsToken ? r.detail
+              : T('console.js.refused', {detail: r.detail}), true);
       return;
     }
     planning = null;
     clearTimeout(planningTimer);
-    queued(station, bandSay, 'band queued as ' + (r.body.id || '').slice(0, 8)
-      + ' — the station applies it on its next pull and it takes effect when '
-      + 'acquisition restarts, so press restart after it is collected. The '
-      + 'observed row above is how you confirm it landed: it should move to '
-      + 'the new window within one sounding cycle.');
+    queued(station, bandSay, T('console.js.band_queued',
+      {id: (r.body.id || '').slice(0, 8)}));
   }
 
   for (const station of Object.keys(BAND)) bandPreview(station);

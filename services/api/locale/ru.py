@@ -18,110 +18,111 @@ from __future__ import annotations
 MESSAGES: dict[str, str] = {
 
     # -- chrome ---------------------------------------------------------
-    "app.title": "ионограммы",
-    "chrome.language": "язык",
+    "app.title": "Ионограммы",
+    "chrome.language": "Язык",
 
-    "nav.console": "консоль",
-    "nav.series": "ряды",
-    "nav.soundings": "зондирования",
-    "nav.sources": "источники",
-    "nav.archives": "архивы",
-    "nav.forecast": "прогноз",
-    "nav.api": "api",
+    "nav.console": "Консоль",
+    "nav.series": "Ряды",
+    "nav.soundings": "Зондирования",
+    "nav.sources": "Источники",
+    "nav.archives": "Архивы",
+    "nav.forecast": "Прогноз",
+    "nav.api": "API",
 
     # -- units ------------------------------------------------------------
     "unit.s": "с",
     "unit.m": "м",
     "unit.h": "ч",
+    "unit.min": "мин",
     "unit.d": "д",
     "unit.km": "км",
     "unit.mhz": "МГц",
 
     # -- shared -----------------------------------------------------------
-    "common.from": "с",
-    "common.to": "по",
-    "common.apply": "применить",
-    "common.clear": "сбросить",
-    "common.open": "открыть",
-    "common.yes": "да",
-    "common.previous": "назад",
-    "common.next": "вперёд",
+    "common.from": "С",
+    "common.to": "По",
+    "common.apply": "Применить",
+    "common.clear": "Сбросить",
+    "common.open": "Открыть",
+    "common.yes": "Да",
+    "common.previous": "Назад",
+    "common.next": "Вперёд",
     "common.col.circuit": "tx → rx",
     "common.pager": "{first}–{last} из {total}",
     "common.pager.empty": "0 из {total}",
 
     # -- soundings --------------------------------------------------------
-    "soundings.title": "зондирования",
-    "soundings.hint": "найдено: {n}",
+    "soundings.title": "Зондирования",
+    "soundings.hint": "Найдено: {n}",
     "soundings.filter.tx": "tx",
-    "soundings.filter.tx.any": "любой",
-    "soundings.filter.format": "формат",
-    "soundings.filter.format.any": "любой",
-    "soundings.filter.picks": "снятые значения",
-    "soundings.filter.picks.any": "любые",
-    "soundings.filter.picks.some": "хотя бы одно",
-    "soundings.filter.picks.none": "нет",
-    "soundings.col.time": "время (UTC)",
-    "soundings.col.format": "формат",
-    "soundings.col.sweep": "полоса, МГц",
-    "soundings.col.gate": "строб, км",
-    "soundings.col.complete": "полнота",
-    "soundings.col.picks": "снято",
+    "soundings.filter.tx.any": "Любой",
+    "soundings.filter.format": "Формат",
+    "soundings.filter.format.any": "Любой",
+    "soundings.filter.picks": "Снятые значения",
+    "soundings.filter.picks.any": "Любые",
+    "soundings.filter.picks.some": "Хотя бы одно",
+    "soundings.filter.picks.none": "Нет",
+    "soundings.col.time": "Время (UTC)",
+    "soundings.col.format": "Формат",
+    "soundings.col.sweep": "Полоса, МГц",
+    "soundings.col.gate": "Строб, км",
+    "soundings.col.complete": "Полнота",
+    "soundings.col.picks": "Снято",
     "soundings.empty": "По этим фильтрам ничего не найдено.",
     "soundings.empty.clear": "Сбросить их.",
 
     # -- one sounding -----------------------------------------------------
-    "sounding.notfound": "не найдено",
-    "sounding.all": "все зондирования",
-    "sounding.earliest": "самое раннее зондирование",
-    "sounding.latest": "самое позднее зондирование",
+    "sounding.notfound": "Не найдено",
+    "sounding.all": "Все зондирования",
+    "sounding.earliest": "Самое раннее зондирование",
+    "sounding.latest": "Самое позднее зондирование",
     "sounding.arrows":
         "&larr; и &rarr; перелистывают зондирования по времени.",
-    "sounding.col.path": "трасса",
-    "sounding.col.sweep": "полоса",
-    "sounding.col.gate": "строб",
-    "sounding.col.file": "файл",
-    "sounding.percent_complete": "пройдено {pct}%",
+    "sounding.col.path": "Трасса",
+    "sounding.col.sweep": "Полоса",
+    "sounding.col.gate": "Строб",
+    "sounding.col.file": "Файл",
+    "sounding.percent_complete": "Пройдено {pct}%",
 
-    "sounding.ionogram": "ионограмма",
-    "sounding.gate_label": "строб дальности:",
-    "sounding.gate.auto": "авто",
-    "sounding.gate.full": "полный",
-    "sounding.plot_label": "график:",
-    "sounding.plot.interactive": "интерактивный",
-    "sounding.plot.rendered": "готовый",
-    "sounding.scaling_label": "обработка:",
-    "sounding.method_title": "чей след нарисован",
-    "sounding.sao": "скачать SAO.XML",
-    "sounding.sao_title": "все три записи, SAO.XML 5.0",
+    "sounding.ionogram": "Ионограмма",
+    "sounding.gate_label": "Строб дальности:",
+    "sounding.gate.auto": "Авто",
+    "sounding.gate.full": "Полный",
+    "sounding.plot_label": "График:",
+    "sounding.plot.interactive": "Интерактивный",
+    "sounding.plot.rendered": "Готовый",
+    "sounding.scaling_label": "Обработка:",
+    "sounding.method_title": "Чей след нарисован",
+    "sounding.sao": "Скачать SAO.XML",
+    "sounding.sao_title": "Все три записи, SAO.XML 5.0",
     "sounding.auto_note":
-        "<b>авто</b> подгоняет окно под то место, где находится эхо. Продукт "
+        "<b>Авто</b> подгоняет окно под то место, где находится эхо. Продукт "
         "v2 в режиме поиска хранит &plusmn;3998 км, а след занимает несколько "
         "сотен, поэтому на полном размахе он выглядит волоском в пустом поле.",
     "sounding.rendered_note":
         "Рисуется по запросу, а не заранее &mdash; 288 изображений в сутки "
         "заранее это 105 тыс. файлов в год, которые в основном никто не "
         "открывает.",
-    "sounding.no_scaling": "нет обработки",
+    "sounding.no_scaling": "Нет обработки",
     "sounding.scaling_failed":
         "Сохранённые извлечения ниже не затронуты &mdash; они записаны при "
         "загрузке. Попробуйте <a href=\"{url}\">готовый</a> график, ему "
         "запись SAO не нужна.",
-    "sounding.show_points": "снятые точки",
-    "sounding.show_raster": "растр",
+    "sounding.show_points": "Снятые точки",
+    "sounding.show_raster": "Растр",
     "sounding.show_marks": "MUF / LOF",
     "sounding.legend_hint":
-        "&mdash; щелчок по строке легенды скрывает след, двойной щелчок "
+        "&mdash; Щелчок по строке легенды скрывает след, двойной щелчок "
         "оставляет только его.",
-    "sounding.relative_pill": "относительная дальность",
+    "sounding.relative_pill": "Относительная дальность",
     "sounding.relative_note":
         "Нулю дальности этой записи доверять нельзя: разности вдоль следа "
         "верны, начало отсчёта &mdash; нет. Не читайте ось как групповую "
         "дальность.",
     "sounding.traces_points":
         "{method} &mdash; {traces} {trace_unit}, {points} {point_unit}",
-    "sounding.declined": "этот метод отказался &mdash; значение не снято",
-    "sounding.letter_title": "квалифицирующая буква UAG-23A: {letter}",
+    "sounding.declined": "Этот метод отказался &mdash; значение не снято",
+    "sounding.letter_title": "Квалифицирующая буква UAG-23A: {letter}",
     "sounding.model_note":
         "Модельные строки помечены моделью, которая их утверждает, и никогда "
         "не используются для правки измерения. IRI и измеренный MUF временами "
@@ -129,19 +130,19 @@ MESSAGES: dict[str, str] = {
         "кто из них прав.",
     "sounding.scaled_in": "Обработано за {cost} с.",
 
-    "sounding.extractions": "извлечения",
-    "sounding.col.method": "метод",
+    "sounding.extractions": "Извлечения",
+    "sounding.col.method": "Метод",
     "sounding.col.muf": "MUF",
     "sounding.col.lof": "LOF",
-    "sounding.col.range": "дальность, км",
+    "sounding.col.range": "Дальность, км",
     "sounding.col.snr": "SNR, дБ",
-    "sounding.col.run": "серия",
-    "sounding.col.hops": "скачки",
-    "sounding.col.scatter": "разброс",
-    "sounding.col.flags": "признаки",
-    "sounding.no_pick": "не снято",
+    "sounding.col.run": "Серия",
+    "sounding.col.hops": "Скачки",
+    "sounding.col.scatter": "Разброс",
+    "sounding.col.flags": "Признаки",
+    "sounding.no_pick": "Не снято",
     "sounding.limited_title":
-        "значение снято на верхней границе полосы: MUF является нижней оценкой",
+        "Значение снято на верхней границе полосы: MUF является нижней оценкой",
     "sounding.loflim_title": "LOF ушёл ниже нижней границы полосы",
     "sounding.stored_note":
         "Записано при загрузке. Признаки качества идут вместе со значением, "
@@ -152,25 +153,25 @@ MESSAGES: dict[str, str] = {
 
     "sounding.axis.freq": "Частота (МГц)",
     "sounding.axis.range": "Действующая дальность (км)",
-    "sounding.hop": "скачок",
+    "sounding.hop": "Скачок",
 
     # -- forecast ---------------------------------------------------------
-    "forecast.title": "прогноз",
+    "forecast.title": "Прогноз",
     "forecast.hint":
-        "зарегистрировано {models} {model_unit}, работает {n} на {circuits} "
+        "Зарегистрировано {models} {model_unit}, работает {n} на {circuits} "
         "{circuit_unit}",
-    "forecast.live": "в работе",
-    "forecast.col.circuit": "трасса",
-    "forecast.col.param": "параметр",
-    "forecast.col.model": "модель",
-    "forecast.col.last_issue": "последний выпуск",
-    "forecast.col.state": "состояние",
-    "forecast.no_model": "нет модели",
-    "forecast.stale": "устарело",
-    "forecast.ok": "норма",
+    "forecast.live": "В работе",
+    "forecast.col.circuit": "Трасса",
+    "forecast.col.param": "Параметр",
+    "forecast.col.model": "Модель",
+    "forecast.col.last_issue": "Последний выпуск",
+    "forecast.col.state": "Состояние",
+    "forecast.no_model": "Нет модели",
+    "forecast.stale": "Устарело",
+    "forecast.ok": "Норма",
     "forecast.no_circuits":
         "Пока ни на одной трассе нет достаточно данных для прогноза.",
-    "forecast.overtaken": "обойдена",
+    "forecast.overtaken": "Обойдена",
     "forecast.drift":
         "{circuit} / {param}: <b>{model}</b> даёт {mae} МГц на {lead}, тогда "
         "как <b>{baseline}</b> даёт {baseline_mae}, по {n} {pair_unit}. "
@@ -182,17 +183,17 @@ MESSAGES: dict[str, str] = {
         "её ниже. До тех пор <code>/forecast</code> отдаёт пустоту, а не "
         "что-то непроверенное.",
 
-    "forecast.models": "модели",
-    "forecast.col.origin": "происхождение",
-    "forecast.col.inputs": "входы",
+    "forecast.models": "Модели",
+    "forecast.col.origin": "Происхождение",
+    "forecast.col.inputs": "Входы",
     "forecast.golden.recorded": "эталон записан",
     "forecast.golden.absent": "эталона нет",
-    "forecast.unbound": "без трассы",
-    "forecast.of": "по",
+    "forecast.unbound": "Без трассы",
+    "forecast.of": "По",
     "forecast.state.active": "В РАБОТЕ",
-    "forecast.state.comparison": "для сравнения",
-    "forecast.activate": "назначить",
-    "forecast.retire": "снять",
+    "forecast.state.comparison": "Для сравнения",
+    "forecast.activate": "Назначить",
+    "forecast.retire": "Снять",
     "forecast.activate.modelled_title":
         "Обучена по модельной цели, поэтому её можно сравнивать сколько "
         "угодно, но нельзя назначить. Отказывает схема базы, а не эта "
@@ -206,13 +207,13 @@ MESSAGES: dict[str, str] = {
         "регистрирует модель; маршрута по HTTP для этого намеренно нет, потому "
         "что регистрация модели означает запуск кода из файла на общем томе.",
 
-    "forecast.leaderboard": "рейтинг",
+    "forecast.leaderboard": "Рейтинг",
     "forecast.leaderboard.sub": "{circuit} &middot; {param} &middot; MAE (МГц)",
-    "forecast.circuit_label": "трасса:",
-    "forecast.col.subject": "предмет",
-    "forecast.col.pairs": "пар",
-    "forecast.baselines_divider": "&mdash; опорные методы &mdash;",
-    "forecast.baseline": "опорный",
+    "forecast.circuit_label": "Трасса:",
+    "forecast.col.subject": "Предмет",
+    "forecast.col.pairs": "Пар",
+    "forecast.baselines_divider": "&mdash; Опорные методы &mdash;",
+    "forecast.baseline": "Опорный",
     "forecast.censored_note":
         "Часы с цензурой &mdash; значение снято на верхней границе полосы или "
         "на её дне &mdash; оцениваются односторонне и считаются отдельно, "
@@ -224,22 +225,20 @@ MESSAGES: dict[str, str] = {
         "прохода <code>infer</code> &mdash; оценка идёт следом за ним. До тех "
         "пор таблица выше говорит, что модель <i>из себя представляет</i>, но "
         "не насколько она хороша.",
-    "forecast.col.what": "что это",
+    "forecast.col.what": "Что это",
     "forecast.baseline.persistence":
-        "значение, снятое одну заблаговременность назад; на горизонте 24 ч это "
+        "Значение, снятое одну заблаговременность назад; на горизонте 24 ч это "
         "вчера в ту же минуту UTC, что даром улавливает суточный ход",
     "forecast.baseline.recurrence":
-        "один оборот Солнца назад; стандартный оперативный опорный метод для КВ",
+        "Один оборот Солнца назад; стандартный оперативный опорный метод для КВ",
     "forecast.baseline.iri":
-        "сохранённое опорное значение IRI в контрольной точке трассы &mdash; "
+        "Сохранённое опорное значение IRI в контрольной точке трассы &mdash; "
         "уже построено и проверено. Только MUF: IRI ничего не говорит о "
         "поглощении, которое задаёт LOF",
     "forecast.baseline.harmonic":
-        "суточные гармоники плюс зенитный угол Солнца, подогнанные строго до "
+        "Суточные гармоники плюс зенитный угол Солнца, подогнанные строго до "
         "оцениваемого окна, чтобы метод не стал оракулом в собственном рейтинге",
 
-    "forecast.js.no_token":
-        "Нет управляющего токена. Сначала вставьте его на странице консоли.",
     "forecast.js.activate_confirm":
         "Назначить {name} прогнозом {param} для трассы {circuit}?\n\n"
         "То, что работает на этой трассе сейчас, будет снято тем же действием.",
@@ -248,17 +247,17 @@ MESSAGES: dict[str, str] = {
         "Её строки и её прогнозы сохраняются, поэтому действие обратимо: "
         "достаточно назначить её снова.",
     # -- archives ---------------------------------------------------------
-    "archives.title": "архивы",
-    "archives.hint": "зарегистрировано {n} {unit}",
-    "archives.mounted": "подключённый архив",
-    "archives.col.host": "папка на хосте",
-    "archives.col.seen_as": "видна здесь как",
-    "archives.col.state": "состояние",
-    "archives.not_reported": "не сообщено",
-    "archives.primary": "основная",
-    "archives.not_readable": "не читается",
-    "archives.mounted_empty": "подключена, но пуста",
-    "archives.ok": "норма",
+    "archives.title": "Архивы",
+    "archives.hint": "Зарегистрировано {n} {unit}",
+    "archives.mounted": "Подключённый архив",
+    "archives.col.host": "Папка на хосте",
+    "archives.col.seen_as": "Видна здесь как",
+    "archives.col.state": "Состояние",
+    "archives.not_reported": "Не сообщено",
+    "archives.primary": "Основная",
+    "archives.not_readable": "Не читается",
+    "archives.mounted_empty": "Подключена, но пуста",
+    "archives.ok": "Норма",
     "archives.in_container":
         "Работа идёт в контейнере, поэтому &laquo;видна здесь как&raquo; "
         "&mdash; это точка монтирования, а папка на хосте &mdash; то, что "
@@ -308,26 +307,26 @@ MESSAGES: dict[str, str] = {
         "Автоматическое пересканирование выключено "
         "(<code>ARCHIVE_SCAN_INTERVAL_S=0</code>), поэтому новые файлы "
         "появятся, только когда кто-нибудь нажмёт сканирование.",
-    "archives.col.name": "имя",
-    "archives.col.path": "путь",
-    "archives.col.format": "формат",
-    "archives.col.methods": "методы",
-    "archives.col.soundings": "зондирований",
-    "archives.col.last_scan": "последнее сканирование",
-    "archives.col.result": "результат",
-    "archives.disabled": "отключена",
-    "archives.any": "любой",
-    "archives.set": "задать",
-    "archives.scan_now": "сканировать",
-    "archives.disable": "отключить",
-    "archives.enable": "включить",
-    "archives.remove": "удалить",
+    "archives.col.name": "Имя",
+    "archives.col.path": "Путь",
+    "archives.col.format": "Формат",
+    "archives.col.methods": "Методы",
+    "archives.col.soundings": "Зондирований",
+    "archives.col.last_scan": "Последнее сканирование",
+    "archives.col.result": "Результат",
+    "archives.disabled": "Отключена",
+    "archives.any": "Любой",
+    "archives.set": "Задать",
+    "archives.scan_now": "Сканировать",
+    "archives.disable": "Отключить",
+    "archives.enable": "Включить",
+    "archives.remove": "Удалить",
     "archives.nothing_registered":
         "Пока ничего не зарегистрировано. Пока папки здесь нет, этот сервер "
         "индексирует только то, по чему кто-то вручную прогнал "
         "<code>services.api.ingest</code>.",
 
-    "archives.add": "добавить папку",
+    "archives.add": "Добавить папку",
     "archives.add_note":
         "Путь задаётся относительно <code>{root}</code>. Индексировать можно "
         "только папки внутри этого корня &mdash; в контейнере это "
@@ -339,27 +338,27 @@ MESSAGES: dict[str, str] = {
         "Регистрация одной покрывает все дни, которые в ней есть, и все дни, "
         "которые приёмник добавит позже &mdash; сканирование рекурсивно, "
         "поэтому новая дневная папка не требует здесь никаких действий.",
-    "archives.col.folder": "папка",
-    "archives.col.root": "корень",
-    "archives.col.holds": "содержит",
-    "archives.mount_itself": "(само монтирование)",
+    "archives.col.folder": "Папка",
+    "archives.col.root": "Корень",
+    "archives.col.holds": "Содержит",
+    "archives.mount_itself": "(Само монтирование)",
     "archives.day_folders": "{n} {unit}",
     "archives.inside":
-        "внутри <code>{path}</code> &mdash; регистрируйте одно или другое, "
+        "Внутри <code>{path}</code> &mdash; регистрируйте одно или другое, "
         "но не оба",
-    "archives.stored_absolute": "хранится абсолютным",
-    "archives.indexed": "проиндексировано: {n}",
+    "archives.stored_absolute": "Хранится абсолютным",
+    "archives.indexed": "Проиндексировано: {n}",
     "archives.holds": "{n} {unit}",
-    "archives.unreadable": "ничего, что этот сервер умеет читать",
-    "archives.registered": "зарегистрирована",
-    "archives.use": "выбрать",
-    "archives.field.path": "путь",
-    "archives.field.name": "имя",
-    "archives.name_placeholder": "(по умолчанию совпадает с путём)",
-    "archives.field.format": "формат",
-    "archives.add_button": "добавить",
-    "archives.methods": "методы",
-    "archives.all": "все",
+    "archives.unreadable": "Ничего, что этот сервер умеет читать",
+    "archives.registered": "Зарегистрирована",
+    "archives.use": "Выбрать",
+    "archives.field.path": "Путь",
+    "archives.field.name": "Имя",
+    "archives.name_placeholder": "(По умолчанию совпадает с путём)",
+    "archives.field.format": "Формат",
+    "archives.add_button": "Добавить",
+    "archives.methods": "Методы",
+    "archives.all": "Все",
     "archives.methods_note":
         "Добавленный позже метод при следующем сканировании охватит уже "
         "имеющиеся зондирования папки &mdash; всё, что уже вычислено, "
@@ -371,29 +370,28 @@ MESSAGES: dict[str, str] = {
         "<i>каждого</i> запрошенного метода, поэтому выбор метода, который "
         "никогда не даёт строки, заставлял бы пересканировать всю папку на "
         "каждом проходе, вечно.",
-    "archives.looking": "смотрим, что смонтировано &hellip;",
 
     # -- series -----------------------------------------------------------
-    "series.title": "ряды",
+    "series.title": "Ряды",
     "series.hint": "{n} {unit}",
     "series.h2": "Параметры во времени",
-    "series.nothing_ingested": "пока ничего не загружено",
-    "series.circuit": "трасса",
-    "series.all_overlaid": "все (наложением)",
-    "series.no_picks": "для этого метода ничего не снято",
-    "series.day": "день",
-    "series.all": "все",
-    "series.reference": "опорная модель",
-    "series.off": "выкл",
+    "series.nothing_ingested": "Пока ничего не загружено",
+    "series.circuit": "Трасса",
+    "series.all_overlaid": "Все (наложением)",
+    "series.no_picks": "Для этого метода ничего не снято",
+    "series.day": "День",
+    "series.all": "Все",
+    "series.reference": "Опорная модель",
+    "series.off": "Выкл",
     "series.off_note":
-        "выкл пропускает модель, а вместе с ней и сеть, которая ей может "
+        "Выкл пропускает модель, а вместе с ней и сеть, которая ей может "
         "понадобиться.",
     "series.bare_date":
         "Одна дата без времени охватывает весь этот день с любого конца.",
-    "series.family.forecast": "прогноз",
-    "series.family.context": "верх полосы / hmF2",
+    "series.family.forecast": "Прогноз",
+    "series.family.context": "Верх полосы / hmF2",
     "series.drag_hint":
-        "&mdash; протяните, чтобы приблизить, двойной щелчок сбрасывает, "
+        "&mdash; Протяните, чтобы приблизить, двойной щелчок сбрасывает, "
         "щелчок по точке открывает её ионограмму.",
     "series.hue_note":
         "<b>Цвет &mdash; это параметр, форма &mdash; это источник.</b> Маркеры "
@@ -431,24 +429,24 @@ MESSAGES: dict[str, str] = {
         "поглощением в области D, то есть идёт за Солнцем, а не за слоем F2: "
         "MUF, который движется, пока LOF под ним стоит на месте, стоит "
         "посмотреть ещё раз.",
-    "series.summary": "сводка",
+    "series.summary": "Сводка",
     "series.col.n": "n",
-    "series.col.muf_median": "медиана MUF",
-    "series.col.at_ceiling": "у потолка",
-    "series.col.lof_median": "медиана LOF",
-    "series.col.at_floor": "у дна",
-    "series.col.fof2_median": "медиана foF2",
-    "series.col.vs_iri": "против IRI: n",
-    "series.col.bias": "смещение",
+    "series.col.muf_median": "Медиана MUF",
+    "series.col.at_ceiling": "У потолка",
+    "series.col.lof_median": "Медиана LOF",
+    "series.col.at_floor": "У дна",
+    "series.col.fof2_median": "Медиана foF2",
+    "series.col.vs_iri": "Против IRI: n",
+    "series.col.bias": "Смещение",
     "series.col.rms": "СКО",
     "series.col.r": "r",
     "series.path_km": "{km} км",
     "series.hops": ", скачков: {n}",
-    "series.limited_title": "снято на верхнем краю полосы: нижняя оценка",
+    "series.limited_title": "Снято на верхнем краю полосы: нижняя оценка",
     "series.loflim_title": "LOF ушёл ниже дна полосы: верхняя оценка",
-    "series.excluded_title": "нижние оценки, исключены",
-    "series.reference_off": "модель выключена",
-    "series.no_pair": "не с чем сравнивать",
+    "series.excluded_title": "Нижние оценки, исключены",
+    "series.reference_off": "Модель выключена",
+    "series.no_pair": "Не с чем сравнивать",
     "series.bias_note":
         "<b>Смещение &mdash; это медиана разности измеренного и IRI по тем "
         "парам, которые являются измерениями.</b> Нижние оценки, посчитанные "
@@ -466,6 +464,551 @@ MESSAGES: dict[str, str] = {
         "постоянное смещение &mdash; это вопрос масштаба, суточное &mdash; "
         "нет.",
 
+    # -- sources ----------------------------------------------------------
+    "sources.title": "Источники",
+    "sources.hint": "{n} {unit}",
+    "sources.receiver": "Приёмник",
+    "sources.no_station":
+        "Ни одна станция ещё не отчиталась, поэтому опознавать передатчик "
+        "попросту не <i>для кого</i>.",
+    "sources.station": "Станция",
+    "sources.per_receiver": "Всё на этой странице относится к одному приёмнику.",
+    "sources.slot_note":
+        "Секунда слота &mdash; это секунда <b>приёма</b>: секунда передачи "
+        "плюс время распространения в одну сторону плюс собственное смещение "
+        "эпохи этого приёмника. У одного и того же передатчика, слышимого "
+        "двумя приёмниками, два разных значения <code>chirpt</code>, поэтому "
+        "сделанное здесь опознание принадлежит этой трассе, а не передатчику "
+        "самому по себе. (Потолок полосы привязан так же и по той же причине.)",
+
+    "sources.heard": "Слышимые передатчики",
+    "sources.census_note":
+        "По файлам <b>{kind}</b> за последние {days} {day_unit}, "
+        "сгруппировано по скорости ЛЧМ и фазе прихода на цикле {cycle} с. "
+        "Ради этого и существует режим <b>поиска</b>: он находит, кто "
+        "передаёт, и каждая строка &mdash; кандидат на то, чтобы его опознали "
+        "и затем зондировали намеренно.",
+    "sources.building_pill": "Идёт первая перепись",
+    "sources.building":
+        "<b>Ни одна перепись ещё не закончилась, поэтому это не значит "
+        "&laquo;передатчиков не слышно&raquo;.</b> Перечисление одного дня "
+        "этого архива стоит минут ещё до того, как открыт первый файл, поэтому "
+        "перепись идёт в фоне и страница её никогда не ждёт. Перезагрузите "
+        "через несколько минут. Если она так и не завершится, смотреть надо на "
+        "монтирование архива, а не на эту страницу.",
+    "sources.as_of": "По состоянию на {minutes} мин назад",
+    "sources.refreshing": "Более свежая уже читается.",
+    "sources.next_at": "Более свежая начнётся, когда эта перевалит за {minutes} мин.",
+    "sources.stale_note":
+        "Архив слишком медленный, чтобы переписывать его, пока вы ждёте, "
+        "поэтому страница показывает последнюю завершённую перепись и её "
+        "возраст, а не блокируется на новой.",
+    "sources.cached": "Из кэша",
+    "sources.read": "Прочитано {files} {file_unit} из {where} за {seconds} с",
+    "sources.archive_root": "Корня архива",
+    "sources.opened": "&mdash; открыто {opened}, уже известно {cached}",
+    "sources.nothing_reopened": "&mdash; ничего не открывалось заново",
+    "sources.unreadable":
+        "<b>Не удалось прочитать {n} {file_unit}</b>, они пропущены; "
+        "пойманный на записи детектор &mdash; это норма, устойчивое число "
+        "&mdash; нет.",
+    "sources.one_day": "1 день",
+    "sources.capped_pill": "С ограничением",
+    "sources.capped":
+        "<b>Это самые свежие {files} из {found} {file_unit}, а не все.</b> "
+        "Перепись останавливается на {budget}, потому что открыть остальные на "
+        "этом архиве заняло бы часы, а страница, которая никогда не отвечает, "
+        "хуже той, что отвечает про недавний его конец. Урезается время, а не "
+        "качество: тот же продукт детектирования, начиная с самых свежих дней, "
+        "поэтому сегодняшний день цел, а файлы потерял самый старый. "
+        "Излучатель, передававший только в урезанной части, будет отсутствовать "
+        "&mdash; запросите <a href=\"{url}\">1 день</a>, чтобы потратить весь "
+        "бюджет на сегодня, и почистите архив, если ограничение не уходит.",
+    "sources.slow":
+        "<b>Это медленно, и дело в архиве, а не в арифметике.</b> Перепись "
+        "открывает по одному файлу HDF5 на детектирование, и каждое открытие "
+        "стоит round trip на сетевом архиве. Каждый прочитанный здесь файл "
+        "запоминается &mdash; эти продукты записываются один раз и не меняются "
+        "&mdash; поэтому следующая загрузка должна открыть только то, что "
+        "появилось с тех пор. Если медленно и дальше, значит процесс "
+        "перезапускали или архив переписывают у него под руками.",
+
+    "sources.col.rate": "Скорость",
+    "sources.col.heard_at": "Слышен на (с от начала цикла)",
+    "sources.col.n": "n",
+    "sources.col.per_slot": "/слот",
+    "sources.col.per_slot_title":
+        "Детектирований, делённых на число разных слотов: как часто он "
+        "возвращался",
+    "sources.col.phase": "Фаза, мс",
+    "sources.col.snr": "SNR",
+    "sources.col.span": "Охват, ч",
+    "sources.col.identified_as": "Опознан как",
+    "sources.identify": "Опознать",
+    "sources.khz_s": "{rate} кГц/с",
+    "sources.seconds_note":
+        "<b>Секунды даны как принято, а не как передано.</b> Слот &mdash; это "
+        "секунда передачи плюс время распространения в одну сторону плюс "
+        "смещение эпохи этого приёмника. Для расписания нужно именно это число "
+        "&mdash; станции надо знать, когда <i>слушать</i>, &mdash; но это не "
+        "время передачи и не дальность.",
+    "sources.no_emitter":
+        "За последние {days} {day_unit} не найдено ни одного повторяющегося "
+        "излучателя, у которого хотя бы {min_count} детектирований. Режим "
+        "поиска должен работать, а его файлы детектирования должны доходить до "
+        "этого архива.",
+    "sources.rejected_summary": "Отклонено как помеха: {n} {unit}",
+    "sources.rejected_note":
+        "Отклонено по <b>форме, а не по силе</b>. Самая громкая группа в этом "
+        "архиве оказалась наименее настоящей: 500 кГц/с при медианном SNR выше, "
+        "чем у cyprus1, занимающая все 300 секунд цикла с разбросом фазы "
+        "прихода &plusmn;274&nbsp;мс. Передатчик молчит в большинстве секунд и "
+        "приходит в один и тот же момент внутри тех немногих, что использует. "
+        "Показано, чтобы список можно было проверить &mdash; если строка, за "
+        "которой вы пришли, оказалась здесь, значит неверны пороги, а не "
+        "передатчик.",
+    "sources.col.rejected_because": "Отклонено потому что",
+
+    "sources.identify_panel": "Опознать этот излучатель",
+    "sources.identify_note":
+        "Ничто в детектировании не говорит, кто передаёт. Имя, которое вы "
+        "здесь дадите, &mdash; это <b>суждение</b>, сделанное так же, как "
+        "<code>cyprus1</code> был разрешён в <code>NIC</code>, &mdash; и оно "
+        "несущее: оно записывается в расписание как "
+        "<code>transmit_name</code>, которое <code>calc_ionograms.py</code> "
+        "ставит в <i>имя файла</i> продукта и в <code>txname</code>. Этот "
+        "конвейер читает его обратно как личность передатчика и по нему ищет "
+        "его координаты и потолок полосы. Излучатель, который вы не можете "
+        "назвать, всё равно можно поставить в расписание &mdash; назовите его "
+        "так, как знаете, &mdash; но именно этой строкой будет называться "
+        "каждый продукт от него.",
+    "sources.field.code": "Код",
+    "sources.field.txname": "Полное имя",
+    "sources.field.rep": "Период (с)",
+    "sources.field.note": "Заметка",
+    "sources.name_rule":
+        "Буквы, цифры, подчёркивание и точка &mdash; <b>без дефиса</b>. Имя "
+        "файла продукта разделяется дефисами "
+        "(<code>lfm_ionogram-&#123;tx&#125;-&#123;rx&#125;-&#123;ch&#125;-"
+        "&#123;id&#125;-&#123;t0&#125;.h5</code>), поэтому дефис внутри кода "
+        "не ломает разбор, а сдвигает каждое поле после себя.",
+    "sources.slots_label": "Слоты для зондирования:",
+    "sources.slots_note":
+        "По одной записи на каждый отмеченный слот. Каждая &mdash; ещё одно "
+        "зондирование за цикл, конкурирующее за окно кольцевого буфера "
+        "&mdash; прежде чем отмечать много, посмотрите в README, как читать "
+        "<code>find_timings.log</code>.",
+    "sources.note_placeholder": "Откуда известно -- что это решило",
+    "sources.save": "Сохранить передатчик",
+    "sources.cancel": "Отмена",
+    "sources.verified": "Подтверждённые передатчики",
+    "sources.verified_note":
+        "Опознаны один раз и хранятся вместе со строкой переписи, которая это "
+        "решила. Именно из них составляется расписание &mdash; сырую строку "
+        "переписи в расписание поставить нельзя, потому что у неё нет ни "
+        "имени, ни id, а <code>calc_ionograms.py</code> читает и то и другое "
+        "без значения по умолчанию. <b>Выбор, что из них зондировать, и запуск "
+        "зондирования &mdash; на <a href=\"/ui\">консоли</a></b>, рядом со "
+        "станцией, которая будет это делать: расписание и регистратор &mdash; "
+        "это одно решение, а эта страница, чтобы вообще отрисоваться, должна "
+        "сначала прочитать архив.",
+
+    # -- console ----------------------------------------------------------
+    "console.title": "Консоль станции",
+    "console.hint": "Обновление каждые 15 с",
+    "console.archive": "Архив",
+    "console.ingested": "Загружено {n} {unit}.",
+    "console.method_picks": "{method} &middot; снято {picks} из {n}",
+    "console.no_extractions":
+        "Извлечений пока нет &mdash; зарегистрируйте папку на странице "
+        "<a href=\"/ui/archives\">архивы</a> и просканируйте её",
+
+    "console.upstream": "Внешние узлы",
+    "console.net.online": "ИНТЕРНЕТ ЕСТЬ",
+    "console.net.degraded": "ЧАСТИЧНО",
+    "console.net.offline": "ИНТЕРНЕТА НЕТ",
+    "console.net.unknown": "ИНТЕРНЕТ?",
+    "console.checked_ago": "Проверено {age} назад",
+    "console.net_note":
+        "{detail}. Это серверы, откуда берутся солнечные индексы, а не "
+        "интернет вообще &mdash; узел, который дотягивается до них через "
+        "зеркало, здесь зелёный, а узел за прокси, который блокирует "
+        "<code>sidc.be</code>, &mdash; нет; именно это различие и решает, "
+        "можно ли обновить значения IRI на странице зондирования.",
+    "console.col.host": "Узел",
+    "console.col.rtt": "Задержка",
+    "console.col.provides": "Что даёт",
+    "console.col.cached": "В кэше",
+    "console.col.detail": "Подробности",
+    "console.never": "Никогда",
+    "console.ok": "Норма",
+    "console.fail": "СБОЙ",
+    "console.cache_note":
+        "<b>Доступность и кэш &mdash; это разные вопросы.</b> Недоступен при "
+        "свежем кэше &mdash; это модель, которая по-прежнему отвечает верно; "
+        "доступен при <span class=\"pill unk\">никогда</span> &mdash; это "
+        "модель, у которой драйвера не было ни разу. Файл в кэше старше семи "
+        "суток перечитывается при следующем использовании, а устаревший всё "
+        "равно отдаётся, если загрузка не удалась &mdash; так что индекс может "
+        "быть месячной давности, и больше ничто на этой консоли об этом не "
+        "скажет.",
+
+    "console.no_stations": "Станций нет",
+    "console.no_stations_note":
+        "Ни одного отчёта о состоянии ещё не приходило. Запустите агента с "
+        "<code>server_url</code>, указывающим сюда, и станция появится в "
+        "течение одного интервала отправки.",
+    "console.stale": "УСТАРЕЛО",
+    "console.healthy": "ИСПРАВНА",
+    "console.unhealthy": "НЕИСПРАВНА",
+    "console.last_report": "Последний отчёт {age} с назад",
+    "console.never_reported": "Отчётов не было",
+    "console.agent": "Агент {version}",
+    "console.stale_note":
+        "Уже больше {seconds} с ничего не приходило. Состояние отправляется "
+        "самой станцией, поэтому молчание и есть сигнал тревоги &mdash; "
+        "метрики ниже последние из полученных, а не текущее состояние.",
+    "console.forget": "Забыть этот приёмник",
+    "console.forget_note":
+        "Для приёмника, который <b>переименовали или вывели из работы</b>. "
+        "Удаляет историю его состояния и очередь команд &mdash; то, из чего "
+        "сделана эта панель. Опознания и эпохи конфигурации сохраняются "
+        "&mdash; это происхождение продуктов, которые уже лежат на диске.",
+
+    "console.acquisition": "Приём",
+    "console.acquiring": "ИДЁТ ПРИЁМ",
+    "console.not_acquiring": "ПРИЁМА НЕТ",
+    "console.no_products": "НЕТ ПРОДУКТОВ",
+    "console.acquiring_unknown": "ПРИЁМ?",
+    "console.mode.scheduled": "По расписанию",
+    "console.mode.search": "Поиск",
+    "console.mode.unrecorded": "Режим не записан",
+    "console.sounding_pill": "ЗОНДИРУЕТ",
+    "console.slot_due": "СЛОТ НАСТУПИЛ",
+    "console.between_slots": "Между слотами",
+    "console.oversubscribed": "РАНГ {ranks} ПЕРЕГРУЖЕН",
+    "console.configured_at": "Настроено {when}",
+    "console.changed_by": "кем: {who}",
+    "console.due_note":
+        "<b>Слот, помеченный как наступивший, &mdash; это расписание, сверенное "
+        "с часами, а не наблюдение:</b> он говорит, что ЛЧМ ожидается в эту "
+        "секунду, а не что он записывается.",
+    "console.search_note":
+        "Станция в режиме <b>поиска</b>, поэтому это расписание &mdash; то, "
+        "что лежит в ini, а не то, что она делает: поиск записывает всё, что "
+        "проходит мимо, и выводит тайминг задним числом.",
+    "console.col.rank": "Ранг",
+    "console.col.transmitter": "Передатчик",
+    "console.col.rate": "Скорость",
+    "console.col.slot": "Слот",
+    "console.col.state": "Состояние",
+    "console.col.next": "Следующий",
+    "console.unidentified": "Не опознан",
+    "console.khz_s": "{rate} кГц/с",
+    "console.slot_of": "{chirpt} с из {rep} с",
+    "console.sounding_state": "Зондирует",
+    "console.due_state": "Наступил",
+    "console.seconds_in": "Прошло {age}, развёртка кончается {ends}",
+    "console.sweep_unknown": "Длина развёртки неизвестна",
+    "console.idle": "Простой",
+    "console.in": "Через {age}",
+    "console.contended":
+        "<b>У ранга {ranks} слотов в работе больше, чем у него процессов.</b> "
+        "Ранг зондирует по одному ЛЧМ за раз: он берёт слот с наименьшим "
+        "ожиданием и занят всю развёртку, поэтому перекрывающийся слот в этом "
+        "цикле пропускается, и ничто об этом не сообщает. Дайте передатчикам "
+        "отдельные ранги или разнесите слоты больше чем на одну развёртку.",
+    "console.span_note":
+        "Развёртка отсчитывается от полосы, которую на самом деле покрывают "
+        "недавние продукты этого приёмника ({span} МГц), и от скорости ЛЧМ "
+        "записи &mdash; измерено, а не задано.",
+    "console.no_span_note":
+        "Для этого приёмника не загружено ни одного продукта, поэтому длина "
+        "развёртки неизвестна и ни один слот нельзя назвать идущим. Сами "
+        "времена слотов при этом точны.",
+
+    "console.preview_alt": "Самое свежее зондирование от {tx}",
+    "console.old": "Возраст {age}",
+    "console.preview_note":
+        "Самый свежий продукт <b>на собственном диске этой станции</b>, по "
+        "одному на передатчик, закодированный там и отправленный вместе с "
+        "отчётом о состоянии &mdash; поэтому он актуален, даже когда передача "
+        "архива отстаёт на часы. Возраст &mdash; это собственное время начала "
+        "зондирования. Цвета те же, что и на полной ионограмме: шкала "
+        "<code>jet</code> от 20 до 75 дБ",
+    "console.preview_note.cropped":
+        "; звёздочкой отмечена ось дальности, суженная под эхо",
+    "console.no_preview_note":
+        "Эта станция не присылает превью. Либо её агент старше этой "
+        "возможности, либо <code>preview</code> в её <code>agent.json</code> "
+        "равно <code>false</code>; а есть ли у неё вообще что показывать, "
+        "отвечает <code>newest_product_age_s</code> ниже.",
+
+    "console.col.arrived": "Пришло",
+    "console.col.from": "От",
+    "console.col.age": "Возраст",
+    "console.col.sweep": "Развёртка",
+    "console.arrivals_note":
+        "Последние <b>загруженные</b> продукты этого приёмника. При зависшей "
+        "передаче здесь будут старые поступления, хотя регистратор в порядке "
+        "&mdash; за саму станцию говорит метрика "
+        "<code>newest_product_age_s</code> ниже, и именно её читает индикатор "
+        "вверху этой панели.",
+    "console.nothing_ingested_for":
+        "Под именем приёмника <code>{name}</code> ничего не загружено.",
+
+    "console.col.metric": "Метрика",
+    "console.col.value": "Значение",
+    "console.unknown_note":
+        "Серый <span class=\"pill unk\">?</span> означает <b>неизвестно</b>, а "
+        "не «в порядке»: агент не смог это измерить. Неисправной станцию "
+        "делает только определённый сбой.",
+
+    "console.plan": "План зондирования",
+    "console.mode": "Режим",
+    "console.not_recorded": "&mdash; Не записан &mdash;",
+    "console.apply": "Применить",
+    "console.queued_note":
+        "Ставится в очередь сейчас; станция применит это при следующем опросе, "
+        "а в силу оно вступит при перезапуске приёма",
+    "console.col.code": "Код",
+    "console.col.name": "Имя",
+    "console.col.slots": "Слоты",
+    "console.col.identified": "Опознан",
+    "console.col.note": "Заметка",
+    "console.slots_of": "{slots} с из {rep} с",
+    "console.nothing_identified":
+        "На этом приёмнике пока никто не опознан, поэтому расписание составить "
+        "не из чего. Строку переписи в расписание поставить нельзя &mdash; у "
+        "неё нет ни имени, ни id, а <code>calc_ionograms.py</code> читает и то "
+        "и другое без значения по умолчанию. Назовите кого-нибудь на странице "
+        "<a href=\"/ui/sources\">источники</a>, и он появится здесь.",
+
+    "console.band": "Полоса приёма",
+    "console.read_only": "Только чтение",
+    "console.col.digitised": "Оцифровано",
+    "console.col.analysed": "Анализируется",
+    "console.col.lo": "Гетеродин",
+    "console.configured": "Задано",
+    "console.observed": "Наблюдается",
+    "console.band_not_reported":
+        "Не сообщено &mdash; эта станция ещё не присылала отчёт о состоянии со "
+        "своей полосой",
+    "console.from_products": "По {n} {unit}",
+    "console.no_products_yet": "Продуктов пока нет",
+    "console.disagree": "<b>Заданное и наблюдаемое расходятся:</b> {detail}",
+    "console.agree":
+        "Заданное и наблюдаемое сходятся в пределах {tolerance} МГц. "
+        "Небольшая недостача ожидаема: <code>calc_ionograms.py</code> отбирает "
+        "сохранённые отсчёты строгими неравенствами, поэтому оба крайних "
+        "отсчёта отбрасываются.",
+    "console.band_start": "Начало полосы",
+    "console.analyse_from": "Анализировать с",
+    "console.apply_band": "Применить полосу",
+    "console.presets": "Предустановки:",
+    "console.preset_v2": "0&ndash;25 (по умолчанию в v2)",
+    "console.preset_current": "7.5&ndash;32.5 (текущая)",
+
+    "console.start": "Пуск",
+    "console.stop": "Стоп",
+    "console.restart": "Перезапуск",
+    "console.queued_pull":
+        "Ставится в очередь сейчас, забирается при следующем опросе станцией",
+    "console.col.command": "Команда",
+    "console.col.issued": "Выдана",
+    "console.col.acked": "Подтверждена",
+    "console.col.result": "Результат",
+    "console.acked": "Подтверждена",
+    "console.failed": "Не выполнена",
+    "console.delivered": "Доставлена",
+    "console.pending": "В очереди",
+
+    "console.token": "Управляющий токен",
+    "console.token_note":
+        "Хранится только в этой вкладке (sessionStorage), никогда не "
+        "вшивается в страницу. Нужен для пуска, остановки и перезапуска.",
+
+    # -- shared, browser side ---------------------------------------------
+    "common.js.no_token":
+        "Нет управляющего токена. Сначала вставьте его на странице консоли.",
+
+    # -- archives, browser side -------------------------------------------
+    "archives.js.path_set":
+        "Путь задан: {path} \u2014 проверьте методы ниже и нажмите «добавить».",
+    "archives.js.enter_path": "Сначала введите путь.",
+    "archives.js.checking": "Проверяем \u2026",
+    "archives.js.choose_method": "Выберите хотя бы один метод.",
+    "archives.js.replace_confirm":
+        "{detail}\n\nЗарегистрировать её и удалить те строки?",
+    "archives.js.registered":
+        "{name} зарегистрирована \u2014 видно {n} {unit}{kinds}. Нажмите "
+        "«сканировать», чтобы их проиндексировать.",
+    "archives.js.starting": "Запускаем \u2026",
+    "archives.js.methods_set": "Методы заданы: {methods} \u2014 {note}",
+    "archives.js.unrecognised": "Не распознано",
+    "archives.js.out_of_scope": "{what} вне области",
+    "archives.js.remove": "Удалить",
+    "archives.js.these": "Эти",
+    "archives.js.drop_confirm":
+        "Удалить {what} {unit} вместе с их извлечениями и модельными "
+        "значениями? Файлы не трогаются \u2014 расширение формата прочитает "
+        "их снова.",
+    "archives.js.press_again": "Нажмите ещё раз для подтверждения",
+    "archives.js.unregister_confirm":
+        "Снять {name} с регистрации?\n\nЕё зондирования и их характеристики "
+        "остаются в базе; прекращается только индексирование.",
+    "archives.js.reading":
+        "Читаем {name} \u2014 перечисляем файлы и проверяем, что уже "
+        "проиндексировано",
+    "archives.js.reading_detail":
+        "На этом шаге читается папка, до всякого индексирования. Это не "
+        "зависание.",
+    "archives.js.indexing": "Индексируем {name} \u2014 {done} из {total} ({pct}%)",
+    "archives.js.left": "Осталось ~{time}",
+    "archives.js.loaded": "Загружено {n} {unit}",
+    "archives.js.skipped": ", пропущено {n}",
+    "archives.js.loaded_note":
+        " \u2014 характеристики выводятся по мере чтения каждого файла, "
+        "поэтому сделанное уже пригодно к использованию.",
+    "archives.js.result": "{name}: {result}",
+    "archives.js.looking": "Смотрим, что смонтировано \u2026",
+    "archives.js.no_unregistered": "Под монтированием нет незарегистрированных папок.",
+    "archives.js.why": "{why}.",
+
+    # -- series, inside the plot ------------------------------------------
+    "series.trace.muf": "MUF",
+    "series.trace.muf_bound": "MUF (нижняя оценка)",
+    "series.trace.muf_smooth": "MUF сглаженный",
+    "series.trace.lof": "LOF",
+    "series.trace.lof_bound": "LOF (на дне полосы)",
+    "series.trace.fof2": "foF2 (эквивалентный)",
+    "series.trace.iri_muf": "MUF по IRI",
+    "series.trace.iri_fof2": "foF2 по IRI",
+    "series.trace.iri_hmf2": "hmF2 по IRI",
+    "series.trace.residual": "Измерено &minus; IRI",
+    "series.trace.residual_bound": "Невязка (граница)",
+    "series.trace.sweep_top": "Верх развёртки",
+    "series.trace.forecast": "Прогноз {param}",
+    "series.trace.forecast_band": "Прогноз {param} \u00b1\u03c3",
+    "series.hover.muf_ceiling": "MUF на верхнем краю полосы",
+    "series.hover.muf_smooth": "MUF, сглаженный трекером",
+    "series.hover.lof_floor": "LOF на дне полосы",
+    "series.hover.fof2": "foF2, следующий из измеренного MUF",
+    "series.hover.iri_hmf2": "hmF2 по IRI, правая ось",
+    "series.hover.residual_bound": "Нижняя оценка: в статистику не входит",
+    "series.hover.sweep_top": "Верх развёртки",
+    "series.axis.time": "Время (UTC)",
+    "series.axis.frequency": "Частота (МГц)",
+    "series.axis.residual": "Измер. &minus; IRI (МГц)",
+    "series.axis.hmf2": "hmF2 (км)",
+
+    # -- sources, browser side --------------------------------------------
+    "sources.js.code_required": "Код обязателен.",
+    "sources.js.tick_a_slot": "Отметьте хотя бы один слот.",
+    "sources.js.saving": "Сохраняем...",
+    "sources.js.refused": "Отказано: {detail}",
+    "sources.js.none_identified":
+        "На этом приёмнике пока никто не опознан. Выберите строку выше и дайте "
+        "ей имя.",
+    "sources.js.khz_s": "{rate} кГц/с",
+    "sources.js.of_rep": "Из {rep} с",
+    "sources.js.forget": "Забыть",
+    "sources.js.forget_confirm":
+        "Забыть {code} на {station}?\n\nУже записанные продукты сохраняют "
+        "это имя; удаляются только опознание и его обоснование.",
+    "sources.js.col.code": "Код",
+    "sources.js.col.name": "Имя",
+    "sources.js.col.id": "id",
+    "sources.js.col.rate": "Скорость",
+    "sources.js.col.slots": "Слоты",
+    "sources.js.col.verified": "Опознан",
+    "sources.js.col.note": "Заметка",
+
+    # -- console, browser side --------------------------------------------
+    "console.js.paste_token": "Сначала вставьте управляющий токен ниже.",
+    "console.js.stop_confirm":
+        "Остановить приём на {station}? Регистратор останавливается по SIGINT, "
+        "чтобы USRP освободился чисто, и до нового запуска ничего не "
+        "записывается. Нажмите «стоп» ещё раз для подтверждения; страница не "
+        "обновится, пока вы этого не сделаете.",
+    "console.js.stop_cancelled":
+        "Остановка не подтверждена, поэтому ничего не отправлено.",
+    "console.js.sending": "{name} \u2026",
+    "console.js.refused": "Отказано: {detail}",
+    "console.js.queued":
+        "{name} поставлено в очередь как {id} \u2014 ждёт, пока агент станции "
+        "это заберёт.",
+    "console.js.forget_confirm":
+        "Забыть {station}? История состояния и очередь команд удаляются "
+        "\u2014 включая то, когда прекратились отчёты. Опознания и эпохи "
+        "конфигурации сохраняются. Нажмите ещё раз для подтверждения; страница "
+        "не обновится, пока вы этого не сделаете.",
+    "console.js.forget_cancelled":
+        "Удаление не подтверждено, поэтому ничего не удалено.",
+    "console.js.forgetting": "Забываем {station} \u2026",
+    "console.js.forgotten": "Забыто",
+    "console.js.live_again":
+        "Ничего не применено, страница снова показывает текущее состояние.",
+    "console.js.no_mode":
+        "У этого сервера нет записи о режиме, в котором находится станция, "
+        "поэтому ничего не выбрано заранее. Выберите режим, чтобы увидеть, что "
+        "будет отправлено.",
+    "console.js.search_no_schedule":
+        "Режиму поиска расписание не нужно: он записывает всё, что проходит "
+        "мимо, и выводит тайминг задним числом. Отметки игнорируются, пока "
+        "режим не станет «по расписанию».",
+    "console.js.plan":
+        "Передатчиков: {n} ({codes}) \u2014 групп рангов: {n}, поэтому "
+        "calc_ionograms.py должен запускаться с -np {n}.",
+    "console.js.tick_one":
+        "Отметьте хотя бы один передатчик. Режим «по расписанию» с пустым "
+        "расписанием ничего не записывает, а все процессы при этом "
+        "отчитываются как исправные.",
+    "console.js.choose_mode":
+        "Сначала выберите режим. У этого сервера нет записи о том, в каком "
+        "режиме станция, и применение значения по умолчанию настроило бы её по "
+        "предположению, а не по тому, что вы знаете.",
+    "console.js.tick_one_first":
+        "Сначала отметьте хотя бы один передатчик \u2014 сервер отказывает в "
+        "режиме «по расписанию» без расписания, и правильно делает.",
+    "console.js.schedule_queued":
+        "Расписание поставлено в очередь как {id} \u2014 рангов: {ranks} для "
+        "{transmitters}. Оно дойдёт до станции при следующем опросе и вступит "
+        "в силу при перезапуске приёма, поэтому после того, как его заберут, "
+        "нажмите «перезапуск».",
+    "console.js.mode_queued":
+        "Режим {mode} поставлен в очередь как {id} \u2014 применяется при "
+        "следующем опросе станцией, действует после перезапуска.",
+    "console.js.enter_band":
+        "Введите начало полосы, чтобы увидеть, что будет отправлено.",
+    "console.js.enter_band_first": "Сначала введите начало полосы.",
+    "console.js.no_sample_rate":
+        "Эта станция не сообщила частоту дискретизации, поэтому полосу "
+        "пропускания здесь показать нельзя. Агент всё равно проверит её перед "
+        "тем, как что-либо применять.",
+    "console.js.band_plan":
+        "Гетеродин {lo} МГц, оцифровка {start}\u2013{stop} МГц",
+    "console.js.window_inverted": "Окно анализа вывернуто",
+    "console.js.window_outside":
+        "\u2717 Окно анализа выходит за пределы оцифрованной полосы \u2014 "
+        "эта часть будет БПФ по спектру, который радио никогда не "
+        "оцифровывало, и сервер это отклонит",
+    "console.js.sweep_too_long":
+        "\u2717 {code}: развёртка {sweep} с не помещается в его цикл {rep} с",
+    "console.js.sweep_over_budget":
+        "\u26a0 {code}: развёртка {sweep} с, сверх бюджета кольцевого буфера "
+        "{budget} с \u2014 зондирования будут теряться, как теряются сейчас",
+    "console.js.sweep_ok":
+        "{code}: развёртка {sweep} с из его цикла {rep} с",
+    "console.js.band_sending": "Отправляем \u2026",
+    "console.js.band_queued":
+        "Полоса поставлена в очередь как {id} \u2014 станция применит её при "
+        "следующем опросе, и в силу это вступит при перезапуске приёма, "
+        "поэтому после того, как её заберут, нажмите «перезапуск». Строка "
+        "«наблюдается» выше \u2014 это то, чем вы подтверждаете, что всё "
+        "долетело: она должна сдвинуться в новое окно в течение одного цикла "
+        "зондирования.",
+
 }
 
 #: Three forms, not two: 1 зондирование, 2 зондирования, 5 зондирований.
@@ -481,4 +1024,11 @@ PLURALS: dict[str, dict[str, str]] = {
     "folder": {"one": "папка", "few": "папки", "many": "папок"},
     "dayfolder": {"one": "дневная папка", "few": "дневные папки",
                   "many": "дневных папок"},
+    "emitter": {"one": "излучатель", "few": "излучателя",
+                "many": "излучателей"},
+    "day": {"one": "день", "few": "дня", "many": "дней"},
+    "file": {"one": "файл", "few": "файла", "many": "файлов"},
+    "group": {"one": "группа", "few": "группы", "many": "групп"},
+    "product": {"one": "продукту", "few": "продуктам",
+                "many": "продуктам"},
 }

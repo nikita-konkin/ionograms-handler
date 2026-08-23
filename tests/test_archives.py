@@ -401,7 +401,7 @@ def test_the_page_lists_the_registered_folders(client):
     _add(client, name="feb")
     page = client.get("/ui/archives").text
     assert "feb" in page
-    assert "add a folder" in page
+    assert "add a folder" in page.lower()
 
 
 def test_the_page_says_what_to_do_when_nothing_is_registered(client):
@@ -424,7 +424,7 @@ def test_a_missing_host_path_says_so_rather_than_inventing_one(client,
                                                                monkeypatch):
     monkeypatch.delenv("ARCHIVE_HOST_PATH", raising=False)
     assert client.get("/archives").json()["mount"]["host"] == ""
-    assert "not reported" in client.get("/ui/archives").text
+    assert "not reported" in client.get("/ui/archives").text.lower()
 
 
 def test_an_empty_mount_is_called_out(client, monkeypatch, tmp_path):

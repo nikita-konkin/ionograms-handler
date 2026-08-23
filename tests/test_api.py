@@ -856,7 +856,7 @@ def test_neighbours_follow_time_not_id(client, api_db, tmp_path):
     assert f"/ui/sounding/{ids['late.lfs']}" in page, "next is the later time"
 
     ends = client.get(f"/ui/sounding/{ids['late.lfs']}").text
-    assert "latest sounding" in ends, "the last one offers no next"
+    assert "latest sounding" in ends.lower(), "the last one offers no next"
 
 
 # --------------------------------------------------------------------------
@@ -1746,7 +1746,7 @@ def test_the_page_says_a_census_is_still_being_built(cold_census, client,
 
     page = client.get("/ui/sources?min_count=2")
     assert page.status_code == 200
-    assert "first census running" in page.text
+    assert "first census running" in page.text.lower()
     assert "No census has finished yet" in page.text
 
 
@@ -2050,7 +2050,7 @@ def test_the_forget_button_is_offered_only_on_a_stale_panel(client, api_db):
     assert "forget this receiver" not in client.get("/ui").text
 
     _retired(client, api_db, station="DOB")
-    assert client.get("/ui").text.count("forget this receiver") == 1
+    assert client.get("/ui").text.lower().count("forget this receiver") == 1
 
 
 def test_forgetting_a_receiver_is_control_scope(client, api_db):
@@ -2393,7 +2393,7 @@ def test_the_console_carries_the_chooser_the_start_button_needs(client):
     # so the station is not running it and nothing may be pre-ticked yet.
     assert "checked" not in box(page, "NIC"), "a pending command is not a state"
     assert "checked" not in box(page, "SGO")
-    assert "&mdash; not recorded &mdash;" in page, \
+    assert "&mdash; not recorded &mdash;" in page.lower(), \
         "no mode was ever acknowledged, so none may be pre-selected"
 
     timings = json.dumps([[{"chirp-rate": 100e3, "rep": 300.0, "chirpt": 235.0,
@@ -3009,7 +3009,7 @@ def test_a_station_on_an_old_recorder_gets_a_read_only_panel(client):
     client.post("/stations/health", json=band_report(patched=False),
                 headers=CTL)
     page = client.get("/ui").text
-    assert "read-only" in page
+    assert "read-only" in page.lower()
     assert "patch 0014" in page
     assert 'id="bandStart-SIM"' not in page, (
         "the band fields must not be rendered for a recorder that cannot "
@@ -3030,7 +3030,7 @@ def test_configured_and_observed_disagreeing_is_shown(client, tmp_path):
     client.post("/stations/health", json=band_report(), headers=CTL)
     _sounding(client, tmp_path, lo=2.55, hi=27.30)
     page = client.get("/ui").text
-    assert "configured and observed disagree" in page
+    assert "configured and observed disagree" in page.lower()
     assert "wrong spectrum" in page
 
 
@@ -3047,7 +3047,7 @@ def test_the_expected_edge_trim_is_not_called_a_disagreement(client, tmp_path):
 
 def test_the_observed_row_says_so_when_there_are_no_products(client):
     client.post("/stations/health", json=band_report(), headers=CTL)
-    assert "no products yet" in client.get("/ui").text
+    assert "no products yet" in client.get("/ui").text.lower()
 
 
 def test_a_station_that_never_reported_a_band_says_that(client):
