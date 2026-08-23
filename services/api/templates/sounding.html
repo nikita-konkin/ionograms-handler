@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ sounding.file if sounding else 'not found' }}{% endblock %}
+{% block title %}{{ sounding.file if sounding else t('sounding.notfound') }}{% endblock %}
 {% block body %}
 
 {% if not sounding %}
-<div class="panel"><h2>not found</h2></div>
+<div class="panel"><h2>{{ t('sounding.notfound') }}</h2></div>
 {% else %}
 
 {# Neighbours are by time, not by id -- see the route. Rendered as disabled
@@ -12,79 +12,76 @@
 <div class="panel" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
   {% if prev %}
   <a class="pill" href="/ui/sounding/{{ prev.id }}?gate={{ gate }}&method={{ method }}&plot={{ plot }}"
-     title="{{ prev.datetime }}  (left arrow)">&larr; previous</a>
-  {% else %}<span class="pill muted" title="earliest sounding">&larr; previous</span>{% endif %}
-  <a class="pill" href="/ui/soundings">all soundings</a>
+     title="{{ prev.datetime }}  (left arrow)">&larr; {{ t('common.previous') }}</a>
+  {% else %}<span class="pill muted" title="{{ t('sounding.earliest') }}">&larr; {{ t('common.previous') }}</span>{% endif %}
+  <a class="pill" href="/ui/soundings">{{ t('sounding.all') }}</a>
   {% if next %}
   <a class="pill" href="/ui/sounding/{{ next.id }}?gate={{ gate }}&method={{ method }}&plot={{ plot }}"
-     title="{{ next.datetime }}  (right arrow)">next &rarr;</a>
-  {% else %}<span class="pill muted" title="latest sounding">next &rarr;</span>{% endif %}
-  <span class="note">&larr; and &rarr; step through soundings in time order.</span>
+     title="{{ next.datetime }}  (right arrow)">{{ t('common.next') }} &rarr;</a>
+  {% else %}<span class="pill muted" title="{{ t('sounding.latest') }}">{{ t('common.next') }} &rarr;</span>{% endif %}
+  <span class="note">{{ t('sounding.arrows') }}</span>
 </div>
 
 <div class="panel">
   <h2>{{ sounding.file }}</h2>
   <div class="scroll"><table>
-    <tr><th>time (UTC)</th><td>{{ sounding.datetime }}</td>
-        <th>path</th><td>{{ sounding.tx }} &rarr; {{ sounding.rx }}
-            {% if sounding.path_km %}({{ '%.0f'|format(sounding.path_km) }} km,
+    <tr><th>{{ t('soundings.col.time') }}</th><td>{{ sounding.datetime }}</td>
+        <th>{{ t('sounding.col.path') }}</th><td>{{ sounding.tx }} &rarr; {{ sounding.rx }}
+            {% if sounding.path_km %}({{ '%.0f'|format(sounding.path_km) }} {{ t('unit.km') }},
             {{ sounding.path_type }}){% endif %}</td></tr>
-    <tr><th>format</th><td>{{ sounding.format or '?' }}</td>
-        <th>sweep</th><td>{{ '%.3f'|format(sounding.freq_start or 0) }}&ndash;{{ '%.3f'|format(sounding.freq_stop or 0) }} MHz
+    <tr><th>{{ t('soundings.col.format') }}</th><td>{{ sounding.format or '?' }}</td>
+        <th>{{ t('sounding.col.sweep') }}</th><td>{{ '%.3f'|format(sounding.freq_start or 0) }}&ndash;{{ '%.3f'|format(sounding.freq_stop or 0) }} {{ t('unit.mhz') }}
             {% if not sounding.sweep_complete %}
-            <span class="pill fail">{{ '%.0f'|format(100 * (sounding.sweep_fraction or 0)) }}% complete</span>
+            <span class="pill fail">{{ t('sounding.percent_complete',
+              pct='%.0f'|format(100 * (sounding.sweep_fraction or 0))) }}</span>
             {% endif %}</td></tr>
-    <tr><th>gate</th><td>{{ '%.0f'|format(sounding.gate_lo or 0) }}&ndash;{{ '%.0f'|format(sounding.gate_hi or 0) }} km</td>
-        <th>file</th><td class="muted">{{ sounding.path }}</td></tr>
+    <tr><th>{{ t('sounding.col.gate') }}</th><td>{{ '%.0f'|format(sounding.gate_lo or 0) }}&ndash;{{ '%.0f'|format(sounding.gate_hi or 0) }} {{ t('unit.km') }}</td>
+        <th>{{ t('sounding.col.file') }}</th><td class="muted">{{ sounding.path }}</td></tr>
   </table></div>
 </div>
 
 <div class="panel">
-  <h2>ionogram</h2>
+  <h2>{{ t('sounding.ionogram') }}</h2>
 
   <div style="display:flex;gap:1.4rem;flex-wrap:wrap;align-items:center">
-    <span><span class="note">range gate:</span>
+    <span><span class="note">{{ t('sounding.gate_label') }}</span>
       <a class="pill {% if gate == 'auto' %}ok{% endif %}"
-         href="/ui/sounding/{{ sounding.id }}?gate=auto&method={{ method }}&plot={{ plot }}">auto</a>
+         href="/ui/sounding/{{ sounding.id }}?gate=auto&method={{ method }}&plot={{ plot }}">{{ t('sounding.gate.auto') }}</a>
       <a class="pill {% if gate != 'auto' %}ok{% endif %}"
-         href="/ui/sounding/{{ sounding.id }}?gate=full&method={{ method }}&plot={{ plot }}">full</a></span>
+         href="/ui/sounding/{{ sounding.id }}?gate=full&method={{ method }}&plot={{ plot }}">{{ t('sounding.gate.full') }}</a></span>
 
-    <span><span class="note">plot:</span>
+    <span><span class="note">{{ t('sounding.plot_label') }}</span>
       <a class="pill {% if plot == 'interactive' %}ok{% endif %}"
-         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ method }}&plot=interactive">interactive</a>
+         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ method }}&plot=interactive">{{ t('sounding.plot.interactive') }}</a>
       <a class="pill {% if plot != 'interactive' %}ok{% endif %}"
-         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ method }}&plot=rendered">rendered</a></span>
+         href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ method }}&plot=rendered">{{ t('sounding.plot.rendered') }}</a></span>
 
     {% if plot == 'interactive' %}
-    <span><span class="note">scaling:</span>
+    <span><span class="note">{{ t('sounding.scaling_label') }}</span>
       {% for m in methods %}
       <a class="pill {% if m == method %}ok{% endif %}"
          href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&method={{ m }}&plot=interactive"
-         title="which estimator's trace is drawn">{{ m }}</a>
+         title="{{ t('sounding.method_title') }}">{{ m }}</a>
       {% endfor %}</span>
     <a class="pill" href="/soundings/{{ sounding.id }}/sao.xml?gate={{ gate }}"
-       title="all three records, SAO.XML 5.0">download SAO.XML</a>
+       title="{{ t('sounding.sao_title') }}">{{ t('sounding.sao') }}</a>
     {% endif %}
   </div>
-  <p class="note" style="margin:.6rem 0 0"><b>auto</b> fits the window to where
-  the echo is. A search-mode v2 product stores &plusmn;3998 km while the trace
-  occupies a few hundred, so at full extent it is a hairline in an empty field.</p>
+  <p class="note" style="margin:.6rem 0 0">{{ t('sounding.auto_note') }}</p>
 
 {% if plot != 'interactive' %}
   <p style="margin-top:.8rem">
     <img class="iono" loading="lazy" alt="ionogram"
          src="/ionogram/{{ sounding.id }}.png?trace=true{% if gate == 'auto' %}&gate=auto{% endif %}">
   </p>
-  <p class="note">Rendered on request, not precomputed &mdash; 288 images a day
-  precomputed is 105k files a year that mostly nobody opens.</p>
+  <p class="note">{{ t('sounding.rendered_note') }}</p>
 
 {% elif sao_error %}
   <p class="note" style="margin-top:.8rem">
-    <span class="pill fail">no scaling</span> {{ sao_error }}
+    <span class="pill fail">{{ t('sounding.no_scaling') }}</span> {{ sao_error }}
   </p>
-  <p class="note">The stored extractions below are unaffected &mdash; they were
-  written at ingest. Try <a href="/ui/sounding/{{ sounding.id }}?gate={{ gate }}&plot=rendered">rendered</a>,
-  which needs no SAO record.</p>
+  <p class="note">{{ t('sounding.scaling_failed',
+    url='/ui/sounding/%d?gate=%s&plot=rendered'|format(sounding.id, gate)) }}</p>
 
 {% else %}
   {# The raster is a PNG behind the traces, not a heatmap trace. 486 x 3999
@@ -95,26 +92,26 @@
     <div style="flex:3 1 620px;min-width:300px">
       <div style="display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;
                   margin-bottom:.4rem" class="note">
-        <label><input type="checkbox" id="show-points" checked> scaled points</label>
-        <label><input type="checkbox" id="show-raster" checked> raster</label>
-        <label><input type="checkbox" id="show-marks" checked> MUF / LOF</label>
-        <span>&mdash; click a legend entry to toggle one trace, double-click to
-        isolate it.</span>
+        <label><input type="checkbox" id="show-points" checked> {{ t('sounding.show_points') }}</label>
+        <label><input type="checkbox" id="show-raster" checked> {{ t('sounding.show_raster') }}</label>
+        <label><input type="checkbox" id="show-marks" checked> {{ t('sounding.show_marks') }}</label>
+        <span>{{ t('sounding.legend_hint') }}</span>
       </div>
       <div id="sao-plot" style="height:560px"></div>
       {% if frame.relative %}
-      <p class="note"><span class="pill unk">relative range</span> This record's
-      range zero is not trustworthy: differences along the trace are right, the
-      origin is not. Do not read the axis as group range.</p>
+      <p class="note"><span class="pill unk">{{ t('sounding.relative_pill') }}</span>
+      {{ t('sounding.relative_note') }}</p>
       {% endif %}
     </div>
 
     <div style="flex:1 1 300px;min-width:280px">
       {% set record = scaling.record(method) %}
       <div class="scroll"><table>
-        <tr><th colspan="4">{{ method }} &mdash;
-            {{ record.traces|length if record else 0 }} trace(s),
-            {{ frame.traces|map(attribute='points')|sum }} point(s)</th></tr>
+        {%- set n_traces = record.traces|length if record else 0 %}
+        {%- set n_points = frame.traces|map(attribute='points')|sum %}
+        <tr><th colspan="4">{{ t('sounding.traces_points', method=method,
+            traces=n_traces, trace_unit=plural(n_traces, 'trace'),
+            points=n_points, point_unit=plural(n_points, 'point')) }}</th></tr>
         {% for c in (record.characteristics if record else []) %}
         <tr title="{{ c.description }}">
           <td>{{ c.name }}</td>
@@ -122,11 +119,11 @@
               if c.bound is not none %} &plusmn;{{ '%.3f'|format(c.bound) }}{% endif %}</td>
           <td class="muted">{{ c.units }}</td>
           <td>{% if c.letter %}<span class="pill unk"
-                title="UAG-23A qualifying letter {{ c.letter }}">{{ c.letter }}</span>{% endif %}
+                title="{{ t('sounding.letter_title', letter=c.letter) }}">{{ c.letter }}</span>{% endif %}
               {% if c.model %}<span class="note">{{ c.model }}</span>{% endif %}</td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="muted">this estimator declined &mdash; no pick</td></tr>
+        <tr><td colspan="4" class="muted">{{ t('sounding.declined') }}</td></tr>
         {% endfor %}
       </table></div>
 
@@ -141,11 +138,9 @@
         {{ scaling.model.options }}.
       {% endif %}
       </p>
-      <p class="note">Modelled rows are marked with the model that asserted
-      them and are never used to correct the measurement. IRI and the measured
-      MUF disagree by several MHz at times, and writing them side by side does
-      not settle which is right.</p>
-      <p class="note">Scaled in {{ '%.2f'|format(scaling.cost_s) }}s.</p>
+      <p class="note">{{ t('sounding.model_note') }}</p>
+      <p class="note">{{ t('sounding.scaled_in',
+        cost='%.2f'|format(scaling.cost_s)) }}</p>
     </div>
   </div>
 
@@ -175,9 +170,11 @@
       marker: {symbol: 'circle-open', size: 8, color: t.colour,
                line: {width: 1.6, color: t.colour}},
       customdata: t.amplitude,
-      hovertemplate: '%{x:.3f} MHz<br>%{y:.1f} km'
+      hovertemplate: '%{x:.3f} {{ t('unit.mhz') }}<br>%{y:.1f} {{ t('unit.km') }}'
         + (t.amplitude ? '<br>%{customdata:.1f} dB' : '')
-        + '<extra>' + t.name + (t.hops ? ' · ' + t.hops + ' hop' : '') + '</extra>',
+        + '<extra>' + t.name
+        + (t.hops ? ' · ' + t.hops + ' ' + {{ t('sounding.hop')|tojson }} : '')
+        + '</extra>',
     }));
 
     // The raster is an image, so nothing in this plot carries a colour axis
@@ -226,9 +223,9 @@
       margin: {l: 62, r: bar ? 78 : 12, t: 26, b: 46},
       paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#0b0d10',
       font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
-      xaxis: {title: {text: 'Frequency (MHz)'}, range: [e.f_lo, e.f_hi],
+      xaxis: {title: {text: {{ t('sounding.axis.freq')|tojson }}}, range: [e.f_lo, e.f_hi],
               gridcolor: 'rgba(255,255,255,.12)', zeroline: false},
-      yaxis: {title: {text: 'Virtual range (km)'}, range: [e.r_lo, e.r_hi],
+      yaxis: {title: {text: {{ t('sounding.axis.range')|tojson }}}, range: [e.r_lo, e.r_hi],
               gridcolor: 'rgba(255,255,255,.12)', zeroline: false},
       images: [raster], shapes: shapes, annotations: notes,
       hovermode: 'closest', dragmode: 'zoom',
@@ -263,15 +260,18 @@
 </div>
 
 <div class="panel">
-  <h2>extractions</h2>
+  <h2>{{ t('sounding.extractions') }}</h2>
   <div class="scroll"><table>
-    <tr><th>method</th><th>MUF</th><th>LOF</th><th>range km</th><th>SNR dB</th>
-        <th>run</th><th>hops</th><th>scatter</th><th>flags</th></tr>
+    <tr><th>{{ t('sounding.col.method') }}</th><th>{{ t('sounding.col.muf') }}</th>
+        <th>{{ t('sounding.col.lof') }}</th><th>{{ t('sounding.col.range') }}</th>
+        <th>{{ t('sounding.col.snr') }}</th><th>{{ t('sounding.col.run') }}</th>
+        <th>{{ t('sounding.col.hops') }}</th><th>{{ t('sounding.col.scatter') }}</th>
+        <th>{{ t('sounding.col.flags') }}</th></tr>
     {% for e in extractions %}
     <tr>
       <td>{{ e.method }}</td>
       <td>{% if e.muf is not none %}{{ '%.2f'|format(e.muf) }}{% else %}
-          <span class="muted">no pick</span>{% endif %}</td>
+          <span class="muted">{{ t('sounding.no_pick') }}</span>{% endif %}</td>
       <td>{% if e.lof is not none %}{{ '%.2f'|format(e.lof) }}{% else %}&mdash;{% endif %}</td>
       <td>{% if e.vrange is not none %}{{ '%.0f'|format(e.vrange) }}{% else %}&mdash;{% endif %}</td>
       <td>{% if e.snr is not none %}{{ '%.1f'|format(e.snr) }}{% else %}&mdash;{% endif %}</td>
@@ -279,16 +279,13 @@
       <td>{{ e.hops if e.hops is not none else '&mdash;'|safe }}</td>
       <td>{% if e.scatter is not none %}{{ '%.1f'|format(e.scatter) }}{% else %}&mdash;{% endif %}</td>
       <td>
-        {% if e.limited %}<span class="pill unk" title="pick at the top of the sweep: the MUF is a lower bound">limited</span>{% endif %}
-        {% if e.loflim %}<span class="pill unk" title="LOF ran off the bottom of the band">loflim</span>{% endif %}
+        {% if e.limited %}<span class="pill unk" title="{{ t('sounding.limited_title') }}">limited</span>{% endif %}
+        {% if e.loflim %}<span class="pill unk" title="{{ t('sounding.loflim_title') }}">loflim</span>{% endif %}
       </td>
     </tr>
     {% endfor %}
   </table></div>
-  <p class="note">Stored at ingest. Quality columns travel with the value,
-  never separately &mdash; a <b>limited</b> MUF is a lower bound, not a
-  measurement. The panel above is scaled live from the product, so it can
-  differ from these if the detectors have changed since.</p>
+  <p class="note">{{ t('sounding.stored_note') }}</p>
 </div>
 
 <script>

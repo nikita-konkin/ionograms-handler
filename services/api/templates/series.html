@@ -1,6 +1,7 @@
 {% extends "base.html" %}
-{% block title %}series{% endblock %}
-{% block hint %}{{ points|length }} point(s){% endblock %}
+{% block title %}{{ t('series.title') }}{% endblock %}
+{% block hint %}{{ t('series.hint', n=points|length,
+   unit=plural(points|length, 'point')) }}{% endblock %}
 {% block body %}
 
 {%- set window = ('&from=' ~ start if start else '') ~ ('&to=' ~ end if end else '') -%}
@@ -9,37 +10,37 @@
 {%- set circ = '&circuit=' ~ (circuit|urlencode) -%}
 
 <div class="panel">
-  <h2>Parameters against time</h2>
+  <h2>{{ t('series.h2') }}</h2>
   <div>
     {% for m in methods %}
       <a href="/ui/series?method={{ m }}{{ circ }}{{ tail }}"
          class="pill {% if m == method %}ok{% endif %}">{{ m }}</a>
     {% endfor %}
-    {% if not methods %}<span class="muted">nothing ingested yet</span>{% endif %}
+    {% if not methods %}<span class="muted">{{ t('series.nothing_ingested') }}</span>{% endif %}
   </div>
 
   {# Every parameter here belongs to a path, not to a receiver. Default is one
      circuit; `all` overlays them coloured, for when comparing is deliberate. #}
   <div style="margin-top:.5rem">
-    <span class="muted" style="font-size:.85rem">circuit</span>
+    <span class="muted" style="font-size:.85rem">{{ t('series.circuit') }}</span>
     {% for c in circuits %}
       <a href="/ui/series?method={{ method }}&circuit={{ c|urlencode }}{{ tail }}"
          class="pill {% if c == circuit %}ok{% endif %}">{{ c }}</a>
     {% endfor %}
     {% if circuits|length > 1 %}
       <a href="/ui/series?method={{ method }}&circuit=all{{ tail }}"
-         class="pill {% if circuit == 'all' %}ok{% endif %}">all (overlaid)</a>
+         class="pill {% if circuit == 'all' %}ok{% endif %}">{{ t('series.all_overlaid') }}</a>
     {% endif %}
-    {% if not circuits %}<span class="muted">no picks for this method</span>{% endif %}
+    {% if not circuits %}<span class="muted">{{ t('series.no_picks') }}</span>{% endif %}
   </div>
 
   {# One link per day that actually has picks. An archive of a few days months
      apart is the normal case here, and without this the whole span is drawn at
      once with the days as unreadable vertical stripes. #}
   <div style="margin-top:.5rem">
-    <span class="muted" style="font-size:.85rem">day</span>
+    <span class="muted" style="font-size:.85rem">{{ t('series.day') }}</span>
     <a href="/ui/series?method={{ method }}{{ circ }}{{ mod }}"
-       class="pill {% if not start and not end %}ok{% endif %}">all</a>
+       class="pill {% if not start and not end %}ok{% endif %}">{{ t('series.all') }}</a>
     {% for d in days %}
       <a href="/ui/series?method={{ method }}{{ circ }}&from={{ d }}&to={{ d }}{{ mod }}"
          class="pill {% if start == d %}ok{% endif %}">{{ d }}</a>
@@ -50,26 +51,26 @@
      needs a solar driver -- so it has to be refusable here and not only from
      the environment. #}
   <div style="margin-top:.5rem">
-    <span class="muted" style="font-size:.85rem">reference</span>
+    <span class="muted" style="font-size:.85rem">{{ t('series.reference') }}</span>
     <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}"
        class="pill {% if model != 'off' %}ok{% endif %}">IRI</a>
     <a href="/ui/series?method={{ method }}{{ circ }}{{ window }}&model=off"
-       class="pill {% if model == 'off' %}ok{% endif %}">off</a>
-    <span class="note">off skips the model, and the network it may need.</span>
+       class="pill {% if model == 'off' %}ok{% endif %}">{{ t('series.off') }}</a>
+    <span class="note">{{ t('series.off_note') }}</span>
   </div>
 
   <form method="get" action="/ui/series" style="margin-top:.5rem">
     <input type="hidden" name="method" value="{{ method }}">
     <input type="hidden" name="circuit" value="{{ circuit }}">
     <input type="hidden" name="model" value="{{ model }}">
-    <label class="muted" style="font-size:.85rem">from
+    <label class="muted" style="font-size:.85rem">{{ t('common.from') }}
       <input type="text" name="from" value="{{ start }}" placeholder="2026-08-09"
              size="19"></label>
-    <label class="muted" style="font-size:.85rem">to
+    <label class="muted" style="font-size:.85rem">{{ t('common.to') }}
       <input type="text" name="to" value="{{ end }}" placeholder="2026-08-11"
              size="19"></label>
-    <button type="submit" class="pill">apply</button>
-    <span class="note">A bare date covers that whole day at either end.</span>
+    <button type="submit" class="pill">{{ t('common.apply') }}</button>
+    <span class="note">{{ t('series.bare_date') }}</span>
   </form>
 </div>
 
@@ -85,112 +86,73 @@
     <label><input type="checkbox" class="family" data-family="fof2"> foF2</label>
     <label><input type="checkbox" class="family" data-family="model"> IRI</label>
     {% if frame.any_forecast %}
-    <label><input type="checkbox" class="family" data-family="forecast"> forecast</label>
+    <label><input type="checkbox" class="family" data-family="forecast"> {{ t('series.family.forecast') }}</label>
     {% endif %}
-    <label><input type="checkbox" class="family" data-family="context"> sweep top / hmF2</label>
-    <span>&mdash; drag to zoom, double-click to reset, click a point to open its
-    ionogram.</span>
+    <label><input type="checkbox" class="family" data-family="context"> {{ t('series.family.context') }}</label>
+    <span>{{ t('series.drag_hint') }}</span>
   </div>
 
   <div id="series-plot" style="height:620px"></div>
 
   <p class="note" style="margin-top:.8rem">
-    <b>Hue is the parameter, shape is the source.</b> Markers are measured,
-    lines are modelled &mdash; so a blue marker and the blue dashed line beside
-    it are this circuit's MUF and IRI's, and the gap between them is what the
-    residual panel plots.
-    {% if frame.circuits|length > 1 %}
-    With several circuits overlaid, hue is the <b>circuit</b> instead &mdash;
-    two paths' MUFs in one colour is exactly the comparison this must not
-    invite &mdash; so only MUF and its model are drawn at first. Each circuit
-    is modelled at its own control point; the legend groups them.
-    {% endif %}
+    {{ t('series.hue_note') }}
+    {% if frame.circuits|length > 1 %}{{ t('series.hue_note.multi') }}{% endif %}
   </p>
-  <p class="note">
-    <b>Hollow markers are bounds, not measurements.</b> A hollow MUF marker sat
-    at the top of the sweep, so the real MUF is at or above it; a hollow LOF
-    marker sat at the band floor, so the real LOF is at or below it. They are
-    drawn rather than filtered out &mdash; dropping either silently would bend
-    the curve towards the middle of the band. They are left out of the residual
-    statistics below, which is a different decision and is stated there.
-  </p>
-  <p class="note">
-    <b>foF2 here is not measured.</b> An oblique sounder never sees vertical
-    incidence. It is the measured MUF put back through the secant law at
-    hmF2&nbsp;=&nbsp;{{ '%.0f'|format(frame.hmf2_km) }}&nbsp;km over one hop, which
-    is what makes it comparable with a model or with a nearby vertical
-    ionosonde. IRI's own foF2 is its model output, converted the same way in
-    reverse to get the MUF beside it.
-  </p>
-  <p class="note">
-    <b>LOF, not LUF.</b> ITU-R P.533-13 sec. 9 defines the lowest <i>usable</i>
-    frequency with a required signal-to-noise ratio and a monthly median
-    &mdash; a property of a service and of a month, neither of which one
-    sounding has. What an oblique sounder scales is the lowest <i>observed</i>
-    frequency, and that is what this is. It tracks D-region absorption, so it
-    follows the sun rather than the F2 layer: a MUF that moves while the LOF
-    under it does not is worth a second look.
-  </p>
+  <p class="note">{{ t('series.hollow_note') }}</p>
+  <p class="note">{{ t('series.fof2_note',
+    hmf2='%.0f'|format(frame.hmf2_km)) }}</p>
+  <p class="note">{{ t('series.lof_note') }}</p>
 </div>
 
 <div class="panel">
-  <h2>summary</h2>
+  <h2>{{ t('series.summary') }}</h2>
   <div class="scroll"><table>
     <tr>
-      <th>circuit</th><th>n</th>
-      <th>MUF median</th><th>at ceiling</th>
-      <th>LOF median</th><th>at floor</th>
-      <th>foF2 median</th>
-      <th>vs IRI: n</th><th>bias</th><th>RMS</th><th>r</th>
+      <th>{{ t('series.circuit') }}</th><th>{{ t('series.col.n') }}</th>
+      <th>{{ t('series.col.muf_median') }}</th><th>{{ t('series.col.at_ceiling') }}</th>
+      <th>{{ t('series.col.lof_median') }}</th><th>{{ t('series.col.at_floor') }}</th>
+      <th>{{ t('series.col.fof2_median') }}</th>
+      <th>{{ t('series.col.vs_iri') }}</th><th>{{ t('series.col.bias') }}</th>
+      <th>{{ t('series.col.rms') }}</th><th>{{ t('series.col.r') }}</th>
     </tr>
     {% for c in frame.circuits %}
     {% set s = c.stats %}
     <tr>
       <td title="{{ c.geometry }}">{{ c.name }}{% if c.path_km %}
-          <span class="muted">({{ '%.0f'|format(c.path_km) }} km{% if c.hops > 1 %},
-          {{ c.hops }} hops{% endif %})</span>{% endif %}</td>
+          <span class="muted">({{ t('series.path_km', km='%.0f'|format(c.path_km)) }}{%
+          if c.hops > 1 %}{{ t('series.hops', n=c.hops) }}{% endif %})</span>{% endif %}</td>
       <td>{{ c.n }}</td>
-      <td>{% if s.muf.median is not none %}{{ '%.2f'|format(s.muf.median) }} MHz
+      <td>{% if s.muf.median is not none %}{{ '%.2f'|format(s.muf.median) }} {{ t('unit.mhz') }}
           <span class="muted">({{ s.muf.n }})</span>{% else %}&mdash;{% endif %}</td>
       <td>{% if s.limited %}<span class="pill unk"
-            title="pick at the top of the sweep: a lower bound">{{ s.limited }}</span>
+            title="{{ t('series.limited_title') }}">{{ s.limited }}</span>
           {% else %}&mdash;{% endif %}</td>
-      <td>{% if s.lof.median is not none %}{{ '%.2f'|format(s.lof.median) }} MHz
+      <td>{% if s.lof.median is not none %}{{ '%.2f'|format(s.lof.median) }} {{ t('unit.mhz') }}
           <span class="muted">({{ s.lof.n }})</span>{% else %}&mdash;{% endif %}</td>
       <td>{% if s.loflim %}<span class="pill unk"
-            title="LOF ran off the bottom of the band: an upper bound">{{ s.loflim }}</span>
+            title="{{ t('series.loflim_title') }}">{{ s.loflim }}</span>
           {% else %}&mdash;{% endif %}</td>
-      <td>{% if s.fof2.median is not none %}{{ '%.2f'|format(s.fof2.median) }} MHz
+      <td>{% if s.fof2.median is not none %}{{ '%.2f'|format(s.fof2.median) }} {{ t('unit.mhz') }}
           {% else %}&mdash;{% endif %}</td>
 
       {% if c.model.get('error') %}
       <td colspan="4" class="wrap"><span class="pill unk">IRI</span> {{ c.model.error }}</td>
       {% elif s.model.n %}
       <td>{{ s.model.n }}{% if s.model.excluded %}
-          <span class="muted" title="lower bounds, left out">+{{ s.model.excluded }}</span>{% endif %}</td>
-      <td>{{ '%+.2f'|format(s.model.bias) }} MHz</td>
-      <td>{{ '%.2f'|format(s.model.rms) }} MHz</td>
+          <span class="muted" title="{{ t('series.excluded_title') }}">+{{ s.model.excluded }}</span>{% endif %}</td>
+      <td>{{ '%+.2f'|format(s.model.bias) }} {{ t('unit.mhz') }}</td>
+      <td>{{ '%.2f'|format(s.model.rms) }} {{ t('unit.mhz') }}</td>
       <td>{% if s.model.r is not none %}{{ '%+.3f'|format(s.model.r) }}{% else %}&mdash;{% endif %}</td>
       {% else %}
-      <td colspan="4" class="muted">{% if model == 'off' %}reference off{%
-          else %}no pair to compare{% endif %}</td>
+      <td colspan="4" class="muted">{% if model == 'off' %}{{ t('series.reference_off') }}{%
+          else %}{{ t('series.no_pair') }}{% endif %}</td>
       {% endif %}
     </tr>
     {% endfor %}
   </table></div>
 
-  <p class="note"><b>Bias is a median of measured &minus; IRI, over the pairs
-  that are measurements.</b> The lower bounds counted in the <i>at ceiling</i>
-  column are excluded from it: a pick pinned to the top of the sweep says the
-  ionosphere supported <i>at least</i> that, and scoring it as a residual would
-  report the recorder's band ceiling as a modelling error. On a
-  ceiling-limited circuit that is most of the daytime, which is why the count
-  of excluded points is printed beside the one used.</p>
-  <p class="note">IRI is a climatology driven by a smoothed solar index, and
-  for a recent month that index does not exist yet &mdash; see
-  <code>muf/reference/indices.py</code>. Treat a few MHz of disagreement as
-  normal and the <i>shape</i> of the residual as the interesting part: a flat
-  offset is a scale question, a diurnal one is not.</p>
+  <p class="note">{{ t('series.bias_note') }}</p>
+  <p class="note">{{ t('series.iri_note') }}</p>
   {% for c in frame.circuits if c.model.get('source') %}
   <p class="note"><span class="pill ok">IRI</span> {{ c.name }} &mdash;
      {{ c.model.source }}{% if c.model.get('note') %};

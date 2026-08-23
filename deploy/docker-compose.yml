@@ -26,6 +26,9 @@ services:
     environment:
       API_DB: /data/ionograms.sqlite3
       ARCHIVE_ROOT: /archive
+      # Which language a browser with no cookie gets. Per-browser
+      # choice still wins, from the EN/RU toggle in the header.
+      UI_LANG: "${UI_LANG:-en}"
       # Passed in so the archives page can show *which host folder* is
       # mounted at ARCHIVE_ROOT. The container cannot discover this on its
       # own -- a bind mount looks like an ordinary directory from inside --

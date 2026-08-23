@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ lang }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}ionograms{% endblock %}</title>
+<title>{% block title %}{{ t('app.title') }}{% endblock %}</title>
 <style>
   :root {
     --bg: #14161a; --panel: #1c1f26; --line: #2b3039;
@@ -22,6 +22,14 @@
            display:flex; gap:1.2rem; align-items:baseline; flex-wrap:wrap; }
   header b { font-size:1rem; }
   nav a { color:var(--dim); text-decoration:none; margin-right:1rem; }
+  header .right { margin-left:auto; display:flex; gap:1.2rem;
+                  align-items:baseline; min-width:0; }
+  /* `min-width:0` on the hint too, or its text refuses to wrap inside the
+     group and pushes the toggle off the row again. */
+  header .right .note { min-width:0; }
+  nav.lang { flex:none; }
+  nav.lang a { margin-right:.4rem; font-size:.85rem; letter-spacing:.05em; }
+  nav.lang a:last-child { margin-right:0; }
   nav a:hover, nav a.on { color:var(--accent); }
   main { padding:1rem; max-width:1400px; }
   .panel { background:var(--panel); border:1px solid var(--line);
@@ -62,20 +70,73 @@
   .note { color:var(--dim); font-size:.85rem; }
   img.iono { max-width:100%; border:1px solid var(--line); border-radius:6px; }
 </style>
+
+<script>
+  /* The browser half of `services.api.i18n`. About a third of this console's
+     text is written by JavaScript -- confirmations, refusals, plot axes -- and
+     those strings need the same catalog the templates use, not a second one
+     that can disagree with it.
+
+     `T('key', {name: value})` substitutes `{name}` in the message. An unknown
+     key renders as the key rather than as `undefined`, so a missing string is
+     visible instead of silently blanking a dialogue.
+
+     Inlined rather than carried in a `type="application/json"` block like the
+     plot frames are: `tojson` escapes `<`, `>`, `&` and `'`, so a message
+     cannot break out of this element, and a second JSON block ahead of
+     `series-frame` and `sao-frame` would shadow them for anything reading the
+     first one on the page. */
+  const I18N = {{ js_catalog|tojson }};
+  const T = (key, vars) => (I18N.messages[key] || key).replace(
+    /\{(\w+)\}/g, (whole, name) => (vars && name in vars) ? vars[name] : whole);
+
+  /* Mirrors `i18n._form`. Russian needs three noun forms where English needs
+     two, and which one goes with a number depends on its last digit and its
+     last two digits -- 21 takes the same form as 1, but 11 does not. */
+  T.plural = (n, key) => {
+    const forms = I18N.plurals[key];
+    if (!forms) return key;
+    n = Math.abs(Math.trunc(n)) || 0;
+    let form = 'other';
+    if (I18N.lang === 'ru') {
+      if (n % 10 === 1 && n % 100 !== 11) form = 'one';
+      else if ([2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100)) form = 'few';
+      else form = 'many';
+    } else if (n === 1) form = 'one';
+    return forms[form] || forms.other || key;
+  };
+</script>
 </head>
 <body>
 <header>
   <b>ionograms-handler</b>
   <nav>
-    <a href="/ui">console</a>
-    <a href="/ui/series">series</a>
-    <a href="/ui/soundings">soundings</a>
-    <a href="/ui/sources">sources</a>
-    <a href="/ui/archives">archives</a>
-    <a href="/ui/forecast">forecast</a>
-    <a href="/docs">api</a>
+    <a href="/ui">{{ t('nav.console') }}</a>
+    <a href="/ui/series">{{ t('nav.series') }}</a>
+    <a href="/ui/soundings">{{ t('nav.soundings') }}</a>
+    <a href="/ui/sources">{{ t('nav.sources') }}</a>
+    <a href="/ui/archives">{{ t('nav.archives') }}</a>
+    <a href="/ui/forecast">{{ t('nav.forecast') }}</a>
+    <a href="/docs">{{ t('nav.api') }}</a>
   </nav>
-  <span class="note" style="margin-left:auto">{% block hint %}{% endblock %}</span>
+  {# Hint and toggle share one flex item rather than being two of them.
+     `flex-wrap` breaks lines on hypothetical sizes and never shrinks an item
+     to avoid a break, so as two items the toggle dropped to a second row the
+     moment the hint grew -- which Russian does by about 15%. Grouped, a tight
+     header wraps the hint's own text instead and the toggle stays put. #}
+  <span class="right">
+    <span class="note">{% block hint %}{% endblock %}</span>
+    {# The toggle carries the whole query string across, so changing language
+       while looking at a filtered, sorted table does not also reset the
+       filter and the sort. `?lang=` is what writes the cookie -- see
+       `i18n.LocaleMiddleware` -- so these are ordinary links and there is
+       nothing here for JavaScript to do. #}
+    <nav class="lang" aria-label="{{ t('chrome.language') }}">
+      {% for code in locales %}<a href="{{ lang_urls[code] }}" hreflang="{{ code }}"
+         {% if code == lang %}class="on" aria-current="true"{% endif
+         %}>{{ code|upper }}</a>{% endfor %}
+    </nav>
+  </span>
 </header>
 <main>{% block body %}{% endblock %}</main>
 </body>

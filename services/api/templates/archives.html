@@ -1,25 +1,26 @@
 {% extends "base.html" %}
-{% block title %}archives{% endblock %}
-{% block hint %}{{ archives|length }} folder(s) registered{% endblock %}
+{% block title %}{{ t('archives.title') }}{% endblock %}
+{% block hint %}{{ t('archives.hint', n=archives|length,
+   unit=plural(archives|length, 'folder')) }}{% endblock %}
 {% block body %}
 
 <div class="panel">
-  <h2>mounted archive</h2>
+  <h2>{{ t('archives.mounted') }}</h2>
   {# Two paths, because in a container they differ and only one of them is the
      thing an operator edits. `/archive` alone cannot tell anyone whether the
      .env change took effect. #}
   <div class="scroll"><table>
-    <tr><th>host folder</th><th>seen here as</th><th>state</th></tr>
+    <tr><th>{{ t('archives.col.host') }}</th><th>{{ t('archives.col.seen_as') }}</th><th>{{ t('archives.col.state') }}</th></tr>
     {% for r in mount.roots %}
     <tr>
       <td>{% if r.host %}<code>{{ r.host }}</code>
-          {% else %}<span class="muted">not reported</span>{% endif %}</td>
+          {% else %}<span class="muted">{{ t('archives.not_reported') }}</span>{% endif %}</td>
       <td><code>{{ r.root }}</code>
-        {%- if r.primary %} <span class="note">primary</span>{% endif %}</td>
-      <td>{% if not r.exists %}<span class="bad">not readable</span>
+        {%- if r.primary %} <span class="note">{{ t('archives.primary') }}</span>{% endif %}</td>
+      <td>{% if not r.exists %}<span class="bad">{{ t('archives.not_readable') }}</span>
           {%- if r.error %}<div class="note">{{ r.error }}</div>{% endif %}
-          {% elif r.empty %}<span class="bad">mounted but empty</span>
-          {% else %}<span class="ok">ok</span>
+          {% elif r.empty %}<span class="bad">{{ t('archives.mounted_empty') }}</span>
+          {% else %}<span class="ok">{{ t('archives.ok') }}</span>
           {# No entry count: reading one meant enumerating the whole root on
              an endpoint the page polls once a second, which on an SMB share
              was minutes of listing per poll against the mount the indexer was
@@ -30,61 +31,35 @@
     </tr>
     {% endfor %}
   </table></div>
-  {% if mount.in_container %}<p class="note">Running in a container, so
-  &ldquo;seen here as&rdquo; is the mount point and the host folder is what
-  <code>deploy/.env</code> set.</p>{% endif %}
+  {% if mount.in_container %}<p class="note">{{ t('archives.in_container') }}</p>{% endif %}
   {% if not mount.extra %}
-  <p class="note">One root. To index a folder on another disk, give it a
-  <code>volumes:</code> line of its own <i>and</i> list its container path in
-  <code>ARCHIVE_ROOTS</code> &mdash; both, then redeploy. A path cannot be
-  added from this page: a container's filesystem is fixed when it starts.</p>
+  <p class="note">{{ t('archives.one_root') }}</p>
   {% endif %}
   {# Three different unreadables with three different fixes. Saying "set
      ARCHIVE_HOST_PATH and redeploy" to someone whose NAS is down sends them
      to edit a file that is already correct, and a redeploy will not bring the
      storage back. The errno already knows which case this is. #}
   {% if not mount.exists and mount.fault == 'unreachable' %}
-  <p class="note bad"><b>The mount is there; the storage behind it is not
-  answering.</b> <code>{{ mount.root }}</code> exists inside the container and
-  every read of it fails &mdash; {{ mount.error }}.
-  <code>ARCHIVE_HOST_PATH</code> is <i>not</i> the problem here and redeploying
-  will not help: fix it on the host, where the volume is mounted, then the
-  scans resume on their own. Nothing can be registered or indexed until then.</p>
+  <p class="note bad">{{ t('archives.fault.unreachable',
+    root=mount.root, error=mount.error) }}</p>
   {% elif not mount.exists and mount.fault == 'denied' %}
-  <p class="note bad">The mount exists but this process may not read it &mdash;
-  {{ mount.error }}. The api runs as uid 10001; that uid needs read access to
-  the host folder. No folder can be registered until this is fixed.</p>
+  <p class="note bad">{{ t('archives.fault.denied', error=mount.error) }}</p>
   {% elif not mount.exists %}
-  <p class="note bad">Nothing is readable at <code>{{ mount.root }}</code>.
-  Under Docker that means the bind mount is missing or its source is gone
-  &mdash; set <code>ARCHIVE_HOST_PATH</code> in <code>deploy/.env</code> and
-  redeploy. No folder can be registered until this is fixed.</p>
+  <p class="note bad">{{ t('archives.fault.missing', root=mount.root) }}</p>
   {% elif mount.empty %}
-  <p class="note bad">The mount exists but holds nothing. A bind mount whose
-  source was renamed on the host still appears inside the container, as an
-  empty directory &mdash; every scan would then report &ldquo;0 on disk&rdquo;
-  truthfully and forever.</p>
+  <p class="note bad">{{ t('archives.fault.empty') }}</p>
   {% endif %}
 </div>
 
 <div class="panel">
-  <h2>archives</h2>
-  <p>Folders under <code>{{ archive_root }}</code> that this server keeps
-  indexed. A scan runs the pipeline over whatever is new, so every sounding it
-  loads arrives with its characteristics already derived &mdash; MUF, LOF,
-  group range and SNR in the database, and the full scaling behind each
-  sounding's page and its <code>sao.xml</code>. There is no separate step to
-  compute them.</p>
+  <h2>{{ t('archives.title') }}</h2>
+  <p>{{ t('archives.intro', root=archive_root) }}</p>
 
   {% if interval_s %}
-  <p class="note">Enabled folders are re-scanned automatically every
-  {{ '%g'|format(interval_s / 60) }} min. Scans run one at a time: they are
-  CPU-bound and they lock the database, so two would finish later than one
-  after the other.</p>
+  <p class="note">{{ t('archives.rescan_on',
+    minutes='%g'|format(interval_s / 60)) }}</p>
   {% else %}
-  <p class="note">Automatic re-scanning is off
-  (<code>ARCHIVE_SCAN_INTERVAL_S=0</code>), so new files appear only when
-  someone presses scan.</p>
+  <p class="note">{{ t('archives.rescan_off') }}</p>
   {% endif %}
 
   {# The progress panel. Hidden until a scan runs, because an empty bar on a
@@ -107,18 +82,20 @@
 
   {% if archives %}
   <div class="scroll"><table>
-    <tr><th>name</th><th>path</th><th>format</th><th>methods</th>
-        <th>soundings</th><th>last scan</th><th>result</th><th></th></tr>
+    <tr><th>{{ t('archives.col.name') }}</th><th>{{ t('archives.col.path') }}</th>
+        <th>{{ t('archives.col.format') }}</th><th>{{ t('archives.col.methods') }}</th>
+        <th>{{ t('archives.col.soundings') }}</th><th>{{ t('archives.col.last_scan') }}</th>
+        <th>{{ t('archives.col.result') }}</th><th></th></tr>
     {% for a in archives %}
     <tr{% if not a.enabled %} class="muted"{% endif %}>
-      <td><b>{{ a.name }}</b>{% if not a.enabled %} <span class="note">disabled</span>{% endif %}</td>
+      <td><b>{{ a.name }}</b>{% if not a.enabled %} <span class="note">{{ t('archives.disabled') }}</span>{% endif %}</td>
       <td class="muted"><code>{{ a.relpath }}</code></td>
       {# Not a label any more: `scan_once` hands this to `find_new`, so
          narrowing it stops the other formats being ingested at all. That is
          what lets a removal stay removed. #}
       <td class="muted" style="white-space:nowrap">
         <select id="fmt-{{ a.id }}" onchange="saveFormat({{ a.id }})">
-          <option value="" {% if not a.format %}selected{% endif %}>any</option>
+          <option value="" {% if not a.format %}selected{% endif %}>{{ t('archives.any') }}</option>
           {% for f in formats %}
           <option {% if a.format == f %}selected{% endif %}>{{ f }}</option>
           {% endfor %}
@@ -132,7 +109,7 @@
                  {% if m in a.methods.split(',') %}checked{% endif %}
                  {% if not info.usable %}disabled{% endif %}>{{ m }}</label>
         {% endfor %}
-        <button onclick="saveMethods({{ a.id }})">set</button></td>
+        <button onclick="saveMethods({{ a.id }})">{{ t('archives.set') }}</button></td>
       {# The count is the point of the page: it links to the numbers rather
          than stopping at "it scanned". #}
       <td>{% if a.soundings %}<a href="/ui/soundings">{{ a.soundings }}</a>
@@ -146,33 +123,27 @@
           style="min-width:22rem">
         {{ a.last_scan_result or '' }}</td>
       <td style="white-space:nowrap">
-        <button onclick="scan({{ a.id }})">scan now</button>
+        <button onclick="scan({{ a.id }})">{{ t('archives.scan_now') }}</button>
         <button onclick="setEnabled({{ a.id }}, {{ 'false' if a.enabled else 'true' }})">
-          {{ 'disable' if a.enabled else 'enable' }}</button>
+          {{ t('archives.disable') if a.enabled else t('archives.enable') }}</button>
         {# Single-quoted, and it has to be: `tojson` escapes `<`, `>`, `&` and `'`
            but deliberately not `"`, so a double-quoted handler ends at the first
            quote of the string and leaves the browser a syntax error. Same
            pattern as `sources.html`'s `data-row`. #}
-        <button onclick='remove({{ a.id }}, {{ a.name|tojson }})'>remove</button>
+        <button onclick='remove({{ a.id }}, {{ a.name|tojson }})'>{{ t('archives.remove') }}</button>
       </td>
     </tr>
     {% endfor %}
   </table></div>
   {% else %}
-  <p class="muted">Nothing registered yet. Until a folder is here, this server
-  indexes only what someone ran <code>services.api.ingest</code> over by
-  hand.</p>
+  <p class="muted">{{ t('archives.nothing_registered') }}</p>
   {% endif %}
   <div id="say" class="note" style="margin-top:.5rem"></div>
 </div>
 
 <div class="panel">
-  <h2>add a folder</h2>
-  <p class="note">The path is relative to
-  <code>{{ archive_root }}</code>. Only folders under that root can be
-  indexed &mdash; in the container it is the single path mounted at
-  <code>/archive</code>, so a folder elsewhere is not merely unreadable, it is
-  invisible, and a scan of it would report success having loaded nothing.</p>
+  <h2>{{ t('archives.add') }}</h2>
+  <p class="note">{{ t('archives.add_note', root=archive_root) }}</p>
 
   {# What is actually mounted, so adding a folder is picking from what is
      there rather than typing a path and hoping.
@@ -183,52 +154,52 @@
      someone opens this page -- that wait was long enough to look like a
      blank page and a dead server. #}
   <div id="cands">
-  <p class="note">Folders that hold daily sounding data, and the days inside
-  each of them. Registering one covers every day it contains and every day the
-  receiver adds later &mdash; scanning is recursive, so a new day folder needs
-  no action here.</p>
+  <p class="note">{{ t('archives.cands_note') }}</p>
   {% if candidates %}
   <div class="scroll" style="margin-bottom:.6rem"><table>
-    <tr><th>folder</th>{% if mount.extra %}<th>root</th>{% endif %}
-        <th>holds</th><th></th></tr>
+    <tr><th>{{ t('archives.col.folder') }}</th>{% if mount.extra %}<th>{{ t('archives.col.root') }}</th>{% endif %}
+        <th>{{ t('archives.col.holds') }}</th><th></th></tr>
     {% for c in candidates %}
     <tr>
-      <td><code>{{ '(the mount itself)' if c.path == '.' else c.path }}</code>
-          {%- if c.days %} <span class="note">{{ c.days }} day folder{{ '' if c.days == 1 else 's' }}</span>{% endif %}
-          {%- if c.inside %} <span class="note">inside <code>{{ '(the mount itself)' if c.inside == '.' else c.inside }}</code> &mdash; register one or the other, not both</span>{% endif %}</td>
+      <td><code>{{ t('archives.mount_itself') if c.path == '.' else c.path }}</code>
+          {%- if c.days %} <span class="note">{{ t('archives.day_folders',
+            n=c.days, unit=plural(c.days, 'dayfolder')) }}</span>{% endif %}
+          {%- if c.inside %} <span class="note">{{ t('archives.inside',
+            path=t('archives.mount_itself') if c.inside == '.' else c.inside) }}</span>{% endif %}</td>
       {% if mount.extra %}<td class="muted">{{ c.root }}
-        {%- if not c.primary %} <span class="note">stored absolute</span>{% endif %}</td>{% endif %}
+        {%- if not c.primary %} <span class="note">{{ t('archives.stored_absolute') }}</span>{% endif %}</td>{% endif %}
       <td class="muted">
-        {%- if c.by_format is none %}{{ c.soundings }} indexed
-        {%- elif c.soundings %}{{ c.soundings }} sounding(s)
+        {%- if c.by_format is none %}{{ t('archives.indexed', n=c.soundings) }}
+        {%- elif c.soundings %}{{ t('archives.holds', n=c.soundings,
+            unit=plural(c.soundings, 'sounding')) }}
           ({% for f, n in c.by_format.items() %}{{ n }} {{ f }}{{ ', ' if not loop.last }}{% endfor %})
-        {%- else %}<span class="muted">nothing this server can read</span>{% endif %}</td>
-      <td>{% if c.registered %}<span class="muted">registered</span>
-          {%- elif c.soundings %}<button onclick='pick({{ c.path|tojson }})'>use</button>
+        {%- else %}<span class="muted">{{ t('archives.unreadable') }}</span>{% endif %}</td>
+      <td>{% if c.registered %}<span class="muted">{{ t('archives.registered') }}</span>
+          {%- elif c.soundings %}<button onclick='pick({{ c.path|tojson }})'>{{ t('archives.use') }}</button>
           {%- endif %}</td>
     </tr>
     {% endfor %}
   </table></div>
   {% else %}
-  <p class="muted" id="candsNote">looking at what is mounted &hellip;</p>
+  <p class="muted" id="candsNote">{{ t('archives.looking') }}</p>
   {% endif %}
   </div>
 
   <div style="display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap">
-    <label class="muted" style="font-size:.85rem">path
+    <label class="muted" style="font-size:.85rem">{{ t('archives.field.path') }}
       <input id="path" size="28" placeholder="2026.02.04"></label>
-    <label class="muted" style="font-size:.85rem">name
-      <input id="name" size="16" placeholder="(defaults to the path)"></label>
-    <label class="muted" style="font-size:.85rem">format
+    <label class="muted" style="font-size:.85rem">{{ t('archives.field.name') }}
+      <input id="name" size="16" placeholder="{{ t('archives.name_placeholder') }}"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('archives.field.format') }}
       <select id="format">
-        <option value="">any</option>
+        <option value="">{{ t('archives.any') }}</option>
         {% for f in formats %}<option>{{ f }}</option>{% endfor %}
       </select></label>
-    <button onclick="add()">add</button>
+    <button onclick="add()">{{ t('archives.add_button') }}</button>
   </div>
 
   <div style="margin-top:.5rem">
-    <span class="muted" style="font-size:.85rem">methods</span>
+    <span class="muted" style="font-size:.85rem">{{ t('archives.methods') }}</span>
     {% for m, info in methods.items() %}
     <label style="font-size:.85rem; margin-left:.5rem"
            {% if not info.usable %}title="{{ info.why }}"{% endif %}>
@@ -237,15 +208,11 @@
              {% if not info.usable %}disabled{% endif %}>{{ m }}
       {%- if not info.usable %} <span class="muted">({{ info.why }})</span>{% endif %}</label>
     {% endfor %}
-    <button onclick="allMethods()">all</button>
+    <button onclick="allMethods()">{{ t('archives.all') }}</button>
   </div>
-  <p class="note">Adding a method later re-scopes the folder's existing
-  soundings on the next scan &mdash; anything already computed is kept.
+  <p class="note">{{ t('archives.methods_note') }}
   {% if methods.cnn and not methods.cnn.usable %}
-  A method that cannot run here is disabled rather than merely warned about:
-  <code>already_done</code> counts a sounding finished only when it holds a
-  row for <i>every</i> requested method, so choosing one that never produces
-  a row would re-scan the whole folder on every pass, forever.{% endif %}</p>
+  {{ t('archives.methods_note.cnn') }}{% endif %}</p>
   <div id="addSay" class="note" style="margin-top:.45rem"></div>
 </div>
 

@@ -24,7 +24,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import agent_routes, archive_routes, archives, auth, control_routes
-from . import db, net, read_routes, sources
+from . import db, i18n, net, read_routes, sources
 from . import web_routes
 
 VERSION = "0.1.0"
@@ -73,6 +73,8 @@ async def lifespan(app: FastAPI):
     print(f"api {VERSION}{' ' + BUILD_SHA if BUILD_SHA else ''}  "
           f"db={db.DEFAULT_DB}  archive={app.state.archive_root}")
     print(f"  {auth.describe()}")
+    print(f"  ui language: {i18n.default_lang()}"
+          f" (of {', '.join(i18n.LOCALES)}; per-browser via the header toggle)")
     if not auth.READ_TOKEN:
         print("  READ_TOKEN is unset: reads are open. Correct for a rig on "
               "127.0.0.1, wrong anywhere a station can reach.")
@@ -125,6 +127,14 @@ app = FastAPI(title="ionograms-handler api", version=VERSION,
 # keeps it off the small health responses, where a compressed frame would be
 # larger than the answer.
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Decides which language the pages render in, before routing, and writes the
+# cookie when `?lang=` asked for one. Outside the gzip layer because it only
+# ever adds a header. Plain ASGI rather than `@app.middleware("http")`: that
+# decorator wraps `BaseHTTPMiddleware`, which buffers a response through an
+# anyio stream, and this server streams rendered ionograms and a 1 MB plotting
+# bundle through the same stack.
+app.add_middleware(i18n.LocaleMiddleware)
 
 app.include_router(agent_routes.router)
 app.include_router(archive_routes.router)

@@ -47,7 +47,8 @@ muf = "muf.cli:main"
 # Only the pipeline package. The original top-level scripts (MUF.py, stuffr.py,
 # data_handler/, ...) stay in the repository for reference but are not shipped.
 packages = ["muf", "muf.extractors", "muf.reference", "services",
-            "services.agent", "services.api", "services.prediction"]
+            "services.agent", "services.api", "services.api.locale",
+            "services.prediction"]
 
 # The api service ships its schema and its Jinja templates, which are data, not
 # modules -- without this an installed copy starts and then 500s on the first

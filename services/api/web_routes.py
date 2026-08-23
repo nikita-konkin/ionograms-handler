@@ -17,10 +17,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 
 from muf.reference import indices
 
-from . import acquisition, db
+from . import acquisition, db, i18n
 from . import net as net_mod
 from . import sao as sao_mod
 from . import series as series_mod
@@ -29,7 +30,13 @@ from .auth import require_read
 from .read_routes import _age_seconds, _command, _preview, _tri
 
 router = APIRouter(include_in_schema=False, dependencies=[Depends(require_read)])
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# `context_processors` puts `t`, `plural` and `lang` into every render
+# without any route function or context dict having to carry a language
+# around -- see `i18n.context`. The alternative, threading a language
+# through eight route signatures, is eight chances to forget one.
+templates = Jinja2Templates(
+    directory=str(Path(__file__).parent / "templates"),
+    context_processors=[i18n.context])
 
 #: Age past which a station is shown as stale rather than as whatever it last
 #: said. Defined in `acquisition` because the acquiring/stopped indicator
@@ -38,26 +45,32 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 STALE_AFTER_S = acquisition.STALE_AFTER_S
 
 
-def _duration(seconds) -> str:
+def _duration(seconds, lang: str = i18n.DEFAULT) -> str:
     """Seconds as something readable at a glance, with a sign for the past.
 
     An operator reading "is it working this minute" should not have to divide
     by sixty. ``None`` prints as an em dash rather than as zero, because "not
     known" and "now" are the two answers this must never confuse.
+
+    The unit letters come from the catalog: ``9h04m`` is ``9ч04м`` in Russian,
+    and a console that prints one of them beside a Russian sentence is a
+    console somebody has to read in two languages at once.
     """
     if seconds is None:
         return "—"
+    sec, minute, hour, day = (str(i18n.t(f"unit.{u}", lang))
+                              for u in ("s", "m", "h", "d"))
     sign, value = ("-", -seconds) if seconds < 0 else ("", seconds)
     if value < 90:
-        return f"{sign}{value:.0f}s"
+        return f"{sign}{value:.0f}{sec}"
     if value < 5400:
-        return f"{sign}{int(value) // 60}m{int(value) % 60:02d}s"
+        return f"{sign}{int(value) // 60}{minute}{int(value) % 60:02d}{sec}"
     if value < 172800:
-        return f"{sign}{int(value) // 3600}h{(int(value) % 3600) // 60:02d}m"
-    return f"{sign}{value / 86400:.1f}d"
+        return f"{sign}{int(value) // 3600}{hour}{(int(value) % 3600) // 60:02d}{minute}"
+    return f"{sign}{value / 86400:.1f}{day}"
 
 
-def _lead(seconds) -> str:
+def _lead(seconds, lang: str = i18n.DEFAULT) -> str:
     """A horizon as a column heading: ``1 h``, ``24 h``, ``7 d``.
 
     Separate from `_duration`, which answers "how long ago" and prints
@@ -67,11 +80,19 @@ def _lead(seconds) -> str:
     if seconds is None:
         return "—"
     seconds = int(seconds)
-    return f"{seconds // 3600} h" if seconds < 172800 else f"{seconds // 86400} d"
+    unit = "h" if seconds < 172800 else "d"
+    count = seconds // 3600 if seconds < 172800 else seconds // 86400
+    return f"{count} {i18n.t('unit.' + unit, lang)}"
 
 
-templates.env.filters["duration"] = _duration
-templates.env.filters["lead"] = _lead
+# Wrapped rather than registered directly: a Jinja filter has no request, and
+# `pass_context` is how it reaches the `lang` the context processor put there.
+# Keeping the plain functions callable means the units stay testable without a
+# render.
+templates.env.filters["duration"] = pass_context(
+    lambda ctx, seconds: _duration(seconds, ctx.get("lang", i18n.DEFAULT)))
+templates.env.filters["lead"] = pass_context(
+    lambda ctx, seconds: _lead(seconds, ctx.get("lang", i18n.DEFAULT)))
 
 
 #: How far the observed band may sit inside the configured one before the

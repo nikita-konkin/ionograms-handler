@@ -48,21 +48,36 @@ CPUAffinity=2-7
 # nothing. That is exactly what -np 2 did here from 2026-08-12 (when the
 # schedule dropped from SGO+NIC to NIC3 alone) until 2026-08-19.
 #
-# Today that means 3, for NIC0, NIC1 and NIC3. Changing the schedule means
-# changing this number in the same commit -- and on 2026-08-20 that did not
-# happen: the schedule went from one transmitter to three through the web
-# console while this said 1, so ranks 1 and 2 never existed and NIC1 and
-# NIC3 went unsounded for twelve hours with the console showing all three
-# as `sounding`. That indicator reads the ini against a clock; it cannot
-# see how many ranks were started.
+# Today that means 4, for NIC1, NIC2, NIC3 and NIC4. Changing the schedule
+# means changing this number in the same commit, and twice now that has not
+# happened:
+#
+#   2026-08-20  the schedule went from one transmitter to three through the
+#               web console while this said 1, so ranks 1 and 2 never existed
+#               and NIC1 and NIC3 went unsounded for twelve hours.
+#   2026-08-23  the schedule went from three to four the same way while this
+#               said 3, so rank 3 never existed and NIC4 produced nothing at
+#               all -- no products, no preview -- while the console listed it
+#               as `sounding` beside the three that worked.
+#
+# Both times the console showed every transmitter as `sounding`. That
+# indicator reads the ini against a clock; it cannot see how many ranks were
+# started, so it will agree with the schedule no matter what mpirun did.
+# The symptom to look for is not in the console's state column: it is a
+# transmitter with no preview and no arrivals while its neighbours have both.
 #
 # The agent has a guard for this -- `control._validate` refuses a schedule
 # whose rank-group count disagrees with the `-np` it text-scans out of
-# `StationConfig.launcher`. It did not fire because `launcher` still
-# pointed at `examples/marieluise/dombas.sh`, which starts nothing since
-# the systemd migration, so the scan found no `calc_ionograms.py` line,
-# returned None, and disabled itself. A guard aimed at a dead file is not
-# a guard. It now points at the installed unit.
+# `StationConfig.launcher`. It has not fired either time. In August it was
+# aimed at `examples/marieluise/dombas.sh`, dead since the systemd migration,
+# so the scan found no `calc_ionograms.py` line, returned None and disabled
+# itself; the default now points at this unit. It stayed silent on 08-23 for
+# the same reason, because that fix is in the repository and not on the
+# station: `_launcher_ranks` returning None is indistinguishable from
+# passing, so an undeployed guard looks exactly like a satisfied one.
+#
+# **Deploying the agent is therefore part of changing the schedule**, not a
+# tidy-up to do later.
 #
 # (In serendipitous mode timings come from find_timings.py instead and any -np
 # is valid, which is why this constraint only appeared when DOB switched modes
@@ -72,7 +87,7 @@ CPUAffinity=2-7
 # the measurement. Without it Open MPI puts rank 0 on physical core 0 whatever
 # CPUAffinity says, so this unit's deadline-critical rank and the recorder end
 # up sharing execution units, L1 and L2.
-ExecStart=/usr/bin/mpirun --bind-to none -np 3 /home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
+ExecStart=/usr/bin/mpirun --bind-to none -np 4 /home/ionouser/chirpsounder2/.venv38/bin/python3 calc_ionograms.py --config /home/ionouser/chirpsounder2/my_station.ini
 Restart=always
 RestartSec=15
 
