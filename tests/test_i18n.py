@@ -419,3 +419,40 @@ def test_the_browser_gets_the_javascript_half_of_the_catalog(client):
     page = client.get("/ui/soundings").text
     assert "const I18N = {" in page
     assert '<script id="i18n-catalog"' not in page
+
+
+#: Keys whose value is appended to something already rendered -- a count, a
+#: list, a timestamp -- rather than starting its own label, sentence or cell.
+#: They are the one place the sentence-case rule inverts: a capital here lands
+#: in the middle of a phrase.
+#:
+#: This has now bitten three times. `forecast.of` follows
+#: `{{ m.features|length }}` and rendered "18 Of muf" on the live page;
+#: `sources.js.of_rep` follows a list of chirp offsets and rendered
+#: "5s, 10s Of 300s". Both were introduced by the capitalisation sweep, which
+#: could not see where a string lands.
+#:
+#: `console.in` and `console.from_products` are deliberately NOT here: each is
+#: the whole contents of its table cell, so it starts a phrase and keeps its
+#: capital.
+MID_PHRASE = {
+    "forecast.of",
+    "sources.js.of_rep",
+}
+
+
+@pytest.mark.parametrize("lang", i18n.LOCALES)
+@pytest.mark.parametrize("key", sorted(MID_PHRASE))
+def test_a_mid_phrase_fragment_does_not_start_with_a_capital(key, lang):
+    value = i18n.CATALOGS[lang][key]
+    first = value.lstrip()[0]
+    assert first == first.lower(), (
+        f"{lang}:{key} = {value!r} starts with a capital, but it is appended "
+        f"to a value already on the page -- it renders mid-phrase. "
+        f"See MID_PHRASE.")
+
+
+def test_the_mid_phrase_list_has_no_stale_entries():
+    """A key removed from the catalog should leave this list, not sit in it."""
+    missing = sorted(MID_PHRASE - set(en.MESSAGES))
+    assert not missing, f"MID_PHRASE names keys that no longer exist: {missing}"

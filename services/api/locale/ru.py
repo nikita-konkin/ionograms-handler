@@ -189,7 +189,7 @@ MESSAGES: dict[str, str] = {
     "forecast.golden.recorded": "эталон записан",
     "forecast.golden.absent": "эталона нет",
     "forecast.unbound": "Без трассы",
-    "forecast.of": "По",
+    "forecast.of": "по",
     "forecast.state.active": "В РАБОТЕ",
     "forecast.state.comparison": "Для сравнения",
     "forecast.activate": "Назначить",
@@ -911,7 +911,7 @@ MESSAGES: dict[str, str] = {
         "На этом приёмнике пока никто не опознан. Выберите строку выше и дайте "
         "ей имя.",
     "sources.js.khz_s": "{rate} кГц/с",
-    "sources.js.of_rep": "Из {rep} с",
+    "sources.js.of_rep": "из {rep} с",
     "sources.js.forget": "Забыть",
     "sources.js.forget_confirm":
         "Забыть {code} на {station}?\n\nУже записанные продукты сохраняют "

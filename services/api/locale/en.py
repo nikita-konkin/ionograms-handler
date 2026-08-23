@@ -195,7 +195,7 @@ MESSAGES: dict[str, str] = {
     "forecast.golden.recorded": "golden recorded",
     "forecast.golden.absent": "golden absent",
     "forecast.unbound": "Unbound",
-    "forecast.of": "Of",
+    "forecast.of": "of",
     "forecast.state.active": "ACTIVE",
     "forecast.state.comparison": "Comparison",
     "forecast.activate": "Activate",
@@ -889,7 +889,7 @@ MESSAGES: dict[str, str] = {
     "sources.js.none_identified":
         "Nothing identified at this receiver yet. Pick a row above and name it.",
     "sources.js.khz_s": "{rate} kHz/s",
-    "sources.js.of_rep": "Of {rep}s",
+    "sources.js.of_rep": "of {rep}s",
     "sources.js.forget": "Forget",
     "sources.js.forget_confirm":
         "Forget {code} at {station}?\n\nProducts already recorded keep the "
