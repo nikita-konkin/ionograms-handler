@@ -171,6 +171,11 @@ data/
 out/
 imgs/
 *.png
+# `muf export` defaults to --out sao (muf/cli.py), so a plain run drops its
+# XML here. 288 of them were committed once; nothing reads them, and
+# tests/test_saoxml.py builds every fixture it needs in tmp_path.
+sao/
+sao_test/
 
 # Local database credentials (data_handler/database.ini holds real hosts/passwords)
 database.ini
