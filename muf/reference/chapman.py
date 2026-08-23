@@ -29,12 +29,11 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from ..geometry import Point, great_circle_km, midpoint
+from ..geometry import Point, midpoint
 from . import ReferenceSeries, as_index
 
 #: alpha-Chapman: Nm ~ sqrt(cos X), and f ~ sqrt(Nm), giving foF2 ~ cos(X)^0.25.

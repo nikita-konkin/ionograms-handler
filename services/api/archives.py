@@ -42,7 +42,7 @@ import re
 import threading
 import time
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import db, watch

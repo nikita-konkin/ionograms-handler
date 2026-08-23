@@ -516,17 +516,6 @@ def record_epoch(conn: sqlite3.Connection, station: str, changes: dict,
     return int(cur.lastrowid)
 
 
-def recent_epochs(conn: sqlite3.Connection, station: str,
-                  limit: int = 10) -> list[dict]:
-    out = []
-    for row in rows(conn, "SELECT * FROM config_epoch WHERE station = ?"
-                          " ORDER BY valid_from DESC, id DESC LIMIT ?",
-                    (station, limit)):
-        row["changes"] = json.loads(row["changes"] or "{}")
-        out.append(row)
-    return out
-
-
 # --------------------------------------------------------------------------
 # Archives -- the folders that are meant to be indexed
 # --------------------------------------------------------------------------

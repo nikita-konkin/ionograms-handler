@@ -28,11 +28,9 @@ the run:
 
 from __future__ import annotations
 
-import datetime as dt
 from dataclasses import dataclass, field
 from typing import Callable
 
-import numpy as np
 import pandas as pd
 
 from ..geometry import Point

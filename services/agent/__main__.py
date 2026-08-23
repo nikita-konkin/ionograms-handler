@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import client, control, health, logs, runner
+from . import control, health, logs, runner
 from .config import StationConfig
 
 

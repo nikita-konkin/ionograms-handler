@@ -30,7 +30,7 @@ default here, recorded in the recipe as an assumption rather than a reading.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np

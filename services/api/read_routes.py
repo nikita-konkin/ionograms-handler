@@ -547,7 +547,7 @@ def _render(path: Path, *, gate, trace, muf, dpi, bare: bool = False) -> bytes:
     results = extractors.run(ion) if muf else None
     segments = reconstruction = None
     if trace and results:
-        from muf import fit as fit_module, geometry, trace as trace_module
+        from muf import geometry, trace as trace_module
 
         best = next((r for r in results.values() if r.ok), None)
         if best is not None:

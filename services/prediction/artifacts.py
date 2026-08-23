@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import json
 import warnings
-import zipfile
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -158,10 +157,6 @@ def _sklearn_origin_version(caught) -> str | None:
         if original:
             return str(original)
     return None
-
-
-def _describe(estimator: Any) -> str:
-    return f"{type(estimator).__module__}.{type(estimator).__name__}"
 
 
 def _framework_of(estimator: Any) -> str:

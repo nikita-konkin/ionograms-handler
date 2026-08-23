@@ -285,7 +285,7 @@ def cmd_plot(args) -> int:
 
 def _analyse_trace(ion, results, method: str):
     """Segment and reconstruct one estimator's trace, for the plot overlay."""
-    from muf import fit, geometry, trace
+    from muf import geometry, trace
 
     result = results.get(method)
     if result is None or not result.ok:
