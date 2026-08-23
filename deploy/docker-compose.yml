@@ -70,6 +70,11 @@ services:
       CONTROL_TOKEN: "${CONTROL_TOKEN:?set CONTROL_TOKEN in deploy/.env}"
     volumes:
       - api-data:/data
+      # Uploaded artifacts, quarantined. Its own volume rather than a corner of
+      # `models`, and read-write here: the api has to be able to put a file
+      # down, and must never be able to put one where `infer` runs code from.
+      # Nothing in this container ever opens what lands here.
+      - model-uploads:/uploads
       # Read-only, and it stays read-only. The api renders from the archive and
       # has no business writing to it.
       - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
@@ -147,8 +152,77 @@ services:
       - sim-products:/var/lib/station/products
     restart: unless-stopped
 
+  # The two workers that open what the console sends.
+  #
+  # Neither listens on anything, and that is the whole point: the api takes
+  # bytes and queues a row; a process no request can reach is what unpickles an
+  # artifact or fits a model. `services/prediction/importer.py` refused an HTTP
+  # import route for that reason, and this is how the refusal survives the
+  # console growing an upload button.
+  #
+  # Same image as `train` and `importer` -- it may have to load a Keras model
+  # to introspect one, and neither process imports tensorflow unless it does.
+  #
+  # `models` is read-write in these two and **only** in these two. `infer`
+  # keeps `:ro`: a process that runs code out of an artifact should not be able
+  # to replace one.
+  registrar:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.train
+    command: >
+      python -m services.prediction.registrar
+      --interval ${MODEL_REGISTRAR_INTERVAL_S:-10}
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MODEL_STORE: /models
+      MODEL_UPLOADS: /uploads
+      MUF_INDEX_CACHE: /indices
+    # No server in here, so an inherited healthcheck could only ever fail.
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      - model-uploads:/uploads
+      - models:/models
+      - indices:/indices
+    restart: unless-stopped
+
+  # Separate from the registrar, not folded into it: a fit takes minutes and an
+  # upload settles in seconds, and one worker draining both queues would leave
+  # an operator watching a spinner for the length of somebody else's training
+  # run.
+  trainer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.train
+    command: >
+      python -m services.prediction.trainer
+      --interval ${MODEL_TRAINER_INTERVAL_S:-60}
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MODEL_STORE: /models
+      MUF_INDEX_CACHE: /indices
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      - models:/models
+      - indices:/indices
+    restart: unless-stopped
+
 volumes:
   api-data:
+  # Artifacts uploaded from the console, before anything has opened them.
+  # Separate from `models` so that the api can write here without being able to
+  # write there.
+  model-uploads:
   sim-products:
   models:
   indices:

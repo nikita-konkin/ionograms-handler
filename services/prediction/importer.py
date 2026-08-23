@@ -7,10 +7,18 @@ research project, the output of a training run, and anything an operator drops
 on the models volume by hand -- because they differ only in what they can prove
 about themselves, and the difference is recorded rather than assumed.
 
-**There is no HTTP import route.** Registering a model means reading a file
-from a shared volume and running code out of it; exposing that would give the
-prediction service an inbound surface, which the architecture spends real
-effort avoiding. This runs as a one-off container beside ``train``.
+**Nothing that answers HTTP ever calls this.** Registering a model means
+reading a file from a shared volume and running code out of it, and giving the
+prediction service an inbound surface is what the architecture spends real
+effort avoiding. That has not changed now that the console has an upload
+button: the api hashes the bytes, checks four magic bytes and writes them to a
+quarantine volume *without opening them*, and
+``services/prediction/registrar.py`` -- a container that listens on nothing --
+is what calls the function below. ``tests/test_prediction_upload.py`` greps
+``services/api/`` to keep it that way.
+
+This module is still also a command, run as a one-off container beside
+``train``, which is what a scripted bulk import wants.
 
 What it refuses, and why refusing beats guessing:
 
@@ -32,7 +40,7 @@ import sys
 from pathlib import Path
 
 from ..api import db
-from . import artifacts, legacy_features, registry
+from . import artifacts, legacy_features, registry, store
 
 
 def describe(row: dict) -> str:
@@ -51,7 +59,10 @@ def import_artifact(path: Path, *, param: str, name: str | None = None,
                     origin: str = "legacy", target_src: str | None = None,
                     features: list[str] | None = None,
                     period: int = legacy_features.DEFAULT_DECOMPOSITION_PERIOD,
+                    period_assumed: bool = True,
                     note: str | None = None,
+                    trained_from: str | None = None,
+                    trained_to: str | None = None,
                     conn=None) -> dict:
     """Load, introspect, prove it runs, and write the registry row."""
     path = Path(path)
@@ -77,7 +88,7 @@ def import_artifact(path: Path, *, param: str, name: str | None = None,
         features=tuple(names), n_features=len(names), env=contract.env,
     )
 
-    recipe = legacy_features.parse(names, period=period)
+    recipe = legacy_features.parse(names, period=period, assumed=period_assumed)
 
     # Prove it runs, and record what it said, before anything is written.
     row = artifacts.golden_row(contract)
@@ -95,6 +106,7 @@ def import_artifact(path: Path, *, param: str, name: str | None = None,
         feature_recipe=recipe.as_dict(), env=contract.env,
         golden_input=row, golden_output=output,
         target_src=target_src, note=note,
+        trained_from=trained_from, trained_to=trained_to,
     )
 
     owned = conn is not None
@@ -132,15 +144,33 @@ def main(argv: list[str] | None = None) -> int:
                              "artifact -- this is the one part of the recipe "
                              "that is assumed rather than read.")
     parser.add_argument("--note", default=None)
+    parser.add_argument("--store", action="store_true",
+                        help="copy the artifact into the content-addressed "
+                             "store first, and register the stored object "
+                             "rather than the path given. Off by default: a "
+                             "row that already names a path keeps working, "
+                             "and rewriting one under a running `infer` is a "
+                             "worse failure than an inconsistency.")
     parser.add_argument("--db", type=Path, default=None)
     args = parser.parse_args(argv)
 
     names = json.loads(args.features.read_text()) if args.features else None
 
+    artifact = args.artifact
+    if args.store:
+        try:
+            artifact = store.put(artifact, artifacts.sha256(artifact))
+        except (store.StoreError, OSError) as exc:
+            print(f"import failed: {exc}", file=sys.stderr)
+            return 1
+        # The stem becomes the digest once it is in the store, so a name that
+        # was going to be defaulted has to be pinned to the original file.
+        args.name = args.name or Path(args.artifact).stem
+
     try:
         with db.session(args.db) as conn:
             row = import_artifact(
-                args.artifact, param=args.param, name=args.name,
+                artifact, param=args.param, name=args.name,
                 tx=args.tx, rx=args.rx, origin=args.origin,
                 target_src=args.target_src, features=names,
                 period=args.period, note=args.note, conn=conn,

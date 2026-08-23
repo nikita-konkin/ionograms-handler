@@ -178,10 +178,9 @@ MESSAGES: dict[str, str] = {
         "Показано, но не снято с работы.",
     "forecast.nothing_live":
         "Ничего не работает. Для свежего развёртывания это нормальное "
-        "состояние, а не сбой &mdash; зарегистрируйте модель командой "
-        "<code>python -m services.prediction.importer</code>, затем назначьте "
-        "её ниже. До тех пор <code>/forecast</code> отдаёт пустоту, а не "
-        "что-то непроверенное.",
+        "состояние, а не сбой &mdash; добавьте модель ниже или обучите её на "
+        "собственных измерениях этой трассы, затем назначьте. До тех пор "
+        "<code>/forecast</code> отдаёт пустоту, а не что-то непроверенное.",
 
     "forecast.models": "Модели",
     "forecast.col.origin": "Происхождение",
@@ -202,10 +201,66 @@ MESSAGES: dict[str, str] = {
         "Не привязана ни к одной трассе, поэтому прогнозировать ей нечего. "
         "Загрузите её заново с --tx и --rx.",
     "forecast.nothing_registered":
-        "Ничего не зарегистрировано. <code>python -m "
-        "services.prediction.importer &lt;файл&gt; --param muf</code> "
-        "регистрирует модель; маршрута по HTTP для этого намеренно нет, потому "
-        "что регистрация модели означает запуск кода из файла на общем томе.",
+        "Ничего не зарегистрировано. Загрузите артефакт ниже или обучите "
+        "модель. В обоих случаях файл открывает отдельный процесс, а не этот "
+        "сервер: регистрация модели означает запуск кода из файла, и процессу, "
+        "отвечающему на этот запрос, этим заниматься незачем.",
+
+    # -- forecast: adding a model -----------------------------------------
+    "forecast.add": "Добавить модель",
+    "forecast.add.hint":
+        "Файл хешируется, проверяется и кладётся в промежуточную область. "
+        "Здесь он не открывается: <code>.sav</code> &mdash; это pickle, и его "
+        "загрузка выполняет код из файла, поэтому этим занимается процесс без "
+        "сетевого доступа. Между «принято» и «зарегистрировано» проходит "
+        "несколько секунд.",
+    "forecast.add.file": "Артефакт",
+    "forecast.add.name": "Имя",
+    "forecast.add.name.placeholder": "по умолчанию: имя файла",
+    "forecast.add.circuit": "Трасса",
+    "forecast.add.circuit.any": "Без трассы (только для сравнения)",
+    "forecast.add.origin": "Происхождение",
+    "forecast.add.origin.imported": "imported &mdash; положена вручную",
+    "forecast.add.origin.legacy": "legacy &mdash; из исследовательского архива",
+    "forecast.add.origin.trained": "trained &mdash; обучена в другом месте",
+    "forecast.add.target_src": "Целевая величина",
+    "forecast.add.target_src.auto": "по умолчанию для этого происхождения",
+    "forecast.add.target_src.measured": "измеренная &mdash; можно назначить",
+    "forecast.add.target_src.modelled": "модельная &mdash; только сравнение",
+    "forecast.add.note": "Примечание",
+    "forecast.add.submit": "Загрузить",
+    "forecast.add.queue": "В очереди",
+    "forecast.add.col.file": "Файл",
+    "forecast.add.col.uploaded": "Загружено",
+    "forecast.add.col.detail": "Что произошло",
+    "forecast.add.empty": "Очередь пуста.",
+    "forecast.add.forget": "Забыть",
+    "forecast.state.pending": "В очереди",
+    "forecast.state.refused": "Отклонена",
+
+    # -- forecast: training -----------------------------------------------
+    "forecast.train": "Обучить модель",
+    "forecast.train.hint":
+        "Обучение идёт на собственных измеренных отсчётах этой трассы: "
+        "признаки берутся с отслеженной сетки, цель &mdash; из самих отсчётов, "
+        "граничные оценки исключаются, последние сутки удерживаются для "
+        "проверки. Результат регистрируется для сравнения и сообщает, "
+        "выигрывает ли он у персистентности; назначение остаётся отдельным "
+        "решением.",
+    "forecast.train.lead": "Заблаговременность",
+    "forecast.train.estimator": "Алгоритм",
+    "forecast.train.holdout": "Удержать (суток)",
+    "forecast.train.submit": "Поставить в очередь",
+    "forecast.train.jobs": "Запуски обучения",
+    "forecast.train.col.requested": "Запрошено",
+    "forecast.train.col.lead": "Заблаговременность",
+    "forecast.train.empty": "На этом развёртывании ещё ничего не обучалось.",
+    "forecast.train.cancel": "Отменить",
+    "forecast.state.queued": "В очереди",
+    "forecast.state.running": "Выполняется",
+    "forecast.state.done": "Готово",
+    "forecast.state.failed": "Ошибка",
+    "forecast.state.cancelled": "Отменено",
 
     "forecast.leaderboard": "Рейтинг",
     "forecast.leaderboard.sub": "{circuit} &middot; {param} &middot; MAE (МГц)",
@@ -239,6 +294,22 @@ MESSAGES: dict[str, str] = {
         "Суточные гармоники плюс зенитный угол Солнца, подогнанные строго до "
         "оцениваемого окна, чтобы метод не стал оракулом в собственном рейтинге",
 
+    "forecast.js.no_file": "Сначала выберите файл артефакта.",
+    "forecast.js.uploading": "Загрузка {name}\u2026",
+    "forecast.js.waiting":
+        "{name} принят. Ожидаем, пока регистратор его откроет\u2026",
+    "forecast.js.slow":
+        "{name} всё ещё в очереди. Регистратор опрашивает её каждые несколько "
+        "секунд; если он не запущен, файл никто не откроет.",
+    "forecast.js.queued_training":
+        "Поставлено в очередь. Тренер возьмёт задание в течение минуты; "
+        "обучение занимает минуты, а не секунды.",
+    "forecast.js.forget_confirm":
+        "Забыть {name}?\n\nЗагруженные байты будут удалены. Уже "
+        "зарегистрированные модели не затрагиваются.",
+    "forecast.js.cancel_confirm":
+        "Отменить задание {id}?\n\nОтменить можно только незапущенное "
+        "задание; начавшееся обучение доводится до конца.",
     "forecast.js.activate_confirm":
         "Назначить {name} прогнозом {param} для трассы {circuit}?\n\n"
         "То, что работает на этой трассе сейчас, будет снято тем же действием.",

@@ -6,8 +6,11 @@
    circuit_unit=plural(live|length, 'circuit')) }}{% endblock %}
 {% block body %}
 
-{# Four bands, in the order the questions get asked: is it running, is it
-   wrong, what does it say, what else could be run. #}
+{# Six bands, in the order the questions get asked: is it running, is it
+   wrong, what does it say, what else could be run -- and then, last, the two
+   ways to get another one. The actions sit below the evidence deliberately:
+   an operator lands here to find out whether the forecast is any good, and
+   the answer to that is what should decide whether they upload anything. #}
 
 <div class="panel">
   <h2>{{ t('forecast.live') }}</h2>
@@ -199,6 +202,153 @@
   {% endif %}
 </div>
 
+<div class="panel">
+  <h2>{{ t('forecast.add') }}</h2>
+  <p class="note">{{ t('forecast.add.hint') }}</p>
+
+  <form onsubmit="sendUpload(event)" style="margin-bottom:.8rem">
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.file') }}
+      <input type="file" id="up-file" accept=".sav,.joblib,.pkl,.keras"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.col.param') }}
+      <select id="up-param"><option value="muf">MUF</option>
+        <option value="lof">LOF</option></select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.circuit') }}
+      <select id="up-circuit">
+        <option value="">{{ t('forecast.add.circuit.any') }}</option>
+        {% for tx, rx in circuits %}
+        <option value="{{ tx }}|{{ rx }}">{{ tx }} &rarr; {{ rx }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.origin') }}
+      <select id="up-origin">
+        <option value="imported">{{ t('forecast.add.origin.imported') }}</option>
+        <option value="legacy">{{ t('forecast.add.origin.legacy') }}</option>
+        <option value="trained">{{ t('forecast.add.origin.trained') }}</option>
+      </select></label>
+    {# Left on "default for this origin" on purpose. `importer` defaults a
+       legacy artifact to `modelled`, which is what makes the comparison-only
+       rule hold by forgetting rather than by remembering. #}
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.target_src') }}
+      <select id="up-target">
+        <option value="">{{ t('forecast.add.target_src.auto') }}</option>
+        <option value="measured">{{ t('forecast.add.target_src.measured') }}</option>
+        <option value="modelled">{{ t('forecast.add.target_src.modelled') }}</option>
+      </select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.name') }}
+      <input type="text" id="up-name" size="22"
+             placeholder="{{ t('forecast.add.name.placeholder') }}"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
+      <input type="text" id="up-note" size="26"></label>
+    <button type="submit" class="pill">{{ t('forecast.add.submit') }}</button>
+  </form>
+
+  <h3 class="muted" style="font-size:.9rem">{{ t('forecast.add.queue') }}</h3>
+  {% if uploads %}
+  <div class="scroll"><table>
+    <tr><th>{{ t('forecast.add.col.file') }}</th><th>{{ t('forecast.col.param') }}</th>
+        <th>{{ t('forecast.col.circuit') }}</th><th>{{ t('forecast.add.col.uploaded') }}</th>
+        <th>{{ t('forecast.col.state') }}</th><th>{{ t('forecast.add.col.detail') }}</th>
+        <th></th></tr>
+    {% for u in uploads %}
+    <tr>
+      <td><b>{{ u.filename }}</b>
+        <div class="note"><code>{{ u.sha256[:12] }}</code> &middot; {{ u.bytes }} B</div></td>
+      <td class="muted">{{ u.param|upper }}</td>
+      <td class="muted">{% if u.tx %}{{ u.tx }} &rarr; {{ u.rx }}
+          {%- else %}<span class="note">{{ t('forecast.unbound') }}</span>{% endif %}</td>
+      <td class="muted">{{ u.uploaded_at }}</td>
+      <td>{% if u.state == 'pending' %}<span class="pill unk">{{ t('forecast.state.pending') }}</span>
+          {%- else %}<span class="pill fail">{{ t('forecast.state.refused') }}</span>{% endif %}</td>
+      {# Wrapped and in full. These are the importer's own sentences, and they
+         say what to change -- a state pill with the reason truncated beside it
+         is the thing this console keeps refusing to ship. #}
+      <td class="note wrap" style="max-width:34rem">{{ u.detail or '' }}</td>
+      <td style="white-space:nowrap">
+        <button onclick='forget({{ u.id }}, {{ u.filename|tojson }})'
+          >{{ t('forecast.add.forget') }}</button></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="note">{{ t('forecast.add.empty') }}</p>
+  {% endif %}
+  <div id="say-upload" class="note" style="margin-top:.5rem"></div>
+</div>
+
+<div class="panel">
+  <h2>{{ t('forecast.train') }}</h2>
+  <p class="note">{{ t('forecast.train.hint') }}</p>
+
+  {% if circuits %}
+  <form onsubmit="sendTraining(event)" style="margin-bottom:.8rem">
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.circuit') }}
+      <select id="tr-circuit">
+        {% for tx, rx in circuits %}
+        <option value="{{ tx }}|{{ rx }}">{{ tx }} &rarr; {{ rx }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.col.param') }}
+      <select id="tr-param"><option value="muf">MUF</option>
+        <option value="lof">LOF</option></select></label>
+    {# A lead time, not a lag in samples. The operator is choosing how far
+       ahead to predict; 288 is an implementation detail of a 300 s grid. #}
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.train.lead') }}
+      <select id="tr-lead">
+        {% for h in leads %}
+        <option value="{{ h }}">{{ (h * 3600)|lead }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.train.estimator') }}
+      <select id="tr-estimator">
+        {% for e in estimators %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.train.holdout') }}
+      <input type="number" id="tr-holdout" value="2" min="0.5" step="0.5" size="4"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
+      <input type="text" id="tr-note" size="26"></label>
+    <button type="submit" class="pill">{{ t('forecast.train.submit') }}</button>
+  </form>
+  {% else %}
+  <p class="note">{{ t('forecast.no_circuits') }}</p>
+  {% endif %}
+
+  <h3 class="muted" style="font-size:.9rem">{{ t('forecast.train.jobs') }}</h3>
+  {% if jobs %}
+  <div class="scroll"><table>
+    <tr><th>{{ t('forecast.col.circuit') }}</th><th>{{ t('forecast.col.param') }}</th>
+        <th>{{ t('forecast.train.col.lead') }}</th><th>{{ t('forecast.train.estimator') }}</th>
+        <th>{{ t('forecast.train.col.requested') }}</th><th>{{ t('forecast.col.state') }}</th>
+        <th>{{ t('forecast.add.col.detail') }}</th><th></th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td><b>{{ j.tx }} &rarr; {{ j.rx }}</b></td>
+      <td class="muted">{{ j.param|upper }}</td>
+      <td class="muted">{{ j.lead_s|lead }}</td>
+      <td class="muted">{{ j.spec.estimator }}</td>
+      <td class="muted">{{ j.requested_at }}</td>
+      {# Spelled out rather than built from `j.state`: a key assembled at
+         render time is a key `tests/test_i18n.py` cannot see, and the first
+         thing that goes wrong is a raw `forecast.state.running` on screen. #}
+      <td>
+        {%- if j.state == 'done' %}<span class="pill ok">{{ t('forecast.state.done') }}</span>
+        {%- elif j.state == 'failed' %}<span class="pill fail">{{ t('forecast.state.failed') }}</span>
+        {%- elif j.state == 'running' %}<span class="pill warn">{{ t('forecast.state.running') }}</span>
+        {%- elif j.state == 'cancelled' %}<span class="pill">{{ t('forecast.state.cancelled') }}</span>
+        {%- else %}<span class="pill unk">{{ t('forecast.state.queued') }}</span>{% endif %}</td>
+      <td class="note wrap" style="max-width:34rem">{{ j.detail or '' }}</td>
+      <td style="white-space:nowrap">
+        {% if j.state == 'queued' %}
+        <button onclick='cancelJob({{ j.id }})'>{{ t('forecast.train.cancel') }}</button>
+        {% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="note">{{ t('forecast.train.empty') }}</p>
+  {% endif %}
+  <div id="say-train" class="note" style="margin-top:.5rem"></div>
+</div>
+
 <script>
 // Same contract as the console's start/stop buttons and the archives page:
 // the control token lives in sessionStorage, put there on the console page,
@@ -217,10 +367,22 @@ async function control(url, method, body) {
   return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
 }
 
-const say = (text, bad) => {
-  const el = document.getElementById('say');
+// Three panels, three places to answer in. A message about an upload that
+// appeared beside the promotion buttons would be read as being about them.
+const say = (text, bad, where) => {
+  const el = document.getElementById(where || 'say');
   el.textContent = text;
   el.className = 'note' + (bad ? ' bad' : '');
+};
+
+const field = id => (document.getElementById(id).value || '').trim();
+
+// "TX|RX" from one select rather than two boxes: a circuit is a pair that has
+// to match what is in the database exactly, and a typo in either half
+// registers a model against a circuit that does not exist.
+const circuit = id => {
+  const parts = field(id).split('|');
+  return parts.length === 2 ? {tx: parts[0], rx: parts[1]} : {};
 };
 
 // Asks once, naming the incumbent: promotion changes what every consumer of
@@ -238,6 +400,98 @@ async function retire(id, name) {
   if (!confirm(T('forecast.js.retire_confirm', {name: name}))) return;
   const r = await control('/models/' + id + '/retire', 'POST');
   say(r.ok ? r.body.detail : r.detail, !r.ok);
+  if (r.ok) setTimeout(() => location.reload(), 700);
+}
+
+// --------------------------------------------------------------------------
+// Adding a model
+//
+// The file goes up as the raw request body, not as multipart -- `fetch` sends
+// a File that way, and it keeps `python-multipart` out of the api image. The
+// metadata rides in the query string, where a filename and a circuit code are
+// unremarkable.
+// --------------------------------------------------------------------------
+
+async function sendUpload(event) {
+  event.preventDefault();
+  const tok = token();
+  if (!tok) { say(T('common.js.no_token'), true, 'say-upload'); return; }
+
+  const chosen = document.getElementById('up-file').files[0];
+  if (!chosen) { say(T('forecast.js.no_file'), true, 'say-upload'); return; }
+
+  const query = new URLSearchParams({filename: chosen.name,
+                                     param: field('up-param')});
+  const where = circuit('up-circuit');
+  if (where.tx) { query.set('tx', where.tx); query.set('rx', where.rx); }
+  for (const [key, id] of [['name', 'up-name'], ['origin', 'up-origin'],
+                           ['target_src', 'up-target'], ['note', 'up-note']]) {
+    if (field(id)) query.set(key, field(id));
+  }
+
+  say(T('forecast.js.uploading', {name: chosen.name}), false, 'say-upload');
+  let r;
+  try {
+    r = await fetch('/models/upload?' + query.toString(), {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + tok},
+      body: chosen,
+    });
+  } catch (err) {
+    say(String(err), true, 'say-upload');
+    return;
+  }
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) { say(out.detail || r.status, true, 'say-upload'); return; }
+
+  // Accepted is not registered, and the wording says so: the registrar has to
+  // open the file before anything is known about it.
+  say(T('forecast.js.waiting', {name: chosen.name}), false, 'say-upload');
+  watchUpload(out.upload.id, chosen.name);
+}
+
+// Polls rather than pushes. A push would mean the api reaching the registrar,
+// which is the surface this whole design exists to avoid.
+async function watchUpload(id, name, tries) {
+  tries = (tries || 0) + 1;
+  const body = await fetch('/models/uploads').then(r => r.json())
+                     .catch(() => ({uploads: []}));
+  const row = (body.uploads || []).find(u => u.id === id);
+  if (row && row.state !== 'pending') { location.reload(); return; }
+  if (tries >= 15) { say(T('forecast.js.slow', {name: name}), true, 'say-upload'); return; }
+  setTimeout(() => watchUpload(id, name, tries), 2000);
+}
+
+async function forget(id, name) {
+  if (!confirm(T('forecast.js.forget_confirm', {name: name}))) return;
+  const r = await control('/models/uploads/' + id, 'DELETE');
+  say(r.ok ? r.body.detail : r.detail, !r.ok, 'say-upload');
+  if (r.ok) setTimeout(() => location.reload(), 700);
+}
+
+// --------------------------------------------------------------------------
+// Training
+// --------------------------------------------------------------------------
+
+async function sendTraining(event) {
+  event.preventDefault();
+  const where = circuit('tr-circuit');
+  const r = await control('/models/train', 'POST', {
+    param: field('tr-param'), tx: where.tx, rx: where.rx,
+    lead_h: parseFloat(field('tr-lead')),
+    estimator: field('tr-estimator'),
+    holdout_days: parseFloat(field('tr-holdout')),
+    note: field('tr-note') || null,
+  });
+  if (!r.ok) { say(r.detail, true, 'say-train'); return; }
+  say(r.body.detail + ' ' + T('forecast.js.queued_training'), false, 'say-train');
+  setTimeout(() => location.reload(), 1500);
+}
+
+async function cancelJob(id) {
+  if (!confirm(T('forecast.js.cancel_confirm', {id: id}))) return;
+  const r = await control('/models/jobs/' + id, 'DELETE');
+  say(r.ok ? r.body.detail : r.detail, !r.ok, 'say-train');
   if (r.ok) setTimeout(() => location.reload(), 700);
 }
 </script>

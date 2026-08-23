@@ -403,3 +403,80 @@ CREATE TABLE IF NOT EXISTS score (
 );
 
 CREATE INDEX IF NOT EXISTS score_circuit ON score(param, tx, rx, horizon_s);
+
+
+-- --------------------------------------------------------------------------
+-- Two work queues, and the reason they exist
+-- --------------------------------------------------------------------------
+--
+-- Registering a model means running code out of a file; training one means
+-- running code that fits. Neither belongs in the process that answers HTTP,
+-- and `services/prediction/importer.py` refused an inbound route for exactly
+-- that reason. These tables are how the refusal is kept while the console
+-- still gets a button: the api writes a row and never opens the artifact, and
+-- a worker with no listening socket does the part that executes.
+
+-- One uploaded artifact awaiting registration.
+--
+-- `sha256` is the identity, here as everywhere: the quarantine file is named
+-- by it, so two uploads of the same bytes converge on one blob and one object.
+-- The binding columns carry what the operator asked for, verbatim, to be
+-- handed to `importer.import_artifact` unchanged -- the console path must not
+-- become a second implementation of the shell one.
+--
+-- `detail` holds the refusal *sentence*, not a code. It is rendered in full on
+-- the forecast page, in the same discipline the baselines table follows: an
+-- unavailable thing states why, because a blank reads as neglect.
+CREATE TABLE IF NOT EXISTS model_upload (
+    id          INTEGER PRIMARY KEY,
+    filename    TEXT NOT NULL,          -- as the operator named it, for display
+    sha256      TEXT NOT NULL,
+    bytes       INTEGER NOT NULL,
+    name        TEXT,
+    param       TEXT NOT NULL,
+    tx          TEXT, rx TEXT,
+    origin      TEXT NOT NULL DEFAULT 'imported',
+    target_src  TEXT,                   -- NULL: let the importer's default rule apply
+    period      INTEGER,
+    note        TEXT,
+    state       TEXT NOT NULL DEFAULT 'pending',
+    detail      TEXT,
+    model_id    INTEGER REFERENCES model_registry(id) ON DELETE SET NULL,
+    uploaded_at TEXT NOT NULL,
+    uploaded_by TEXT,
+    settled_at  TEXT,
+    CHECK (state IN ('pending', 'registered', 'refused'))
+);
+
+CREATE INDEX IF NOT EXISTS model_upload_state ON model_upload(state, uploaded_at);
+CREATE INDEX IF NOT EXISTS model_upload_sha ON model_upload(sha256);
+
+
+-- One requested training run.
+--
+-- The recipe and estimator knobs travel as one JSON `spec` rather than a
+-- column each: they are a single argument set handed to one function, and a
+-- column per knob would need a migration every time the trainer learns a new
+-- one. `param`/`tx`/`rx`/`method` are promoted out of it because they are what
+-- the console lists jobs by.
+--
+-- `running` is a state and not a flag so that a worker restarted mid-fit
+-- leaves something visible. A job silently returned to `queued` would be
+-- retried for ever by a fit that crashes the container.
+CREATE TABLE IF NOT EXISTS train_job (
+    id           INTEGER PRIMARY KEY,
+    param        TEXT NOT NULL,
+    tx           TEXT NOT NULL, rx TEXT NOT NULL,
+    method       TEXT NOT NULL DEFAULT 'contour',
+    spec         TEXT NOT NULL,         -- JSON: lag, windows, stats, estimator, holdout
+    state        TEXT NOT NULL DEFAULT 'queued',
+    detail       TEXT,
+    model_id     INTEGER REFERENCES model_registry(id) ON DELETE SET NULL,
+    requested_at TEXT NOT NULL,
+    requested_by TEXT,
+    started_at   TEXT,
+    settled_at   TEXT,
+    CHECK (state IN ('queued', 'running', 'done', 'failed', 'cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS train_job_state ON train_job(state, requested_at);

@@ -184,10 +184,9 @@ MESSAGES: dict[str, str] = {
         "Surfaced, not demoted.",
     "forecast.nothing_live":
         "Nothing is live. That is the normal state of a fresh deployment, not "
-        "a fault &mdash; register a model with <code>python -m "
-        "services.prediction.importer</code>, then promote one below. Until "
-        "then <code>/forecast</code> returns nothing rather than something "
-        "unvouched-for.",
+        "a fault &mdash; add a model below, or train one on this circuit's own "
+        "measurements, then promote it. Until then <code>/forecast</code> "
+        "returns nothing rather than something unvouched-for.",
 
     "forecast.models": "Models",
     "forecast.col.origin": "Origin",
@@ -207,10 +206,68 @@ MESSAGES: dict[str, str] = {
         "Bound to no circuit, so there is no forecast it could be. Re-import "
         "it with --tx and --rx.",
     "forecast.nothing_registered":
-        "Nothing registered. <code>python -m services.prediction.importer "
-        "&lt;file&gt; --param muf</code> registers one; there is deliberately "
-        "no route that does it over HTTP, because registering a model means "
-        "running code out of a file on a shared volume.",
+        "Nothing registered. Upload an artifact below, or train one. Either "
+        "way the file is opened by a worker rather than by this server: "
+        "registering a model means running code out of it, and the process "
+        "answering this request has no business doing that.",
+
+    # -- forecast: adding a model -----------------------------------------
+    #
+    # The panel exists because registering a model used to need a shell on the
+    # host. What has *not* changed is that the api never opens an artifact:
+    # these strings describe a queue, and the wording is deliberate about it.
+    "forecast.add": "Add a model",
+    "forecast.add.hint":
+        "The file is hashed, checked, and put in a holding area. It is not "
+        "opened here &mdash; a <code>.sav</code> is a pickle, and loading one "
+        "runs code out of it, so a worker with no network surface does that "
+        "part. Expect a few seconds between accepted and registered.",
+    "forecast.add.file": "Artifact",
+    "forecast.add.name": "Name",
+    "forecast.add.name.placeholder": "default: the file name",
+    "forecast.add.circuit": "Circuit",
+    "forecast.add.circuit.any": "Unbound (comparison only)",
+    "forecast.add.origin": "Origin",
+    "forecast.add.origin.imported": "imported &mdash; dropped in by hand",
+    "forecast.add.origin.legacy": "legacy &mdash; from the research archive",
+    "forecast.add.origin.trained": "trained &mdash; fitted elsewhere",
+    "forecast.add.target_src": "Target",
+    "forecast.add.target_src.auto": "default for this origin",
+    "forecast.add.target_src.measured": "measured &mdash; promotable",
+    "forecast.add.target_src.modelled": "modelled &mdash; comparison only",
+    "forecast.add.note": "Note",
+    "forecast.add.submit": "Upload",
+    "forecast.add.queue": "In the queue",
+    "forecast.add.col.file": "File",
+    "forecast.add.col.uploaded": "Uploaded",
+    "forecast.add.col.detail": "What happened",
+    "forecast.add.empty": "Nothing waiting.",
+    "forecast.add.forget": "Forget",
+    "forecast.state.pending": "Queued",
+    "forecast.state.refused": "Refused",
+
+    # -- forecast: training -----------------------------------------------
+    "forecast.train": "Train a model",
+    "forecast.train.hint":
+        "Fits on this circuit's own measured picks &mdash; inputs from the "
+        "tracked grid, target from the picks themselves, band-edge bounds "
+        "excluded, and the last days held back. The result is registered for "
+        "comparison and reports how it did against persistence; promoting it "
+        "stays a separate decision.",
+    "forecast.train.lead": "Lead",
+    "forecast.train.estimator": "Estimator",
+    "forecast.train.holdout": "Hold back (days)",
+    "forecast.train.submit": "Queue training",
+    "forecast.train.jobs": "Training runs",
+    "forecast.train.col.requested": "Requested",
+    "forecast.train.col.lead": "Lead",
+    "forecast.train.empty": "Nothing has been trained on this deployment yet.",
+    "forecast.train.cancel": "Cancel",
+    "forecast.state.queued": "Queued",
+    "forecast.state.running": "Running",
+    "forecast.state.done": "Done",
+    "forecast.state.failed": "Failed",
+    "forecast.state.cancelled": "Cancelled",
 
     "forecast.leaderboard": "Leaderboard",
     "forecast.leaderboard.sub": "{circuit} &middot; {param} &middot; MAE (MHz)",
@@ -243,6 +300,22 @@ MESSAGES: dict[str, str] = {
         "Diurnal harmonics plus solar zenith angle, fitted strictly before the "
         "scored window so it cannot become an oracle on its own leaderboard",
 
+    "forecast.js.no_file": "Choose an artifact file first.",
+    "forecast.js.uploading": "Uploading {name}\u2026",
+    "forecast.js.waiting":
+        "{name} accepted. Waiting for the registrar to open it\u2026",
+    "forecast.js.slow":
+        "{name} is still queued. The registrar polls every few seconds; if it "
+        "is not running, nothing will open this file.",
+    "forecast.js.queued_training":
+        "Queued. The trainer picks it up within a minute; a fit takes minutes, "
+        "not seconds.",
+    "forecast.js.forget_confirm":
+        "Forget {name}?\n\nThe uploaded bytes are deleted. Nothing that is "
+        "already registered is affected.",
+    "forecast.js.cancel_confirm":
+        "Cancel training job {id}?\n\nOnly a job that has not started can be "
+        "cancelled; a fit that is running goes to its end.",
     "forecast.js.activate_confirm":
         "Make {name} the {param} forecast for {circuit}?\n\n"
         "Whatever is live for that circuit is demoted in the same step.",

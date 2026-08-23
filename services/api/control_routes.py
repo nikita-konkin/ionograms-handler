@@ -46,10 +46,15 @@ purpose:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import tempfile
+from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import (APIRouter, Body, Depends, HTTPException, Query, Request,
+                     status)
 
 from muf.stations import default_registry
 
@@ -490,3 +495,207 @@ def retire_model(model_id: int, request: Request,
     return {"ok": True, "retired": {"id": row["id"], "name": row["name"]},
             "detail": f"{row['name']} is no longer the live forecast; its "
                       f"rows and its forecasts are kept."}
+
+
+# --------------------------------------------------------------------------
+# Adding a model from the console
+# --------------------------------------------------------------------------
+#
+# **This process takes the bytes and never opens them.** A `.sav` is a joblib
+# pickle, and loading one runs code out of the file;
+# `services/prediction/importer.py` refused an inbound route for exactly that
+# reason and the reason still holds. What changed is that the surface is split
+# rather than opened: the api hashes an upload, checks four magic bytes, writes
+# it to a quarantine volume and records a row. A worker with no listening
+# socket -- `services/prediction/registrar.py` -- is what loads it.
+#
+# The same split covers training. `POST /models/train` writes a row; the fit
+# happens in `services/prediction/trainer.py`, in a container that answers no
+# requests. Nothing under `services/api/` unpickles or fits, and
+# `tests/test_prediction_upload.py` greps this tree to keep it that way.
+
+#: Where quarantined uploads land. Its own volume, not the models one: the api
+#: has to be able to write here, and it must never be able to write into the
+#: directory the inference service runs code out of.
+UPLOAD_DIR = Path(os.environ.get("MODEL_UPLOADS", "/uploads"))
+
+#: A ceiling, because the body is streamed and an unbounded stream fills a
+#: volume. 64 MiB clears every artifact in the archive by a wide margin -- the
+#: legacy `.sav` files are 2-7 KB and the one Keras model is 11.9 MB.
+MAX_UPLOAD_BYTES = int(os.environ.get("MODEL_UPLOAD_MAX_BYTES", 64 * 1024 * 1024))
+
+#: How much of the stream is read at a time.
+CHUNK = 1 << 20
+
+#: Starlette renamed this constant mid-series -- `HTTP_413_REQUEST_ENTITY_TOO_LARGE`
+#: became `HTTP_413_CONTENT_TOO_LARGE` and the old spelling now warns on every
+#: use. The number is the part that has not changed in twenty-five years.
+TOO_LARGE = 413
+
+
+@router.post("/models/upload")
+async def upload_model(request: Request,
+                       filename: str = Query(..., min_length=1),
+                       param: str = Query(..., pattern="^(muf|lof)$"),
+                       tx: str | None = None, rx: str | None = None,
+                       name: str | None = None,
+                       origin: str = Query("imported",
+                                           pattern="^(legacy|trained|imported)$"),
+                       target_src: str | None = Query(
+                           None, pattern="^(measured|modelled)$"),
+                       period: int | None = None,
+                       note: str | None = None,
+                       who: str = Depends(require_control)) -> dict:
+    """Quarantine an uploaded artifact and queue it for registration.
+
+    The file arrives as the **raw request body**, not as multipart: a browser
+    `fetch(url, {body: fileObject})` sends it that way, and it keeps
+    `python-multipart` out of an image whose dependency list is argued for line
+    by line. The metadata rides in the query string, where a circuit code and a
+    filename are unremarkable.
+
+    Refusals happen before anything is stored, and both are cheap:
+
+    * a body that does not begin with a pickle or zip magic is **415**. This is
+      a format check, not a safety check -- nothing here would make an
+      arbitrary pickle safe -- but it turns "an operator picked the wrong file"
+      into a sentence instead of a worker-log traceback ten seconds later.
+    * a body over `MAX_UPLOAD_BYTES` is **413**, with the partial file removed.
+
+    What lands is `<quarantine>/<sha256>`, so two uploads of the same bytes
+    converge on one blob rather than racing.
+    """
+    from ..prediction import artifacts, queues
+
+    try:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"the upload quarantine {UPLOAD_DIR} is not writable ({exc}). "
+            f"Mount a volume there for the api, as deploy/docker-compose.yml "
+            f"does.") from exc
+
+    digest = hashlib.sha256()
+    total = 0
+    head = b""
+    handle, temporary = tempfile.mkstemp(dir=UPLOAD_DIR, prefix=".incoming-")
+    temporary_path = Path(temporary)
+
+    try:
+        with os.fdopen(handle, "wb") as writer:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                if not head:
+                    head = chunk[:4]
+                    if not (head.startswith(artifacts.PICKLE_MAGIC)
+                            or head.startswith(artifacts.ZIP_MAGIC)):
+                        raise HTTPException(
+                            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                            f"{filename} does not begin like a model artifact "
+                            f"(first bytes: {head!r}). Expected a joblib "
+                            f"pickle (.sav, .joblib) or a Keras .keras file.")
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        TOO_LARGE,
+                        f"{filename} is larger than the {MAX_UPLOAD_BYTES} "
+                        f"byte limit. Raise MODEL_UPLOAD_MAX_BYTES if this is "
+                        f"a model rather than a mistake.")
+                digest.update(chunk)
+                writer.write(chunk)
+    except HTTPException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            f"could not write the upload: {exc}") from exc
+
+    if not total:
+        temporary_path.unlink(missing_ok=True)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "the request body was empty; there is no file in it.")
+
+    sha = digest.hexdigest()
+    os.replace(temporary_path, UPLOAD_DIR / sha)
+
+    row = queues.add_upload(
+        request.app.state.db, by=who, filename=filename, sha256=sha,
+        bytes=total, name=name, param=param, tx=tx, rx=rx, origin=origin,
+        target_src=target_src, period=period, note=note)
+
+    return {
+        "ok": True, "upload": row,
+        "detail": (f"{filename} accepted ({total} bytes, sha256 {sha[:12]}). "
+                   f"It is queued for registration; nothing has loaded it yet."),
+    }
+
+
+@router.delete("/models/uploads/{upload_id}")
+def forget_upload(upload_id: int, request: Request,
+                  _: str = Depends(require_control)) -> dict:
+    """Drop a queued or refused upload, and its quarantined bytes with it."""
+    from ..prediction import queues
+
+    conn = request.app.state.db
+    row = queues.delete_upload(conn, upload_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no upload {upload_id}")
+
+    reaped = False
+    if not queues.blob_is_referenced(conn, row["sha256"]):
+        blob = UPLOAD_DIR / row["sha256"]
+        if blob.exists():
+            blob.unlink()
+            reaped = True
+
+    return {"ok": True, "forgotten": {"id": upload_id,
+                                      "filename": row["filename"]},
+            "reaped": reaped,
+            "detail": f"{row['filename']} is no longer queued."
+                      + ("" if reaped else " Its bytes are still referenced by "
+                                           "another upload row.")}
+
+
+@router.post("/models/train")
+def queue_training(request: Request, spec: dict = Body(...),
+                   who: str = Depends(require_control)) -> dict:
+    """Queue a training run. The fit happens in the trainer, not here.
+
+    Validated at the door rather than in the worker, because a job that is
+    going to be refused should be refused while the operator is still looking
+    at the form. What cannot be checked here -- whether the circuit has enough
+    history for the requested lead -- is arithmetic the trainer does against
+    the tracked series, and it reports it as a sentence.
+    """
+    from ..prediction import queues, train
+
+    conn = request.app.state.db
+    try:
+        plan = train.vet(spec)
+    except train.TrainError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    row = queues.add_job(conn, param=plan["param"], tx=plan["tx"],
+                         rx=plan["rx"], method=plan["method"],
+                         spec=plan["spec"], by=who)
+    return {"ok": True, "job": row,
+            "detail": (f"queued: {plan['estimator']} for {plan['param']} on "
+                       f"{plan['tx']} -> {plan['rx']} at "
+                       f"{plan['lead_h']:g} h lead. The trainer picks it up "
+                       f"within a minute.")}
+
+
+@router.delete("/models/jobs/{job_id}")
+def cancel_training(job_id: int, request: Request,
+                    _: str = Depends(require_control)) -> dict:
+    from ..prediction import queues
+
+    try:
+        row = queues.cancel_job(request.app.state.db, job_id)
+    except queues.QueueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return {"ok": True, "cancelled": {"id": row["id"]},
+            "detail": f"training job {job_id} cancelled."}

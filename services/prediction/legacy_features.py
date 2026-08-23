@@ -95,13 +95,21 @@ class Recipe:
 
 
 def parse(features: Iterable[str],
-          period: int = DEFAULT_DECOMPOSITION_PERIOD) -> Recipe:
+          period: int = DEFAULT_DECOMPOSITION_PERIOD,
+          assumed: bool = True) -> Recipe:
     """Recover a :class:`Recipe` from a model's ordered feature names.
 
     Raises :class:`RecipeError` rather than guessing when a name does not
     parse, or when two aliases or two lags appear. A model whose input contract
     is only partly understood is not runnable -- the half that parsed would
     still produce a number.
+
+    ``assumed`` is what the returned recipe records about ``period``. It
+    defaults to True because the period is genuinely unrecoverable from an
+    artifact -- that is this module's standing complaint about the archive's
+    models. A model this service trained is the one case where it is known, so
+    :mod:`~services.prediction.train` passes False and the registry stops
+    claiming an assumption it did not make.
     """
     features = tuple(features)
     if not features:
@@ -157,7 +165,7 @@ def parse(features: Iterable[str],
         windows=tuple(sorted(windows)), stats=tuple(s for s in STATS if s in stats),
         components=tuple(sorted(components)), raw=raw,
         time_predictors=tuple(time_cols),
-        period=period, period_assumed=True,
+        period=period, period_assumed=assumed,
         features=features,
     )
 

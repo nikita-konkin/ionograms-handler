@@ -188,9 +188,29 @@ def retire(conn: sqlite3.Connection, model_id: int) -> dict | None:
 
 
 def set_metrics(conn: sqlite3.Connection, model_id: int, metrics: dict) -> None:
+    """Merge into the metrics column. Two writers share it.
+
+    `scoring` writes how a model does in production; `train` writes how it did
+    on its holdout at fit time, before it has ever issued a forecast. A
+    replacing write would mean the first scoring pass silently erased the only
+    record of what the model was accepted on, so the top-level keys are merged
+    and each writer owns its own.
+    """
+    row = db.one(conn, "SELECT metrics FROM model_registry WHERE id = ?",
+                 (model_id,))
+    existing: dict = {}
+    if row and row.get("metrics"):
+        try:
+            loaded = json.loads(row["metrics"])
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            existing = loaded
+
+    existing.update(metrics)
     with conn:
         conn.execute("UPDATE model_registry SET metrics = ? WHERE id = ?",
-                     (json.dumps(metrics), model_id))
+                     (json.dumps(existing), model_id))
 
 
 def _decode(row: dict) -> dict:

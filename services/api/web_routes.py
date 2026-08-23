@@ -44,6 +44,13 @@ templates = Jinja2Templates(
 #: conclude anything from.
 STALE_AFTER_S = acquisition.STALE_AFTER_S
 
+#: Lead times the training form offers, in hours. A select rather than a box
+#: for the lag in samples: the operator is choosing how far ahead to predict,
+#: and `288` is an implementation detail of a five-minute grid. These four are
+#: the horizons the archive's own models were fitted at, so a trained model
+#: lands in the same scoring bucket as the import it is meant to replace.
+LEADS = (24, 48, 72, 120)
+
 
 def _duration(seconds, lang: str = i18n.DEFAULT) -> str:
     """Seconds as something readable at a glance, with a sign for the past.
@@ -516,7 +523,7 @@ def forecast_page(request: Request, param: str | None = None,
     is not comparable with MAE on a 700 km one -- so there is no "all circuits"
     view to mistake for one.
     """
-    from ..prediction import dataset, registry, scoring
+    from ..prediction import dataset, queues, registry, scoring, train
 
     conn = request.app.state.db
     models = registry.models(conn)
@@ -569,6 +576,20 @@ def forecast_page(request: Request, param: str | None = None,
 
     board = scoring.leaderboard(conn, *chosen) if chosen else []
 
+    # Every circuit that has data, for the upload and training forms. Built
+    # from `live` rather than from the models, so a fresh deployment with
+    # nothing registered still offers the circuits it is actually recording.
+    circuits = sorted({(row["tx"], row["rx"]) for row in live})
+
+    # Lead time in seconds, so the table can use the same `lead` filter the
+    # leaderboard's horizon columns do. Computed here because the conversion
+    # needs the grid step, and a template that hard-codes 300 is a template
+    # that lies the day the step changes.
+    jobs = queues.jobs(conn, limit=25)
+    for entry in jobs:
+        entry["lead_s"] = (entry.get("spec") or {}).get("lag", 0) \
+            * dataset.DEFAULT_STEP_S
+
     return templates.TemplateResponse(request, "forecast.html", {
         "models": models,
         "live": live,
@@ -579,6 +600,15 @@ def forecast_page(request: Request, param: str | None = None,
         "drift": scoring.drift(board),
         "horizons": scoring.HORIZONS,
         "baselines": scoring.BASELINES,
+        "circuits": circuits,
+        # Only what is still moving or still needs reading. A registered
+        # upload is already in the models table above, and listing it twice
+        # would make the queue look permanently full.
+        "uploads": [row for row in queues.uploads(conn, limit=25)
+                    if row["state"] != queues.REGISTERED],
+        "jobs": jobs,
+        "leads": LEADS,
+        "estimators": train.ESTIMATORS,
     })
 
 

@@ -46,7 +46,7 @@ COPY tools/ /app/tools/
 # Non-root. This process is reachable from the sounding laptop; there is no
 # reason for it to be able to write anything outside its own volume.
 RUN useradd --create-home --uid 10001 api \
- && mkdir -p /data && chown -R api:api /data /app
+ && mkdir -p /data /uploads && chown -R api:api /data /uploads /app
 USER api
 
 # What this image was built from, readable at `/healthz`. Last, so a rebuild

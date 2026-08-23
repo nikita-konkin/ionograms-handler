@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from . import db
 from . import net as net_mod
@@ -224,6 +224,72 @@ def models(request: Request,
         row["golden"] = "recorded" if row.pop("golden_output", None) is not None \
             else "absent"
     return {"count": len(rows), "models": rows}
+
+
+@router.get("/models/uploads")
+def model_uploads(request: Request, state: str | None = None,
+                  limit: int = Query(50, ge=1, le=200)) -> dict:
+    """Artifacts uploaded from the console, and what became of them.
+
+    Read scope: the console polls this after an upload to watch the row settle,
+    and that poll should not need the token that can stop a radio. `detail`
+    carries the refusal *sentence* when there is one, because the page renders
+    it in full -- a state pill with no reason beside it is the thing this
+    service keeps refusing to ship.
+    """
+    from ..prediction import queues
+
+    rows = queues.uploads(request.app.state.db, state=state, limit=limit)
+    return {"count": len(rows), "uploads": rows}
+
+
+@router.get("/models/jobs")
+def training_jobs(request: Request, state: str | None = None,
+                  limit: int = Query(50, ge=1, le=200)) -> dict:
+    """Training runs: queued, running, and what the finished ones produced."""
+    from ..prediction import queues
+
+    rows = queues.jobs(request.app.state.db, state=state, limit=limit)
+    return {"count": len(rows), "jobs": rows}
+
+
+@router.get("/models/{model_id}/artifact")
+def model_artifact(model_id: int, request: Request):
+    """The artifact itself, so another deployment can pull a model.
+
+    **Read scope, and that is a deliberate trade rather than an oversight.**
+    With `READ_TOKEN` unset -- the documented default for a rig on 127.0.0.1 --
+    this serves every registered artifact to anything that can reach the port.
+    The alternative is worse: a host syncing models would have to hold
+    `CONTROL_TOKEN`, which is the token that can stop an acquisition, in order
+    to perform a read. `auth.describe` announces an open read scope at startup
+    for exactly this class of decision.
+
+    Served as an attachment with the digest in a header, so a puller can
+    confirm it received the bytes the registry names without trusting the path
+    it came from -- which is the whole argument for the content-addressed
+    store.
+    """
+    from ..prediction import registry, store
+
+    row = registry.get(request.app.state.db, model_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no model {model_id}")
+
+    path = store.resolve(row["artifact"])
+    if not path.is_file():
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            f"{row['name']} is registered but its artifact is not on this "
+            f"host ({path}). The registry row survives a volume that does "
+            f"not, which is why the digest is recorded: sha256 "
+            f"{row['sha256']}.")
+
+    return FileResponse(
+        path, media_type="application/octet-stream",
+        filename=f"{row['name']}{path.suffix or '.sav'}",
+        headers={"X-Artifact-SHA256": row["sha256"],
+                 "X-Model-Id": str(row["id"])})
 
 
 @router.get("/forecast")
