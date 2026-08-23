@@ -38,14 +38,13 @@ from __future__ import annotations
 
 import errno
 import os
-import re
 import threading
 import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import db, watch
+from . import daydir, db, watch
 
 #: How many soundings one **automatic** pass may ingest. The background loop
 #: runs unattended on a box that is also serving pages, so it takes a bite and
@@ -469,11 +468,6 @@ def _worth_surveying(path: Path) -> bool:
     return name not in UNWALKABLE and not name.startswith(".")
 
 
-#: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
-#: The same shape `sources._DAY_RE` matches, and for the same reason -- the
-#: station and the archive server disagree about separators.
-_DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
-
 #: How far below a root to look for a dataset folder. Two is enough for both
 #: layouts seen in service -- day directories at the root, and day directories
 #: one folder down -- and the bound is what stops discovery walking an archive
@@ -484,10 +478,6 @@ DISCOVERY_DEPTH = 2
 #: A dataset is recognised by its *first* day with data, so this only bites on
 #: a folder that is not a dataset, where the answer is "no" either way.
 PROBE_DAYS = 8
-
-
-def _is_day(path: Path) -> bool:
-    return _DAY_RE.match(path.name) is not None
 
 
 def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
@@ -533,7 +523,7 @@ def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
 
         # Newest first: a dataset is recognised by its first day with data,
         # and the newest day is the one most likely to have any.
-        days = sorted((c for c in children if _is_day(c)), reverse=True)
+        days = sorted((c for c in children if daydir.is_day(c)), reverse=True)
         if (days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS])
                 or loader.has_soundings(path, recursive=False)):
             found.append(path)
@@ -551,7 +541,7 @@ def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
         # or several, and `overlapping` refuses taking both by accident.
         if depth < max_depth:
             queue.extend((child, depth + 1)
-                         for child in children if not _is_day(child))
+                         for child in children if not daydir.is_day(child))
 
     return found
 
@@ -633,7 +623,7 @@ def _day_count(path: Path) -> int:
     """
     try:
         return sum(1 for child in path.iterdir()
-                   if _is_day(child) and child.is_dir())
+                   if daydir.is_day(child) and child.is_dir())
     except OSError:
         return 0
 

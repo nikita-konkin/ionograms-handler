@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import math
 import os
-import re
 import threading
 import time
 import warnings
 from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
+
+from . import daydir
 
 #: Cap on directories scanned in one request. A census reads every detection
 #: file under the target, and an archive holds thousands; the endpoint is meant
@@ -108,40 +109,20 @@ DEFAULT_MAX_FILES = 2000
 DEFAULT_MAX_AGE_S = 1800.0
 
 
-#: A directory name that is a date: ``2026-08-10``, ``2026.02.04``, ``20260810``.
-_DAY_RE = re.compile(r"^(\d{4})[-._]?(\d{2})[-._]?(\d{2})$")
-
-
-def _day_key(name: str) -> tuple[int, int, int] | None:
-    match = _DAY_RE.match(name)
-    return (int(match.group(1)), int(match.group(2)),
-            int(match.group(3))) if match else None
-
-
 def _day_directories(root: Path, max_days: int) -> list[Path]:
-    """Newest dated subdirectories, or the root itself if it holds files.
+    """The newest dated subdirectories, or the root itself if it holds files.
 
-    Sorted by the date the name *means*, not by the string. A reverse lexical
-    sort is wrong twice over on a real archive, and both were live here:
+    Ordering is `daydir.newest`'s, which sorts by the date a name *means*
+    rather than by the string -- see that function for the two ways a
+    lexical sort goes wrong on this archive.
 
-    * Two conventions coexist. ``.`` is 0x2E and ``-`` is 0x2D, so every
-      ``2026.02.*`` sorts ahead of every ``2026-08-*`` -- the census reported
-      February as "what is on air today" and never opened an August day.
-    * Not every subdirectory is a day. ``ionozond_data2`` beats any digit and
-      took a slot outright.
-
-    A directory whose name is not a date is not a day, and is skipped rather
-    than ranked. If none of them are dates the tree is flat, and the root is
-    scanned as before.
+    What is local to the census is the fallback: if none of the children are
+    dates the tree is flat, and the root is scanned as before.
     """
     if not root.exists():
         return []
-    dated = [(key, p) for p in root.iterdir() if p.is_dir()
-             for key in (_day_key(p.name),) if key is not None]
-    if not dated:
-        return [root]
-    dated.sort(key=lambda item: item[0], reverse=True)
-    return [path for _, path in dated[:max_days]]
+    days = daydir.newest(p for p in root.iterdir() if p.is_dir())
+    return days[:max_days] if days else [root]
 
 
 #: Parsed records per detection file, keyed by path. **A chirpsounder2
