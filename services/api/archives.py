@@ -522,8 +522,11 @@ def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
             continue
 
         # Newest first: a dataset is recognised by its first day with data,
-        # and the newest day is the one most likely to have any.
-        days = sorted((c for c in children if daydir.is_day(c)), reverse=True)
+        # and the newest day is the one most likely to have any. By the date
+        # the name means, not by the name -- only `PROBE_DAYS` of these are
+        # ever opened, so getting the order wrong spends the whole budget on
+        # the oldest folders. See `daydir.newest`.
+        days = daydir.newest(children)
         if (days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS])
                 or loader.has_soundings(path, recursive=False)):
             found.append(path)

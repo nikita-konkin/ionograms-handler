@@ -19,6 +19,7 @@ import pytest
 
 from muf import loader
 from services.api import archives
+from services.api.archives import PROBE_DAYS
 
 # The api-backed tests below reuse `test_archives`'s client, archive root
 # and helpers rather than standing up a second copy of the same fixtures.
@@ -125,6 +126,45 @@ def test_an_unreadable_folder_is_skipped_not_raised(nested, monkeypatch):
 
     monkeypatch.setattr(Path, "iterdir", iterdir)
     assert names(nested, archives.datasets(nested)) == {"ionozond_data2"}
+
+
+# --------------------------------------------------------------------------
+# Two spellings of a day, in one root
+#
+# The receiver writes `2026-08-11`; the archive server holds `2026.02.04`.
+# Both are days, and both turn up under one root -- which is what makes the
+# ordering matter. `.` is 0x2E and `-` is 0x2D, so *every* dotted name sorts
+# above *every* hyphenated one, and `datasets` concludes from the first
+# `PROBE_DAYS` alone. A lexical sort therefore spends the entire probe budget
+# on the oldest days and reports a live dataset as holding nothing.
+#
+# `sources._day_directories` already carries this scar; discovery did not.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def two_spellings(tmp_path) -> Path:
+    """Enough empty dotted days to exhaust the probe, then the real ones."""
+    root = tmp_path / "mixed"
+    for number in range(1, PROBE_DAYS + 2):
+        (root / f"2026.02.{number:02d}").mkdir(parents=True)
+    for day in ("2026-08-10", "2026-08-11"):
+        sounding(root / day, f"lfm_ionogram-NIC-{day}.h5")
+    return root
+
+
+def test_the_newest_day_is_the_newest_date_not_the_highest_string(two_spellings):
+    """The August days hold the soundings, and nothing probes them by accident.
+
+    There are `PROBE_DAYS + 1` empty February folders, so a sort that puts the
+    dotted spelling first never reaches August at all and the root is offered
+    as no dataset -- with the receiver actively writing into it.
+    """
+    assert archives.datasets(two_spellings) == [two_spellings]
+
+
+def test_the_dotted_days_are_not_offered_on_their_own(two_spellings):
+    """Ordering is the bug; the covering rule still has to hold either way."""
+    assert names(two_spellings, archives.datasets(two_spellings)) == {"."}
 
 
 # --------------------------------------------------------------------------
