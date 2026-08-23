@@ -309,6 +309,129 @@ def _cdetection_rows(path, rows):
                         i0=-1, n_samples=-1, sample_rate=float("nan"))
 
 
+# --------------------------------------------------------------------------
+# The phases of a census. Named rather than inlined because `census` is the
+# hot path and had grown to six of them in one 200-line function; each is
+# callable on its own, and every one of the comments below was already in
+# place, attached to the same code.
+# --------------------------------------------------------------------------
+
+def _scan(root: Path, max_days: int) -> tuple[list, int, list[Path]]:
+    """The days, and the best detection product each of them holds.
+
+    Scan first, read second. A directory listing is one round trip per
+    directory; an HDF5 open is several per *file*. Doing the cheap half first
+    is what lets an unchanged archive answer without opening anything.
+
+    One pass per day, not one per product. Asking the three finders in turn
+    walked the tree three times, and on a station that writes no `par-*.h5`
+    the first of those walks visited every `chirp-*.h5` in the day to
+    discover that -- 46,436 entries to return an empty list.
+
+    Returns the per-day scans, how many files they name, and the day list
+    itself -- the caller reports the day names, and listing the root twice to
+    find that out is a round trip nobody needs.
+    """
+    from muf import io_detect
+
+    days = _day_directories(root, max_days)
+    scans, matched = [], 0
+    for day in days:
+        try:
+            products = io_detect.find_products(day)
+        except Exception:
+            continue
+        for key, reader, expand, name in (
+                ("par", io_detect.read_timing, None, "timing solution"),
+                ("chirp", io_detect.read_detection, None, "detection"),
+                ("cdetections", io_detect.read_cdetections,
+                 _cdetection_rows, "consolidated detection")):
+            paths = products.get(key) or []
+            if paths:
+                scans.append((paths, reader, expand, name))
+                matched += len(paths)
+                break
+    return scans, matched, days
+
+
+def _trim_to_budget(scans: list, matched: int,
+                    max_files: int) -> tuple[list, int, int, int]:
+    """Spend the file budget newest day first, and say what was left out.
+
+    A trimmed day still answers the question the page asks -- 2000 files is
+    ~12 cycles of 300 s, and `min_repeats` wants 3.
+    """
+    found, capped = matched, 0
+    if max_files and matched > max_files:
+        budget, kept_scans = max_files, []
+        for paths, reader, expand, name in scans:       # newest day first
+            keep = sorted(paths, key=_file_time)[len(paths) - budget:] \
+                if len(paths) > budget else list(paths)
+            capped += len(paths) - len(keep)
+            budget -= len(keep)
+            if keep:
+                kept_scans.append((keep, reader, expand, name))
+        scans, matched = kept_scans, found - capped
+    return scans, matched, found, capped
+
+
+def _read_all(scans: list) -> tuple[list, str, list, dict]:
+    """Every scan's records, through the memo. Called under `_CENSUS_LOCK`.
+
+    ``kind`` is the last product that yielded anything, which is the one the
+    page names. The files that could not be read come back as ``skipped`` so
+    the next call can re-stat exactly those and trust the cache otherwise.
+    """
+    records, kind, skipped = [], "none", []
+    totals = {"opened": 0, "cached": 0, "unreadable": 0}
+    for paths, reader, expand, name in scans:
+        got, counts, could_not = _read_cached(paths, reader, expand)
+        for field, n in counts.items():
+            totals[field] += n
+        skipped.extend(could_not)
+        if got:
+            records.extend(got)
+            kind = name
+    return records, kind, skipped, totals
+
+
+def _group(records: list, kind: str, cycle: float, cost: dict, started: float,
+           *, min_count: int, max_scatter_s: float, max_slot_fraction: float,
+           min_repeats: float) -> dict:
+    """Records to emitters, with the ones the filters threw out kept beside.
+
+    ``cost`` is mutated rather than copied: its ``seconds`` is only meaningful
+    once the grouping below has run, which is the expensive half.
+    """
+    from muf import io_detect
+
+    if not records:
+        return {"count": 0, "kind": "none", "cycle_s": cycle,
+                "emitters": [], "cost": cost}
+
+    emitters = io_detect.census(records, cycle_s=cycle, min_count=min_count)
+    kept, rejected = [], []
+    for emitter in emitters:
+        why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction,
+                         min_repeats)
+        (rejected if why else kept).append(
+            (emitter, why) if why else emitter)
+    cost["seconds"] = round(time.perf_counter() - started, 2)
+    return {
+        "count": len(kept),
+        "kind": kind,
+        "cycle_s": cycle,
+        "emitters": [_as_row(e) for e in kept],
+        # Kept, not silently dropped. A schedule page that hides its
+        # rejects cannot be checked, and the operator is the one who knows
+        # whether the thing it threw away was the transmitter they came
+        # for.
+        "rejected": [dict(_as_row(e), rejected_because=why)
+                     for e, why in rejected],
+        "cost": cost,
+    }
+
+
 def census(archive_root: str | os.PathLike, *,
            max_days: int = DEFAULT_MAX_DAYS,
            cycle_s: float | None = None,
@@ -376,45 +499,8 @@ def census(archive_root: str | os.PathLike, *,
         # than rendering an empty archive as "no transmitters heard".
         return _served(params, None) or _building(cycle, max_files)
 
-    # Scan first, read second. A directory listing is one round trip per
-    # directory; an HDF5 open is several per *file*. Doing the cheap half
-    # first is what lets an unchanged archive answer without opening anything.
-    #
-    # One pass per day, not one per product. Asking the three finders in turn
-    # walked the tree three times, and on a station that writes no `par-*.h5`
-    # the first of those walks visited every `chirp-*.h5` in the day to
-    # discover that -- 46,436 entries to return an empty list.
-    scans, matched = [], 0
-    for day in _day_directories(root, max_days):
-        try:
-            products = io_detect.find_products(day)
-        except Exception:
-            continue
-        for key, reader, expand, name in (
-                ("par", io_detect.read_timing, None, "timing solution"),
-                ("chirp", io_detect.read_detection, None, "detection"),
-                ("cdetections", io_detect.read_cdetections,
-                 _cdetection_rows, "consolidated detection")):
-            paths = products.get(key) or []
-            if paths:
-                scans.append((paths, reader, expand, name))
-                matched += len(paths)
-                break
-
-    # The budget, spent newest day first. A trimmed day still answers the
-    # question the page asks -- 2000 files is ~12 cycles of 300 s, and
-    # `min_repeats` wants 3.
-    found, capped = matched, 0
-    if max_files and matched > max_files:
-        budget, kept_scans = max_files, []
-        for paths, reader, expand, name in scans:       # newest day first
-            keep = sorted(paths, key=_file_time)[len(paths) - budget:] \
-                if len(paths) > budget else list(paths)
-            capped += len(paths) - len(keep)
-            budget -= len(keep)
-            if keep:
-                kept_scans.append((keep, reader, expand, name))
-        scans, matched = kept_scans, found - capped
+    scans, matched, days = _scan(root, max_days)
+    scans, matched, found, capped = _trim_to_budget(scans, matched, max_files)
 
     # Fingerprinted on the file *names*, which the scan above already has for
     # free -- not on their contents, and not on a `stat` per file. Every one
@@ -450,24 +536,23 @@ def census(archive_root: str | os.PathLike, *,
                                seconds=round(time.perf_counter() - started, 2))
             return out
 
-        records, kind, skipped = [], "none", []
-        totals = {"opened": 0, "cached": 0, "unreadable": 0}
-        for paths, reader, expand, name in scans:
-            got, counts, could_not = _read_cached(paths, reader, expand)
-            for field, n in counts.items():
-                totals[field] += n
-            skipped.extend(could_not)
-            if got:
-                records.extend(got)
-                kind = name
+        records, kind, skipped, totals = _read_all(scans)
+
+        # Both warnings stay here rather than moving into the helpers: they
+        # are addressed to whoever called `census`, and `stacklevel` counts
+        # frames.
         if totals["unreadable"]:
             warnings.warn(
                 f"skipped {totals['unreadable']} unreadable detection file(s) "
                 f"under {root}", stacklevel=2)
 
+        # `days` comes back from the scan rather than being listed again. It
+        # used to be a second `_day_directories` call for this line alone,
+        # which is a second listing of the root -- and a listing is the
+        # expensive half on this archive.
         cost = dict(
             totals,
-            days=[d.name for d in _day_directories(root, max_days)],
+            days=[d.name for d in days],
             files=matched, found=found, capped=capped, budget=max_files,
             records=len(records), unchanged=False,
             seconds=round(time.perf_counter() - started, 2),
@@ -480,37 +565,12 @@ def census(archive_root: str | os.PathLike, *,
                 f"file(s) under {root}: the {max_files}-file ceiling",
                 stacklevel=2)
 
-        if not records:
-            out = {"count": 0, "kind": "none", "cycle_s": cycle,
-                   "emitters": [], "cost": cost}
-            _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped,
-                         params=params, at=time.time())
-            return out
-
-        emitters = io_detect.census(records, cycle_s=cycle,
-                                    min_count=min_count)
-        kept, rejected = [], []
-        for emitter in emitters:
-            why = _rejection(emitter, cycle, max_scatter_s, max_slot_fraction,
-                             min_repeats)
-            (rejected if why else kept).append(
-                (emitter, why) if why else emitter)
-        cost["seconds"] = round(time.perf_counter() - started, 2)
-        out = {
-            "count": len(kept),
-            "kind": kind,
-            "cycle_s": cycle,
-            "emitters": [_as_row(e) for e in kept],
-            # Kept, not silently dropped. A schedule page that hides its
-            # rejects cannot be checked, and the operator is the one who knows
-            # whether the thing it threw away was the transmitter they came
-            # for.
-            "rejected": [dict(_as_row(e), rejected_because=why)
-                         for e, why in rejected],
-            "cost": cost,
-        }
+        out = _group(records, kind, cycle, cost, started,
+                     min_count=min_count, max_scatter_s=max_scatter_s,
+                     max_slot_fraction=max_slot_fraction,
+                     min_repeats=min_repeats)
         _LAST.update(fingerprint=fingerprint, census=out, skipped=skipped,
-                         params=params, at=time.time())
+                     params=params, at=time.time())
         return out
 
 
