@@ -496,10 +496,11 @@ def _maybe_progress(iterator, total: int, enabled: bool):
 
 # --- daily aggregation -------------------------------------------------------
 #
-# Reimplemented rather than imported: muf_interpolation.py and
-# data_handler/muf_data_handler.py both import psycopg2 at module scope, so
-# neither can be imported without a database driver installed. The logic they
-# contain is small enough that duplicating it costs less than the coupling.
+# Reimplemented rather than imported: the inherited muf_interpolation.py and
+# data_handler/muf_data_handler.py both imported psycopg2 at module scope, so
+# neither could be imported without a database driver installed. The logic
+# they contained is small enough that duplicating it cost less than the
+# coupling -- and both files are gone now (`f94f561`), which settles it.
 
 DEFAULT_GRID_MINUTES = 5
 DEFAULT_SAVGOL_WINDOW = 19
@@ -545,7 +546,8 @@ def daily(
     """Resample MUF onto a regular grid and smooth it.
 
     Akima interpolation then linear fill, matching ``muf_interpolation.py:35``;
-    Savitzky-Golay smoothing matching ``muf_data_handler.py:74``.
+    Savitzky-Golay smoothing matching ``muf_data_handler.py:74``. Both files
+    were removed in ``f94f561``; the line numbers resolve against its parent.
 
     A table spanning several days is handled a day at a time and the results
     concatenated, so a missing day leaves a gap rather than being interpolated

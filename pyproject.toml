@@ -31,8 +31,6 @@ parquet = ["pyarrow>=14"]
 iri = ["PyIRI>=0.1.5"]
 # The experimental CNN estimator (`--methods cnn`)
 cnn = ["tensorflow>=2.16"]
-# The pre-existing PostgreSQL scripts in data_handler/
-db = ["psycopg2-binary>=2.9"]
 # Running already-trained forecasting models (`services.prediction`). joblib
 # reads the archive's artifacts; statsmodels rebuilds the trend/seasonal
 # columns those models take as inputs, so it is needed at inference and not
@@ -44,8 +42,9 @@ test = ["pytest>=8"]
 muf = "muf.cli:main"
 
 [tool.setuptools]
-# Only the pipeline package. The original top-level scripts (MUF.py, stuffr.py,
-# data_handler/, ...) stay in the repository for reference but are not shipped.
+# Only the pipeline package. The inherited top-level scripts (MUF.py, stuffr.py,
+# data_handler/, ...) were never shipped and are no longer in the tree either --
+# removed in `f94f561`, readable from its parent.
 packages = ["muf", "muf.extractors", "muf.reference", "services",
             "services.agent", "services.api", "services.api.locale",
             "services.prediction"]

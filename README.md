@@ -47,7 +47,6 @@ pip install -e ".[iri]"       # the IRI reference model
 pip install -e ".[parquet]"   # --format parquet
 pip install -e ".[test]"      # pytest
 pip install -e ".[cnn]"       # the experimental CNN estimator (TensorFlow)
-pip install -e ".[db]"        # only for the pre-existing data_handler/ scripts
 ```
 
 Check it works — this reads one file header and computes nothing:
@@ -1716,8 +1715,14 @@ has to recover both. Real recordings have no ground truth, so they are used for
 regression pinning and for physical plausibility instead.
 
 The original scripts (`MUF.py`, `stuffr.py`, `muf_interpolation.py`,
-`data_handler/`, …) are untouched and still present for reference. They need
-`psycopg2` and a reachable PostgreSQL server; the `muf/` pipeline needs neither.
+`data_handler/`, …) were removed from the tree in `f94f561`; nothing imported
+them, and they needed `psycopg2` and a reachable PostgreSQL server that the
+`muf/` pipeline needs neither of. They remain readable in git history, which is
+where every citation of them below resolves:
+
+```bash
+git show f94f561^:MUF.py
+```
 
 ---
 

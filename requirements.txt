@@ -25,15 +25,6 @@ pytest==8.3.4
 # 2022. Keras 3 (shipped with TF 2.20) will not load that format. Either install
 # tf-keras and set TF_USE_LEGACY_KERAS=1, or retrain via `python -m muf train-cnn`.
 
-# --- Optional: legacy PostgreSQL scripts -------------------------------------
-# Only needed by the pre-existing data_handler/ code and the old top-level
-# scripts. The muf/ pipeline writes files and never imports psycopg2.
-#   pip install psycopg2-binary
-#
-# --- Optional: legacy forecasting scripts ------------------------------------
-# data_handler/muf_data_handler.py additionally wants:
-#   pip install statsmodels xgboost
-
 # --- Optional: the api service (services/api/) -------------------------------
 # Only needed to run the server; the muf pipeline and the station agent do not
 # import any of these. `tests/test_api.py` skips itself when fastapi is absent.
