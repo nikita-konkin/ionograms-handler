@@ -595,6 +595,24 @@ charges it one-sidedly.
 never gated this service: the artifacts are read as files, not imported as a
 package. Registering and running one is `docs/prediction.md` §4.
 
+**Models arrive from the console, and the api still cannot run one.** Adding a
+model used to mean a shell on the host, because loading a `.sav` unpickles it
+and fitting one is worse. Rather than open that surface, it is split. The api
+hashes an upload, checks four magic bytes and writes it to a quarantine volume;
+`POST /models/train` writes a row. Two workers with no listening socket —
+`registrar` (10 s) and `trainer` (60 s) — are what unpickle and what fit. The
+invariant is mechanical, not documentary:
+`tests/test_prediction_upload.py` reads the syntax tree of `services/api/` and
+fails if anything there imports `joblib`, and of all of `services/` to confirm
+exactly one module calls `.fit`.
+
+Artifacts are addressed by content — `/models/objects/<aa>/<sha256>`, mode
+0444 — because `artifacts.sha256` was always right that a path is not an
+identity. That is DVC's cache layout on purpose; DVC is not used, and
+`docs/prediction.md` §3.5 says why. `GET /models/<id>/artifact` is the pull, at
+read scope. The store is read-write in the two workers and `:ro` everywhere
+else, `api` included.
+
 ---
 
 ## 5. Data contracts
@@ -684,6 +702,19 @@ convention.
 
 `api` ↔ web client. Services do not push payloads to one another; `renderer`
 output is fetched, not posted.
+
+**The two model queues are the one place a payload does travel inward**, and
+they are shaped so that it still is not pushed anywhere: the api writes a
+`model_upload` or `train_job` row and a worker polls for it. Nothing reaches
+into the workers, and the workers expose nothing to reach.
+
+| route | scope | what it does |
+|---|---|---|
+| `POST /models/upload` | control | quarantines raw bytes; never opens them |
+| `POST /models/train` | control | vets a spec and queues a fit |
+| `GET /models/uploads`, `GET /models/jobs` | read | what the console polls |
+| `GET /models/<id>/artifact` | read | the artifact itself, by digest |
+| `DELETE /models/uploads/<id>`, `/models/jobs/<id>` | control | forget, cancel |
 
 ### 5.4 Station ↔ server: health and control **[proposed]**
 
@@ -824,7 +855,7 @@ this is infrastructure for what comes next, not a deliverable in itself.
 - Retire v1 **only once the web client covers what operators actually use** —
   watch usage over M4 rather than building for feature parity
 
-### M6 — Prediction service **[built 2026-08-23; retraining outstanding]**
+### M6 — Prediction service **[built 2026-08-23; training built 2026-08-24, a model worth promoting outstanding]**
 
 The thin service above `N:\muf`, not a home for models: it reads the database,
 rebuilds the frame an artifact expects, runs it *without* refitting, and writes
@@ -838,20 +869,34 @@ rebuilds the frame an artifact expects, runs it *without* refitting, and writes
   "the forecast"
 - `artifacts` records a golden input/output at import and re-checks it on every
   load, which catches a library upgrade that changes behaviour silently
-- **Nothing calls `fit`.** The code this replaces refits on load, so its
-  "predictions" come from a model trained seconds earlier;
-  `tests/test_prediction_infer.py` makes `fit` raise to keep it that way
+- **Nothing on the inference path calls `fit`.** The code this replaces refits
+  on load, so its "predictions" come from a model trained seconds earlier;
+  `tests/test_prediction_infer.py` makes `fit` raise to keep it that way, and
+  `train.py` is now the single, source-checked exception
 - `scoring` runs the model and four baselines through the same code, over the
   same pairs, into the same table. Truth is measured picks, never the tracked
   grid
 - Promotion is a schema constraint, not a warning: a model fitted against a
   modelled target, or bound to no circuit, cannot be made active
 
+- **Models arrive from the console**, and the process that answers HTTP still
+  cannot open one: it quarantines bytes, and a worker with no listening socket
+  unpickles them (§4.4). Artifacts are stored under their own sha-256
+- **`train.py` fits on measured picks**, never on the tracked grid it draws
+  features from, excludes band-edge bounds from the fit while keeping them in
+  the score, and holds out the tail rather than a random sample
+
 *Exit:* a registered model runs unattended and its forecast is on the console
 beside the measurement, with a leaderboard saying whether it beats persistence.
-**Outstanding:** retrain on the accumulated multi-station record — every model
-run so far is a legacy import fitted on another circuit, and all four lose to
-persistence at 24 h (`docs/prediction.md` §5).
+**Met.**
+
+**Outstanding, and narrower than it was:** a trained model actually worth
+promoting. The service now fits its own — `huber-muf-24h` on NIC3 →
+Yoshkar-Ola, 474 measured rows, holdout MAE **2.66 MHz against persistence's
+2.00** (`docs/prediction.md` §5). Six days of one circuit at a 24 h lead is
+thin, and the leaderboard exists to make that visible rather than to be argued
+around. What is left is archive, not architecture: the same run against the
+accumulated multi-station record, which is now a form submission.
 
 ### M7 — Bilingual console **[done 2026-08-23]**
 
@@ -886,7 +931,13 @@ repo; a different *lifecycle* is.
 | `chirpsounder` v1 fork | 1 | Current acquisition; `.lfs` writer, Qt console. Frozen, retired at M5 | Separate upstream (abandoned) |
 | `chirpsounder2` clone | 1 | Target acquisition. **Pinned clone, not a fork** (§2.2) — nothing of ours in it | **Tracks live upstream** |
 | `ionograms-handler` | 1–3 | `muf` package **and every service** | — |
-| `N:\muf` | 2 | Forecasting models, BER / channel availability | Own heavy deps, research lifecycle |
+| `N:\muf` | 2 | Research: BER / channel availability, and the archive's models | Own heavy deps, research lifecycle |
+
+`services/prediction/` gained the pieces that make a model a first-class object
+rather than a file somebody staged: `store.py` (content-addressed artifacts),
+`queues.py` (the two work queues, and the only module that writes their tables),
+`registrar.py` and `trainer.py` (the workers that open what the console sends),
+and `train.py` — the one module in the repository allowed to call `fit`.
 
 ### The one hard boundary
 

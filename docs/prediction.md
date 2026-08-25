@@ -4,9 +4,10 @@ Reference for `services/prediction/` — what each stage does, what it refuses t
 do, and how an operator gets a saved model from the research project into a
 curve on the console.
 
-Values marked **[measured 2026-08-23]** were read off the local OrbStack rig on
-that date, running four real artifacts from `N:\muf` against the DOB / Yoshkar-Ola
-archive. Anything else is read from this repository.
+Values marked **[measured …]** were read off the local OrbStack rig on that
+date: `2026-08-23` running four real artifacts from `N:\muf`, `2026-08-24` the
+console upload path and the first model this service fitted itself, both against
+the DOB / Yoshkar-Ola archive. Anything else is read from this repository.
 
 The per-module docstrings are the authority on *why* each rule exists and are
 worth reading before changing one; this document is the path through them.
@@ -49,6 +50,22 @@ worth reading before changing one; this document is the path through them.
       └──▶ /forecast, /ui/series overlay
 ```
 
+Two ways in, and the same wall behind both:
+
+```
+  /ui/forecast  ──POST /models/upload (raw bytes)──▶  api ──▶ /uploads/<sha256>
+  /ui/forecast  ──POST /models/train  (JSON spec) ──▶  api ──▶ train_job row
+                                                       │
+                          the api hashes and sniffs four bytes. It never
+                          unpickles, and it never fits.
+                                                       │
+        registrar (10 s poll, no port) ────────────────┤
+        trainer   (60 s poll, no port) ────────────────┘
+                     │ loads / fits, golden-checks, registers
+                     ▼
+        /models/objects/<aa>/<sha256>  +  model_registry row
+```
+
 Two products come out of this one path and should not be confused. A **nowcast**
 extends the tracked series a little past the last sounding and is nearly free. A
 **forecast** runs days ahead and is a much harder problem. They differ only in
@@ -65,8 +82,8 @@ themselves:
 | origin | comes from | `target_src` default |
 |---|---|---|
 | `legacy` | joblib/Keras files predating this service; contract recovered from the artifact | **`modelled`** |
-| `trained` | the training job, which records the contract as it saves | `measured` |
-| `imported` | dropped on the models volume and registered by hand | `measured` |
+| `trained` | `train.py`, which builds the contract rather than recovering it | `measured` |
+| `imported` | uploaded from the console, or dropped on the volume by hand | `measured` |
 
 `target_src` is the gate on promotion, and it is enforced by the schema, not by
 a warning:
@@ -201,17 +218,155 @@ rule changes it changes for the model and its competitors together.
 `HORIZONS = (3600, 21600, 86400, 604800)`; a forecast is bucketed to the nearest
 by log ratio.
 
+
+### 3.5 `store` — the hash is the address
+
+`artifacts.sha256` has said since it was written that *"a models volume is
+shared and writable by the training job, so a file at a given path is not
+necessarily the file that was registered there"* — and `model_registry.artifact`
+was a mutable path anyway. Uploads make that worse, because every operator picks
+a filename, and training worse again, because every run wants one.
+
+So new artifacts are addressed by content:
+
+```
+/models/objects/<first two hex>/<the full 64-hex sha256>     mode 0444
+```
+
+That is **DVC's cache layout**, deliberately. DVC itself is *not* used: its unit
+of work is a developer's git commit against a configured remote, and what
+happens here is an operator uploading to, or training on, a running server. The
+registry already does what DVC could not — input contracts, golden checks,
+measured-versus-modelled provenance, and a promotion rule that is a schema
+CHECK rather than a convention. Matching the layout costs nothing and means a
+`dvc remote` could be pointed at this directory later without moving a byte.
+
+`0444` because the two workers mount the volume read-write and have to add to
+it; that is not a reason for them to be able to replace something already in
+it. `store.put` writes a temporary file in the destination directory and
+`os.replace`s it into position, so a reader never sees a half-copied artifact,
+and placing the same bytes twice converges on one object rather than racing.
+
+**Both shapes stay live.** `store.resolve` takes whatever a registry row
+records: an object, or the path of a file somebody put on the volume by hand.
+`importer --store` is opt-in, so the four legacy rows on the rig still resolve
+by path. Rewriting `artifact` under a running `infer` would be a worse failure
+than the inconsistency.
+
+`GET /models/<id>/artifact` is the pull, at **read** scope, streaming the object
+with the digest in `X-Artifact-SHA256` so a second deployment can confirm it got
+the bytes the registry names. Read rather than control is a trade worth stating:
+with `READ_TOKEN` unset — the documented default for a rig on `127.0.0.1` — this
+serves every registered artifact to anything that can reach the port. The
+alternative is worse, because a host syncing models would then have to hold the
+token that can stop an acquisition in order to perform a read.
+
+### 3.6 `train` — the only module that calls `fit`
+
+Everything else in this service exists to keep `fit` out of the inference path;
+`tests/test_prediction_infer.py::test_inference_never_fits` makes it raise, and
+`test_prediction_upload.py::test_only_the_trainer_fits` reads the syntax tree of
+`services/` to confirm exactly one module calls it. Training runs in a separate
+process, in a separate container, and never writes a `forecast` row.
+
+Three decisions carry it, and each is a way of not fooling yourself.
+
+**Inputs are the tracked grid; the target is a measured pick.** Features have to
+exist at regular instants, which is what `dataset.tracked` is for. Truth does
+not. `y` comes from `scoring.truth` — the same picks the leaderboard judges
+against — and a feature row with no real pick within half a step of the instant
+it predicts is *dropped*, not filled. The tracker would happily supply a value
+there; fitting to it teaches the model the Kalman filter.
+
+**Band-edge picks are excluded from the fit and kept in the score.** A `limited`
+MUF is a lower bound. Regressing onto it teaches the model the sweep ceiling,
+hardest at midday. `scoring.summarise` already counts bounds one-sidedly and
+apart, so the holdout number is directly comparable with what the leaderboard
+reports later — it is the same function.
+
+**The holdout is the last N days, never a shuffle.** Every feature is a lagged
+function of the target, so a random split puts each row's own future in the
+training set and the MAE that comes back measures leakage.
+
+The recipe is **constructed rather than parsed**: `train.feature_names` emits
+columns in a fixed order — raw lag, then components sorted, then rolling
+windows sorted with stats in `STATS` order, then time predictors — and that
+order is what `feature_names_in_` records, so it round-trips through
+`legacy_features.parse` on import. The archive's models carry `set` iteration
+order from the source project; ours do not. Because the period is *chosen* here
+rather than guessed, `parse(..., assumed=False)` stops the registry claiming an
+assumption that was not made.
+
+Estimators are `huber` (default), `ridge` and `xgboost`. The linear two are
+wrapped in a `StandardScaler` pipeline: `HuberRegressor`'s epsilon is a
+threshold on a standardised residual and its `alpha` penalises coefficients, and
+the columns are megahertz, rolling standard deviations and a month number. Trees
+are left bare, so `artifacts._framework_of` still reports `xgboost`.
+
+Refusals state the arithmetic: how many grid points the circuit has, how many a
+lag-*N* model with a *W*-sample window needs before it can build one row, and
+how many measured rows fall before the holdout cut. Those are data limits, not
+faults, and the message says so.
+
+**It never activates.** A trained model is `measured` and bound to its circuit,
+so it satisfies both promotion CHECKs and is eligible — which is the whole
+difference between it and every legacy import. Promotion stays a deliberate act
+behind the control token, because it changes what every consumer of `/forecast`
+receives with nothing in the logs having asked for it.
+
 ---
 
 ## 4. Runbook: a saved model to a curve on the console
 
-Worked end to end on the OrbStack rig. **[measured 2026-08-23]**
+Worked end to end on the OrbStack rig. **[measured 2026-08-23]** for the shell
+path, **[measured 2026-08-24]** for the console one.
 
-### 4.1 Stage the artifact on the models volume
+### 4.1 From the console
 
-The volume is mounted `:ro` into both `infer` and `importer` — deliberately: a
-process that runs code out of an artifact should not also be able to replace
-one. So staging needs a third container that mounts it read-write.
+`/ui/forecast` has two panels at the foot of the page, below the evidence:
+**Add a model** takes a `.sav` or `.keras` file, and **Train a model** queues a
+fit on a circuit's own measured picks. Both need the control token pasted on the
+console page — the same one the start/stop buttons use.
+
+An upload settles in about ten seconds and the page reloads itself when it does.
+What it does *not* do is open the file: the api hashes it, checks the first four
+bytes are a pickle or a zip, writes it to a quarantine volume and records a
+`pending` row. `registrar` — a container with no port, that nothing can reach —
+is what loads it, runs the golden check and writes the registry row.
+
+Refusals arrive as sentences on the page, not status codes. Uploading a text
+file: **[measured 2026-08-24]**
+
+```
+notes.txt does not begin like a model artifact (first bytes: b'not ').
+Expected a joblib pickle (.sav, .joblib) or a Keras .keras file.
+```
+
+A refused upload keeps its quarantined bytes, because the usual fix is to
+register the same file again with an explicit feature list. `Forget` deletes
+them.
+
+**Two deployment traps, both seen on the first run.** [measured 2026-08-24]
+
+The `models` volume must be owned by uid 10001. A named volume takes its
+ownership from whatever populated it first, and one seeded by a throwaway root
+container — which is what §4.2 tells you to do — cannot then be written by the
+workers. The refusal names the fix:
+
+```
+docker run --rm -v ionograms_models:/models alpine chown -R 10001:10001 /models
+```
+
+And the `api` needs `models:/models:ro` for `GET /models/<id>/artifact` to have
+anything to serve; without it the route correctly answers **410** naming the
+digest it could not find. Both compose files carry the mount now.
+
+### 4.2 Or from a shell: stage the artifact on the models volume
+
+Still the right answer for a scripted bulk import, and unchanged. The volume is
+mounted `:ro` into both `infer` and `importer` — deliberately: a process that
+runs code out of an artifact should not also be able to replace one. So staging
+needs a third container that mounts it read-write.
 
 ```bash
 docker run --rm -v ionograms_models:/models -v "$PWD/stage":/stage:ro alpine cp /stage/model.sav /models/
@@ -227,7 +382,7 @@ docker run --rm -v ionograms_models:/models alpine chmod 0444 /models/model.sav
 Give the file a name that carries the lag — the registry's `name` defaults to
 the file stem, and four rows called `huber_mae-…` are unreadable in a list.
 
-### 4.2 Register it
+### 4.3 Register it
 
 ```bash
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile import run --rm importer /models/huber_lag288.sav --param muf --tx NIC3 --rx Yoshkar-Ola --origin legacy
@@ -246,7 +401,7 @@ recorded:
   decomposition period assumed to be 288 samples; the artifact does not record it.
 ```
 
-### 4.3 Run it
+### 4.4 Run it
 
 An **active** model runs on the unattended loop. A **comparison** model is run by
 id, and needs the circuit named — the model says what it expects, not which
@@ -256,7 +411,7 @@ circuit's data to feed it:
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env run --rm infer python -m services.prediction.infer --once --param muf --method contour --model 1 --tx NIC3 --rx Yoshkar-Ola
 ```
 
-### 4.4 See it
+### 4.5 See it
 
 Both read surfaces apply the same rule — **active models only, unless one is
 named** — so a comparison model is invisible until asked for:
@@ -299,6 +454,36 @@ and a different ionosphere, and `target_src = modelled` is the schema refusing t
 let "the service runs them correctly" be confused with "the numbers are good".
 The lag-1440 figure rests on 48 pairs and should not be read as a win.
 
+### The first model this service fitted itself
+
+`huber-muf-24h`, queued from the console, on the same circuit. **[measured
+2026-08-24]**
+
+| | |
+|---|---|
+| Features | 3 — `muf_lag_288`, `muf_rolling_48_{mean,std}_lag_288` |
+| Fitted on | 474 measured, uncensored rows, 2026-08-17T17:40Z → 2026-08-21T20:30Z |
+| Holdout | the last 2 days, 285 pairs |
+| **MAE** | **2.66 MHz** (RMSE 3.42, bias **+1.17**) |
+| persistence, same window | **2.00 MHz** over 142 pairs |
+
+**It loses to persistence, and that is the result.** Not a defect in the
+pipeline — the pipeline did what it is for, which is to make the comparison
+visible before anybody promotes anything. Three things are worth reading off it:
+
+* **474 rows is not much.** The circuit holds 6.3 days; a 24 h lag plus a
+  48-sample window consumes the first day and change before a single feature row
+  exists, and a 2-day holdout takes another third of what is left.
+* **The bias is +1.17 MHz**, so it runs high rather than noisy. On this little
+  data a linear model on three lagged features mostly learns the diurnal mean.
+* **The two `n` differ — 285 against 142 — so the comparison is indicative, not
+  paired.** `scoring._shifted` drops any instant with no measured pick one lead
+  time back rather than interpolating one, which is what makes persistence an
+  honest "do nothing" baseline and also what makes it score on a subset.
+
+The remedy is archive, not architecture: the same command against a longer
+record is the experiment worth running, and it is now one form submission.
+
 The sparse-circuit contrast is starker. The same model against **SGO → DOB** —
 150 picks over 12.1 days, so most of the grid is tracker-filled — scored **7.99**
 against persistence's **1.82**, and was correctly labelled a *backtest*, its
@@ -312,8 +497,15 @@ and `harmonic` need history older than the window, and `iri` needs
 
 ## 6. Not covered
 
-- **Retraining.** M6's remaining bullet. `Dockerfile.train` exists; no training
-  job has been run against the accumulated multi-station record.
+- **A trained model that is worth promoting.** `train.py` exists and runs; what
+  it produced on 6.3 days of one circuit loses to persistence (§5). Retraining
+  across the accumulated multi-station record is the open question, and it is
+  now a form submission rather than a missing module.
+- **Hyperparameter search.** The estimators take fixed, defensible settings.
+  `Dockerfile.train` carries `hyperopt` and nothing uses it.
+- **Automatic promotion.** Deliberate, and unlikely to change: `scoring.drift`
+  already surfaces a live model that has been overtaken, and demoting it stays a
+  human decision behind the control token.
 - **`deep` artifacts.** One Keras file exists in the archive (`1_1_model.keras`,
   11.9 MB). It needs the training image and has never been imported.
 - **LOF forecasting in practice.** The path supports `--param lof` throughout and

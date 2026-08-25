@@ -135,3 +135,105 @@ def test_the_named_model_query_parameters_are_real(doc):
     assert "forecast: int | None = None" in (api / "web_routes.py").read_text()
     assert "`?model=<id>`" in doc
     assert "`?forecast=<id>`" in doc
+
+
+# --------------------------------------------------------------------------
+# The console path
+#
+# Added when uploading and training moved into the browser. Same reasoning as
+# everything above: these are the parts of the document a code change can
+# falsify without anyone reading it again.
+# --------------------------------------------------------------------------
+
+ARCHITECTURE = Path(__file__).resolve().parents[1] / "docs" / "architecture.md"
+
+
+@pytest.fixture(scope="module")
+def architecture() -> str:
+    return ARCHITECTURE.read_text(encoding="utf-8")
+
+
+def test_the_store_layout_is_quoted_as_the_code_builds_it(doc):
+    """The layout is the one fact a reader might copy into a shell command."""
+    from services.prediction import store
+
+    assert store.OBJECTS == "objects"
+    assert "/models/objects/<first two hex>/<the full 64-hex sha256>" in doc
+    # And the mode, which is the reason a `chmod` in the runbook would fail.
+    assert "0444" in doc
+
+
+def test_the_estimators_the_document_lists_are_the_ones_that_exist(doc):
+    from services.prediction import train
+
+    assert train.ESTIMATORS == ("huber", "ridge", "xgboost")
+    assert train.DEFAULT_ESTIMATOR == "huber"
+    quoted = re.search(r"Estimators are `(\w+)` \(default\), `(\w+)` and `(\w+)`", doc)
+    assert quoted, "the document no longer lists the estimators"
+    assert set(quoted.groups()) == set(train.ESTIMATORS)
+
+
+def test_the_console_routes_exist_and_are_named(doc, architecture):
+    """Every route the console panels post to, and the pull.
+
+    Checked against `architecture.md` as well: sec. 5.3 tabulates them, and a
+    table of routes is exactly the kind of thing that goes stale silently.
+    """
+    api = Path(__file__).resolve().parents[1] / "services" / "api"
+    control = (api / "control_routes.py").read_text(encoding="utf-8")
+    read = (api / "read_routes.py").read_text(encoding="utf-8")
+
+    for route in ("/models/upload", "/models/train"):
+        assert f'@router.post("{route}")' in control, f"route gone: {route}"
+        assert f"`POST {route}`" in architecture, f"not tabulated: {route}"
+
+    for route in ("/models/uploads", "/models/jobs"):
+        assert f'@router.get("{route}")' in read, f"route gone: {route}"
+        assert route in architecture
+
+    assert '@router.get("/models/{model_id}/artifact")' in read
+    assert "`GET /models/<id>/artifact`" in architecture
+    assert "`GET /models/<id>/artifact`" in doc
+
+
+def test_the_worker_poll_intervals_match_what_the_document_promises(doc,
+                                                                    architecture):
+    """"Settles in about ten seconds" is a claim the default can falsify."""
+    from services.prediction import registrar, trainer
+
+    assert registrar.DEFAULT_INTERVAL_S == 10
+    assert trainer.DEFAULT_INTERVAL_S == 60
+    assert "settles in about ten seconds" in doc
+    assert "`registrar` (10 s) and `trainer` (60 s)" in architecture
+
+
+def test_the_documents_agree_that_dvc_was_considered_and_declined(doc,
+                                                                  architecture):
+    """A "why not" is worth guarding only against being quietly dropped.
+
+    The layout choice is otherwise unexplainable -- a two-character fan-out
+    directory reads as arbitrary unless the document says whose convention it
+    is and why the tool that owns it is not here.
+    """
+    assert "DVC's cache layout" in doc
+    assert "DVC itself is *not* used" in doc
+    assert "DVC is not used" in architecture
+    assert not (ARCHITECTURE.parent.parent / ".dvc").exists(), \
+        "DVC is in the tree now; both documents say it deliberately is not"
+
+
+def test_only_the_two_workers_may_write_the_store(doc):
+    """`models` is read-write in `registrar` and `trainer` and nowhere else.
+
+    The compose files are the enforcement; this is the check that nobody
+    loosened one of them in passing. `infer` runs code out of these files and
+    must not be able to replace one -- `Dockerfile.infer` says so at length.
+    """
+    compose = Path(__file__).resolve().parents[1] / "deploy"
+    for name in ("docker-compose.yml", "docker-compose.hub.yml"):
+        text = (compose / name).read_text(encoding="utf-8")
+        writable = re.findall(r"^      - models:/models$", text, re.M)
+        readonly = re.findall(r"^      - models:/models:ro$", text, re.M)
+        assert len(writable) == 2, \
+            f"{name}: {len(writable)} services can write the object store, expected 2"
+        assert readonly, f"{name}: nothing mounts the store read-only any more"

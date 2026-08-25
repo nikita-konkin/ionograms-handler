@@ -75,6 +75,12 @@ services:
       # down, and must never be able to put one where `infer` runs code from.
       # Nothing in this container ever opens what lands here.
       - model-uploads:/uploads
+      # The object store, read-only, so `GET /models/{id}/artifact` can hand a
+      # registered artifact to another deployment. Reading bytes is not running
+      # them, and `tests/test_prediction_upload.py` keeps the difference
+      # enforced: nothing under services/api/ may unpickle. `:ro` because the
+      # store is written by the two workers and by nothing else.
+      - models:/models:ro
       # Read-only, and it stays read-only. The api renders from the archive and
       # has no business writing to it.
       - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"

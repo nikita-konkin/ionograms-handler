@@ -105,9 +105,19 @@ def put(source: str | Path, digest: str) -> Path:
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
+        # Two different faults produce this, and the remedies are not the
+        # same. A read-only mount is a compose error. A permission error on a
+        # read-write mount is almost always the volume's *ownership*: a named
+        # volume takes it from whatever populated it first, and a `models`
+        # volume that was seeded by a throwaway root container cannot then be
+        # written by uid 10001 -- which is every service in this deployment.
         raise StoreError(
-            f"cannot create {target.parent}: {exc}. The model store is "
-            f"{root()}; this process needs it mounted read-write."
+            f"cannot create {target.parent}: {exc}. This process is uid "
+            f"{os.getuid()}; the model store is {root()}. Check that the "
+            f"volume is mounted read-write here, and that it is owned by this "
+            f"uid -- a volume first populated by a root container is not, and "
+            f"`docker run --rm -v <volume>:/models alpine chown -R 10001:10001 "
+            f"/models` is the one-off fix."
         ) from exc
 
     handle, temporary = tempfile.mkstemp(dir=target.parent, prefix=".incoming-")
