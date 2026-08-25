@@ -188,6 +188,15 @@ deploy/.env
 # Claude Code preview config -- machine-specific paths
 .claude/launch.json
 
+# Claude Code MCP servers, likewise. `.mcp.json` points at whatever host or
+# interpreter happens to run the helper on the machine editing it -- it has
+# been a `N:\...\python.exe` launch command and a `http://192.168.50.32:8765`
+# LAN URL within one evening, and neither resolves anywhere but there.
+# Committed, it would hand every other checkout and every CI run a server that
+# cannot start. Note this keeps it out of git only: the tree is inside
+# Nextcloud, so the file still reaches every synced machine regardless.
+.mcp.json
+
 # macOS Finder metadata. Was tracked until the inherited scripts were removed.
 .DS_Store
 
