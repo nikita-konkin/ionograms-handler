@@ -176,19 +176,24 @@ def _claim(conn: sqlite3.Connection, table: str) -> dict | None:
     UPDATE: two workers on one database would otherwise both read the same
     queued row and both act on it. There is one worker per queue today; the
     guarantee costs a line and removes the need to remember that.
+
+    ``RETURNING`` rather than a read-back, and that is the second half of the
+    same guarantee. Re-selecting "the most recently started running row" looks
+    equivalent and is not: ``db.utcnow`` has second resolution, so a row left
+    ``running`` by a worker that died -- or claimed by a second worker inside
+    the same second -- can tie on ``started_at`` and win the ordering. Then the
+    caller runs a job it did not claim. SQLite has had ``RETURNING`` since
+    3.35; the inference image carries 3.46.
     """
     if table not in CLAIMABLE:
         raise QueueError(f"not a claimable queue: {table!r}")
     with conn:
-        cursor = conn.execute(
+        row = conn.execute(
             f"UPDATE {table} SET state = ?, started_at = ? "
             f"WHERE id = (SELECT id FROM {table} WHERE state = ? "
-            f"            ORDER BY id LIMIT 1)",
-            (RUNNING, db.utcnow(), QUEUED))
-        if not cursor.rowcount:
-            return None
-    return db.one(conn, f"SELECT * FROM {table} WHERE state = ? "
-                        f"ORDER BY started_at DESC, id DESC LIMIT 1", (RUNNING,))
+            f"            ORDER BY id LIMIT 1) RETURNING *",
+            (RUNNING, db.utcnow(), QUEUED)).fetchone()
+    return dict(row) if row else None
 
 
 def claim_job(conn: sqlite3.Connection) -> dict | None:

@@ -254,3 +254,30 @@ def test_cancelling_needs_the_control_token(rig):
 
     assert rig["client"].delete(f"/models/runs/{run['id']}").status_code == 401
     assert queues.run(rig["conn"], run["id"])["state"] == "queued"
+
+
+def test_a_claim_returns_the_row_it_claimed_not_the_newest_running_one(rig):
+    """A worker that died leaves a `running` row behind.
+
+    The claim used to re-select "the most recently started running row", which
+    looks equivalent and is not: `db.utcnow` has second resolution, so a stale
+    row can tie on `started_at` and win the ordering by id. The worker would
+    then run a job it did not claim -- and settle the wrong row.
+    """
+    from services.api import db as db_mod
+
+    registry.activate(rig["conn"], rig["model"]["id"])
+    conn = rig["conn"]
+
+    # A crashed worker's leftovers, with a *higher* id and the same timestamp.
+    wanted = queues.add_run(conn, param="muf", tx=TX, rx=RX)
+    stale = queues.add_run(conn, param="muf", tx=TX, rx=RX)
+    with conn:
+        conn.execute("UPDATE infer_job SET state = ?, started_at = ? WHERE id = ?",
+                     (queues.RUNNING, db_mod.utcnow(), stale["id"]))
+
+    claimed = queues.claim_run(conn)
+
+    assert claimed is not None
+    assert claimed["id"] == wanted["id"], \
+        f"claimed {claimed['id']}, which is the stale row, not {wanted['id']}"
