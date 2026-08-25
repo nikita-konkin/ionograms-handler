@@ -163,25 +163,37 @@ def jobs(conn: sqlite3.Connection, state: str | None = None,
     return [_decode_job(r) for r in db.rows(conn, sql, params + (int(limit),))]
 
 
-def claim_job(conn: sqlite3.Connection) -> dict | None:
-    """Take the oldest queued job and mark it running. Returns it, or None.
+#: Tables `_claim` may touch. The table name is interpolated into SQL -- it is
+#: a module constant here and never a caller's string, and this list is what
+#: keeps it that way.
+CLAIMABLE = ("train_job", "infer_job")
+
+
+def _claim(conn: sqlite3.Connection, table: str) -> dict | None:
+    """Take the oldest queued row in ``table`` and mark it running.
 
     The claim is a conditional UPDATE rather than a SELECT followed by an
     UPDATE: two workers on one database would otherwise both read the same
-    queued row and both fit it. There is one worker today; the guarantee costs
-    one line and removes the need to remember that.
+    queued row and both act on it. There is one worker per queue today; the
+    guarantee costs a line and removes the need to remember that.
     """
+    if table not in CLAIMABLE:
+        raise QueueError(f"not a claimable queue: {table!r}")
     with conn:
         cursor = conn.execute(
-            "UPDATE train_job SET state = ?, started_at = ? "
-            "WHERE id = (SELECT id FROM train_job WHERE state = ? "
-            "            ORDER BY id LIMIT 1)",
+            f"UPDATE {table} SET state = ?, started_at = ? "
+            f"WHERE id = (SELECT id FROM {table} WHERE state = ? "
+            f"            ORDER BY id LIMIT 1)",
             (RUNNING, db.utcnow(), QUEUED))
         if not cursor.rowcount:
             return None
-    row = db.one(conn,
-                 "SELECT * FROM train_job WHERE state = ? ORDER BY started_at "
-                 "DESC, id DESC LIMIT 1", (RUNNING,))
+    return db.one(conn, f"SELECT * FROM {table} WHERE state = ? "
+                        f"ORDER BY started_at DESC, id DESC LIMIT 1", (RUNNING,))
+
+
+def claim_job(conn: sqlite3.Connection) -> dict | None:
+    """Take the oldest queued training job. Returns it, or None."""
+    row = _claim(conn, "train_job")
     return _decode_job(row) if row else None
 
 
@@ -223,3 +235,80 @@ def _decode_job(row: dict) -> dict:
         except json.JSONDecodeError:
             pass
     return out
+
+
+# --------------------------------------------------------------------------
+# Inference passes
+#
+# Drained by `infer` itself, between the slices its interval is now cut into.
+# Nothing else in this module needs to know that; what matters here is that a
+# requested pass is a row somebody can see the state of, the same as an upload
+# or a fit.
+# --------------------------------------------------------------------------
+
+def add_run(conn: sqlite3.Connection, *, param: str, tx: str, rx: str,
+            method: str = "contour", model_id: int | None = None,
+            by: str | None = None) -> dict:
+    cursor = conn.execute(
+        "INSERT INTO infer_job (param, tx, rx, method, model_id, state, "
+        "requested_at, requested_by) VALUES (?,?,?,?,?,?,?,?)",
+        (param, tx, rx, method, model_id, QUEUED, db.utcnow(), by))
+    conn.commit()
+    return run(conn, int(cursor.lastrowid))
+
+
+def run(conn: sqlite3.Connection, run_id: int) -> dict | None:
+    return db.one(conn, "SELECT * FROM infer_job WHERE id = ?", (run_id,))
+
+
+def runs(conn: sqlite3.Connection, state: str | None = None,
+         limit: int = 50) -> list[dict]:
+    sql = "SELECT * FROM infer_job"
+    params: tuple = ()
+    if state:
+        sql += " WHERE state = ?"
+        params = (state,)
+    sql += " ORDER BY id DESC LIMIT ?"
+    return db.rows(conn, sql, params + (int(limit),))
+
+
+def pending_run(conn: sqlite3.Connection) -> dict | None:
+    """Whether anything is waiting, without claiming it.
+
+    `infer` checks this between sleep slices and only opens a write
+    transaction when the answer is yes -- the api holds the write lock for
+    minutes during an archive scan, and a claim attempted every ten seconds
+    against that would be ten seconds of contention for nothing.
+    """
+    return db.one(conn, "SELECT * FROM infer_job WHERE state = ? "
+                        "ORDER BY id LIMIT 1", (QUEUED,))
+
+
+def claim_run(conn: sqlite3.Connection) -> dict | None:
+    return _claim(conn, "infer_job")
+
+
+def settle_run(conn: sqlite3.Connection, run_id: int, state: str,
+               detail: str | None = None, written: int | None = None,
+               backtest: bool | None = None) -> dict | None:
+    if state not in (DONE, FAILED, CANCELLED):
+        raise QueueError(f"not a settled state: {state!r}")
+    with conn:
+        conn.execute(
+            "UPDATE infer_job SET state = ?, detail = ?, written = ?, "
+            "backtest = ?, settled_at = ? WHERE id = ?",
+            (state, detail, written,
+             None if backtest is None else int(backtest), db.utcnow(), run_id))
+    return run(conn, run_id)
+
+
+def cancel_run(conn: sqlite3.Connection, run_id: int) -> dict:
+    """Cancel a pass that has not started. A running one is left alone."""
+    row = run(conn, run_id)
+    if row is None:
+        raise QueueError(f"no inference run {run_id}")
+    if row["state"] != QUEUED:
+        raise QueueError(
+            f"run {run_id} is {row['state']}, not queued, so there is nothing "
+            f"to cancel. A pass that has started runs to its end.")
+    return settle_run(conn, run_id, CANCELLED, "cancelled before it started")

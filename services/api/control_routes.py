@@ -699,3 +699,70 @@ def cancel_training(job_id: int, request: Request,
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return {"ok": True, "cancelled": {"id": row["id"]},
             "detail": f"training job {job_id} cancelled."}
+
+
+@router.post("/models/run")
+def queue_run(request: Request, spec: dict = Body(...),
+              who: str = Depends(require_control)) -> dict:
+    """Ask for a forecast to be issued now, rather than at the next interval.
+
+    **Control scope**, for the same reason promotion is: this writes rows that
+    every consumer of `/forecast` will read. Nothing here runs a model --
+    `infer` does, between the slices its interval is cut into, and it is the
+    only process in the deployment that loads an artifact.
+
+    Refused at the door when there is nothing to run, because "queued, then
+    done, wrote 0 rows" is a worse answer than a sentence saying no model is
+    live for that circuit.
+    """
+    from ..prediction import queues, registry
+
+    conn = request.app.state.db
+    param = str(spec.get("param", "")).strip().lower()
+    tx = str(spec.get("tx", "") or "").strip()
+    rx = str(spec.get("rx", "") or "").strip()
+    method = str(spec.get("method") or "contour").strip()
+    model_id = spec.get("model_id")
+
+    if param not in ("muf", "lof"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "param must be muf or lof")
+    if not tx or not rx:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "a pass runs over one circuit, so tx and rx are required")
+
+    if model_id is not None:
+        model = registry.get(conn, int(model_id))
+        if model is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                f"no model {model_id}")
+        subject = f"{model['name']} (comparison)"
+    else:
+        model = registry.active(conn, param, tx, rx)
+        if model is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"no {param.upper()} model is live for {tx} -> {rx}, so there "
+                f"is no forecast to issue. Activate one, or name a registered "
+                f"model to run it for comparison.")
+        subject = model["name"]
+
+    row = queues.add_run(conn, param=param, tx=tx, rx=rx, method=method,
+                         model_id=(int(model_id) if model_id is not None else None),
+                         by=who)
+    return {"ok": True, "run": row,
+            "detail": (f"queued: {subject} over {tx} -> {rx}. `infer` picks it "
+                       f"up within a few seconds; nothing here loads a model.")}
+
+
+@router.delete("/models/runs/{run_id}")
+def cancel_run(run_id: int, request: Request,
+               _: str = Depends(require_control)) -> dict:
+    from ..prediction import queues
+
+    try:
+        row = queues.cancel_run(request.app.state.db, run_id)
+    except queues.QueueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return {"ok": True, "cancelled": {"id": row["id"]},
+            "detail": f"inference run {run_id} cancelled."}

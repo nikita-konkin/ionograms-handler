@@ -599,9 +599,11 @@ package. Registering and running one is `docs/prediction.md` §4.
 model used to mean a shell on the host, because loading a `.sav` unpickles it
 and fitting one is worse. Rather than open that surface, it is split. The api
 hashes an upload, checks four magic bytes and writes it to a quarantine volume;
-`POST /models/train` writes a row. Two workers with no listening socket —
-`registrar` (10 s) and `trainer` (60 s) — are what unpickle and what fit. The
-invariant is mechanical, not documentary:
+`POST /models/train` and `POST /models/run` write rows. Three workers with no
+listening socket — `registrar` (10 s), `trainer` (60 s), and `infer` itself,
+whose interval is now cut into 10 s slices so a requested pass is served
+without waiting six hours for one — are what unpickle, what fit and what
+predict. The invariant is mechanical, not documentary:
 `tests/test_prediction_upload.py` reads the syntax tree of `services/api/` and
 fails if anything there imports `joblib`, and of all of `services/` to confirm
 exactly one module calls `.fit`.
@@ -712,9 +714,11 @@ into the workers, and the workers expose nothing to reach.
 |---|---|---|
 | `POST /models/upload` | control | quarantines raw bytes; never opens them |
 | `POST /models/train` | control | vets a spec and queues a fit |
+| `POST /models/run` | control | queues a forecast pass over one circuit |
 | `GET /models/uploads`, `GET /models/jobs` | read | what the console polls |
 | `GET /models/<id>/artifact` | read | the artifact itself, by digest |
-| `DELETE /models/uploads/<id>`, `/models/jobs/<id>` | control | forget, cancel |
+| `GET /models/runs` | read | passes asked for, and what they wrote |
+| `DELETE /models/uploads/<id>`, `/models/jobs/<id>`, `/models/runs/<id>` | control | forget, cancel |
 
 ### 5.4 Station ↔ server: health and control **[proposed]**
 
@@ -885,6 +889,9 @@ rebuilds the frame an artifact expects, runs it *without* refitting, and writes
 - **`train.py` fits on measured picks**, never on the tracked grid it draws
   features from, excludes band-edge bounds from the fit while keeping them in
   the score, and holds out the tail rather than a random sample
+- **The console covers the whole lifecycle**: upload or train, promote, and
+  issue. Activating a model does not produce a forecast, so *Run now* queues a
+  pass and `infer` serves it between the slices of its interval
 
 *Exit:* a registered model runs unattended and its forecast is on the console
 beside the measurement, with a leaderboard saying whether it beats persistence.

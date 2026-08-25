@@ -55,16 +55,22 @@ Two ways in, and the same wall behind both:
 ```
   /ui/forecast  ──POST /models/upload (raw bytes)──▶  api ──▶ /uploads/<sha256>
   /ui/forecast  ──POST /models/train  (JSON spec) ──▶  api ──▶ train_job row
+  /ui/forecast  ──POST /models/run    (a circuit) ──▶  api ──▶ infer_job row
                                                        │
                           the api hashes and sniffs four bytes. It never
-                          unpickles, and it never fits.
+                          unpickles, it never fits, and it never predicts.
                                                        │
         registrar (10 s poll, no port) ────────────────┤
-        trainer   (60 s poll, no port) ────────────────┘
-                     │ loads / fits, golden-checks, registers
+        trainer   (60 s poll, no port) ────────────────┤
+        infer     (10 s slices of its interval) ───────┘
+                     │ loads / fits / predicts, golden-checks, registers
                      ▼
-        /models/objects/<aa>/<sha256>  +  model_registry row
+        /models/objects/<aa>/<sha256>  +  model_registry  +  forecast rows
 ```
+
+Three queues, three workers, one rule: **the process that answers HTTP writes
+a row and nothing else.** Every artifact in this service is opened by a
+container with no listening socket.
 
 Two products come out of this one path and should not be confused. A **nowcast**
 extends the tracked series a little past the last sounding and is nearly free. A
@@ -195,6 +201,31 @@ including frequencies that cannot exist.
 
 A run that finds no active model logs and exits zero. A prediction service with
 nothing trained yet is the normal state of a fresh deployment, not a fault.
+
+#### Issuing one on demand
+
+The unattended interval is six hours, which is right for a 24 h forecast and
+quite wrong for a person who has just activated a model and is looking at an
+empty **Last issue** column. Activating does not issue anything; `infer` does.
+
+So the sleep is cut into `POLL_S = 10` second slices, and between them `infer`
+drains `infer_job` — rows written by `POST /models/run` from the console. No
+fourth container: this process already mounts the store, already loads models
+and already writes the rows. What it lacked was a reason to wake up early.
+
+`model_id` on the row is what separates the two uses. Null means *whatever is
+active for this circuit*, which is the button on the Live panel. Naming one
+runs it as a comparison, exactly as `infer --model` does from a shell, without
+promoting anything.
+
+**A requested pass that writes zero rows is `failed`, not `done`** — and that
+is deliberately not how the unattended loop behaves. The loop is right to treat
+a model it cannot load as one bad circuit among many and carry on. A person who
+pressed a button on one circuit and got no forecast has had their request fail,
+whatever the reason; the reason is in `detail` either way, and what changes is
+whether the pill is green.
+
+---
 
 ### 3.4 `scoring` — the claim is comparative
 
@@ -334,6 +365,15 @@ bytes are a pickle or a zip, writes it to a quarantine volume and records a
 `pending` row. `registrar` — a container with no port, that nothing can reach —
 is what loads it, runs the golden check and writes the registry row.
 
+**Run now**, on each row of the Live panel, issues a forecast without waiting
+for the next interval. It is the third queue and behaves like the other two:
+the api writes a row, `infer` picks it up within about ten seconds, and the
+page reloads showing rows written and whether the pass was a backtest. Asking
+for a circuit with nothing live is refused at the door rather than queued —
+*"no MUF model is live for NIC3 -> Yoshkar-Ola, so there is no forecast to
+issue"* — because "queued, then done, wrote 0 rows" is a worse answer than a
+sentence. **[measured 2026-08-24]**
+
 Refusals arrive as sentences on the page, not status codes. Uploading a text
 file: **[measured 2026-08-24]**
 
@@ -412,6 +452,20 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env run --rm infe
 ```
 
 ### 4.5 See it
+
+Nothing is drawn until a pass has run. **Last issue —** on the Live panel means
+exactly that, and **Run now** beside it is the shortest way to fix it; the
+alternative is `infer --once` from a shell, or up to six hours.
+
+On the rig, one press over NIC3 → Yoshkar-Ola wrote **2,052 rows in 9 s**,
+labelled `backtest at +24.0 h lead, valid 2026-08-17 17:40 .. 2026-08-24 20:35`
+— the archive ends before now, so a 24 h lead predicts instants that have
+already happened. That label is the honest one and it reaches the page.
+**[measured 2026-08-24]**
+
+On `/ui/series`, pick the circuit **and the method the picks are in**: the
+selector defaults to `algo`, and a model trained on `contour` drawn over an
+empty `algo` series looks like a broken deployment rather than a wrong choice.
 
 Both read surfaces apply the same rule — **active models only, unless one is
 named** — so a comparison model is invisible until asked for:

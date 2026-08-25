@@ -18,7 +18,7 @@
   <div class="scroll"><table>
     <tr><th>{{ t('forecast.col.circuit') }}</th><th>{{ t('forecast.col.param') }}</th>
         <th>{{ t('forecast.col.model') }}</th><th>{{ t('forecast.col.last_issue') }}</th>
-        <th>{{ t('forecast.col.state') }}</th></tr>
+        <th>{{ t('forecast.col.state') }}</th><th></th></tr>
     {% for row in live %}
     <tr>
       <td><b>{{ row.tx }} &rarr; {{ row.rx }}</b></td>
@@ -32,9 +32,57 @@
         {%- elif row.stale %}<span class="pill warn">{{ t('forecast.stale') }}
           {{ row.age_s|duration }}</span>
         {%- else %}<span class="pill ok">{{ t('forecast.ok') }}</span>{% endif %}</td>
+      {# The button belongs here rather than in a panel of its own: this is the
+         row whose "Last issue" column is empty, and an operator who has just
+         activated a model is looking straight at it. Activating does not issue
+         a forecast -- `infer` does -- and until this existed the only way to
+         say so was a shell. #}
+      <td style="white-space:nowrap">
+        {% if row.model %}
+        <button onclick='runNow({{ row.param|tojson }}, {{ row.tx|tojson }},
+          {{ row.rx|tojson }}, {{ row.model.name|tojson }})'
+          title="{{ t('forecast.run.title') }}">{{ t('forecast.run') }}</button>
+        {% else %}
+        <button disabled title="{{ t('forecast.run.no_model_title') }}"
+          >{{ t('forecast.run') }}</button>
+        {% endif %}</td>
     </tr>
     {% endfor %}
   </table></div>
+
+  {% if runs %}
+  <h3 class="muted" style="font-size:.9rem">{{ t('forecast.run.recent') }}</h3>
+  <div class="scroll"><table>
+    <tr><th>{{ t('forecast.col.circuit') }}</th><th>{{ t('forecast.col.param') }}</th>
+        <th>{{ t('forecast.run.col.requested') }}</th><th>{{ t('forecast.run.col.rows') }}</th>
+        <th>{{ t('forecast.col.state') }}</th><th>{{ t('forecast.add.col.detail') }}</th>
+        <th></th></tr>
+    {% for r in runs %}
+    <tr>
+      <td><b>{{ r.tx }} &rarr; {{ r.rx }}</b></td>
+      <td class="muted">{{ r.param|upper }}</td>
+      <td class="muted">{{ r.requested_at }}</td>
+      {# "has not run" and "ran and wrote nothing" are different answers, and
+         the second is the interesting one, so the column never prints 0 for
+         the first. #}
+      <td class="muted">{% if r.written is not none %}{{ r.written }}
+          {%- if r.backtest %} <span class="note">{{ t('forecast.run.backtest') }}</span>{% endif %}
+          {%- else %}&mdash;{% endif %}</td>
+      <td>
+        {%- if r.state == 'done' %}<span class="pill ok">{{ t('forecast.state.done') }}</span>
+        {%- elif r.state == 'failed' %}<span class="pill fail">{{ t('forecast.state.failed') }}</span>
+        {%- elif r.state == 'running' %}<span class="pill warn">{{ t('forecast.state.running') }}</span>
+        {%- elif r.state == 'cancelled' %}<span class="pill">{{ t('forecast.state.cancelled') }}</span>
+        {%- else %}<span class="pill unk">{{ t('forecast.state.queued') }}</span>{% endif %}</td>
+      <td class="note wrap" style="max-width:32rem">{{ r.detail or '' }}</td>
+      <td style="white-space:nowrap">
+        {% if r.state == 'queued' %}
+        <button onclick='cancelRun({{ r.id }})'>{{ t('forecast.train.cancel') }}</button>
+        {% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
   {% else %}
   <p class="muted">{{ t('forecast.no_circuits') }}</p>
   {% endif %}
@@ -56,6 +104,7 @@
   {% if not live|selectattr('model')|list %}
   <p class="note">{{ t('forecast.nothing_live') }}</p>
   {% endif %}
+  <div id="say-live" class="note" style="margin-top:.5rem"></div>
 </div>
 
 <div class="panel">
@@ -486,6 +535,40 @@ async function sendTraining(event) {
   if (!r.ok) { say(r.detail, true, 'say-train'); return; }
   say(r.body.detail + ' ' + T('forecast.js.queued_training'), false, 'say-train');
   setTimeout(() => location.reload(), 1500);
+}
+
+// --------------------------------------------------------------------------
+// Issuing a forecast
+//
+// Activating a model does not produce one; `infer` does, on its next pass.
+// This queues a pass and watches the row settle, in the same shape the upload
+// panel uses -- the api writes a row and loads nothing.
+// --------------------------------------------------------------------------
+
+async function runNow(param, tx, rx, name) {
+  const r = await control('/models/run', 'POST', {param: param, tx: tx, rx: rx});
+  if (!r.ok) { say(r.detail, true, 'say-live'); return; }
+  say(r.body.detail, false, 'say-live');
+  watchRun(r.body.run.id, name);
+}
+
+async function watchRun(id, name, tries) {
+  tries = (tries || 0) + 1;
+  const body = await fetch('/models/runs').then(x => x.json())
+                    .catch(() => ({runs: []}));
+  const row = (body.runs || []).find(r => r.id === id);
+  if (row && row.state !== 'queued' && row.state !== 'running') {
+    location.reload();
+    return;
+  }
+  if (tries >= 20) { say(T('forecast.js.run_slow', {name: name}), true, 'say-live'); return; }
+  setTimeout(() => watchRun(id, name, tries), 2000);
+}
+
+async function cancelRun(id) {
+  const r = await control('/models/runs/' + id, 'DELETE');
+  say(r.ok ? r.body.detail : r.detail, !r.ok, 'say-live');
+  if (r.ok) setTimeout(() => location.reload(), 700);
 }
 
 async function cancelJob(id) {

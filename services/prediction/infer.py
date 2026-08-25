@@ -39,12 +39,19 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from ..api import db
-from . import artifacts, dataset, legacy_features, registry, scoring
+from . import artifacts, dataset, legacy_features, queues, registry, scoring
 
 #: Default cadence: four times a day. The long-horizon forecast has nothing to
 #: say more often than the drivers move, and issuing it hourly multiplies the
 #: `forecast` table by 24 for no new information.
 DEFAULT_INTERVAL_S = 21600
+
+#: How long the interval is cut into. The interval is right for unattended
+#: running -- a 24 h forecast does not change usefully in six hours -- and
+#: quite wrong for a person who has just activated a model and is looking at
+#: an empty "Last issue" column. So the sleep is sliced, and a requested pass
+#: is picked up within one slice instead of within one interval.
+POLL_S = 10.0
 
 
 def _clean(value):
@@ -203,6 +210,13 @@ def run_once(conn: sqlite3.Connection, params: tuple[str, ...] = ("muf",),
 
     for param in params:
         for circuit in dataset.circuits(conn, param, method):
+            # Narrowing, not filtering after the fact: without this, `--tx`
+            # given on its own was accepted and then ignored, which reads as
+            # "that circuit has no data" rather than "that flag did nothing".
+            if tx and circuit["tx"] != tx:
+                continue
+            if rx and circuit["rx"] != rx:
+                continue
             model = registry.active(conn, param, circuit["tx"], circuit["rx"])
             if model is None:
                 results.append({
@@ -234,6 +248,95 @@ def describe(result: dict) -> str:
     return (f"  {where} [{result['param']}]: {result['written']} rows from "
             f"{result['model']}, {kind} at +{result['horizon_h']} h lead, "
             f"valid {start} .. {stop}{skew}")
+
+
+
+# --------------------------------------------------------------------------
+# Passes the console asked for
+# --------------------------------------------------------------------------
+
+def settle_run(conn: sqlite3.Connection, job: dict,
+               allow_skew: bool = False) -> dict:
+    """Run one requested pass and record what it produced.
+
+    A refusal is an outcome, not a crash: the console shows `detail` in full,
+    and a worker that exited on a bad model would take the unattended loop
+    down with it.
+    """
+    try:
+        results = run_once(conn, (job["param"],), job["method"],
+                           job["model_id"], job["tx"], job["rx"], allow_skew)
+    except (SystemExit, ValueError, artifacts.ArtifactError,
+            legacy_features.RecipeError, sqlite3.Error) as exc:
+        return queues.settle_run(conn, job["id"], queues.FAILED,
+                                 f"{type(exc).__name__}: {exc}"
+                                 if not isinstance(exc, SystemExit) else str(exc))
+
+    if not results:
+        return queues.settle_run(
+            conn, job["id"], queues.FAILED,
+            f"nothing to run: {job['tx']} -> {job['rx']} has no "
+            f"{job['param']} picks for method {job['method']}.", 0)
+
+    written = sum(r.get("written", 0) for r in results)
+    backtest = any(r.get("backtest") for r in results)
+
+    # **Zero rows is a failed request, not a completed one.** The unattended
+    # loop is right to treat a model it cannot load as one bad circuit among
+    # many and carry on; a person who pressed a button on one circuit and got
+    # no forecast has had their request fail, whatever the reason. The reason
+    # is in `detail` either way -- what changes is whether the pill is green.
+    state = queues.DONE if written else queues.FAILED
+    return queues.settle_run(conn, job["id"], state,
+                             "; ".join(describe(r).strip() for r in results),
+                             written, backtest)
+
+
+def drain(conn: sqlite3.Connection, allow_skew: bool = False,
+          limit: int = 4) -> list[dict]:
+    """Settle up to ``limit`` requested passes. Returns the settled rows."""
+    settled = []
+    for _ in range(max(int(limit), 1)):
+        job = queues.claim_run(conn)
+        if job is None:
+            break
+        settled.append(settle_run(conn, job, allow_skew))
+    return settled
+
+
+def _wait(interval: float, db_path, allow_skew: bool) -> None:
+    """Sleep out the interval, stopping to serve any requested pass.
+
+    Split rather than shortened: running the whole unattended pass every ten
+    seconds would be pointless work over every circuit, and waiting six hours
+    to honour a button is not a wait anybody accepts. So the loop sleeps in
+    slices and only opens the database when something is actually queued.
+    """
+    deadline = time.monotonic() + interval
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(POLL_S, remaining))
+        try:
+            with db.session(db_path) as conn:
+                if queues.pending_run(conn) is None:
+                    continue
+                settled = drain(conn, allow_skew)
+        except sqlite3.Error as exc:
+            # The api holds the write lock for minutes during an archive scan.
+            # A slice that cannot read is a slice to skip, not a reason to
+            # abandon the interval and start a full pass early.
+            print(f"requested pass deferred: {type(exc).__name__}: {exc}",
+                  file=sys.stderr, flush=True)
+            continue
+
+        for row in settled:
+            stamp = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+            print(f"[{stamp}] requested pass {row['id']} [{row['param']}] "
+                  f"{row['tx']} -> {row['rx']}: {row['state']}, "
+                  f"{row['written'] if row['written'] is not None else '--'} "
+                  f"rows. {row['detail']}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -322,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.once:
             return 0
-        time.sleep(args.interval)
+        _wait(args.interval, args.db, args.allow_version_skew)
 
 
 if __name__ == "__main__":

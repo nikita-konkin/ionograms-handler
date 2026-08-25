@@ -36,7 +36,8 @@ TX, RX = "NIC3", "Yoshkar-Ola"
 
 
 def seed(conn, days: int = 8, tx: str = TX, rx: str = RX,
-         censor: slice | None = None, gaps: slice | None = None):
+         censor: slice | None = None, gaps: slice | None = None,
+         prefix: str | None = None):
     """Five-minute soundings with a diurnal MUF, optionally censored or absent.
 
     `censor` marks a span as band-edge picks; `gaps` leaves the extraction row
@@ -57,7 +58,7 @@ def seed(conn, days: int = 8, tx: str = TX, rx: str = RX,
         cursor = conn.execute(
             "INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at) "
             "VALUES (?,?,?,?,?,?)",
-            (f"s{position}.h5", f"s{position}.h5",
+            (f"{prefix or tx}{position}.h5", f"{prefix or tx}{position}.h5",
              stamp.strftime("%Y-%m-%d %H:%M:%S"), tx, rx, db.utcnow()))
         if missing[position]:
             continue

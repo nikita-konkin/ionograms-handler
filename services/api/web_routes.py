@@ -607,6 +607,9 @@ def forecast_page(request: Request, param: str | None = None,
         "uploads": [row for row in queues.uploads(conn, limit=25)
                     if row["state"] != queues.REGISTERED],
         "jobs": jobs,
+        # Only what is still moving or still worth reading. A pass that ran
+        # hours ago has already told its story in the Last issue column above.
+        "runs": queues.runs(conn, limit=10),
         "leads": LEADS,
         "estimators": train.ESTIMATORS,
     })

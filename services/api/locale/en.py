@@ -211,6 +211,25 @@ MESSAGES: dict[str, str] = {
         "registering a model means running code out of it, and the process "
         "answering this request has no business doing that.",
 
+    # -- forecast: issuing one now ----------------------------------------
+    #
+    # Activating a model does not produce a forecast; `infer` does, on its next
+    # pass. Before this button the only way to say so was a shell command, and
+    # an empty "Last issue" column with no way to act on it is where a person
+    # gets stuck.
+    "forecast.run": "Run now",
+    "forecast.run.title":
+        "Issue a forecast for this circuit now, instead of waiting for the "
+        "next scheduled pass. The model is loaded by `infer`, not by this "
+        "server.",
+    "forecast.run.no_model_title":
+        "No model is live for this circuit, so there is no forecast to issue. "
+        "Activate one below first.",
+    "forecast.run.recent": "Recent passes",
+    "forecast.run.col.requested": "Asked for",
+    "forecast.run.col.rows": "Rows",
+    "forecast.run.backtest": "backtest",
+
     # -- forecast: adding a model -----------------------------------------
     #
     # The panel exists because registering a model used to need a shell on the
@@ -300,6 +319,10 @@ MESSAGES: dict[str, str] = {
         "Diurnal harmonics plus solar zenith angle, fitted strictly before the "
         "scored window so it cannot become an oracle on its own leaderboard",
 
+    "forecast.js.run_slow":
+        "The pass for {name} is still queued. `infer` checks every few "
+        "seconds; if that container is not running, nothing will issue a "
+        "forecast.",
     "forecast.js.no_file": "Choose an artifact file first.",
     "forecast.js.uploading": "Uploading {name}\u2026",
     "forecast.js.waiting":

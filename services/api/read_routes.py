@@ -253,6 +253,16 @@ def training_jobs(request: Request, state: str | None = None,
     return {"count": len(rows), "jobs": rows}
 
 
+@router.get("/models/runs")
+def inference_runs(request: Request, state: str | None = None,
+                   limit: int = Query(50, ge=1, le=200)) -> dict:
+    """Forecast passes asked for from the console, and what they wrote."""
+    from ..prediction import queues
+
+    rows = queues.runs(request.app.state.db, state=state, limit=limit)
+    return {"count": len(rows), "runs": rows}
+
+
 @router.get("/models/{model_id}/artifact")
 def model_artifact(model_id: int, request: Request):
     """The artifact itself, so another deployment can pull a model.

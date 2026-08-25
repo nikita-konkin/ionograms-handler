@@ -480,3 +480,41 @@ CREATE TABLE IF NOT EXISTS train_job (
 );
 
 CREATE INDEX IF NOT EXISTS train_job_state ON train_job(state, requested_at);
+
+
+-- One requested inference pass.
+--
+-- The third queue, and the one that closes the loop: activating a model does
+-- not produce a forecast, `infer` does, and until this existed the only way to
+-- make that happen was a shell on the host. Every other step of a model's life
+-- is a button, so this is one too.
+--
+-- Drained by `infer` itself rather than by a fourth container. That process
+-- already mounts the artifact store, already loads models and already writes
+-- the rows -- what it lacked was a reason to wake up before its interval
+-- elapsed, which is a change to how it sleeps rather than a new service.
+--
+-- `model_id` NULL means "whatever is active for this circuit", which is the
+-- button on the Live panel. Naming one runs it as a comparison, exactly as
+-- `infer --model` does from a shell, without promoting anything.
+CREATE TABLE IF NOT EXISTS infer_job (
+    id           INTEGER PRIMARY KEY,
+    param        TEXT NOT NULL,
+    tx           TEXT NOT NULL, rx TEXT NOT NULL,
+    method       TEXT NOT NULL DEFAULT 'contour',
+    model_id     INTEGER REFERENCES model_registry(id) ON DELETE SET NULL,
+    state        TEXT NOT NULL DEFAULT 'queued',
+    detail       TEXT,
+    -- Forecast rows the pass wrote. Nullable rather than 0 by default: "has
+    -- not run" and "ran and wrote nothing" are different answers, and the
+    -- second one is the interesting failure.
+    written      INTEGER,
+    backtest     INTEGER,
+    requested_at TEXT NOT NULL,
+    requested_by TEXT,
+    started_at   TEXT,
+    settled_at   TEXT,
+    CHECK (state IN ('queued', 'running', 'done', 'failed', 'cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS infer_job_state ON infer_job(state, requested_at);

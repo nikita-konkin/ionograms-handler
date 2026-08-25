@@ -204,7 +204,7 @@ def test_the_worker_poll_intervals_match_what_the_document_promises(doc,
     assert registrar.DEFAULT_INTERVAL_S == 10
     assert trainer.DEFAULT_INTERVAL_S == 60
     assert "settles in about ten seconds" in doc
-    assert "`registrar` (10 s) and `trainer` (60 s)" in architecture
+    assert "`registrar` (10 s), `trainer` (60 s)" in architecture
 
 
 def test_the_documents_agree_that_dvc_was_considered_and_declined(doc,
@@ -237,3 +237,34 @@ def test_only_the_two_workers_may_write_the_store(doc):
         assert len(writable) == 2, \
             f"{name}: {len(writable)} services can write the object store, expected 2"
         assert readonly, f"{name}: nothing mounts the store read-only any more"
+
+
+def test_the_poll_slice_is_quoted_as_the_code_sets_it(doc, architecture):
+    """"Within about ten seconds" is a promise `POLL_S` can falsify."""
+    from services.prediction import infer
+
+    assert infer.POLL_S == 10
+    assert infer.DEFAULT_INTERVAL_S == 21600
+    assert "`POLL_S = 10` second slices" in doc
+    assert "cut into 10 s slices" in architecture
+
+
+def test_the_run_route_exists_and_both_documents_name_it(doc, architecture):
+    api = Path(__file__).resolve().parents[1] / "services" / "api"
+    assert '@router.post("/models/run")' in (api / "control_routes.py").read_text()
+    assert '@router.get("/models/runs")' in (api / "read_routes.py").read_text()
+    assert "`POST /models/run`" in architecture
+    assert "`GET /models/runs`" in architecture
+    assert "infer_job" in doc
+
+
+def test_a_requested_pass_that_writes_nothing_is_a_failure(doc):
+    """The one place the on-demand path deliberately differs from the loop.
+
+    Documented because it looks like an inconsistency until the reason is
+    stated, and an inconsistency nobody explained is one somebody "fixes".
+    """
+    source = (Path(__file__).resolve().parents[1] / "services" / "prediction"
+              / "infer.py").read_text(encoding="utf-8")
+    assert "state = queues.DONE if written else queues.FAILED" in source
+    assert "is `failed`, not `done`" in doc
