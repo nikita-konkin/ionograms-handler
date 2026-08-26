@@ -40,6 +40,39 @@ _MARKER_COLOURS = {
 }
 
 
+def _lofs_of(ion, results) -> dict:
+    """Each estimator's LOF, from the trace that estimator itself detected.
+
+    Per method rather than once for the ionogram, because that is what makes
+    the pair comparable: `algo`'s LOF and `algo`'s MUF are the two ends of one
+    detected set, and a single band-wide LOF drawn beside three MUFs would
+    invite reading a spread between quantities that were never measured the
+    same way. `pipeline.process_file` builds its `lof_<method>` columns from
+    exactly this call.
+
+    Failures are swallowed to no line: a picture is not the place to discover
+    that the low end could not be picked, and the estimator's own `error`
+    already says when something went wrong.
+    """
+    if not results:
+        return {}
+
+    from . import lof as lof_module
+
+    found = {}
+    for name, result in results.items():
+        if not result.ok or result.presence is None:
+            continue
+        try:
+            low = lof_module.pick_lof(result.presence, ion.freq,
+                                      power_db=ion.db, vrange=ion.vrange)
+        except (ValueError, IndexError):       # pragma: no cover - defensive
+            continue
+        if low.ok:
+            found[name] = low
+    return found
+
+
 def colour_scale(cmap: str | None = None, stops: int = 32) -> list[list]:
     """The raster's colormap, sampled as plotly colorscale stops.
 
@@ -147,14 +180,25 @@ def plot(
     cmap: str | None = None,
     segments=None,
     reconstruction=None,
+    lof: bool = True,
 ) -> Path:
-    """Render one ionogram, optionally marking MUFs and the reconstructed trace.
+    """Render one ionogram, optionally marking MUFs, LOFs and the fitted trace.
 
     ``out_path`` may be a path or an open binary file. The second is for the
     on-demand renderer (``architecture.md`` sec. 4.2), which serves a PNG per
     request and has no reason to touch the filesystem to do it -- a temporary
     file per request would be an extra failure mode and a cleanup problem in a
     container.
+
+    ``lof`` draws the low end of each estimator's own trace beside the MUF it
+    already draws. Both are **recomputed from the ionogram here**, not read
+    from a stored row: the MUF in the title has always come from the
+    ``results`` the caller just ran, and the LOF is derived from the same
+    ``presence`` arrays with :func:`muf.lof.pick_lof`'s defaults. So the two
+    agree with each other, and a row computed by ``pipeline`` under a
+    non-default ``min_run`` or ``band_floor_mhz`` may differ from the picture
+    -- which is already true of the MUF and is why the picture is a view of
+    the sounding rather than a view of the table.
     """
     out_path = _destination(out_path)
 
@@ -174,6 +218,7 @@ def plot(
             f"{header.tx_name} - {header.rx_name} ({header.path_type})\n"
             f"{header.datetime:%Y-%m-%d %H:%M:%S}Z"
         )
+        lofs = _lofs_of(ion, results) if lof else {}
         if results:
             picked = [
                 f"{name} {r.pick.muf_mhz:.2f}"
@@ -181,6 +226,15 @@ def plot(
             ]
             if picked:
                 title += "    MUF: " + "  |  ".join(picked) + " MHz"
+        if lofs:
+            # `<=` because a LOF at the band floor is an upper bound: the trace
+            # ran off the bottom of what the circuit radiates, so the real LOF
+            # is at or below it. The mirror of `limited_` on the MUF, and it
+            # goes in the title for the same reason -- a bound presented as a
+            # measurement is the error this whole distinction exists to stop.
+            title += "\nLOF: " + "  |  ".join(
+                f"{name} {'<=' if low.at_band_floor else ''}{low.lof_mhz:.2f}"
+                for name, low in lofs.items()) + " MHz"
         ax.set_title(title, fontsize=14)
 
         bar = fig.colorbar(mesh, ax=ax, pad=0.01)
@@ -196,9 +250,19 @@ def plot(
                 ax.axvline(
                     result.pick.muf_mhz,
                     color=_MARKER_COLOURS.get(name, "#ffffff"),
-                    linestyle="--", linewidth=1.4, alpha=0.9, label=name,
+                    linestyle="--", linewidth=1.4, alpha=0.9,
+                    label=f"{name} MUF",
                 )
-        if results or segments or reconstruction is not None:
+        # Same hue as the MUF it belongs to, dotted rather than dashed: the two
+        # are the same estimator's answer at opposite ends of its own trace, so
+        # a colour of their own would read as two more estimators.
+        for name, low in lofs.items():
+            ax.axvline(
+                low.lof_mhz, color=_MARKER_COLOURS.get(name, "#ffffff"),
+                linestyle=":", linewidth=1.4, alpha=0.9,
+                label=f"{name} LOF" + (" (bound)" if low.at_band_floor else ""),
+            )
+        if results or segments or reconstruction is not None or lofs:
             ax.legend(loc="upper left", framealpha=0.75, fontsize=9)
 
         ax.set_xlim(ion.cal.freq_start, ion.cal.freq_stop)

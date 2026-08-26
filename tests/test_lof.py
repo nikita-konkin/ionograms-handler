@@ -290,3 +290,75 @@ def test_a_requirement_below_the_noise_peak_saturates(sounding):
 
     assert saturated.ok and real.ok
     assert saturated.lof_mhz < real.lof_mhz
+
+
+# --- on the rendered ionogram -------------------------------------------------
+#
+# The rendered plot drew every estimator's MUF and none of their LOFs, so the
+# picture said less than the table beside it. These pin what it draws now, and
+# -- the part that matters -- that the number under the line is the same one
+# `pipeline` would store.
+
+def test_the_rendered_plot_draws_each_estimators_own_lof(sounding):
+    """Per method, not once for the ionogram.
+
+    `algo`'s LOF and `algo`'s MUF are the two ends of one detected set. A
+    single band-wide LOF drawn beside three MUFs would invite reading a spread
+    between quantities that were never measured the same way.
+    """
+    from muf import render
+
+    results = extractors.run(sounding)
+    drawn = render._lofs_of(sounding, results)
+
+    assert drawn, "no estimator produced a LOF on a sounding with a clear echo"
+    assert set(drawn) <= set(results)
+    for name, low in drawn.items():
+        assert low.ok
+        # Below the MUF the same estimator picked, which is the one ordering
+        # that has to hold for the pair to mean anything.
+        assert low.lof_mhz < results[name].pick.muf_mhz
+
+
+def test_the_drawn_lof_is_the_one_the_pipeline_would_store(sounding):
+    """The picture must not disagree with the table.
+
+    `pipeline.process_file` builds its `lof_<method>` column from
+    `pick_lof(result.presence, ...)` with the defaults; so does the renderer.
+    If those two ever drift apart the image is quietly wrong rather than
+    broken, which is the failure mode `_render`'s gating comment is about.
+    """
+    from muf import render
+
+    results = extractors.run(sounding)
+    drawn = render._lofs_of(sounding, results)
+
+    for name, low in drawn.items():
+        expected = lof.pick_lof(results[name].presence, sounding.freq,
+                                power_db=sounding.db, vrange=sounding.vrange)
+        assert low.lof_mhz == pytest.approx(expected.lof_mhz, abs=1e-12)
+
+
+def test_an_estimator_that_found_nothing_contributes_no_line(sounding):
+    """A failed estimator is a missing line, not a NaN drawn at the origin."""
+    from muf import render
+
+    results = extractors.run(sounding)
+    broken = next(iter(results))
+    results[broken].error = "detector fell over"
+
+    drawn = render._lofs_of(sounding, results)
+
+    assert broken not in drawn
+
+
+def test_the_lof_lines_can_be_turned_off(sounding, tmp_path):
+    from muf import render
+
+    results = extractors.run(sounding)
+    with_lof = render.plot(sounding, tmp_path / "with.png", results)
+    without = render.plot(sounding, tmp_path / "without.png", results, lof=False)
+
+    assert with_lof.stat().st_size > 0 and without.stat().st_size > 0
+    assert with_lof.read_bytes() != without.read_bytes(), (
+        "lof=False drew the same image, so the lines were never conditional")

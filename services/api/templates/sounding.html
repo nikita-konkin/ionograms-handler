@@ -212,11 +212,18 @@
     // hundred kHz of the sweep top on a ceiling-limited circuit, and a
     // centred label there is half outside the frame.
     const middle = (e.f_lo + e.f_hi) / 2;
+    // The label carries its own ground. Its colour is the mark's, and those
+    // are chosen to read over the raster -- MUF is #ffffff -- but the label
+    // sits *above* the frame, on the transparent paper, which is the page's
+    // light background. White on white made the MUF label invisible while
+    // the amber LOF beside it read fine, so the line was there and the number
+    // naming it was not.
     const notes = frame.marks.map(m => ({
       x: m.value, y: 1, yref: 'paper', yanchor: 'bottom', showarrow: false,
       xanchor: m.value > middle ? 'right' : 'left',
       text: m.name + ' ' + m.text + (m.letter ? ' ' + m.letter : ''),
       font: {color: m.colour, size: 10},
+      bgcolor: 'rgba(11,13,16,.85)', borderpad: 2,
     }));
 
     Plotly.newPlot(div, traces, {

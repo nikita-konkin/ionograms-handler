@@ -2895,6 +2895,36 @@ def test_the_plot_frame_carries_points_not_the_raster(scaled):
     assert len(frame["scale"]["stops"]) == 32
 
 
+def test_the_mark_labels_carry_their_own_background():
+    """MUF is drawn white, and its label sits off the dark raster.
+
+    The verticals are coloured to read over the ionogram -- `MUF` is
+    `#ffffff` -- but the annotation naming each one is anchored *above* the
+    plot frame, on `paper_bgcolor: transparent`, which is the page's light
+    background. White on white left the MUF line drawn and the number naming
+    it invisible, while the amber LOF beside it read fine, so the plot looked
+    like it had simply failed to pick a MUF.
+
+    The fix is that the label carries its own ground instead of depending on
+    whatever happens to be behind it. Both halves have to stay together, so
+    both are checked here: a mark colour chosen for the raster, and a
+    background under the text that sits somewhere else.
+    """
+    from services.api import sao as sao_mod
+
+    source = Path(sao_mod.__file__).read_text(encoding="utf-8")
+    assert '("MUF", "#ffffff")' in source, (
+        "the MUF mark is no longer white -- if that is deliberate, re-read "
+        "the guard below rather than deleting it")
+
+    template = (Path(__file__).resolve().parents[1] / "services" / "api"
+                / "templates" / "sounding.html").read_text(encoding="utf-8")
+    notes = template.split("frame.marks.map(m => ({")[2].split("}));")[0]
+    assert "bgcolor" in notes, (
+        "the mark labels lost their background, so a white MUF label is "
+        "invisible on the page ground again")
+
+
 # --------------------------------------------------------------------------
 # The raster's colour key
 # --------------------------------------------------------------------------
