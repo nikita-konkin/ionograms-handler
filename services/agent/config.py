@@ -45,6 +45,26 @@ DEFAULT_UNITS = (
 #: for whoever wants it. It just cannot make the station unhealthy.
 DEFAULT_OPTIONAL_UNITS = ("chirp-digisonde@",)
 
+#: The timer-driven oneshots that carry the archive off this station, and the
+#: prune that follows them.
+#:
+#: Kept apart from :data:`DEFAULT_UNITS` because their health is a different
+#: question. A oneshot that ran and exited cleanly reports ``inactive``, which
+#: is exactly what success looks like -- listed among the resident services it
+#: would paint the console red between every run. What matters for these is
+#: the *result* of the last run and whether the timer is still firing.
+#:
+#: They are here at all because of 2026-08-26: `chirp-archive-sync` failed
+#: every five minutes for thirteen hours -- the destination volume had filled,
+#: and a full CIFS share returns EIO on close rather than ENOSPC -- while the
+#: console showed a green station acquiring normally. It was: acquisition was
+#: never the thing that broke. Nothing on any page said the archive had
+#: stopped moving.
+DEFAULT_JOB_UNITS = (
+    "chirp-archive-sync.service",
+    "chirp-archive-prune.service",
+)
+
 #: Systemd target the control commands act on. One target rather than five
 #: units, so ordering is systemd's problem and not the agent's.
 DEFAULT_TARGET = "chirp.target"
@@ -108,6 +128,15 @@ class StationConfig:
     #: :data:`DEFAULT_OPTIONAL_UNITS`; set it to ``[]`` to have every listed
     #: unit count.
     optional_units: tuple[str, ...] = DEFAULT_OPTIONAL_UNITS
+
+    #: Timer-driven archive jobs. See :data:`DEFAULT_JOB_UNITS` for why they
+    #: are not in ``units``. Their remote destination is *not* configured
+    #: here: it is read back out of the unit at collection time, so the
+    #: console reports the path the job actually uses rather than the one this
+    #: file believes it uses. Those two drifted apart on DOB and nothing
+    #: noticed for four days.
+    job_units: tuple[str, ...] = DEFAULT_JOB_UNITS
+
     target: str = DEFAULT_TARGET
 
     #: Where health goes. Push, per sec. 5.4 -- the station never listens.

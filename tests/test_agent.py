@@ -1596,3 +1596,188 @@ def test_an_unpatched_station_cannot_change_its_band(tmp_path, band_station):
                       recorder_binary=_recorder(tmp_path, patched=False))
     with pytest.raises(control.ControlError, match="rebuild"):
         control.apply_config(station, {"set_band": {"band_start_mhz": 2.5}})
+
+
+# --------------------------------------------------------------------------
+# The archive jobs
+#
+# Written from 2026-08-26, which took an afternoon to diagnose because every
+# page said the station was fine. It was: acquisition never stopped. What
+# stopped was the archive leaving the station, and nothing reported on that
+# at all -- not the job, not the timer, not the volume it writes to.
+# --------------------------------------------------------------------------
+
+JOBS = ("chirp-archive-sync.service",)
+
+
+def _fake_show(monkeypatch, table: dict):
+    """`systemctl show <unit> --property=X --value` answering from a table.
+
+    Keyed `(unit, property)`. A property the table does not mention comes back
+    empty, which is what systemd does for one that is unset.
+    """
+    def run(args, **kw):
+        if args[:2] != ["systemctl", "show"]:
+            return 0, ""
+        unit = args[2]
+        prop = next(a for a in args if a.startswith("--property=")).split("=", 1)[1]
+        return 0, table.get((unit, prop), "")
+    monkeypatch.setattr(health, "_run", run)
+
+
+def test_a_failing_archive_job_is_red_on_the_console(monkeypatch, station):
+    """The thirteen-hour failure nobody could see.
+
+    rsync exited 11 every five minutes because the destination share was
+    full. The station stayed green throughout, because the only units anyone
+    watched were the ones that acquire.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "exit-code",
+        ("chirp-archive-sync.service", "ExecMainStatus"): "11",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Ср 2026-08-26 15:09:26 MSK",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    })
+    metrics = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+
+    job = metrics["job:chirp-archive-sync.service"]
+    assert job.ok is False
+    assert job.value == "exit-code"
+    assert "exit status 11" in job.detail
+    assert "journalctl" in job.detail, "no next step for whoever reads this"
+    assert not health.HealthReport("TST", 0.0, list(metrics.values())).healthy
+
+
+def test_a_oneshot_between_runs_is_not_a_failure(monkeypatch, station):
+    """The reason these are not in `units`.
+
+    `systemctl is-active` on a timer-driven oneshot reports `inactive` for
+    every second it is not running, which is almost all of them. Listed among
+    the resident services it would be red constantly, and a console that is
+    always red is a console nobody reads.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ExecMainStatus"): "0",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    })
+    metrics = health.job_states(replace(station, job_units=JOBS))
+
+    assert all(m.ok is True for m in metrics), [m.name for m in metrics if not m.ok]
+    assert health.HealthReport("TST", 0.0, metrics).healthy
+
+
+def test_a_stopped_timer_fails_even_though_no_run_failed(monkeypatch, station):
+    """The quieter half, and the one worth the extra metric.
+
+    A disabled timer produces no failed runs, because it produces no runs.
+    Watching only the job would show `Result=success` forever -- the last run
+    did succeed, days ago -- while the archive silently stopped growing.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.timer", "ActiveState"): "inactive",
+    })
+    metrics = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+
+    assert metrics["job:chirp-archive-sync.service"].ok is True
+    timer = metrics["timer:chirp-archive-sync.timer"]
+    assert timer.ok is False
+    assert "never fire again" in timer.detail
+
+
+def test_a_timer_that_is_active_but_silent_is_a_failure(monkeypatch, station):
+    """Enabled, running, and not actually firing. Rare, and invisible without this."""
+    stale = int((time.time() - 3 * 3600) * 1e6)
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(stale),
+    })
+    metrics = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+
+    timer = metrics["timer:chirp-archive-sync.timer"]
+    assert timer.ok is False
+    assert "3.0 h ago" in timer.detail
+
+
+def test_the_job_reports_the_destination_the_unit_actually_uses(monkeypatch,
+                                                                station):
+    """Read from the unit, never from this config.
+
+    DOB's installed unit had been edited in place to a different
+    `ARCHIVE_REMOTE` than the repo's copy. Every document describing the
+    station named a path it had not written to for four days, and the console
+    would have repeated the same wrong path if it took it from config.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "Environment"):
+            "ARCHIVE_LOCAL=/home/ionouser/ionozond_data2 "
+            "ARCHIVE_REMOTE=/mnt/tec_data_tb/ionozond_data2",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    })
+    metrics = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+
+    assert "/mnt/tec_data_tb/ionozond_data2" in \
+        metrics["job:chirp-archive-sync.service"].detail
+
+
+def test_a_missing_systemctl_is_unknown_not_failed(monkeypatch, station):
+    """A gap in observation is not evidence of a fault -- the rule the whole
+    report is built on."""
+    monkeypatch.setattr(health, "_run",
+                        lambda args, **kw: (127, "systemctl: not found"))
+    metrics = health.job_states(replace(station, job_units=JOBS))
+
+    assert all(m.ok is None for m in metrics)
+    assert health.HealthReport("TST", 0.0, metrics).healthy
+
+
+# --- the volume it writes to -------------------------------------------------
+
+def test_the_remote_archive_volume_is_measured_not_only_the_local_one(
+        monkeypatch, station, tmp_path):
+    """`disk_free` watches output_dir and the ringbuffer, both local.
+
+    On 2026-08-26 both were comfortable and the destination was 100% full at
+    zero bytes free. The station was healthy; the place it sends its data was
+    not, and no metric covered that.
+    """
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / "2026-08-26").mkdir()
+    monkeypatch.setattr(health, "_unit_environment",
+                        lambda unit: {"ARCHIVE_REMOTE": str(remote)})
+
+    class Full:
+        total, free = 7_200_000_000_000, 0
+    monkeypatch.setattr(health.shutil, "disk_usage", lambda p: Full)
+
+    metric = health.archive_remote_free(replace(station, job_units=JOBS))[0]
+
+    assert metric.ok is False
+    assert metric.value == 0.0
+    assert str(remote) in metric.detail
+
+
+def test_an_unmounted_share_is_unknown_rather_than_healthy(monkeypatch, station,
+                                                           tmp_path):
+    """An empty mountpoint reports the *root* filesystem's free space.
+
+    Which reads as healthy and is the wrong answer -- the same trap
+    `prune.py` guards against before it deletes anything.
+    """
+    empty = tmp_path / "notmounted"
+    empty.mkdir()
+    monkeypatch.setattr(health, "_unit_environment",
+                        lambda unit: {"ARCHIVE_REMOTE": str(empty)})
+
+    metric = health.archive_remote_free(replace(station, job_units=JOBS))[0]
+
+    assert metric.ok is None
+    assert "unmounted" in metric.detail

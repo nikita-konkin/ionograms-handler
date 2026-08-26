@@ -111,6 +111,12 @@ FUTURE_PRODUCT_TOLERANCE_S = 5.0
 #: at 94 % on 2026-08-05 with `ringbuffer_max_age_min` too high.
 RINGBUFFER_WARN_FRACTION = 0.85
 
+#: How long a healthy archive timer may stay silent before that is a failure
+#: rather than a wait. The sync timer runs every 5 min and the prune hourly,
+#: so two hours clears both by a wide margin and still catches a timer that
+#: was disabled or never enabled after a unit edit.
+JOB_SILENT_S = 7200.0
+
 #: Free space below this on the data volume and the station has days, not
 #: weeks. `save_raw_voltage` turns days into hours -- see sec. 3.4.
 DISK_WARN_FRACTION = 0.10
@@ -189,6 +195,174 @@ def unit_states(config: StationConfig) -> list[Metric]:
                                      "its own path without it"))
         else:
             out.append(Metric(f"unit:{unit}", text, ok=False))
+    return out
+
+
+def _unit_environment(unit: str) -> dict[str, str]:
+    """``Environment=`` of a unit, as systemd resolved it.
+
+    Read from the running unit rather than from this station's config, and
+    that is the point: the two are allowed to disagree and did. The installed
+    ``chirp-archive-sync.service`` had been edited in place to a different
+    ``ARCHIVE_REMOTE`` than the repo's copy, so every document describing the
+    station named a path the station had not written to since 22 August.
+    Whatever the console reports here is what rsync will actually use.
+    """
+    code, text = _run(["systemctl", "show", unit, "--property=Environment",
+                       "--value"])
+    if code != 0 or not text:
+        return {}
+    found = {}
+    for item in text.split():
+        key, sep, value = item.partition("=")
+        if sep:
+            found[key] = value
+    return found
+
+
+def _age_of(usec: str) -> float | None:
+    """Seconds since a systemd ``*USec`` timestamp, or None if it never ran."""
+    try:
+        stamp = int(usec)
+    except (TypeError, ValueError):
+        return None
+    # systemd reports 0 for "never", and the monotonic variants are relative
+    # to boot rather than the epoch -- neither is an instant we can subtract.
+    return time.time() - stamp / 1e6 if stamp > 0 else None
+
+
+def job_states(config: StationConfig) -> list[Metric]:
+    """The archive jobs: did the last run succeed, and is the timer still firing.
+
+    Two failures, and only the first one looks like a failure.
+
+    A job that **fails** leaves ``Result=exit-code`` and is red here. That is
+    the 2026-08-26 case: rsync exiting 11 every five minutes because the
+    destination share was full, for thirteen hours, with nothing on any page
+    saying so.
+
+    A timer that is **disabled** is the quieter one. Nothing turns red --
+    there is no failed run to report, because there are no runs. The archive
+    simply stops growing, and the first symptom is a forecast that has run out
+    of measurements days later. So the timer's own state and the age of its
+    last trigger are reported beside the job, and a timer that has not fired
+    in more than :data:`JOB_SILENT_S` is a definite failure rather than an
+    unknown.
+
+    ``rsync`` exit codes 23 and 24 -- partial transfer, vanished source file --
+    are ordinary here and the unit already lists them in
+    ``SuccessExitStatus``, so systemd reports them as success and this reads
+    them the same way. That is deliberate: on a station deleting detection
+    snippets minutes after writing them, a vanished file is the normal case.
+    """
+    out: list[Metric] = []
+    for unit in config.job_units:
+        code, result = _run(["systemctl", "show", unit,
+                             "--property=Result", "--value"])
+        if code == 127 or not result:
+            out.append(Metric.unknown(f"job:{unit}", result or "no systemctl"))
+            continue
+
+        _, status = _run(["systemctl", "show", unit,
+                          "--property=ExecMainStatus", "--value"])
+        _, when = _run(["systemctl", "show", unit,
+                        "--property=ExecMainExitTimestamp", "--value"])
+
+        env = _unit_environment(unit)
+        remote = env.get("ARCHIVE_REMOTE", "")
+        where = f" -> {remote}" if remote else ""
+        ran = f", last ran {when}" if when else ", never run"
+
+        if result == "success":
+            out.append(Metric(f"job:{unit}", result, ok=True,
+                              detail=f"last run succeeded{ran}{where}"))
+        else:
+            out.append(Metric(f"job:{unit}", result, ok=False,
+                              detail=f"last run failed with exit status "
+                                     f"{status or '?'}{ran}{where}. "
+                                     f"`journalctl -u {unit} -n 20` says why."))
+
+        out.append(_timer_metric(unit))
+    return out
+
+
+def _timer_metric(unit: str) -> Metric:
+    """The timer behind a job unit, by systemd's own naming convention."""
+    timer = unit.rsplit(".", 1)[0] + ".timer"
+    code, state = _run(["systemctl", "show", timer,
+                        "--property=ActiveState", "--value"])
+    if code == 127 or not state or state == "unknown":
+        return Metric.unknown(f"timer:{timer}", state or "no systemctl")
+
+    _, last = _run(["systemctl", "show", timer,
+                    "--property=LastTriggerUSec", "--value"])
+    age = _age_of(last)
+
+    if state != "active":
+        return Metric(f"timer:{timer}", state, ok=False,
+                      detail="the timer is not running, so this job will "
+                             "never fire again. Nothing will turn red as the "
+                             "archive falls behind -- there are no failed "
+                             "runs when there are no runs.")
+    if age is None:
+        return Metric(f"timer:{timer}", state, ok=None,
+                      detail="active, but it has not fired yet")
+    if age > JOB_SILENT_S:
+        return Metric(f"timer:{timer}", state, ok=False,
+                      detail=f"active but last fired {age / 3600:.1f} h ago, "
+                             f"past the {JOB_SILENT_S / 3600:.0f} h this "
+                             f"station expects")
+    return Metric(f"timer:{timer}", state, ok=True,
+                  detail=f"last fired {age / 60:.0f} min ago")
+
+
+def archive_remote_free(config: StationConfig) -> list[Metric]:
+    """Free space where the archive is being *sent*, not only where it is staged.
+
+    ``disk_free`` measures ``output_dir`` and the ringbuffer -- both local,
+    both on this station. Neither says anything about the volume rsync writes
+    to, and on 2026-08-26 that was the one that had filled: 7.2 TB, 100% used,
+    zero bytes free, while the station's own disks were comfortable and the
+    console was green.
+
+    The path comes from the unit's ``ARCHIVE_REMOTE``, so this measures the
+    destination in use rather than a configured guess. An unmounted share is
+    reported unknown rather than full: an empty mountpoint directory on the
+    root filesystem would otherwise report the root's free space and read as
+    healthy, which is precisely the wrong answer.
+    """
+    seen: set[str] = set()
+    out: list[Metric] = []
+    for unit in config.job_units:
+        remote = _unit_environment(unit).get("ARCHIVE_REMOTE", "")
+        if not remote or remote in seen:
+            continue
+        seen.add(remote)
+        path = Path(remote)
+        name = "archive_remote_free_fraction"
+
+        if not path.exists():
+            out.append(Metric.unknown(name, f"{path}: not present -- the "
+                                            f"share may not be mounted"))
+            continue
+        # The same guard `prune.py` makes before deleting anything: an
+        # unmounted share is an empty directory that every existence check
+        # passes.
+        if path.is_dir() and not any(path.iterdir()):
+            out.append(Metric.unknown(name, f"{path}: empty -- an unmounted "
+                                            f"share looks exactly like this"))
+            continue
+        try:
+            usage = shutil.disk_usage(path)
+        except OSError as exc:
+            out.append(Metric.unknown(name, f"{type(exc).__name__}: {exc}"))
+            continue
+
+        fraction = usage.free / usage.total if usage.total else 0.0
+        out.append(Metric(name, round(fraction, 4),
+                          ok=(fraction > DISK_WARN_FRACTION),
+                          detail=f"{usage.free / 1e9:.1f} GB free of "
+                                 f"{usage.total / 1e9:.1f} GB at {path}"))
     return out
 
 
@@ -673,8 +847,10 @@ def collect(config: StationConfig | None = None, *,
     config = config or StationConfig()
     metrics: list[Metric] = []
     metrics.extend(unit_states(config))
+    metrics.extend(job_states(config))
     metrics.append(newest_product_age(config, scan))
     metrics.extend(disk_free(config))
+    metrics.extend(archive_remote_free(config))
     metrics.append(sample_rate(config))
     metrics.extend(band(config))
     metrics.append(uptime_s())
