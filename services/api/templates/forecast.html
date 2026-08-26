@@ -396,7 +396,13 @@
         {%- elif j.state == 'running' %}<span class="pill warn">{{ t('forecast.state.running') }}</span>
         {%- elif j.state == 'cancelled' %}<span class="pill">{{ t('forecast.state.cancelled') }}</span>
         {%- else %}<span class="pill unk">{{ t('forecast.state.queued') }}</span>{% endif %}</td>
-      <td class="note wrap" style="max-width:34rem">{{ j.detail or '' }}</td>
+      {# The build that claimed it, beside what it said. A worker's refusal
+         describes the code that ran, which is not always the code that was
+         deployed -- `api` updates itself and the workers do not. Shown only
+         once a worker has taken the row: a queued job has no answer yet. #}
+      <td class="note wrap" style="max-width:34rem">{{ j.detail or '' }}
+        {%- if j.worker %}<br><span class="muted">{{ t('forecast.train.by_build') }}
+          <code>{{ j.worker }}</code></span>{% endif %}</td>
       <td style="white-space:nowrap">
         {% if j.state == 'queued' %}
         <button onclick='cancelJob({{ j.id }})'>{{ t('forecast.train.cancel') }}</button>

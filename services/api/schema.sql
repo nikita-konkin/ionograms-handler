@@ -475,6 +475,11 @@ CREATE TABLE IF NOT EXISTS train_job (
     requested_at TEXT NOT NULL,
     requested_by TEXT,
     started_at   TEXT,
+    -- Which build of the worker claimed this. See db.build_id:
+    -- api and watch update themselves, the workers do not, so a
+    -- refusal that describes the running code accurately can still
+    -- be a stale container rather than a bad request.
+    worker       TEXT,
     settled_at   TEXT,
     CHECK (state IN ('queued', 'running', 'done', 'failed', 'cancelled'))
 );
@@ -513,6 +518,11 @@ CREATE TABLE IF NOT EXISTS infer_job (
     requested_at TEXT NOT NULL,
     requested_by TEXT,
     started_at   TEXT,
+    -- Which build of the worker claimed this. See db.build_id:
+    -- api and watch update themselves, the workers do not, so a
+    -- refusal that describes the running code accurately can still
+    -- be a stale container rather than a bad request.
+    worker       TEXT,
     settled_at   TEXT,
     CHECK (state IN ('queued', 'running', 'done', 'failed', 'cancelled'))
 );

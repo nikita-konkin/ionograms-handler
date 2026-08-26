@@ -33,6 +33,32 @@ DEFAULT_DB = Path(os.environ.get("API_DB", "data/ionograms.sqlite3"))
 ARCHIVE_ROOT = Path(os.environ.get("ARCHIVE_ROOT", "."))
 
 
+def build_id() -> str:
+    """Which build of this code is running, for a row to carry.
+
+    Read at call time rather than bound at import, because a test needs to be
+    able to set it and because nothing here is hot enough to care.
+
+    The value comes from the same build-args `Dockerfile.api` has always
+    stamped and `Dockerfile.train` now does too. Outside a container both are
+    unset and this says ``source``, which is the honest answer for a checkout
+    run by hand -- not ``unknown``, which is what an image built without
+    ``--build-arg`` reports and is a different situation.
+
+    This exists because the services do **not** update together. `api` and
+    `watch` carry the watchtower label and update themselves; `trainer`,
+    `registrar` and `infer` do not, by design -- restarting a trainer mid-fit
+    would abort the job. So the api can offer a feature the worker cannot
+    execute, and the worker's refusal describes its own code accurately while
+    saying nothing about the skew. A build id on the row is the missing half
+    of that sentence.
+    """
+    sha = os.environ.get("API_BUILD_SHA", "")
+    if not sha:
+        return "source"
+    return sha[:12]
+
+
 def time_bound(value: str | None, *, end: bool = False) -> str | None:
     """Normalize a ``from``/``to`` bound to the spelling ``datetime`` is stored in.
 
@@ -99,9 +125,44 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+#: Columns added to tables that already exist somewhere. ``schema.sql`` uses
+#: ``CREATE TABLE IF NOT EXISTS``, which does exactly nothing to a table that
+#: is already there -- so a new column reaches a fresh database and never
+#: reaches the one on the station, which is the only database that matters.
+#:
+#: Kept as a list rather than a migration framework, per this module's opening
+#: paragraph: adding a nullable column is one statement, and the guard is one
+#: ``PRAGMA``. When this list grows past a dozen the trade has changed and it
+#: is worth revisiting; it has two entries.
+ADDED_COLUMNS = (
+    ("train_job", "worker", "TEXT"),
+    ("infer_job", "worker", "TEXT"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> list[str]:
+    """Apply :data:`ADDED_COLUMNS` to tables that lack them. Idempotent."""
+    applied = []
+    for table, column, kind in ADDED_COLUMNS:
+        try:
+            present = {r["name"] for r in
+                       conn.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.Error:                  # pragma: no cover - defensive
+            continue
+        if not present or column in present:
+            # No table at all means `schema.sql` just created it with the
+            # column already in place, or this database predates the feature
+            # entirely. Neither wants an ALTER.
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        applied.append(f"{table}.{column}")
+    return applied
+
+
 def init(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Create anything missing. Safe to call on every start."""
     conn.executescript(SCHEMA.read_text(encoding="utf-8"))
+    _add_missing_columns(conn)
     conn.commit()
     return conn
 

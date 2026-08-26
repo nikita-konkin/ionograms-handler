@@ -177,6 +177,16 @@ def _claim(conn: sqlite3.Connection, table: str) -> dict | None:
     queued row and both act on it. There is one worker per queue today; the
     guarantee costs a line and removes the need to remember that.
 
+    ``worker`` is stamped here, at the moment a build takes responsibility for
+    a row. It is the answer to "the trainer refused this, is the trainer
+    current?" -- a question that cost an afternoon on 2026-08-26, because
+    ``api`` and ``watch`` carry the watchtower label and update themselves
+    while ``trainer``, ``registrar`` and ``infer`` do not. An updated api
+    offered `voting`, queued it correctly, and a trainer several builds behind
+    reported "estimator must be one of ['huber', 'ridge', 'xgboost']" -- an
+    accurate description of the code that was running and no indication that
+    it was not the code that had been deployed.
+
     ``RETURNING`` rather than a read-back, and that is the second half of the
     same guarantee. Re-selecting "the most recently started running row" looks
     equivalent and is not: ``db.utcnow`` has second resolution, so a row left
@@ -189,10 +199,10 @@ def _claim(conn: sqlite3.Connection, table: str) -> dict | None:
         raise QueueError(f"not a claimable queue: {table!r}")
     with conn:
         row = conn.execute(
-            f"UPDATE {table} SET state = ?, started_at = ? "
+            f"UPDATE {table} SET state = ?, started_at = ?, worker = ? "
             f"WHERE id = (SELECT id FROM {table} WHERE state = ? "
             f"            ORDER BY id LIMIT 1) RETURNING *",
-            (RUNNING, db.utcnow(), QUEUED)).fetchone()
+            (RUNNING, db.utcnow(), db.build_id(), QUEUED)).fetchone()
     return dict(row) if row else None
 
 

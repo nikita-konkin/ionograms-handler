@@ -35,5 +35,24 @@ RUN useradd --create-home --uid 10001 train \
  && mkdir -p /models /indices && chown -R train:train /models /indices /app
 USER train
 
+# The same stamp `Dockerfile.api` carries, and for a sharper reason here.
+#
+# CI already passes these build-args to *every* image in its matrix; this file
+# simply never declared them, so they were discarded and this image shipped
+# with no identity at all. That is not cosmetic: `api` and `watch` are
+# watchtower-labelled and update themselves, while `trainer`, `registrar` and
+# `infer` are not and stay on whatever image created them. On 2026-08-26 an
+# updated api offered `voting`/`stacking` and queued the jobs correctly, and a
+# trainer three builds behind refused each one with "estimator must be one of
+# ['huber', 'ridge', 'xgboost']" -- a message that describes the running code
+# perfectly and gives no hint that the running code is stale.
+#
+# `queues.claim_job` now stamps this onto the row it claims, so the console can
+# say which build refused a job instead of leaving that to be deduced.
+ARG API_BUILD_SHA=unknown
+ARG API_BUILD_TIME=unknown
+ENV API_BUILD_SHA=$API_BUILD_SHA \
+    API_BUILD_TIME=$API_BUILD_TIME
+
 # No default command: this image is run with an explicit job, because "train
 # something" is not a thing to do by accident on container start.

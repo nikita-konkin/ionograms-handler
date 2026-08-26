@@ -276,6 +276,7 @@ MESSAGES: dict[str, str] = {
     "forecast.train.lead": "Lead",
     "forecast.train.estimator": "Estimator",
     "forecast.train.members": "Committee",
+    "forecast.train.by_build": "handled by build",
     "forecast.train.holdout": "Hold back (days)",
     "forecast.train.submit": "Queue training",
     "forecast.train.jobs": "Training runs",

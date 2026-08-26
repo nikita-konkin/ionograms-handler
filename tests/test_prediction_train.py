@@ -573,3 +573,102 @@ def test_describe_names_the_committee_and_its_split(conn):
     line = train.describe(result)
     assert "Voting of" in line
     assert "huber" in line and "ridge" in line
+
+
+# --------------------------------------------------------------------------
+# Which build handled it
+#
+# 2026-08-26: `api` and `watch` carry the watchtower label and update
+# themselves; `trainer`, `registrar` and `infer` do not. An updated api
+# offered `voting`, queued the job correctly, and a trainer several builds
+# behind refused it with "estimator must be one of ['huber', 'ridge',
+# 'xgboost']" -- a true statement about the code that ran, and no indication
+# that it was not the code that had been deployed.
+# --------------------------------------------------------------------------
+
+def test_a_claim_records_the_build_that_took_the_job(conn, monkeypatch):
+    monkeypatch.setenv("API_BUILD_SHA", "0123456789abcdef0123")
+    job = queues.add_job(conn, param="muf", tx=TX, rx=RX, method="contour",
+                         spec={"estimator": "huber"})
+
+    claimed = queues.claim_job(conn)
+
+    assert claimed["id"] == job["id"]
+    # Short, like every other sha this project prints.
+    assert claimed["worker"] == "0123456789ab"
+    assert queues.job(conn, job["id"])["worker"] == "0123456789ab"
+
+
+def test_a_checkout_says_source_rather_than_unknown(conn, monkeypatch):
+    """The two are different situations and the console should not merge them.
+
+    `unknown` is what an image built without `--build-arg` reports -- a real
+    container whose provenance was lost. `source` is a checkout somebody is
+    running by hand, which is not a deployment problem at all.
+    """
+    monkeypatch.delenv("API_BUILD_SHA", raising=False)
+    queues.add_job(conn, param="muf", tx=TX, rx=RX, method="contour",
+                   spec={"estimator": "huber"})
+
+    assert queues.claim_job(conn)["worker"] == "source"
+
+
+def test_a_queued_job_has_no_build_yet(conn):
+    """Nothing has taken responsibility for it, so the column is honest."""
+    job = queues.add_job(conn, param="muf", tx=TX, rx=RX, method="contour",
+                         spec={"estimator": "huber"})
+
+    assert queues.job(conn, job["id"])["worker"] is None
+
+
+def test_an_inference_pass_is_stamped_the_same_way(conn, monkeypatch):
+    """Same skew, same queue mechanics, same answer -- `infer` is not
+    watchtower-labelled either."""
+    monkeypatch.setenv("API_BUILD_SHA", "feedfacefeedface")
+    queues.add_run(conn, param="muf", tx=TX, rx=RX)
+
+    assert queues.claim_run(conn)["worker"] == "feedfacefeed"
+    assert queues.runs(conn)[0]["worker"] == "feedfacefeed"
+
+
+def test_the_column_reaches_a_database_that_already_existed(tmp_path,
+                                                            monkeypatch):
+    """The half that matters: `schema.sql` is `CREATE TABLE IF NOT EXISTS`.
+
+    A new column therefore reaches a fresh database and never reaches the one
+    on the station -- which is the only database anybody cares about. Without
+    the ALTER, `claim_job` would fail on the deployed system with "no such
+    column: worker" and every training run would break, which is a worse
+    outcome than the problem being fixed.
+    """
+    monkeypatch.setenv("MODEL_STORE", str(tmp_path / "models"))
+    path = tmp_path / "old.sqlite3"
+
+    with db.session(path) as old:
+        old.execute("ALTER TABLE train_job DROP COLUMN worker")
+        old.execute("ALTER TABLE infer_job DROP COLUMN worker")
+        old.commit()
+        assert "worker" not in {r["name"] for r in
+                                old.execute("PRAGMA table_info(train_job)")}
+
+    # Re-opening runs `init` again, which is what a container restart does.
+    with db.session(path) as migrated:
+        for table in ("train_job", "infer_job"):
+            columns = {r["name"] for r in
+                       migrated.execute(f"PRAGMA table_info({table})")}
+            assert "worker" in columns, f"{table} was not migrated"
+
+        queues.add_job(migrated, param="muf", tx=TX, rx=RX, method="contour",
+                       spec={"estimator": "huber"})
+        assert queues.claim_job(migrated) is not None, "claim broke after ALTER"
+
+
+def test_migrating_twice_is_harmless(tmp_path, monkeypatch):
+    """`init` runs on every start, so it has to be idempotent."""
+    monkeypatch.setenv("MODEL_STORE", str(tmp_path / "models"))
+    path = tmp_path / "twice.sqlite3"
+
+    with db.session(path):
+        pass
+    with db.session(path) as conn:
+        assert db._add_missing_columns(conn) == [], "an ALTER ran a second time"

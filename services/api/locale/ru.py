@@ -263,6 +263,7 @@ MESSAGES: dict[str, str] = {
     "forecast.train.lead": "Заблаговременность",
     "forecast.train.estimator": "Алгоритм",
     "forecast.train.members": "Состав ансамбля",
+    "forecast.train.by_build": "обработано сборкой",
     "forecast.train.holdout": "Удержать (суток)",
     "forecast.train.submit": "Поставить в очередь",
     "forecast.train.jobs": "Запуски обучения",
