@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% block title %}{{ model.name if model else t('model.notfound') }}{% endblock %}
+{% block body %}
+
+{% if not model %}
+<div class="panel"><h2>{{ t('model.notfound') }}</h2>
+  <p class="note">{{ t('model.notfound_note') }}
+    <a href="/ui/forecast">{{ t('model.back') }}</a></p></div>
+{% else %}
+
+<div class="panel" style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap">
+  <a class="pill" href="/ui/forecast">&larr; {{ t('model.back') }}</a>
+  <b>{{ model.name }}</b>
+  <span class="muted">{{ model.param|upper }}</span>
+  {% if model.tx %}<span class="muted">{{ model.tx }} &rarr; {{ model.rx }}</span>{% endif %}
+  {% if model.active %}<span class="pill ok">{{ t('forecast.state.active') }}</span>
+  {% else %}<span class="pill unk">{{ t('forecast.state.comparison') }}</span>{% endif %}
+  {% if model.tx %}
+  <a class="pill" href="/ui/series?forecast={{ model.id }}&circuit={{ model.tx }} -> {{ model.rx }}"
+     >{{ t('model.on_series') }}</a>{% endif %}
+</div>
+
+<div class="panel">
+  <h2>{{ t('model.contract') }}</h2>
+  <div class="scroll"><table>
+    <tr><th>{{ t('model.field') }}</th><th>{{ t('model.value') }}</th></tr>
+    <tr><td class="muted">{{ t('forecast.col.origin') }}</td>
+        <td>{{ model.origin }} &middot; {{ model.framework }}
+          {%- if model.env and model.env.sklearn %} {{ model.env.sklearn }}{% endif %}
+          &middot; {{ model.capability }}</td></tr>
+    <tr><td class="muted">{{ t('forecast.col.inputs') }}</td>
+        <td>{{ model.features|length }}
+          {%- if model.target_alias %} {{ t('forecast.of') }}
+          <code>{{ model.target_alias }}</code>{% endif %}</td></tr>
+    <tr><td class="muted">{{ t('model.fitted_on') }}</td>
+        <td>{% if model.trained_from %}{{ model.trained_from }} &hellip;
+          {{ model.trained_to }}
+          {%- else %}<span class="note">{{ t('model.fitted_elsewhere') }}</span>{% endif %}</td></tr>
+    {% if holdout %}
+    <tr><td class="muted">{{ t('model.holdout') }}</td>
+        <td>{{ t('model.mae') }} <b>{{ '%.3f'|format(holdout.mae) if holdout.mae
+              is not none else '—' }}</b> {{ t('unit.mhz') }}
+          &middot; {{ t('model.rmse') }} {{ '%.3f'|format(holdout.rmse)
+              if holdout.rmse is not none else '—' }}
+          &middot; {{ t('model.bias') }} {{ '%+.3f'|format(holdout.bias)
+              if holdout.bias is not none else '—' }}
+          &middot; {{ holdout.n }} {{ t('model.pairs') }}
+          {%- if holdout.persistence and holdout.persistence.mae is not none %}
+          <div class="note">{{ t('model.against_persistence',
+            mae='%.3f'|format(holdout.persistence.mae)) }}</div>{% endif %}</td></tr>
+    <tr><td class="muted">{{ t('forecast.train.estimator') }}</td>
+        <td>{{ holdout.estimator or '—' }}
+          {%- if holdout.ensemble %}
+          <div class="note">{{ holdout.ensemble.kind }}
+            {%- if holdout.ensemble.weight %} &mdash;
+            {% for name, w in holdout.ensemble.weight.items() %}{{ name }}
+              {{ '%.2f'|format(w) }}{% if not loop.last %}, {% endif %}{% endfor %}
+            {%- elif holdout.ensemble.members %} &mdash;
+            {{ holdout.ensemble.members|join(' + ') }}{% endif %}</div>
+          {%- endif %}</td></tr>
+    {% endif %}
+  </table></div>
+</div>
+
+{# The columns themselves, not just how many. This is the page an operator
+   opens when a model behaves oddly, and "it has no time predictor at all" is
+   exactly the sort of thing a count of 3 hides -- so every column is named,
+   decoded, and shown with how much of the fitted model's weight sits on it. #}
+<div class="panel">
+  <h2>{{ t('model.features') }}</h2>
+  <p class="note">{{ t('model.features_note') }}
+    {%- if share_of %} {{ t('model.share_note') }}{% endif %}
+    {%- if permutation.basis == 'permutation-mae' %}
+    {{ t('model.permuted_note', mhz='%.3f'|format(permutation.baseline_mae),
+          repeats=permutation.repeats, n=permutation.n_rows) }}{% endif %}</p>
+  <div class="scroll"><table>
+    <tr><th>{{ t('model.col.column') }}</th><th>{{ t('model.col.kind') }}</th>
+        <th>{{ t('model.col.built_from') }}</th><th>{{ t('model.col.lead') }}</th>
+        {% for m in share_of %}<th>{{ t('model.col.share') }}{% if m %}
+          <span class="muted">{{ m }}</span>{% endif %}</th>{% endfor %}
+        {% if permutation.basis == 'permutation-mae' %}
+        <th>{{ t('model.col.permuted') }}</th>{% endif %}</tr>
+    {% for f in features %}
+    <tr>
+      <td><code>{{ f.name }}</code></td>
+      <td class="muted">
+        {%- if f.kind == 'raw' %}{{ t('model.kind.raw') }}
+        {%- elif f.kind == 'rolling' %}{{ t('model.kind.rolling', stat=f.stat) }}
+        {%- elif f.kind == 'component' %}{{ t('model.kind.component', part=f.component) }}
+        {%- elif f.kind == 'cyclical' %}{{ t('model.kind.cyclical') }}
+        {%- elif f.kind == 'time' %}{{ t('model.kind.time') }}
+        {%- else %}<span class="pill unk">{{ t('model.kind.unknown') }}</span>{% endif %}</td>
+      <td class="muted">
+        {%- if f.alias %}<code>{{ f.alias }}</code>
+          {%- if f.window_h %} &middot; {{ t('model.over_hours',
+            h='%g'|format(f.window_h)) }}{% endif %}
+        {%- else %}{{ t('model.from_the_clock') }}{% endif %}</td>
+      {# Both spellings, because they are the thing most often confused here:
+         the model counts samples and the operator thinks in hours. #}
+      <td class="muted">{% if f.lead_h is not none %}{{
+          '%g'|format(f.lead_h) }} {{ t('unit.h') }}
+        <span class="note">({{ f.lag }})</span>
+        {%- else %}&mdash;{% endif %}</td>
+      {# A number and a bar. The number is what you quote; the bar is what
+         makes the ranking readable without comparing nine decimals. The track
+         is drawn too, so a short bar reads as "little of the weight" rather
+         than as a rendering accident. #}
+      {% for share in f.shares %}
+      <td>{% if share is not none %}<span
+          style="display:inline-block;min-width:3.4rem">{{
+          '%.1f%%'|format(share * 100) }}</span><span
+          style="display:inline-block;vertical-align:middle;width:5rem;
+                 height:.5rem;background:var(--line);border-radius:2px"
+          title="{{ '%.4f'|format(share) }}"><span
+            style="display:block;height:100%;border-radius:2px;
+                   background:var(--accent);width:{{
+                   '%.1f'|format((f.bars[loop.index0] or 0) * 100) }}%"
+            ></span></span>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
+      {% endfor %}
+      {# Signed and in megahertz, because a negative one is real information:
+         shuffling that column made the holdout *better*, which is noise or a
+         column the model would be better off without. Reported as it came
+         out rather than clamped. #}
+      {% if permutation.basis == 'permutation-mae' %}
+      <td>{% if f.permuted is not none %}<span
+          class="{% if f.permuted <= 0 %}muted{% endif %}"
+          style="display:inline-block;min-width:3.9rem">{{
+          '%+.3f'|format(f.permuted) }}</span><span
+          style="display:inline-block;vertical-align:middle;width:5rem;
+                 height:.5rem;background:var(--line);border-radius:2px"><span
+            style="display:block;height:100%;border-radius:2px;
+                   background:var(--warn);width:{{
+                   '%.1f'|format((f.permuted_bar or 0) * 100) }}%"
+            ></span></span>
+        {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% if not share_of %}
+  <p class="note">{{ t('model.share_absent') }}</p>
+  {% endif %}
+</div>
+
+{# ---------------------------------------------------------------------------
+   The two diagnostics. Each panel explains itself, because the reason to open
+   this page is that something is wrong and the reader is not necessarily the
+   person who trained it.
+   ------------------------------------------------------------------------ #}
+<div class="panel">
+  <h2>{{ t('model.diurnal') }}</h2>
+  {% if diurnal.holdout %}
+  <p class="note">{{ t('model.diurnal_note') }}</p>
+  <div id="diurnal-plot" style="height:420px"></div>
+  {% else %}
+  <p class="note">{{ t('model.diurnal_absent') }}</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>{{ t('model.learning') }}</h2>
+  {% if learning.basis == 'xgboost-rounds' %}
+  <p class="note">{{ t('model.learning_note') }}</p>
+  <div id="learning-plot" style="height:320px"></div>
+  {% elif learning.basis == 'unavailable' %}
+  <p class="note">{{ t('model.learning_failed', why=learning.why) }}</p>
+  {% else %}
+  <p class="note">{{ t('model.learning_absent') }}</p>
+  {% endif %}
+</div>
+
+<script id="model-fit" type="application/json">{{ {'diurnal': diurnal,
+  'learning': learning}|tojson }}</script>
+<script src="/static/plotly.min.js"></script>
+<script>
+(function () {
+  const FIT = JSON.parse(document.getElementById('model-fit').textContent);
+  const css = getComputedStyle(document.body);
+  const ink = css.getPropertyValue('--ink').trim();
+  const dim = css.getPropertyValue('--dim').trim();
+  const grid = 'rgba(128,140,160,.18)';
+
+  const base = {
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: css.getPropertyValue('--bg').trim(),
+    font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
+    hovermode: 'x unified',
+    legend: {orientation: 'h', y: 1.14, x: 0, yanchor: 'bottom',
+             font: {size: 10}},
+  };
+  const config = {responsive: true, displaylogo: false,
+                  modeBarButtonsToRemove: ['select2d', 'lasso2d']};
+
+  // --- error by hour ------------------------------------------------------
+  // Two panels sharing one x. MAE says how wrong, bias says which way, and at
+  // night they are different facts: a large MAE with a bias to match is a
+  // model sitting above a trough it cannot reach, while a large MAE with no
+  // bias is scatter. One panel with both would need two scales and would
+  // invite reading a megahertz of error against a megahertz of offset.
+  const hours = FIT.diurnal || {};
+  const plot = document.getElementById('diurnal-plot');
+  if (plot && (hours.holdout || []).length) {
+    const at = rows => rows.map(r => r.hour);
+    const held = hours.holdout || [], fitted = hours.train || [];
+
+    const traces = [
+      {x: at(held), y: held.map(r => r.mae), type: 'bar',
+       name: T('model.js.holdout'), marker: {color: '#3d8bfd'},
+       hovertemplate: '%{y:.3f} {{ t('unit.mhz')|e }}<extra></extra>'},
+    ];
+    if (fitted.length) {
+      // Behind, not beside: these are the same hours measured on rows the
+      // model has already seen, and a grouped bar would read as a second
+      // independent result rather than as the floor under the first.
+      traces.push({x: at(fitted), y: fitted.map(r => r.mae), type: 'scatter',
+        mode: 'lines+markers', name: T('model.js.fitted_rows'),
+        line: {color: '#8b949e', width: 1.4, dash: 'dot'},
+        marker: {size: 4},
+        hovertemplate: '%{y:.3f} {{ t('unit.mhz')|e }}<extra></extra>'});
+    }
+    traces.push({x: at(held), y: held.map(r => r.bias), type: 'scatter',
+      mode: 'lines+markers', name: T('model.js.bias'), yaxis: 'y2',
+      line: {color: '#d98b1f', width: 1.6}, marker: {size: 4},
+      hovertemplate: '%{y:+.3f} {{ t('unit.mhz')|e }}<extra></extra>'});
+
+    Plotly.newPlot(plot, traces, Object.assign({}, base, {
+      margin: {l: 62, r: 16, t: 34, b: 46},
+      barmode: 'overlay', bargap: 0.35,
+      xaxis: {dtick: 2, gridcolor: grid, zeroline: false, anchor: 'y2',
+              range: [-0.6, 23.6],
+              title: {text: {{ t('model.axis.hour')|tojson }}}},
+      yaxis: {domain: [0.42, 1], gridcolor: grid, zeroline: false,
+              rangemode: 'tozero',
+              title: {text: {{ t('model.axis.mae')|tojson }}}},
+      yaxis2: {domain: [0, 0.30], gridcolor: grid, zeroline: true,
+               zerolinecolor: dim, zerolinewidth: 1,
+               title: {text: {{ t('model.axis.bias')|tojson }}}},
+    }), config);
+  }
+
+  // --- learning curve -----------------------------------------------------
+  const curve = FIT.learning || {};
+  const lp = document.getElementById('learning-plot');
+  if (lp && curve.basis === 'xgboost-rounds') {
+    const marks = [];
+    if (curve.best_round) {
+      // The round the validation loss bottomed out at. Everything to the
+      // right of it is the booster getting better at rows it has already seen
+      // and no better at the ones it has not.
+      marks.push({type: 'line', xref: 'x', yref: 'paper',
+                  x0: curve.best_round, x1: curve.best_round, y0: 0, y1: 1,
+                  line: {color: dim, width: 1, dash: 'dot'}});
+    }
+    Plotly.newPlot(lp, [
+      {x: curve.round, y: curve.train, type: 'scatter', mode: 'lines',
+       name: T('model.js.train_loss'), line: {color: '#8b949e', width: 1.6},
+       hovertemplate: '%{y:.3f}<extra></extra>'},
+      {x: curve.round, y: curve.validation, type: 'scatter', mode: 'lines',
+       name: T('model.js.validation_loss'), line: {color: '#3d8bfd', width: 1.8},
+       hovertemplate: '%{y:.3f}<extra></extra>'},
+    ], Object.assign({}, base, {
+      margin: {l: 62, r: 16, t: 34, b: 46}, shapes: marks,
+      xaxis: {gridcolor: grid, zeroline: false,
+              title: {text: {{ t('model.axis.round')|tojson }}}},
+      yaxis: {gridcolor: grid, zeroline: false,
+              title: {text: {{ t('model.axis.loss')|tojson }}}},
+      annotations: curve.best_round ? [{
+        xref: 'x', yref: 'paper', x: curve.best_round, y: 0.02,
+        xanchor: 'left', yanchor: 'bottom', showarrow: false,
+        font: {size: 9, color: dim},
+        text: ' ' + T('model.js.best_round', {round: curve.best_round}),
+      }] : [],
+    }), config);
+  }
+})();
+</script>
+{% endif %}
+{% endblock %}

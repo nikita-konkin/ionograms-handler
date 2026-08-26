@@ -409,8 +409,8 @@ def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
                 # a genuine prediction. Null for every legacy import: those
                 # were fitted somewhere else and the window was never
                 # recorded, which is a different statement from "trained on
-                # nothing" and is drawn as no band rather than as a zero-width
-                # one.
+                # nothing" and leaves the curve coloured throughout rather
+                # than greying a zero-width stretch of it.
                 "trained_from": (_iso_stamp(rows[0]["trained_from"])
                                  if rows[0]["trained_from"] else None),
                 "trained_to": (_iso_stamp(rows[0]["trained_to"])
@@ -535,7 +535,8 @@ def forecast_page(request: Request, param: str | None = None,
     is not comparable with MAE on a 700 km one -- so there is no "all circuits"
     view to mistake for one.
     """
-    from ..prediction import dataset, queues, registry, scoring, train
+    from ..prediction import (dataset, legacy_features, queues, registry,
+                              scoring, train)
 
     conn = request.app.state.db
     models = registry.models(conn)
@@ -629,6 +630,142 @@ def forecast_page(request: Request, param: str | None = None,
         # pair of names it would have to be remembered to update.
         "ensembles": train.ENSEMBLES,
         "members": train.MEMBERS,
+        # The diurnal terms the form ticks by default. Named from the module
+        # rather than repeated in the template: the recipe is what the model
+        # will actually be fitted on, and a second copy of the list is a
+        # second thing to keep in step.
+        #
+        # DIURNAL and not CYCLICAL: the seasonal pair is very nearly constant
+        # over the days-to-weeks this instrument trains on, and a
+        # nearly-constant column absorbs weight it cannot justify. See
+        # `legacy_features.SEASONAL`. It stays available to a caller that
+        # names it.
+        "cyclical": list(legacy_features.DIURNAL),
+    })
+
+
+def _share_columns(influence: dict) -> list[str]:
+    """Which share columns the features table has, in a stable order."""
+    if influence.get("basis") == "per-member":
+        return sorted(influence.get("members") or {})
+    return [""] if influence.get("share") else []
+
+
+def _feature_table(model: dict | None, influence: dict,
+                   permutation: dict | None = None) -> list[dict]:
+    """Every column the model was fitted on, decoded, in contract order.
+
+    Contract order, never sorted by influence. That order *is* the model's
+    input contract -- it is what `feature_names_in_` records and what
+    `legacy_features.parse` reads back -- and a table that reorders it invites
+    someone to compare two models' rows position by position when the
+    positions mean different things. The shares are there to be read across a
+    row, not to rank the rows.
+
+    The lead is computed from the lag and the grid step rather than stored:
+    a lag is a count of samples, and 288 of them is a day only on a
+    five-minute grid. Saying "24 h" beside a number that means "288 samples"
+    is exactly the confusion `legacy_features._step` exists to prevent, so the
+    step is named in the same breath.
+    """
+    from ..prediction import dataset, legacy_features
+
+    if not model:
+        return []
+
+    per_member = influence.get("basis") == "per-member"
+    members = influence.get("members") or {}
+    single = influence.get("share") or {}
+    permuted = ((permutation or {}).get("delta")
+                if (permutation or {}).get("basis") == "permutation-mae"
+                else None) or {}
+    step_h = dataset.DEFAULT_STEP_S / 3600.0
+
+    rows = []
+    for name in model.get("features") or ():
+        row = legacy_features.describe_feature(name)
+        row["lead_h"] = (round(row["lag"] * step_h, 2)
+                         if row["lag"] is not None else None)
+        row["window_h"] = (round(row["window"] * step_h, 2)
+                           if row["window"] else None)
+        if per_member:
+            row["shares"] = [members[m]["share"].get(name)
+                             for m in sorted(members)]
+        else:
+            row["shares"] = [single.get(name)] if single else []
+        row["permuted"] = permuted.get(name)
+        rows.append(row)
+
+    # Bars are drawn against the largest share in their own column, not
+    # against 100%. Nine columns cannot each hold much of the weight, so an
+    # absolute scale draws nine near-identical stubs and the eye gets nothing
+    # the percentages did not already say. The number beside each bar stays
+    # absolute -- that is the one you quote.
+    if rows and rows[0]["shares"]:
+        for position in range(len(rows[0]["shares"])):
+            column = [r["shares"][position] for r in rows
+                      if r["shares"][position] is not None]
+            peak = max(column) if column else 0
+            for row in rows:
+                value = row["shares"][position]
+                row.setdefault("bars", []).append(
+                    None if value is None or peak <= 0 else value / peak)
+    else:
+        for row in rows:
+            row["bars"] = []
+
+    # The permutation bar is scaled by the largest *positive* degradation.
+    # A negative value -- shuffling the column made the holdout better -- gets
+    # no bar at all rather than one pointing the other way: it means "this
+    # column was not helping", and drawing it as a quantity invites reading a
+    # rank into what is mostly noise.
+    worst = max([v for v in permuted.values() if v and v > 0] or [0])
+    for row in rows:
+        value = row.get("permuted")
+        row["permuted_bar"] = (value / worst
+                               if worst > 0 and value and value > 0 else None)
+    return rows
+
+
+@router.get("/ui/model/{model_id}")
+def model_page(request: Request, model_id: int):
+    """One model's contract and how its fit went, hour by hour.
+
+    Split out from `/ui/forecast` rather than folded into it. That page answers
+    "what is live and what may be promoted" across every circuit, and it is a
+    table; this answers "why is this one wrong at 02 UTC", and the answer is
+    two plots. Putting the second on the first would make an operator scroll
+    past a diagnostic for a model they are not asking about.
+
+    Read scope. Nothing here can change anything -- promotion stays on the
+    forecast page behind the control token.
+    """
+    from ..prediction import registry
+
+    conn = request.app.state.db
+    model = registry.get(conn, model_id)
+    if model is not None:
+        model.pop("golden_input", None)
+        model["golden"] = ("recorded" if model.pop("golden_output", None)
+                           is not None else "absent")
+
+    metrics = (model or {}).get("metrics") or {}
+    return templates.TemplateResponse(request, "model.html", {
+        "model": model,
+        "features": _feature_table(model, metrics.get("influence") or {},
+                                   metrics.get("permutation") or {}),
+        "permutation": metrics.get("permutation") or {},
+        # Column headings for the share columns: one per committee member, or
+        # a single unnamed one. The template cannot work this out itself
+        # without repeating the shape check below.
+        "share_of": _share_columns(metrics.get("influence") or {}),
+        "holdout": metrics.get("holdout") or {},
+        # Passed as their own keys rather than left inside `metrics` so the
+        # template's null checks read as "was this recorded" instead of two
+        # levels of `.get`. A model imported before these existed, or one
+        # fitted by an estimator with no rounds, simply has none.
+        "diurnal": metrics.get("diurnal") or {},
+        "learning": metrics.get("learning") or {},
     })
 
 

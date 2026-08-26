@@ -276,6 +276,9 @@ MESSAGES: dict[str, str] = {
     "forecast.train.lead": "Lead",
     "forecast.train.estimator": "Estimator",
     "forecast.train.members": "Committee",
+    "forecast.train.cyclical": "time of day / season",
+    "forecast.train.see_fit": "see the fit \u2192",
+    "forecast.train.with_time": "+ time of day",
     "forecast.train.by_build": "handled by build",
     "forecast.train.holdout": "Hold back (days)",
     "forecast.train.submit": "Queue training",
@@ -469,6 +472,106 @@ MESSAGES: dict[str, str] = {
         "pass, forever.",
 
     # -- series -----------------------------------------------------------
+    # --- one model's fit -----------------------------------------------
+    "model.notfound": "No such model",
+    "model.notfound_note":
+        "Nothing is registered under that id. It may have been retired, or "
+        "the link may be from a database this console is no longer reading.",
+    "model.back": "Back to models",
+    "model.on_series": "See it on the series",
+    "model.contract": "What it is and what it was given",
+    "model.field": "Field",
+    "model.value": "Value",
+    "model.fitted_on": "Fitted on",
+    "model.fitted_elsewhere":
+        "fitted elsewhere \u2014 the window was never recorded",
+    "model.features": "Columns it was fitted on",
+    "model.features_note":
+        "In contract order \u2014 the order the model resolves its inputs by, "
+        "not an order of importance. A lead is shown in hours and, in "
+        "brackets, as the number of grid samples the model actually counts.",
+    "model.share_note":
+        "Share is how much of the fitted model\u2019s weight sits on that "
+        "column: gain for a booster (already normalised, so this is the "
+        "importance itself) and absolute coefficient for a linear model, "
+        "whose inputs are standardised so the columns are comparable. A "
+        "committee is shown per member, because two members disagreeing "
+        "about which column matters is worth seeing. Read it as what the "
+        "model leans on, not as what predicts the ionosphere: these columns "
+        "are near-duplicates of each other \u2014 the raw lag and the 1 h "
+        "rolling mean correlate at 0.97 \u2014 and a share is split among "
+        "them roughly arbitrarily, so a low one is not evidence the column "
+        "is useless.",
+    "model.share_absent":
+        "No per-column weights were recorded. This model was registered "
+        "before they were, or was fitted by something that exposes neither "
+        "coefficients nor importances.",
+    "model.col.column": "Column",
+    "model.col.kind": "What it is",
+    "model.col.built_from": "Built from",
+    "model.col.lead": "Lead",
+    "model.col.permuted": "Permuted \u0394 MAE",
+    "model.permuted_note":
+        "Permuted \u0394 MAE asks the other question: shuffle that column on "
+        "the holdout, breaking its link to the target, and see how much worse "
+        "the error gets \u2014 effect on error rather than internal weight, "
+        "the same quantity for every estimator, and in the megahertz "
+        "everything else here is in. Averaged over {repeats} shuffles of {n} "
+        "rows against a baseline of {mhz} MHz. Negative means shuffling "
+        "helped: noise, or a column the model would be better off without.",
+    "model.col.share": "Share",
+    "model.kind.raw": "the value itself",
+    "model.kind.rolling": "rolling {stat}",
+    "model.kind.component": "{part} of the decomposition",
+    "model.kind.cyclical": "time of day / season",
+    "model.kind.time": "calendar integer",
+    "model.kind.unknown": "unrecognised",
+    "model.over_hours": "over {h} h",
+    "model.from_the_clock": "the index",
+    "model.holdout": "Holdout",
+    "model.mae": "MAE",
+    "model.rmse": "RMSE",
+    "model.bias": "bias",
+    "model.pairs": "pairs",
+    "model.against_persistence":
+        "persistence over the same window: {mae} MHz",
+    "model.diurnal": "Error by hour of day",
+    "model.diurnal_note":
+        "One MAE averages the sunlit hours with the nightly minimum, and they "
+        "are not the same problem. Bars are the holdout; the dotted line is "
+        "the same hours measured on the rows the model was fitted on. Where "
+        "the two are both high the columns cannot express that hour and more "
+        "archive will not help; where only the holdout is high, it learned an "
+        "hour that has since moved. Bias below says which way it is wrong: "
+        "positive is a model sitting above the measurement.",
+    "model.diurnal_absent":
+        "Not recorded. This model was registered before the fit was broken "
+        "out by hour, or was imported rather than trained here.",
+    "model.learning": "Learning curve",
+    "model.learning_note":
+        "Per-round loss from a probe booster fitted on an inner chronological "
+        "split and then discarded \u2014 the model that was stored has seen "
+        "every training row. Both still falling at the last round means "
+        "under-trained; the validation curve turning up while training keeps "
+        "falling means it is memorising. It says nothing about the night: it "
+        "is one number per round, averaged over every hour.",
+    "model.learning_absent":
+        "No rounds to plot. Ridge has a closed form and Huber converges to "
+        "one, so neither has a loss that evolves over iterations. Only a "
+        "booster does.",
+    "model.learning_failed": "The probe could not be fitted: {why}",
+    "model.axis.hour": "Hour of day (UTC)",
+    "model.axis.mae": "MAE (MHz)",
+    "model.axis.bias": "Bias (MHz)",
+    "model.axis.round": "Boosting round",
+    "model.axis.loss": "MAE (MHz)",
+    "model.js.holdout": "Holdout",
+    "model.js.fitted_rows": "Fitted rows",
+    "model.js.bias": "Bias",
+    "model.js.train_loss": "Inner training",
+    "model.js.validation_loss": "Inner validation",
+    "model.js.best_round": "best at {round}",
+
     "series.title": "Series",
     "series.hint": "{n} point(s)",
     "series.h2": "Parameters against time",
@@ -490,10 +593,10 @@ MESSAGES: dict[str, str] = {
         "circuit are offered. A candidate is dotted; the operational "
         "forecast, when there is one, is dashed.",
     "series.trained_note":
-        "A shaded span marks the hours a trained model was fitted on. Its "
-        "curve there is recital, not prediction \u2014 judge it only where "
-        "the ground is clear. Imported models show no span: they were fitted "
-        "elsewhere and the window was never recorded.",
+        "Where a trained model\u2019s curve runs grey, those are the hours it "
+        "was fitted on: recital, not prediction. Judge a model only where its "
+        "curve is coloured. An imported model is coloured throughout \u2014 it "
+        "was fitted elsewhere and the window was never recorded.",
     "series.family.context": "Sweep top / hmF2",
     "series.drag_hint":
         "&mdash; Drag to zoom, double-click to reset, click a point to open "
@@ -982,7 +1085,8 @@ MESSAGES: dict[str, str] = {
     "series.js.trace.forecast": "{param} forecast",
     "series.js.trace.forecast_band": "{param} forecast \u00b1\u03c3",
     "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
-    "series.js.trained_span": "fitted here \u00b7 {model}",
+    "series.js.trace.forecast_recital": "{model} \u00b7 fitted here",
+    "series.js.recital_hover": "recital \u2014 fitted on these hours",
     "series.hover.muf_ceiling": "MUF at the top of the sweep",
     "series.hover.muf_smooth": "MUF, smoothed by track",
     "series.hover.lof_floor": "LOF at the band floor",

@@ -90,11 +90,33 @@ MIN_INNER_VALIDATION_ROWS = 30
 #: why they are not, and cannot be, chronological.
 STACKING_FOLDS = 5
 
-#: A four-hour rolling window at five-minute sampling. The archive's models use
-#: 48 too, which makes the first trained model directly comparable with the
-#: imports it is meant to replace.
-DEFAULT_WINDOWS = (48,)
-DEFAULT_STATS = ("mean", "std")
+#: **`muf`'s vertical recipe, verbatim.** One hour, four hours and a day at
+#: five-minute sampling, each with four statistics -- twelve rolling columns.
+#: `muf/data_handler/muf_data_handler.py` builds exactly these
+#: (`create_rolling_features_fnc(df_total, 'muf', windows=[12, 48, 288],
+#: stats=['mean', 'std', 'min', 'max'])`), and the archive's own artifacts name
+#: all twelve.
+#:
+#: This defaulted to `(48,)` and `("mean", "std")` until 2026-08-27 -- three
+#: columns against the imports' eighteen. Nothing chose that; it was the
+#: smallest recipe that ran, and it made every trained model a thinner thing
+#: than the import it is supposed to replace on the same leaderboard. The 288
+#: window is the one that mattered most on the fixture: it is what tells the
+#: model whether yesterday as a whole was high or low, rather than only what
+#: the last four hours did.
+DEFAULT_WINDOWS = (12, 48, 288)
+DEFAULT_STATS = ("mean", "std", "min", "max")
+
+#: The additive decomposition, which `muf` also has on by default
+#: (`use_residual_trend_seasonal_features = True`, `period=288` on the vertical
+#: path). Three more columns, and the archive's artifacts carry all three.
+#:
+#: Applied only where the lag can carry it -- see :func:`vet`. The trend is a
+#: centred filter over `period` samples, so at a lag under half a period these
+#: would be built from after the instant being predicted and `build` refuses.
+#: A default that refuses would turn a short lead into an error rather than
+#: into a shorter recipe.
+DEFAULT_COMPONENTS = ("trend", "seasonal", "residual")
 
 #: How much of the record is held back. Two days rather than a fraction: the
 #: holdout has to be long enough to contain a diurnal cycle at every lead this
@@ -109,6 +131,19 @@ DEFAULT_METHOD = "contour"
 #: of them is obvious from the count.
 MIN_TRAIN_ROWS = 200
 ROWS_PER_FEATURE = 10
+
+#: How many times each column is shuffled for the permutation importance. Five
+#: is enough to average out a single unlucky shuffle on a few hundred holdout
+#: rows without turning a diagnostic into the expensive part of a run.
+PERMUTATION_REPEATS = 5
+
+#: Below this many holdout rows a permutation importance is noise, and a noisy
+#: number in a table reads exactly like a real one.
+MIN_PERMUTATION_ROWS = 60
+
+#: Points kept from a learning curve. The curve is a shape to read, not a
+#: series to compute with, and 400 rounds is that shape at fifty samples.
+CURVE_POINTS = 50
 
 #: The components a decomposition can contribute, and the guard `build` applies
 #: to them: the trend is a centred filter, so at a short lag its features would
@@ -284,7 +319,17 @@ def vet(spec: dict) -> dict:
                              "windows", 20000)
     stats = _subset(spec.get("stats", list(DEFAULT_STATS)),
                     legacy_features.STATS, "stats")
-    components = _subset(spec.get("components"), COMPONENTS, "components")
+    # Defaulted, but only where `build` will accept them: half of `period`
+    # samples is the floor, and below it the trend column would carry values
+    # from after the instant being predicted.
+    # Sorted, because `legacy_features.parse` recovers them sorted and the
+    # stored recipe has to equal what a reader of the artifact reconstructs.
+    # `_subset` returns them in COMPONENTS order, which is the decomposition's
+    # natural order and not alphabetical -- readable, and one round trip away
+    # from a recipe that silently disagrees with its own model.
+    components = tuple(sorted(
+        _subset(spec.get("components"), COMPONENTS, "components",
+                default=(DEFAULT_COMPONENTS if lag > period // 2 else ()))))
     time_predictors = _subset(spec.get("time"),
                               tuple(legacy_features.TIME_PREDICTORS), "time")
     raw = bool(spec.get("raw", True))
@@ -586,6 +631,210 @@ def _ensemble(name: str, member_names: list, frame, y) -> tuple:
              "cv_folds": STACKING_FOLDS, "cv_chronological": False})
 
 
+def _column_weights(fitted) -> tuple:
+    """One fitted estimator's per-column weights, and what they are.
+
+    Unwraps the `Pipeline` :func:`_estimator` puts linear models in, which is
+    the same wrapper whose opacity broke `muf`'s voting scheme -- see
+    :func:`_voting_weights`. Here it is unwrapped rather than worked around,
+    because the question is different.
+    """
+    inner = fitted
+    if hasattr(fitted, "named_steps"):
+        inner = fitted.named_steps.get("model", fitted)
+    if hasattr(inner, "feature_importances_"):
+        return np.asarray(inner.feature_importances_, dtype=float), "gain"
+    if hasattr(inner, "coef_"):
+        return np.abs(np.asarray(inner.coef_, dtype=float).ravel()), "coefficient"
+    return None, None
+
+
+def _influence(estimator, names: list[str]) -> dict | None:
+    """Which columns the fitted model actually leans on, as shares.
+
+    Recorded here because this is the only container that ever holds a fitted
+    estimator. The api serves the model page and deliberately cannot
+    deserialise an artifact -- that is what `capability` is about -- so if this
+    is not written at fit time the console can only ever list column names.
+
+    Two sources, normalised to shares of one so a table can put them in the
+    same column:
+
+    * a linear model's ``coef_``, absolute. Comparable across columns *because*
+      :func:`_estimator` scales the inputs: a coefficient on a standardised
+      column is the response to one standard deviation of it, so megahertz and
+      a rolling standard deviation can be read against each other.
+    * a booster's ``feature_importances_``, already normalised by construction.
+
+    **This is not the question `_voting_weights` refuses to answer with
+    coefficient mass**, and the difference matters. Ranking *columns within*
+    one fitted model is exactly what a scaled coefficient is for. Ranking
+    *models against each other* by the size of their coefficients measures
+    scale rather than skill, which is why that function weights by inverse MAE
+    instead. Same numbers, different question, opposite verdict.
+
+    A committee is reported per member rather than blended. Two members
+    disagreeing about which column matters is a fact worth seeing, and an
+    average of a booster's gain and a linear model's coefficient is a number
+    with no units and no meaning.
+    """
+    def share(weights) -> dict | None:
+        if weights is None or len(weights) != len(names):
+            return None
+        total = float(np.sum(weights))
+        if not np.isfinite(total) or total <= 0:
+            return None
+        return {name: round(float(w) / total, 5)
+                for name, w in zip(names, weights)}
+
+    weights, basis = _column_weights(estimator)
+    direct = share(weights)
+    if direct is not None:
+        return {"basis": basis, "share": direct}
+
+    members = {}
+    for member, fitted in (getattr(estimator, "named_estimators_", None)
+                           or {}).items():
+        weights, basis = _column_weights(fitted)
+        part = share(weights)
+        if part is not None:
+            members[member] = {"basis": basis, "share": part}
+    return {"basis": "per-member", "members": members} if members else None
+
+
+def _permutation_importance(estimator, frame, y) -> dict | None:
+    """How much the holdout error worsens when one column is shuffled.
+
+    The answer to what :func:`_influence` cannot answer. Gain and coefficient
+    mass are *model-internal*: they say what the fitted model leans on, and
+    where the columns are near-duplicates of each other -- which these are,
+    `muf_lag_288` against `muf_rolling_12_mean_lag_288` at 0.967 on the rig --
+    the credit is split among them roughly arbitrarily. A low share is then not
+    evidence a column carries nothing.
+
+    Shuffling asks a different question: break the link between this column and
+    the target, on rows the model has never seen, and see how much worse the
+    error gets. It measures effect on error rather than internal weight, it is
+    the same quantity for every estimator so a committee gets one comparable
+    number instead of three incomparable ones, and it is reported in **MHz of
+    MAE**, which is the unit everything else on the page is in.
+
+    It does not solve collinearity either, and nothing does: with two
+    near-identical columns the model can lean on whichever survives the
+    shuffle, so both can look unimportant. Two measures disagreeing is
+    informative, which is why this sits beside the shares rather than
+    replacing them.
+
+    A value can be **negative** -- shuffling made the holdout better. That is
+    noise, or a column the model would be better off without, and it is
+    reported as it came out rather than clamped to zero.
+
+    Scored as plain MAE over the uncensored holdout rows, not through
+    `scoring.pair`. The differences are what this is about, and they are
+    unaffected; the baseline here will not equal the headline MAE, which is
+    matched to picks by tolerance and one-sided at a band edge.
+    """
+    if len(frame) < MIN_PERMUTATION_ROWS:
+        return None
+
+    def mae(data) -> float:
+        return float(np.mean(np.abs(
+            np.asarray(artifacts.predict(estimator, data), dtype=float) - y)))
+
+    try:
+        base = mae(frame)
+        work = frame.copy()
+        rng = np.random.default_rng(42)
+        delta = {}
+        for name in frame.columns:
+            original = work[name].to_numpy(copy=True)
+            scores = [mae(work.assign(**{name: rng.permutation(original)}))
+                      for _ in range(PERMUTATION_REPEATS)]
+            delta[name] = round(float(np.mean(scores)) - base, 4)
+    except Exception as exc:        # a diagnostic never takes the run down
+        return {"basis": "unavailable", "why": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "basis": "permutation-mae",
+        "baseline_mae": round(base, 4),
+        "repeats": PERMUTATION_REPEATS,
+        "n_rows": int(len(frame)),
+        "delta": delta,
+    }
+
+
+def _learning_curve(frame, y) -> dict | None:
+    """Per-round training and validation loss, where there are rounds at all.
+
+    **Only the booster has a learning curve.** Ridge has a closed form and
+    Huber converges to one; neither has a loss that evolves over iterations a
+    reader could watch, so asking for their "learning loss" is asking for a
+    quantity that does not exist. Where the plan involves xgboost -- alone or
+    as a committee member -- there are 400 rounds and the shape of those two
+    curves is the standard diagnostic: still falling together at the end means
+    the model is under-trained, and a validation curve that turns up while the
+    training curve keeps falling means it is memorising.
+
+    **This is a probe, not the shipped model.** Getting a validation curve
+    means holding rows back, and a model fitted on less than all of its
+    training data is not the model this run is supposed to deliver. So a
+    second booster is fitted on the inner split purely to record the curve and
+    is then thrown away; the estimator that gets stored has seen every training
+    row. The cost is one extra fit, which is the price of the curve being about
+    something.
+
+    The split is the same inner chronological one :func:`_voting_weights`
+    uses, and for the same reason: carving it out of the *holdout* would be
+    fitting to the judge.
+
+    One thing this will not show, and it is worth being blunt about it because
+    it is usually the question being asked: a curve like this is a single
+    number per round, averaged over every hour of the day. A model that fits
+    the sunlit hours and misses the nightly minimum has a perfectly healthy
+    curve. That is what :func:`scoring.diurnal` is for.
+    """
+    total = len(frame)
+    cut = int(round(total * (1.0 - INNER_VALIDATION_FRACTION)))
+    if cut < MIN_INNER_VALIDATION_ROWS or total - cut < MIN_INNER_VALIDATION_ROWS:
+        return None
+
+    probe = _estimator("xgboost")
+    probe.set_params(eval_metric="mae")
+    try:
+        probe.fit(frame.iloc[:cut], y[:cut],
+                  eval_set=[(frame.iloc[:cut], y[:cut]),
+                            (frame.iloc[cut:], y[cut:])],
+                  verbose=False)
+        history = probe.evals_result()
+        train = [float(v) for v in history["validation_0"]["mae"]]
+        valid = [float(v) for v in history["validation_1"]["mae"]]
+    except Exception as exc:        # a curve is a diagnostic, never the run
+        return {"basis": "unavailable", "why": f"{type(exc).__name__}: {exc}"}
+
+    if not valid:
+        return None
+
+    # Thinned for storage, with the last round always kept: 400 rounds is a
+    # readable curve at 50 points and four times the JSON at 400.
+    step = max(1, len(valid) // CURVE_POINTS)
+    keep = sorted(set(list(range(0, len(valid), step)) + [len(valid) - 1]))
+    best = int(np.argmin(valid))
+
+    return {
+        "basis": "xgboost-rounds",
+        "metric": "mae",
+        "n_inner_train": cut,
+        "n_inner_validation": total - cut,
+        "n_rounds": len(valid),
+        "round": [k + 1 for k in keep],
+        "train": [round(train[k], 4) for k in keep],
+        "validation": [round(valid[k], 4) for k in keep],
+        "best_round": best + 1,
+        "best_validation": round(valid[best], 4),
+        "final_validation": round(valid[-1], 4),
+    }
+
+
 def default_name(plan: dict) -> str:
     lead = plan["lag"] * dataset.DEFAULT_STEP_S
     return (f"{plan['estimator']}-{plan['param']}-{_lead_label(lead)}-"
@@ -641,7 +890,17 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
                                         frame[fit_rows], y[fit_rows])
     else:
         estimator = _estimator(plan["estimator"])
+
+    # Before the real fit, because the probe wants the same rows and reading
+    # them off a fitted estimator is not possible for a committee -- the
+    # members are cloned inside it.
+    involves_xgboost = (plan["estimator"] == "xgboost"
+                        or "xgboost" in list(plan.get("members") or []))
+    curve = (_learning_curve(frame[fit_rows], y[fit_rows])
+             if involves_xgboost else None)
+
     estimator.fit(frame[fit_rows], y[fit_rows])
+    influence = _influence(estimator, list(recipe.features))
 
     # Judged exactly as the leaderboard will judge it: same picks, same
     # tolerance, same one-sided treatment of band-edge bounds. A holdout number
@@ -650,8 +909,32 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
     held = frame[~is_train]
     predicted = pd.Series(np.asarray(artifacts.predict(estimator, held),
                                      dtype=float), index=held.index)
-    holdout = scoring.summarise(scoring.pair(predicted, parts["observed"]),
-                                plan["param"])
+    pairs = scoring.pair(predicted, parts["observed"])
+    holdout = scoring.summarise(pairs, plan["param"])
+
+    # The same error split by hour, on the holdout and on the rows the model
+    # was fitted on. The pair is the diagnostic, not either half: a night error
+    # that is large in both says the model *cannot* represent the nightly
+    # minimum with the columns it was given, and more archive will not help --
+    # that is a features problem. Large only on the holdout says it learned a
+    # night that has since moved.
+    diurnal = {
+        "holdout": scoring.diurnal(pairs, plan["param"]),
+        "train": scoring.diurnal(scoring.Pairs(
+            valid_at=index[fit_rows],
+            predicted=np.asarray(artifacts.predict(estimator, frame[fit_rows]),
+                                 dtype=float),
+            observed=y[fit_rows],
+            censored=np.zeros(int(fit_rows.sum()), dtype=bool),
+        ), plan["param"]),
+    }
+
+    # On the holdout, uncensored: a band-edge bound is a one-sided
+    # observation and shuffling a column to see how far a two-sided error
+    # moves would be measuring the bound, not the column.
+    scored_rows = (~is_train) & (~censored)
+    permutation = _permutation_importance(estimator, frame[scored_rows],
+                                          y[scored_rows])
 
     horizon_s = int(plan["lag"] * dataset.DEFAULT_STEP_S)
     baseline = _persistence(conn, plan, parts["observed"],
@@ -690,12 +973,17 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
         **({"ensemble": ensemble} if ensemble else {}),
         **holdout,
         "persistence": baseline,
-    }})
+    }, "diurnal": diurnal,
+        **({"learning": curve} if curve else {}),
+        **({"influence": influence} if influence else {}),
+        **({"permutation": permutation} if permutation else {})})
 
     return {
         "model": registry.get(conn, model["id"]),
         "holdout": holdout, "persistence": baseline,
         "horizon_s": horizon_s, "cut": cut,
+        "diurnal": diurnal, "learning": curve, "influence": influence,
+        "permutation": permutation,
         "n_train": int(fit_rows.sum()), "n_paired": len(frame),
         "n_censored": int(censored.sum()),
         "ensemble": ensemble,
@@ -752,11 +1040,34 @@ def describe(result: dict) -> str:
                else ", ".join(ensemble.get("members", [])))
             + ".")
 
+    # The hour that went worst, because a headline MAE cannot say "it is fine
+    # all day and hopeless at 02 UTC" and that is the failure this service
+    # actually keeps producing.
+    worst = ""
+    hours = (result.get("diurnal") or {}).get("holdout") or []
+    ranked = [h for h in hours if h.get("mae") is not None]
+    if ranked and mae is not None:
+        peak = max(ranked, key=lambda h: h["mae"])
+        if peak["mae"] > 1.5 * mae:
+            worst = (f" Worst hour {peak['hour']:02d} UTC at "
+                     f"{peak['mae']:.2f} MHz "
+                     f"({peak['bias']:+.2f} bias).")
+
+    curve = result.get("learning") or {}
+    training = ""
+    if curve.get("basis") == "xgboost-rounds":
+        stopped = curve["best_round"] < 0.8 * curve["n_rounds"]
+        training = (f" Booster best at round {curve['best_round']}"
+                    f"/{curve['n_rounds']}"
+                    + (", so it is over-trained past that." if stopped
+                       else ", still improving at the last round."))
+
     return (f"#{model['id']} {model['name']}: fitted on {result['n_train']} "
             f"measured rows, holdout MAE "
             f"{'--' if mae is None else f'{mae:.2f}'} MHz over "
-            f"{holdout.get('n', 0)} pairs{verdict}.{committee} Registered for "
-            f"comparison until somebody activates it.")
+            f"{holdout.get('n', 0)} pairs{verdict}.{committee}{worst}"
+            f"{training} Registered for comparison until somebody activates "
+            f"it.")
 
 
 def main(argv: list[str] | None = None) -> int:

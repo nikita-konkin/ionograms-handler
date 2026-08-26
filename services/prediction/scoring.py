@@ -203,6 +203,45 @@ def summarise(pairs: Pairs, param: str) -> dict:
     }
 
 
+def diurnal(pairs: Pairs, param: str) -> list[dict]:
+    """The error of :func:`summarise`, split by hour of day.
+
+    One MAE over a diurnal series averages two different regimes. The sunlit
+    hours are high, slowly varying and easy; the hours either side of the
+    nightly minimum are steep, and they are where a model told the time only
+    by a raw ``hour`` column goes wrong. A model 0.4 MHz out by day and 2 MHz
+    out at night reports the same 0.8 MHz as one that is uniformly mediocre,
+    and only one of those two has a fixable cause. This is what tells them
+    apart.
+
+    Hours are UTC, matching every other stamp in the database. Local solar
+    time is a property of the path rather than of the model, so the console
+    converts for display instead of this storing two clocks.
+
+    Bias is kept alongside MAE because at night they say different things: a
+    large MAE with a bias to match is a model sitting *above* the trough it
+    cannot reach, which is the signature of a predictor that has no term for
+    where in the cycle it is.
+    """
+    error = absolute_error(pairs, param)
+    residual = pairs.predicted - pairs.observed
+    free = ~pairs.censored
+    hours = np.asarray(pairs.valid_at.hour)
+
+    out = []
+    for hour in range(24):
+        here = (hours == hour) & free
+        if not here.any():
+            continue
+        out.append({
+            "hour": hour,
+            "n": int(here.sum()),
+            "mae": round(float(error[here].mean()), 4),
+            "bias": round(float(residual[here].mean()), 4),
+        })
+    return out
+
+
 def bucket(horizon_s: float) -> int:
     """The horizon column a lead time is filed under."""
     return min(HORIZONS, key=lambda edge: abs(math.log(max(horizon_s, 1) / edge)))

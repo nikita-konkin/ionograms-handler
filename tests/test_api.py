@@ -3319,3 +3319,225 @@ def test_nothing_is_called_a_disagreement_without_a_configured_band(client,
     client.post("/stations/health", json=report(), headers=CTL)
     _sounding(client, tmp_path, lo=7.55, hi=32.30)
     assert "configured and observed disagree" not in client.get("/ui").text
+
+
+# --------------------------------------------------------------------------
+# One model's own page
+#
+# The diagnostics `train` records are a plot each, and they belong somewhere an
+# operator can reach from the row that raised the question. These pin the three
+# states the page has to survive: recorded, not recorded, and no such model.
+# --------------------------------------------------------------------------
+
+def _fit_metrics(conn, model_id, *, diurnal=True, learning=True):
+    """The metrics a training run writes, without running one."""
+    import json
+    metrics = {"holdout": {"mae": 1.56, "rmse": 2.01, "bias": -0.68, "n": 287,
+                           "estimator": "xgboost",
+                           "persistence": {"mae": 1.75}}}
+    if diurnal:
+        metrics["diurnal"] = {
+            "holdout": [{"hour": h, "n": 12, "mae": 3.8 if h == 3 else 0.9,
+                         "bias": -3.8 if h == 3 else 0.1} for h in range(24)],
+            "train": [{"hour": h, "n": 40, "mae": 0.5, "bias": 0.0}
+                      for h in range(24)],
+        }
+    if learning:
+        metrics["learning"] = {
+            "basis": "xgboost-rounds", "metric": "mae", "n_rounds": 400,
+            "round": [1, 68, 400], "train": [3.0, 1.1, 0.58],
+            "validation": [2.5, 1.65, 1.70], "best_round": 68,
+            "best_validation": 1.6519, "final_validation": 1.7014,
+        }
+    conn.execute("UPDATE model_registry SET metrics = ? WHERE id = ?",
+                 (json.dumps(metrics), model_id))
+    conn.commit()
+
+
+def test_a_model_page_draws_both_diagnostics_when_they_were_recorded(client,
+                                                                     api_db):
+    model = _register(api_db, "xgboost_lag288",
+                      trained=("2026-08-17T17:40:00Z", "2026-08-24T20:30:00Z"))
+    _fit_metrics(api_db, model)
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert 'id="diurnal-plot"' in page
+    assert 'id="learning-plot"' in page
+    # The numbers themselves reach the browser, not a rendered picture of them.
+    assert '"best_round": 68' in page.replace(" ", " ")
+    assert "3.8" in page
+
+
+def test_a_model_page_says_why_a_plot_is_missing_rather_than_drawing_nothing(
+        client, api_db):
+    """An empty axis reads as "the model learned nothing", which is a lie.
+
+    Huber has no rounds and a legacy import has no recorded hours; both are
+    ordinary, and each gets a sentence instead of a blank frame.
+    """
+    model = _register(api_db, "huber_lag288")
+    _fit_metrics(api_db, model, diurnal=False, learning=False)
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert 'id="diurnal-plot"' not in page
+    assert 'id="learning-plot"' not in page
+    assert "Not recorded" in page
+    assert "closed form" in page
+
+
+def test_a_model_page_shows_the_columns_and_not_only_how_many(client, api_db):
+    """The count hides the fault. Three columns and no time predictor is the
+    explanation for a whole class of complaint, and `3` does not say it."""
+    model = _register(api_db, "huber_lag288")
+    api_db.commit()
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "muf_lag_288" in page
+
+
+def test_a_missing_model_gets_a_page_and_not_a_stack_trace(client):
+    response = client.get("/ui/model/9999")
+
+    assert response.status_code == 200
+    assert "No such model" in response.text
+
+
+def test_the_models_table_links_each_row_to_its_own_page(client, api_db):
+    model = _register(api_db, "huber_lag288")
+    api_db.commit()
+
+    assert f'/ui/model/{model}' in client.get("/ui/forecast").text
+
+
+# --------------------------------------------------------------------------
+# The features table
+#
+# The count hides the fault: "3 columns" does not say "and none of them knows
+# what hour it is", and "9 columns" does not say "two of them are constant and
+# carry a third of the weight". Both were real, and both were found by reading
+# this table rather than the number beside it.
+# --------------------------------------------------------------------------
+
+def _with_features(conn, name, features, influence=None):
+    import json
+    model = _register(conn, name)
+    conn.execute("UPDATE model_registry SET features = ? WHERE id = ?",
+                 (json.dumps(features), model))
+    if influence is not None:
+        conn.execute("UPDATE model_registry SET metrics = ? WHERE id = ?",
+                     (json.dumps({"influence": influence}), model))
+    conn.commit()
+    return model
+
+
+def test_the_features_table_decodes_every_column(client, api_db):
+    model = _with_features(api_db, "mixed", [
+        "muf_lag_288", "muf_rolling_48_std_lag_288",
+        "muf_trend_lag_288", "daily_sin", "hour", "nonsense",
+    ])
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "the value itself" in page
+    assert "rolling std" in page
+    assert "trend of the decomposition" in page
+    assert "time of day / season" in page
+    assert "calendar integer" in page
+    # An unparseable column is labelled, never a reason to fail the page.
+    assert "unrecognised" in page
+    assert "nonsense" in page
+
+
+def test_a_lead_is_shown_in_hours_and_in_the_samples_the_model_counts(client,
+                                                                      api_db):
+    """288 samples is a day only on a five-minute grid, and that is exactly
+    the confusion `legacy_features._step` exists to prevent."""
+    model = _with_features(api_db, "lagged", ["muf_lag_288"])
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "24 h" in page
+    assert "(288)" in page
+
+
+def test_per_column_weight_is_shown_when_the_fit_recorded_it(client, api_db):
+    model = _with_features(
+        api_db, "weighted", ["muf_lag_288", "daily_sin"],
+        {"basis": "gain", "share": {"muf_lag_288": 0.73, "daily_sin": 0.27}})
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "73.0%" in page and "27.0%" in page
+
+
+def test_a_committee_is_shown_per_member_and_never_blended(client, api_db):
+    """An average of a booster's gain and a linear model's coefficient is a
+    number with no units. Two members disagreeing is the fact worth seeing."""
+    model = _with_features(
+        api_db, "committee", ["muf_lag_288", "daily_sin"],
+        {"basis": "per-member", "members": {
+            "huber": {"basis": "coefficient",
+                      "share": {"muf_lag_288": 0.1, "daily_sin": 0.9}},
+            "xgboost": {"basis": "gain",
+                        "share": {"muf_lag_288": 0.8, "daily_sin": 0.2}}}})
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "huber" in page and "xgboost" in page
+    assert "90.0%" in page and "80.0%" in page
+
+
+def test_no_recorded_weights_gets_a_table_without_share_columns(client, api_db):
+    model = _with_features(api_db, "bare", ["muf_lag_288"])
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "muf_lag_288" in page
+    assert "No per-column weights were recorded" in page
+
+
+def test_permutation_delta_is_shown_signed_and_beside_the_share(client, api_db):
+    """Two measures of the same thing, kept side by side on purpose.
+
+    Gain is model-internal and splits credit arbitrarily between near-duplicate
+    columns; shuffling measures effect on holdout error. Where they disagree,
+    that is the information.
+    """
+    import json
+    model = _with_features(
+        api_db, "permuted", ["muf_lag_288", "daily_sin"],
+        {"basis": "gain", "share": {"muf_lag_288": 0.73, "daily_sin": 0.27}})
+    api_db.execute(
+        "UPDATE model_registry SET metrics = ? WHERE id = ?",
+        (json.dumps({
+            "influence": {"basis": "gain",
+                          "share": {"muf_lag_288": 0.73, "daily_sin": 0.27}},
+            "permutation": {"basis": "permutation-mae", "baseline_mae": 1.5,
+                            "repeats": 5, "n_rows": 280,
+                            "delta": {"muf_lag_288": -0.012,
+                                      "daily_sin": 0.412}},
+        }), model))
+    api_db.commit()
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "Permuted" in page
+    assert "+0.412" in page
+    # Negative kept as it came out: shuffling that column made the holdout
+    # better, which is worth seeing rather than clamping to zero.
+    assert "-0.012" in page
+    assert "1.500" in page, "the baseline the deltas are against"
+
+
+def test_no_permutation_run_leaves_the_column_off_entirely(client, api_db):
+    model = _with_features(
+        api_db, "unpermuted", ["muf_lag_288"],
+        {"basis": "gain", "share": {"muf_lag_288": 1.0}})
+
+    page = client.get(f"/ui/model/{model}").text
+
+    assert "Permuted" not in page
+    assert "muf_lag_288" in page

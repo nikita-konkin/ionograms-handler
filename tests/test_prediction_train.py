@@ -117,9 +117,16 @@ def test_decomposition_components_are_refused_at_a_short_lag():
 
 
 def test_a_recipe_with_no_lagged_features_is_refused():
+    """Every lagged block has to be turned off explicitly to reach this.
+
+    `components` defaults on at a 24 h lead, so an empty list is passed for it
+    too -- otherwise the recipe still carries the decomposition and is a
+    perfectly ordinary forecast of the ionosphere.
+    """
     with pytest.raises(train.TrainError, match="not a forecast of the ionosphere"):
         train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
-                   "raw": False, "windows": [], "stats": [], "time": ["hour"]})
+                   "raw": False, "windows": [], "stats": [], "components": [],
+                   "time": ["hour"]})
 
 
 def test_a_zero_holdout_is_refused():
@@ -152,7 +159,12 @@ def test_the_feature_order_round_trips_through_parse():
 
     assert recovered == recipe
     assert recipe.features[0] == "muf_lag_288", "the raw lag leads the frame"
-    assert recipe.features[1:5] == (
+    # The decomposition next, sorted -- `parse` recovers components sorted, so
+    # anything else makes a stored recipe disagree with its own artifact.
+    assert recipe.features[1:4] == ("muf_residual_lag_288",
+                                    "muf_seasonal_lag_288",
+                                    "muf_trend_lag_288")
+    assert recipe.features[4:8] == (
         "muf_rolling_12_mean_lag_288", "muf_rolling_12_std_lag_288",
         "muf_rolling_48_mean_lag_288", "muf_rolling_48_std_lag_288")
     assert recipe.features[-2:] == ("hour", "minute")
@@ -672,3 +684,289 @@ def test_migrating_twice_is_harmless(tmp_path, monkeypatch):
         pass
     with db.session(path) as conn:
         assert db._add_missing_columns(conn) == [], "an ALTER ran a second time"
+
+
+# --------------------------------------------------------------------------
+# Where the error is, not just how big
+# --------------------------------------------------------------------------
+
+def test_the_holdout_error_is_broken_out_by_hour(conn):
+    """A headline MAE cannot say "fine by day, hopeless at 02 UTC"."""
+    seed(conn, days=10)
+    result = train.run(conn, plan(holdout_days=2))
+
+    hours = result["diurnal"]["holdout"]
+    assert hours, "no diurnal breakdown was produced"
+    assert [h["hour"] for h in hours] == sorted(h["hour"] for h in hours)
+    assert all(0 <= h["hour"] <= 23 for h in hours)
+    assert all(h["n"] > 0 for h in hours), "an hour with no pairs was reported"
+    assert sum(h["n"] for h in hours) == result["holdout"]["n"]
+
+
+def test_the_same_split_is_reported_over_the_training_rows(conn):
+    """The pair is the diagnostic.
+
+    Night error large on the holdout *and* on the rows the model was fitted on
+    means the columns cannot express the nightly minimum, and more archive will
+    not help. Large on the holdout alone means something moved.
+    """
+    seed(conn, days=10)
+    result = train.run(conn, plan(holdout_days=2))
+
+    fitted = result["diurnal"]["train"]
+    assert fitted, "nothing was reported over the training rows"
+    assert sum(h["n"] for h in fitted) == result["n_train"]
+
+
+def test_the_diurnal_split_is_stored_where_the_console_can_read_it(conn):
+    seed(conn, days=10)
+    model = train.run(conn, plan())["model"]
+
+    metrics = registry.get(conn, model["id"])["metrics"]
+    assert "diurnal" in metrics, "the breakdown never reached the registry"
+    assert set(metrics["diurnal"]) == {"holdout", "train"}
+    # `scoring` writes its own top-level key later and must not erase this one.
+    assert "holdout" in metrics
+
+
+def test_an_estimator_without_rounds_gets_no_learning_curve(conn):
+    """Ridge has a closed form. There is no loss to watch converge.
+
+    Reported as absent rather than as an empty curve: a plot of nothing would
+    read as a model that learned nothing.
+    """
+    seed(conn, days=10)
+    result = train.run(conn, plan(estimator="ridge"))
+
+    assert result["learning"] is None
+    assert "learning" not in registry.get(conn, result["model"]["id"])["metrics"]
+
+
+def test_the_learning_curve_is_thinned_and_keeps_the_last_round(monkeypatch):
+    """The probe's bookkeeping, without needing xgboost installed.
+
+    A stub stands in for the booster because the arithmetic worth pinning is
+    ours, not the library's: which rounds survive the thinning, that the final
+    round is never one of the ones dropped, and that `best_round` is 1-based
+    like the round numbers beside it.
+    """
+    train_loss = [1.0 - k * 0.002 for k in range(400)]
+    valid_loss = [1.0 - k * 0.002 for k in range(150)] + \
+                 [0.7 + k * 0.001 for k in range(250)]
+
+    class Stub:
+        def set_params(self, **kw):
+            self.params = kw
+
+        def fit(self, x, y, eval_set=None, verbose=None):
+            self.eval_set = eval_set
+            return self
+
+        def evals_result(self):
+            return {"validation_0": {"mae": train_loss},
+                    "validation_1": {"mae": valid_loss}}
+
+    monkeypatch.setattr(train, "_estimator", lambda name: Stub())
+    frame = pd.DataFrame({"a": np.arange(500, dtype=float)})
+
+    curve = train._learning_curve(frame, np.arange(500, dtype=float))
+
+    assert curve["basis"] == "xgboost-rounds"
+    assert curve["n_rounds"] == 400
+    assert len(curve["round"]) <= train.CURVE_POINTS + 1
+    assert curve["round"][0] == 1 and curve["round"][-1] == 400
+    assert len(curve["train"]) == len(curve["validation"]) == len(curve["round"])
+    # The stub's validation loss bottoms out at index 150 (0.700, against
+    # 0.702 at 149), which is round 151 once the numbering is 1-based.
+    assert curve["best_round"] == 151
+    assert curve["final_validation"] > curve["best_validation"], \
+        "an over-trained curve did not read as over-trained"
+
+
+def test_a_booster_that_cannot_fit_costs_a_curve_and_not_the_run(monkeypatch):
+    """A diagnostic that takes the run down with it is worse than no diagnostic."""
+    class Broken:
+        def set_params(self, **kw):
+            pass
+
+        def fit(self, *a, **kw):
+            raise RuntimeError("no GPU, no anything")
+
+    monkeypatch.setattr(train, "_estimator", lambda name: Broken())
+    frame = pd.DataFrame({"a": np.arange(500, dtype=float)})
+
+    curve = train._learning_curve(frame, np.arange(500, dtype=float))
+
+    assert curve["basis"] == "unavailable"
+    assert "no GPU" in curve["why"]
+
+
+def test_too_few_rows_get_no_curve_rather_than_a_curve_over_noise(monkeypatch):
+    monkeypatch.setattr(train, "_estimator",
+                        lambda name: pytest.fail("fitted anyway"))
+    frame = pd.DataFrame({"a": np.arange(20, dtype=float)})
+
+    assert train._learning_curve(frame, np.arange(20, dtype=float)) is None
+
+
+# --------------------------------------------------------------------------
+# What the model is actually told
+# --------------------------------------------------------------------------
+
+def test_the_default_recipe_is_mufs_own_lagged_blocks(conn):
+    """Parity with the project these models came from, checked column by column.
+
+    `muf/data_handler/muf_data_handler.py` builds
+    `windows=[12, 48, 288] x stats=[mean, std, min, max]` plus an additive
+    decomposition at `period=288`, and the archive's imported artifacts carry
+    all fifteen of those beside the raw lag. This defaulted to three columns
+    until 2026-08-27, which made every model trained here a thinner thing than
+    the import it shares a leaderboard with.
+    """
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                         "estimator": "huber"})
+    recipe = train.recipe_for({**checked["spec"], "lag": checked["lag"]})
+
+    assert set(recipe.windows) == {12, 48, 288}
+    assert set(recipe.stats) == {"mean", "std", "min", "max"}
+    assert set(recipe.components) == {"trend", "seasonal", "residual"}
+    assert recipe.raw
+    assert len(recipe.features) == 16, recipe.features
+
+    # Still no time predictor by default: `vet` is the API's contract and the
+    # console is what ticks the diurnal block. See
+    # `test_the_console_offers_the_diurnal_block_and_not_the_seasonal_pair`.
+    assert recipe.time_predictors == ()
+
+
+def test_a_short_lead_drops_the_decomposition_rather_than_refusing(conn):
+    """The trend is a centred filter, so a lag under half a period would build
+    a column from after the instant it predicts. `build` refuses that, and a
+    default that refuses would turn a short lead into an error."""
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lag": 12,
+                         "estimator": "huber"})
+    recipe = train.recipe_for({**checked["spec"], "lag": checked["lag"]})
+
+    assert recipe.components == ()
+    assert recipe.windows, "the rolling block went with it"
+
+
+def test_the_console_offers_the_diurnal_block_and_not_the_seasonal_pair():
+    """`muf` reaches for `hour` and `minute`; this deliberately does not.
+
+    Both say "tell the model what time it is" and only one of them works on a
+    linear member -- 23:55 and 00:00 are five minutes apart and 23 units
+    apart. The seasonal pair is left off the default for a different reason:
+    over a week of training rows it is very nearly constant.
+    """
+    assert set(legacy_features.DIURNAL) <= set(legacy_features.TIME_PREDICTORS)
+    assert not set(legacy_features.SEASONAL) & set(legacy_features.DIURNAL)
+    assert "hour" in legacy_features.TIME_PREDICTORS, \
+        "kept, because saved artifacts name it"
+    assert "hour" not in legacy_features.DIURNAL
+
+
+def test_the_cyclical_block_is_continuous_across_midnight(conn):
+    """The reason `hour` is not enough for a linear member.
+
+    23:55 and 00:00 are five minutes apart. As integers they are 23 and 0 --
+    the widest gap in the column -- and a straight line in that cannot describe
+    a diurnal cycle at all.
+    """
+    seed(conn, days=10)
+    spec = {"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+            "estimator": "ridge",
+            "time": list(legacy_features.CYCLICAL)}
+    checked = train.vet(spec)
+    plan_ = {**checked["spec"], "param": checked["param"], "tx": checked["tx"],
+             "rx": checked["rx"], "method": checked["method"],
+             "lag": checked["lag"], "lead_h": checked["lead_h"]}
+
+    frame = train.assemble(conn, plan_)["X"]
+    for name in legacy_features.CYCLICAL:
+        assert name in frame.columns
+
+    index = pd.DatetimeIndex(frame.index)
+    late = frame[(index.hour == 23) & (index.minute == 55)]
+    early = frame[(index.hour == 0) & (index.minute == 0)]
+    assert len(late) and len(early)
+    gap = abs(late["daily_cos"].iloc[0] - early["daily_cos"].iloc[0])
+    assert gap < 0.01, "the cyclical column has a cliff at midnight after all"
+
+
+def test_a_cyclical_recipe_survives_the_round_trip_through_an_artifact(conn):
+    """The columns have to be recoverable, or `infer` cannot rebuild them."""
+    seed(conn, days=10)
+    spec = {"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+            "estimator": "ridge", "time": list(legacy_features.CYCLICAL)}
+    checked = train.vet(spec)
+    plan_ = {**checked["spec"], "param": checked["param"], "tx": checked["tx"],
+             "rx": checked["rx"], "method": checked["method"],
+             "lag": checked["lag"], "lead_h": checked["lead_h"]}
+
+    model = train.run(conn, plan_)["model"]
+
+    recovered = legacy_features.parse(model["features"])
+    assert set(recovered.time_predictors) == set(legacy_features.CYCLICAL)
+    assert recovered.lag == 288
+
+
+def test_permutation_importance_measures_effect_on_holdout_error():
+    """A column the model actually uses costs it when shuffled.
+
+    Built so the answer is not in doubt: `y` is a function of `signal` alone,
+    and `noise` is unrelated to it. Shuffling the first must hurt; shuffling
+    the second must not, up to the noise of five shuffles.
+    """
+    rng = np.random.default_rng(3)
+    n = 400
+    signal = rng.normal(size=n)
+    frame = pd.DataFrame({"signal": signal, "noise": rng.normal(size=n)})
+    y = 5.0 * signal
+
+    from sklearn.linear_model import LinearRegression
+    estimator = LinearRegression().fit(frame, y)
+
+    result = train._permutation_importance(estimator, frame, y)
+
+    assert result["basis"] == "permutation-mae"
+    assert result["repeats"] == train.PERMUTATION_REPEATS
+    assert result["n_rows"] == n
+    assert result["baseline_mae"] == pytest.approx(0, abs=1e-6)
+    assert result["delta"]["signal"] > 1.0
+    assert abs(result["delta"]["noise"]) < 0.05
+
+
+def test_permutation_importance_does_not_disturb_the_frame_it_was_given():
+    """It shuffles columns. Doing that in place would corrupt the caller's
+    holdout, and the corruption would show up as a metric, not as an error."""
+    frame = pd.DataFrame({"a": np.arange(200, dtype=float),
+                          "b": np.arange(200, dtype=float) * 2})
+    y = np.arange(200, dtype=float)
+    before = frame.copy()
+
+    from sklearn.linear_model import LinearRegression
+    train._permutation_importance(LinearRegression().fit(frame, y), frame, y)
+
+    pd.testing.assert_frame_equal(frame, before)
+
+
+def test_too_few_holdout_rows_get_no_permutation_rather_than_noise():
+    frame = pd.DataFrame({"a": np.arange(10, dtype=float)})
+
+    assert train._permutation_importance(None, frame,
+                                         np.arange(10, dtype=float)) is None
+
+
+def test_a_permutation_that_raises_costs_a_metric_and_not_the_run():
+    class Broken:
+        def predict(self, *a, **kw):
+            raise RuntimeError("no predict for you")
+
+    frame = pd.DataFrame({"a": np.arange(200, dtype=float)})
+
+    result = train._permutation_importance(Broken(), frame,
+                                           np.arange(200, dtype=float))
+
+    assert result["basis"] == "unavailable"
+    assert "no predict" in result["why"]

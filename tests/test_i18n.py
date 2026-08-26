@@ -97,6 +97,10 @@ DELIBERATELY_SAME = {
     # Statistical symbols, which are symbols in both languages: n is a count,
     # r is a correlation coefficient.
     "series.col.n", "series.col.r", "sources.col.n", "sources.col.snr",
+    # Error metrics named by their acronyms on both plot axes and in both
+    # languages' literature. Translating them would put a Cyrillic label on a
+    # number an operator compares against the leaderboard's Latin one.
+    "model.mae", "model.rmse",
     "series.trace.muf", "series.trace.lof", "sources.js.col.id",
     # Nothing in them but placeholders, punctuation and markup.
     "archives.day_folders", "archives.js.result", "archives.js.why",
@@ -212,10 +216,10 @@ def test_the_russian_catalog_is_actually_russian():
     a CJK ideograph in `sources.identify_note` on the first run.
     """
     # Greek letters are mathematical notation in either language: σ is the
-    # tracker's standard deviation, not a word.
-    # Greek letters are mathematical notation in either language: σ is the
-    # tracker's standard deviation, not a word. ✗ and ⚠ are status glyphs.
-    allowed = set("—–…‑ «»±≥≤−→σ✗⚠")
+    # tracker's standard deviation and Δ is a difference, neither is a word.
+    # ✗ and ⚠ are status glyphs. (This comment was here twice until
+    # 2026-08-27, which is its own small argument for reading test files.)
+    allowed = set("—–…‑ «»±≥≤−→σΔ✗⚠")
     strays = {}
     for key, text in ru.MESSAGES.items():
         for ch in text:

@@ -457,3 +457,49 @@ def test_a_comparison_model_is_never_flagged_as_drifting(conn):
     scoring.run_once(conn, ("muf",), "contour", window_days=10,
                      now=just_after(index))
     assert scoring.drift(scoring.leaderboard(conn, "muf", TX, RX)) == []
+
+
+def test_diurnal_finds_a_night_the_headline_mae_hides():
+    """The whole point of the split.
+
+    Two models with the same overall MAE: one uniformly mediocre, one perfect
+    by day and badly high at night. Only the second has a cause worth chasing,
+    and only the split can tell them apart.
+    """
+    when = pd.date_range("2026-08-01", periods=24 * 8, freq="h")
+    night = np.isin(when.hour, [0, 1, 2, 3, 4])
+    observed = np.where(night, 13.0, 24.0)
+
+    def summarised(predicted):
+        pairs = scoring.Pairs(valid_at=when, predicted=predicted,
+                              observed=observed,
+                              censored=np.zeros(len(when), dtype=bool))
+        return scoring.summarise(pairs, "muf"), scoring.diurnal(pairs, "muf")
+
+    flat, flat_hours = summarised(observed + 0.5)
+    night_high = observed + np.where(night, 2.4, 0.0)
+    peaked, peaked_hours = summarised(night_high)
+
+    assert flat["mae"] == pytest.approx(peaked["mae"], abs=0.01), \
+        "the fixture does not actually hide the difference"
+
+    assert {h["mae"] for h in flat_hours} == {0.5}
+    worst = max(peaked_hours, key=lambda h: h["mae"])
+    assert worst["hour"] in (0, 1, 2, 3, 4)
+    assert worst["mae"] == pytest.approx(2.4)
+    # Sitting above a trough it cannot reach: the bias carries the sign.
+    assert worst["bias"] == pytest.approx(2.4)
+
+
+def test_diurnal_reports_only_the_hours_that_have_pairs():
+    when = pd.DatetimeIndex(["2026-08-01T06:00", "2026-08-01T06:30",
+                             "2026-08-01T18:00"])
+    pairs = scoring.Pairs(valid_at=when, predicted=np.array([1.0, 2.0, 3.0]),
+                          observed=np.array([1.0, 1.0, 1.0]),
+                          censored=np.zeros(3, dtype=bool))
+
+    hours = scoring.diurnal(pairs, "muf")
+
+    assert [h["hour"] for h in hours] == [6, 18]
+    assert [h["n"] for h in hours] == [2, 1]
+    assert hours[0]["mae"] == pytest.approx(0.5)

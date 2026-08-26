@@ -117,7 +117,7 @@
         <th></th></tr>
     {% for m in models %}
     <tr{% if m.target_src != 'measured' %} class="muted"{% endif %}>
-      <td><b>{{ m.name }}</b>
+      <td><a href="/ui/model/{{ m.id }}"><b>{{ m.name }}</b></a>
         <div class="note">{{ m.framework }}{% if m.env and m.env.sklearn %}
           {{ m.env.sklearn }}{% endif %} &middot; {{ m.capability }}
           &middot; {{ t('forecast.golden.recorded') if m.golden == 'recorded'
@@ -362,6 +362,16 @@
         <input type="checkbox" class="tr-member" value="{{ m }}" checked> {{ m }}</label>
       {% endfor %}
     </span>
+    {# Ticked by default, and it is the one control here whose default is a
+       correction rather than a preference. Without it the recipe is three
+       lagged columns and nothing that says what hour it is, so the model can
+       only reproduce the shape of 24 h ago -- which is why it sits above the
+       nightly minimum whenever tonight's trough is deeper than last night's.
+       `vet` still defaults to no time columns for a programmatic caller: this
+       changes what the console asks for, not what the API means. #}
+    <label class="muted" style="font-size:.85rem">
+      <input type="checkbox" id="tr-cyclical" checked>
+      {{ t('forecast.train.cyclical') }}</label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.train.holdout') }}
       <input type="number" id="tr-holdout" value="2" min="0.5" step="0.5" size="4"></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
@@ -385,7 +395,8 @@
       <td class="muted">{{ j.param|upper }}</td>
       <td class="muted">{{ j.lead_s|lead }}</td>
       <td class="muted">{{ j.spec.estimator }}
-        {%- if j.spec.members %}<br><span class="note">{{ j.spec.members|join(' + ') }}</span>{% endif %}</td>
+        {%- if j.spec.members %}<br><span class="note">{{ j.spec.members|join(' + ') }}</span>{% endif %}
+        {%- if j.spec.time %}<br><span class="note">{{ t('forecast.train.with_time') }}</span>{% endif %}</td>
       <td class="muted">{{ j.requested_at }}</td>
       {# Spelled out rather than built from `j.state`: a key assembled at
          render time is a key `tests/test_i18n.py` cannot see, and the first
@@ -401,6 +412,8 @@
          deployed -- `api` updates itself and the workers do not. Shown only
          once a worker has taken the row: a queued job has no answer yet. #}
       <td class="note wrap" style="max-width:34rem">{{ j.detail or '' }}
+        {%- if j.model_id %} <a href="/ui/model/{{ j.model_id }}"
+          >{{ t('forecast.train.see_fit') }}</a>{% endif %}
         {%- if j.worker %}<br><span class="muted">{{ t('forecast.train.by_build') }}
           <code>{{ j.worker }}</code></span>{% endif %}</td>
       <td style="white-space:nowrap">
@@ -562,6 +575,9 @@ async function sendTraining(event) {
     holdout_days: parseFloat(field('tr-holdout')),
     note: field('tr-note') || null,
   };
+  if (document.getElementById('tr-cyclical').checked) {
+    body.time = {{ cyclical|tojson }};
+  }
   if (isEnsemble()) {
     body.members = [...document.querySelectorAll('.tr-member:checked')]
                      .map(box => box.value);
