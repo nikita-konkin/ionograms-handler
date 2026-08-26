@@ -25,6 +25,7 @@ from muf.geometry import Point                     # noqa: E402
 from muf.reference import ReferenceSeries          # noqa: E402
 from muf.reference import indices                  # noqa: E402
 from services.api import acquisition as acq        # noqa: E402
+from services.api.locale import en                 # noqa: E402
 from services.api import auth, db, main, net       # noqa: E402
 from services.api import series as series_mod      # noqa: E402
 from services.api import web_routes                # noqa: E402
@@ -1157,7 +1158,14 @@ def test_the_frame_is_json_a_browser_will_parse(client, api_db, tmp_path):
 # state the local OrbStack rig was in with 9,352 forecast rows in the table.
 # --------------------------------------------------------------------------
 
-def _register(conn, name, *, param="muf", tx="cyprus1", rx="rx", active=0):
+def _register(conn, name, *, param="muf", tx="cyprus1", rx="rx", active=0,
+              trained=None):
+    """A registered model. `trained` is the (from, to) span a fit recorded.
+
+    Left null by default, because the default here is a legacy import and an
+    import genuinely has no recorded window -- see
+    `test_an_imported_model_gets_no_band_because_it_has_no_recorded_window`.
+    """
     cur = conn.execute(
         "INSERT INTO model_registry (name, param, tx, rx, origin, framework, "
         "loader, capability, artifact, sha256, features, target_alias, "
@@ -1166,7 +1174,12 @@ def _register(conn, name, *, param="muf", tx="cyprus1", rx="rx", active=0):
         (name, param, tx, rx, "legacy", "sklearn", "joblib", "slim",
          f"/models/{name}.sav", name, '["muf_lag_288"]', "muf",
          "modelled" if not active else "measured", db.utcnow(), active))
-    return int(cur.lastrowid)
+    model_id = int(cur.lastrowid)
+    if trained:
+        conn.execute("UPDATE model_registry SET origin = 'trained', "
+                     "target_src = 'measured', trained_from = ?, "
+                     "trained_to = ? WHERE id = ?", (*trained, model_id))
+    return model_id
 
 
 def _forecast(conn, model_id, *, param="muf", tx="cyprus1", rx="rx",
@@ -1291,6 +1304,83 @@ def test_the_chosen_model_survives_a_day_or_method_click(client, api_db,
     assert days, "no day links on the page to check"
     assert all(f"forecast={model}" in href for href in days), (
         "a day link dropped the chosen model")
+
+
+# --------------------------------------------------------------------------
+# What the model learned on
+#
+# A lagged model run over a finished archive predicts instants that have
+# already happened -- `infer` calls that a backtest. Where those instants fall
+# inside the span the model was *fitted* on, the curve is not a prediction at
+# all: it is the model reciting rows it has already seen, and it will look
+# superb. The plot shades that span so the two halves of the same line can be
+# told apart by eye; these pin the data it shades from.
+# --------------------------------------------------------------------------
+
+def test_a_trained_model_carries_the_span_it_was_fitted_on(client, api_db,
+                                                           tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "huber-muf-24h", active=1,
+                      trained=("2026-01-20T00:00:00Z", "2026-02-03T00:00:00Z"))
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    frame = _frame(client.get("/ui/series?method=algo").text)
+    drawn = frame["circuits"][0]["forecast"][0]
+
+    # Stripped of the trailing Z, exactly as `t` is: the band and the curve
+    # share an axis with the naive-UTC soundings, and a mixed axis would put
+    # the shading a whole timezone away from the hours it describes.
+    assert drawn["trained_from"] == "2026-01-20T00:00:00"
+    assert drawn["trained_to"] == "2026-02-03T00:00:00"
+    assert frame["any_trained"] is True
+
+
+def test_an_imported_model_gets_no_band_because_it_has_no_recorded_window(
+        client, api_db, tmp_path):
+    """Null, not a zero-width band, and the difference is the whole point.
+
+    Every legacy import was fitted somewhere else on somebody else's circuit.
+    "Trained on nothing" and "we do not know what it was trained on" are
+    different claims, and only one of them is true here.
+    """
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    model = _register(conn, "legacy_import", active=1)
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    frame = _frame(client.get("/ui/series?method=algo").text)
+    drawn = frame["circuits"][0]["forecast"][0]
+
+    assert drawn["trained_from"] is None
+    assert drawn["trained_to"] is None
+    assert frame["any_trained"] is False
+
+
+def test_the_band_is_explained_only_when_there_is_a_band(client, api_db,
+                                                         tmp_path):
+    """A sentence about shading, printed beside a plot with none, sends the
+    reader hunting for something that is not there."""
+    conn = api_db
+    _mk(conn, tmp_path, "a.lfs", "2026-02-04 06:00:00", muf=20.0, **GEOMETRY)
+    imported = _register(conn, "legacy_import")
+    _forecast(conn, imported, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+    note = en.MESSAGES["series.trained_note"][:40]
+
+    assert note not in client.get(
+        f"/ui/series?method=algo&forecast={imported}").text
+
+    trained = _register(conn, "huber-muf-24h",
+                        trained=("2026-01-20T00:00:00Z",
+                                 "2026-02-03T00:00:00Z"))
+    _forecast(conn, trained, stamps=["2026-02-05T06:00:00Z"])
+    conn.commit()
+
+    assert note in client.get(
+        f"/ui/series?method=algo&forecast={trained}").text
 
 
 def _frame(page: str) -> dict:

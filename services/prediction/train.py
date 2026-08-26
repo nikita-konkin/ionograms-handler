@@ -61,8 +61,34 @@ from . import (artifacts, dataset, importer, legacy_features, registry,
 #: What may be fitted. `huber` first because it is what the archive's models
 #: are and because a MUF series has outliers -- a mistracked trace is a real
 #: number in the wrong place, and least squares chases it.
-ESTIMATORS = ("huber", "ridge", "xgboost")
+ESTIMATORS = ("huber", "ridge", "xgboost", "voting", "stacking")
 DEFAULT_ESTIMATOR = "huber"
+
+#: The two that are not estimators but committees of them, ported from the
+#: `muf` project's ``voting_stacking_models``. Both exist because the three
+#: single estimators fail differently: huber shrugs off a mistracked trace and
+#: cannot bend, xgboost bends and will happily learn the tracker's artefacts,
+#: ridge sits between them. Averaging decorrelated errors is the one free lunch
+#: in forecasting, and it is worth having before reaching for a bigger model.
+ENSEMBLES = ("voting", "stacking")
+
+#: What may sit inside a committee. Deliberately the single estimators and
+#: nothing else: every member is something this module can already fit alone,
+#: so a committee's holdout number is comparable with its own members' and an
+#: operator can find out whether the ensemble earned its cost.
+MEMBERS = ("huber", "ridge", "xgboost")
+DEFAULT_MEMBERS = ("huber", "ridge", "xgboost")
+
+#: The tail of the *training* half held back to weight the voters -- never the
+#: holdout, which is the judge and must not be consulted by anything being
+#: judged. `muf` weighted its voters by the mass of their coefficients, which
+#: this module cannot do honestly: see :func:`_voting_weights`.
+INNER_VALIDATION_FRACTION = 0.2
+MIN_INNER_VALIDATION_ROWS = 30
+
+#: Folds for the stack's internal cross-validation. See :func:`_ensemble` for
+#: why they are not, and cannot be, chronological.
+STACKING_FOLDS = 5
 
 #: A four-hour rolling window at five-minute sampling. The archive's models use
 #: 48 too, which makes the first trained model directly comparable with the
@@ -213,6 +239,22 @@ def vet(spec: dict) -> dict:
     if estimator not in ESTIMATORS:
         raise TrainError(f"estimator must be one of {list(ESTIMATORS)}")
 
+    members = _subset(spec.get("members"), MEMBERS, "members",
+                      default=DEFAULT_MEMBERS)
+    if estimator in ENSEMBLES:
+        if len(members) < 2:
+            raise TrainError(
+                f"{estimator} is a committee, and a committee of "
+                f"{len(members)} is just {members[0] if members else 'nothing'}"
+                f". Name at least two members, or fit that one estimator "
+                f"directly and save the cost.")
+    elif spec.get("members") is not None:
+        # Accepting it would mean storing a `members` list on a model that has
+        # none, which is the kind of quiet this service keeps refusing to ship.
+        raise TrainError(
+            f"members only means something for {list(ENSEMBLES)}; "
+            f"{estimator} is a single estimator.")
+
     step_s = dataset.DEFAULT_STEP_S
     if spec.get("lag") is not None:
         lag = _positive_ints(spec["lag"], "lag", 20000)[0]
@@ -284,6 +326,11 @@ def vet(spec: dict) -> dict:
         "raw": raw,
         "period": period,
         "estimator": estimator,
+        # Absent, not empty, for a single estimator. `plan_from_job` re-vets
+        # the stored spec, and a `members: []` sitting in it would come back
+        # through the refusal above as "members only means something for..."
+        # -- a job refused on the strength of a key this function wrote.
+        **({"members": list(members)} if estimator in ENSEMBLES else {}),
         "holdout_days": holdout_days,
         "start": spec.get("start") or None,
         "end": spec.get("end") or None,
@@ -413,6 +460,132 @@ def _estimator(name: str):
     return Pipeline([("scale", StandardScaler()), ("model", inner)])
 
 
+def _voting_weights(members: list, frame, y) -> tuple[list[float], dict]:
+    """How much say each voter gets, from an inner chronological validation.
+
+    **This is where the port diverges from `muf`, deliberately.** That project
+    weighted its voters by the mass of their fitted parameters -- the sum of
+    ``feature_importances_`` for a tree, the sum of ``abs(coef_)`` for a linear
+    model, normalised across members. Three things are wrong with it here, and
+    the first is fatal:
+
+    * The linear members are ``Pipeline`` objects, because :func:`_estimator`
+      scales them. A pipeline exposes neither attribute, so the original code's
+      ``hasattr`` chain falls through to its ``importance = 1.0`` default and
+      every linear voter silently gets an identical weight. The scheme would
+      not fail, it would quietly stop being the scheme.
+    * ``sum(feature_importances_)`` is 1.0 for any fitted gradient booster, by
+      construction -- the importances are normalised. So the tree's weight is a
+      constant that carries no information about the tree.
+    * Coefficient mass measures scale, not skill. A model whose columns happen
+      to be small numbers gets large coefficients and, under that rule, more
+      of the vote for it.
+
+    So the *intent* is kept -- members earn their weight rather than splitting
+    it evenly -- and the measure is changed to the one thing that actually
+    ranks forecasters: error on data they did not see. The last
+    ``INNER_VALIDATION_FRACTION`` of the training half is held back, each
+    member is fitted on what precedes it, and weights are inverse MAE,
+    normalised. Chronological, like every other split in this module.
+
+    The inner block is carved out of the *training* rows only. Weighting on the
+    holdout would be fitting to the judge, and the MAE this run reports would
+    be describing a model that had already read the answer.
+    """
+    from sklearn.base import clone
+
+    names = [name for name, _ in members]
+    equal = [1.0 / len(members)] * len(members)
+
+    total_rows = len(frame)
+    cut = int(round(total_rows * (1.0 - INNER_VALIDATION_FRACTION)))
+    if cut < MIN_INNER_VALIDATION_ROWS or total_rows - cut < MIN_INNER_VALIDATION_ROWS:
+        return equal, {
+            "basis": "equal",
+            "why": (f"{total_rows} training rows split "
+                    f"{cut}/{total_rows - cut} leaves an inner validation "
+                    f"block under {MIN_INNER_VALIDATION_ROWS} rows, which "
+                    f"would rank the members on noise"),
+            "members": names,
+        }
+
+    inner_x, inner_y = frame.iloc[:cut], y[:cut]
+    valid_x, valid_y = frame.iloc[cut:], y[cut:]
+
+    errors: list[float] = []
+    for _, estimator in members:
+        try:
+            fitted = clone(estimator).fit(inner_x, inner_y)
+            predicted = np.asarray(artifacts.predict(fitted, valid_x),
+                                   dtype=float)
+            mae = float(np.mean(np.abs(predicted - valid_y)))
+        except Exception:            # a member that cannot fit gets no vote
+            mae = float("inf")
+        errors.append(mae if np.isfinite(mae) else float("inf"))
+
+    inverse = [0.0 if not np.isfinite(e) else 1.0 / max(e, 1e-6)
+               for e in errors]
+    if sum(inverse) <= 0:
+        return equal, {"basis": "equal",
+                       "why": "no member produced a finite error",
+                       "members": names}
+
+    weights = [value / sum(inverse) for value in inverse]
+    return weights, {
+        "basis": "inverse-mae",
+        "n_inner_train": cut,
+        "n_inner_validation": total_rows - cut,
+        "members": names,
+        "mae": {name: (None if not np.isfinite(e) else round(e, 4))
+                for name, e in zip(names, errors)},
+        "weight": {name: round(w, 4) for name, w in zip(names, weights)},
+    }
+
+
+def _ensemble(name: str, member_names: list, frame, y) -> tuple:
+    """A committee of :func:`_estimator` members, and what to record about it.
+
+    ``voting`` is a weighted average of the members' predictions; ``stacking``
+    fits a small random forest on top of their out-of-fold predictions, which
+    is what `muf` used and is kept.
+
+    **The stack's internal cross-validation is not chronological, and cannot
+    be.** ``StackingRegressor`` builds the meta-learner's training matrix with
+    ``cross_val_predict``, which requires the folds to partition the rows --
+    every row predicted exactly once. Forward-chaining folds never partition
+    anything: the earliest block has no past to be trained on, so it can be a
+    training set or excluded, never a test fold. sklearn refuses a
+    ``TimeSeriesSplit`` here with "cross_val_predict only works for
+    partitions", and it is right to.
+
+    So the meta-learner sees out-of-fold predictions from members that were
+    fitted partly on later data. That is leakage, and it is confined: it can
+    make the *blend* better than it deserves to be, and it cannot touch the
+    number this run reports, because the entire stack is fitted on rows before
+    the cut and scored on rows after it. If a stack beats its own members on
+    that holdout, the win is real; if it wins by a suspiciously wide margin,
+    this paragraph is the first place to look.
+    """
+    from sklearn.ensemble import (RandomForestRegressor, StackingRegressor,
+                                  VotingRegressor)
+
+    members = [(member, _estimator(member)) for member in member_names]
+
+    if name == "voting":
+        weights, detail = _voting_weights(members, frame, y)
+        return (VotingRegressor(estimators=members, weights=list(weights)),
+                {"kind": "voting", **detail})
+
+    return (StackingRegressor(
+                estimators=members,
+                final_estimator=RandomForestRegressor(n_estimators=50,
+                                                      random_state=42),
+                cv=STACKING_FOLDS, n_jobs=1),
+            {"kind": "stacking", "members": list(member_names),
+             "final_estimator": "random_forest(50)",
+             "cv_folds": STACKING_FOLDS, "cv_chronological": False})
+
+
 def default_name(plan: dict) -> str:
     lead = plan["lag"] * dataset.DEFAULT_STEP_S
     return (f"{plan['estimator']}-{plan['param']}-{_lead_label(lead)}-"
@@ -461,7 +634,13 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
             f"rows: the record ends at {index.max():%Y-%m-%d %H:%M} and starts "
             f"at {index.min():%Y-%m-%d %H:%M}.")
 
-    estimator = _estimator(plan["estimator"])
+    ensemble: dict | None = None
+    if plan["estimator"] in ENSEMBLES:
+        members = list(plan.get("members") or DEFAULT_MEMBERS)
+        estimator, ensemble = _ensemble(plan["estimator"], members,
+                                        frame[fit_rows], y[fit_rows])
+    else:
+        estimator = _estimator(plan["estimator"])
     estimator.fit(frame[fit_rows], y[fit_rows])
 
     # Judged exactly as the leaderboard will judge it: same picks, same
@@ -508,6 +687,7 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
         "days": plan["holdout_days"],
         "n_train": int(fit_rows.sum()),
         "estimator": plan["estimator"],
+        **({"ensemble": ensemble} if ensemble else {}),
         **holdout,
         "persistence": baseline,
     }})
@@ -518,6 +698,7 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
         "horizon_s": horizon_s, "cut": cut,
         "n_train": int(fit_rows.sum()), "n_paired": len(frame),
         "n_censored": int(censored.sum()),
+        "ensemble": ensemble,
         "series": str(parts["series"]),
     }
 
@@ -560,11 +741,22 @@ def describe(result: dict) -> str:
     if mae is not None and theirs is not None:
         verdict = (f", {'beats' if mae < theirs else 'loses to'} persistence "
                    f"({theirs:.2f})")
+    committee = ""
+    ensemble = result.get("ensemble") or {}
+    if ensemble:
+        weights = ensemble.get("weight")
+        committee = (
+            f" {ensemble['kind'].title()} of "
+            + (", ".join(f"{name} {value:.2f}"
+                         for name, value in weights.items()) if weights
+               else ", ".join(ensemble.get("members", [])))
+            + ".")
+
     return (f"#{model['id']} {model['name']}: fitted on {result['n_train']} "
             f"measured rows, holdout MAE "
             f"{'--' if mae is None else f'{mae:.2f}'} MHz over "
-            f"{holdout.get('n', 0)} pairs{verdict}. Registered for comparison "
-            f"until somebody activates it.")
+            f"{holdout.get('n', 0)} pairs{verdict}.{committee} Registered for "
+            f"comparison until somebody activates it.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -580,6 +772,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lag", type=int, default=None,
                         help=f"lead in samples of {dataset.DEFAULT_STEP_S} s")
     parser.add_argument("--estimator", default=DEFAULT_ESTIMATOR, choices=ESTIMATORS)
+    parser.add_argument("--members", default="",
+                        help=f"for {'/'.join(ENSEMBLES)}: which of "
+                             f"{','.join(MEMBERS)} sit on the committee "
+                             f"(default: all three)")
     parser.add_argument("--windows", default=",".join(str(w) for w in DEFAULT_WINDOWS))
     parser.add_argument("--stats", default=",".join(DEFAULT_STATS))
     parser.add_argument("--components", default="")
@@ -602,6 +798,7 @@ def main(argv: list[str] | None = None) -> int:
     spec = {
         "param": args.param, "tx": args.tx, "rx": args.rx,
         "method": args.method, "estimator": args.estimator,
+        "members": _split(args.members) or None,
         "lead_h": args.lead, "lag": args.lag,
         "windows": [int(w) for w in _split(args.windows)],
         "stats": _split(args.stats), "components": _split(args.components),

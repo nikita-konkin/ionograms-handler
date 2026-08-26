@@ -328,11 +328,57 @@ order from the source project; ours do not. Because the period is *chosen* here
 rather than guessed, `parse(..., assumed=False)` stops the registry claiming an
 assumption that was not made.
 
-Estimators are `huber` (default), `ridge` and `xgboost`. The linear two are
-wrapped in a `StandardScaler` pipeline: `HuberRegressor`'s epsilon is a
-threshold on a standardised residual and its `alpha` penalises coefficients, and
-the columns are megahertz, rolling standard deviations and a month number. Trees
-are left bare, so `artifacts._framework_of` still reports `xgboost`.
+Estimators are `huber` (default), `ridge`, `xgboost`, `voting` and `stacking`.
+The linear ones are wrapped in a `StandardScaler` pipeline: `HuberRegressor`'s
+epsilon is a threshold on a standardised residual and its `alpha` penalises
+coefficients, and the columns are megahertz, rolling standard deviations and a
+month number. Trees are left bare, so `artifacts._framework_of` still reports
+`xgboost`.
+
+#### 3.6.1 Committees
+
+`voting` and `stacking` are ports of the `muf` project's
+`voting_stacking_models`. Both take a `members` list — any two or more of
+`huber`, `ridge`, `xgboost` — and both are registered, scored and promoted like
+any single estimator; nothing downstream of the registry can tell the
+difference. A `members` list on a single estimator is refused rather than
+ignored, and the key is *absent* from a single estimator's stored spec rather
+than empty, because `plan_from_job` vets that spec a second time in the worker
+and an empty list would come back through the refusal.
+
+`stacking` is `muf`'s unchanged: three base members, a 50-tree random forest as
+the final estimator.
+
+`voting` diverges in one place, deliberately — **how a voter earns its weight.**
+`muf` weighted by the mass of the fitted parameters: the sum of
+`feature_importances_` for a tree, the sum of `abs(coef_)` for a linear model.
+Three things are wrong with that here, and the first is fatal:
+
+* The linear members are `Pipeline` objects, because they are scaled. A pipeline
+  exposes neither attribute, so the original `hasattr` chain falls through to
+  its `importance = 1.0` default and every linear voter silently gets the same
+  weight. The scheme would not fail — it would quietly stop being the scheme.
+* `sum(feature_importances_)` is 1.0 for any fitted booster, by construction.
+  The tree's weight is a constant carrying no information about the tree.
+* Coefficient mass measures scale, not skill.
+
+So the intent is kept and the measure is replaced: the last 20 % of the
+*training* rows is held back, each member is fitted on what precedes it, and the
+weights are inverse MAE, normalised — chronological, like every other split
+here. The inner block never touches the holdout; weighting on the judge would
+make the reported MAE describe a model that had already read the answer. Below
+30 rows either side the weights fall back to equal and say why. Who voted, on
+what evidence, and with how much say is recorded in `metrics.holdout.ensemble`.
+
+One honest caveat, recorded in the metrics as `cv_chronological: false`.
+`StackingRegressor` builds its meta-features with `cross_val_predict`, which
+requires folds that *partition* the rows; forward-chaining folds never do — the
+earliest block has no past to be trained on, so it can be a training set or
+excluded, never a test fold. sklearn refuses a `TimeSeriesSplit` here outright.
+So the meta-learner sees out-of-fold predictions from members fitted partly on
+later data. The leakage is confined to the blend: the whole stack is fitted on
+rows before the cut and scored after it, so the reported number stays honest. A
+stack that wins by a suspiciously wide margin is the case to look at first.
 
 Refusals state the arithmetic: how many grid points the circuit has, how many a
 lag-*N* model with a *W*-sample window needs before it can build one row, and
@@ -479,6 +525,28 @@ named** — so a comparison model is invisible until asked for:
 On the plot a candidate is **dotted and named for the model**; the operational
 forecast is **dashed and named for the parameter**. They are not the same claim,
 so they are not the same line.
+
+### 4.6.1 The shaded span: what the model was fitted on
+
+A lagged model run over a finished archive predicts instants that have already
+happened — `infer` calls that a backtest and labels it. Where those instants
+fall inside the window the model was *fitted* on, the curve is not a prediction
+at all: it is the model reciting rows it has already seen, and it will look
+superb. Read as a forecast, that is the single most flattering mistake this
+page can invite.
+
+So the plot shades the fitted window as ground beneath the traces, labelled
+`fitted here · <model>`. The span comes from `model_registry.trained_from` /
+`trained_to`, which `train.run` records as the first and last instant of the
+rows it actually fitted. **Judge a curve only where the ground is clear.**
+
+A legacy import shows **no band**. It was fitted somewhere else and the window
+was never recorded — which is a different statement from "trained on nothing",
+and is why the null check is on the stamps rather than on the model. The band
+is drawn and explained only when something on the page carries a real span, and
+it is withdrawn with the forecast family when that is switched off: a grey
+stripe over the measurements with nothing left to explain it is worse than no
+band at all.
 
 ---
 

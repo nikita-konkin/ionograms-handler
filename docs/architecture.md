@@ -905,6 +905,15 @@ thin, and the leaderboard exists to make that visible rather than to be argued
 around. What is left is archive, not architecture: the same run against the
 accumulated multi-station record, which is now a form submission.
 
+Two things since narrow the gap without closing it. **Committees** —
+`voting` and `stacking`, ported from the `muf` project's
+`voting_stacking_models` — let a run average decorrelated errors across
+`huber`, `ridge` and `xgboost` instead of betting on one; the voting weights
+are earned on a chronological inner split rather than on `muf`'s coefficient
+mass, for reasons `docs/prediction.md` §3.6.1 sets out. And `/ui/series` now
+**shades the window a model was fitted on**, because the flattering way to read
+a backtest is to read it over the training data and not notice.
+
 ### M7 — Bilingual console **[done 2026-08-23]**
 
 Not originally a milestone. The operators are at Yoshkar-Ola and the station

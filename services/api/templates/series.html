@@ -79,6 +79,12 @@
          >{{ c.name }} <span class="muted">{{ c.param|upper }}</span></a>
     {% endfor %}
     <span class="note">{{ t('series.forecast_note') }}</span>
+    {# Only when something on the page actually carries a training window --
+       the sentence describes a band, and printing it beside a plot that has
+       none sends the reader looking for shading that is not there. #}
+    {% if frame.any_trained %}
+    <span class="note">{{ t('series.trained_note') }}</span>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -424,6 +430,41 @@
     }
   });
 
+  // --- what the model was fitted on --------------------------------------
+  // The band matters more than it looks. A lagged model run over a finished
+  // archive predicts instants that have already happened -- `infer` calls that
+  // a backtest and says so -- and where those instants fall inside the span
+  // the model was *fitted* on, the curve is not a forecast at all: it is the
+  // model reciting data it has already seen. Drawn as ground rather than as a
+  // trace, because it is a property of the axis, not another quantity on it.
+  //
+  // Only trained models have a span. A legacy import was fitted somewhere
+  // else and the window was never recorded, so it gets no band -- which is a
+  // different statement from a band of zero width and is why the null check
+  // is on the stamps rather than on the model.
+  const spans = [];
+  FRAME.circuits.forEach(circuit => {
+    (circuit.forecast || []).forEach(f => {
+      if (!f.trained_from || !f.trained_to) return;
+      const key = f.model_id + '|' + f.trained_from + '|' + f.trained_to;
+      if (!spans.some(s => s.key === key)) {
+        spans.push({key: key, from: f.trained_from, to: f.trained_to,
+                    model: f.model});
+      }
+    });
+  });
+
+  const spanShapes = spans.map(s => ({
+    type: 'rect', xref: 'x', yref: 'paper', x0: s.from, x1: s.to,
+    y0: 0, y1: 1, layer: 'below', fillcolor: 'rgba(128,140,160,.16)',
+    line: {width: 1, dash: 'dot', color: 'rgba(128,140,160,.55)'},
+  }));
+  const spanLabels = spans.map(s => ({
+    xref: 'x', yref: 'paper', x: s.from, y: 1.02, xanchor: 'left',
+    yanchor: 'bottom', showarrow: false, font: {size: 9, color: dim},
+    text: T('series.js.trained_span', {model: s.model}),
+  }));
+
   // What is drawn before anything is clicked. foF2 restates the MUF at a lower
   // level and the context traces are for explaining a shape once you have one,
   // so both start in the legend rather than on the axes. LOF joins them once
@@ -446,7 +487,9 @@
   const heights = traces.some(t => t.yaxis === 'y3');
   const top = residuals ? [0.30, 1] : [0, 1];
   const layout = {
-    margin: {l: 62, r: heights ? 58 : 16, t: 18, b: 44},
+    // Room above the axes for the span labels, which sit outside it. Without
+    // it the label is clipped to a sliver of its own descenders.
+    margin: {l: 62, r: heights ? 58 : 16, t: spans.length ? 32 : 18, b: 44},
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: css.getPropertyValue('--bg').trim(),
     font: {color: ink, family: 'ui-monospace,Menlo,monospace', size: 11},
@@ -457,7 +500,7 @@
             title: {text: {{ t('series.axis.frequency')|tojson }}}},
     hovermode: 'closest', dragmode: 'zoom',
     legend: {orientation: 'h', y: -0.14, x: 0, font: {size: 10}},
-    shapes: [], annotations: [],
+    shapes: spanShapes.slice(), annotations: spanLabels.slice(),
   };
   if (residuals) {
     layout.yaxis2 = {
@@ -493,6 +536,21 @@
       if (shown !== !!div.layout.yaxis3.visible) {
         Plotly.relayout(div, {'yaxis3.visible': shown});
       }
+    });
+  }
+
+  // The band goes with the curve it qualifies. Left on its own after the
+  // forecast is switched off it becomes a grey stripe over the measurements
+  // with nothing to explain it, which is worse than not drawing it at all.
+  if (spanShapes.length) {
+    let drawn = true;
+    div.on('plotly_restyle', () => {
+      const shown = div.data.some((t, i) => family[i] === 'forecast'
+        && t.visible !== 'legendonly' && t.visible !== false);
+      if (shown === drawn) return;
+      drawn = shown;
+      Plotly.relayout(div, {shapes: shown ? spanShapes : [],
+                            annotations: shown ? spanLabels : []});
     });
   }
 

@@ -383,7 +383,8 @@ def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
                 rows = db.rows(
                     conn,
                     "SELECT f.valid_at, f.value, f.sigma, m.name, m.id, "
-                    "       m.active, m.target_alias "
+                    "       m.active, m.target_alias, "
+                    "       m.trained_from, m.trained_to "
                     "FROM forecast f JOIN model_registry m ON m.id = f.model_id "
                     f"WHERE {where} AND f.param = ? AND f.tx = ? AND f.rx = ? "
                     "AND f.issued_at = (SELECT MAX(issued_at) FROM forecast x "
@@ -403,6 +404,17 @@ def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
                 "model_id": rows[0]["id"],
                 "alias": rows[0]["target_alias"],
                 "comparison": not rows[0]["active"],
+                # The span the model learned on, so the plot can separate the
+                # part of the curve it has already seen from the part that is
+                # a genuine prediction. Null for every legacy import: those
+                # were fitted somewhere else and the window was never
+                # recorded, which is a different statement from "trained on
+                # nothing" and is drawn as no band rather than as a zero-width
+                # one.
+                "trained_from": (_iso_stamp(rows[0]["trained_from"])
+                                 if rows[0]["trained_from"] else None),
+                "trained_to": (_iso_stamp(rows[0]["trained_to"])
+                               if rows[0]["trained_to"] else None),
                 "t": [_iso_stamp(row["valid_at"]) for row in rows],
                 "value": [row["value"] for row in rows],
                 "sigma": [row["sigma"] for row in rows],
@@ -612,6 +624,11 @@ def forecast_page(request: Request, param: str | None = None,
         "runs": queues.runs(conn, limit=10),
         "leads": LEADS,
         "estimators": train.ESTIMATORS,
+        # The committee picker is only meaningful for these two, and the
+        # template decides that from the list rather than from a hard-coded
+        # pair of names it would have to be remembered to update.
+        "ensembles": train.ENSEMBLES,
+        "members": train.MEMBERS,
     })
 
 

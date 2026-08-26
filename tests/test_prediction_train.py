@@ -386,3 +386,190 @@ def test_a_running_job_cannot_be_cancelled_out_from_under_the_fit(conn):
     queues.claim_job(conn)
     with pytest.raises(queues.QueueError, match="runs to its end"):
         queues.cancel_job(conn, job["id"])
+
+
+# --------------------------------------------------------------------------
+# Committees
+#
+# Ported from the `muf` project's `voting_stacking_models`, with one deliberate
+# change: how a voter earns its weight. `train._voting_weights` carries the
+# argument; `test_voting_weights_are_earned_on_rows_the_fit_did_not_see` is the
+# part of it that has to keep being true.
+#
+# Every test here names its members explicitly rather than taking the default.
+# The default committee includes xgboost, which is an optional dependency --
+# an ensemble test that skipped wherever xgboost is absent would stop covering
+# the ensemble machinery on exactly the developer machines that have it least.
+# --------------------------------------------------------------------------
+
+LINEAR = ["huber", "ridge"]
+
+
+def test_a_committee_of_one_is_refused_with_the_arithmetic(conn):
+    """It is not an ensemble, and fitting it as one costs the wrapper."""
+    with pytest.raises(train.TrainError) as caught:
+        train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                   "estimator": "voting", "members": ["huber"]})
+    assert "committee of 1 is just huber" in str(caught.value)
+
+
+def test_members_on_a_single_estimator_are_refused_not_ignored(conn):
+    """Accepting it would store a committee on a model that has none."""
+    with pytest.raises(train.TrainError) as caught:
+        train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                   "estimator": "huber", "members": LINEAR})
+    assert "single estimator" in str(caught.value)
+
+
+def test_a_single_estimator_spec_survives_the_round_trip_through_a_job(conn):
+    """The regression that the refusal above nearly caused.
+
+    `vet` normalises into the spec that is stored on the `train_job` row, and
+    `plan_from_job` vets that stored spec a second time in the worker. A
+    `members: []` written by the first pass would come back through the second
+    as "members only means something for voting/stacking" -- a job refused on
+    the strength of a key nothing asked for. The key is absent, not empty.
+    """
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                         "estimator": "huber"})
+    assert "members" not in checked["spec"]
+
+    job = {"param": "muf", "tx": TX, "rx": RX, "method": "contour",
+           "spec": checked["spec"]}
+    assert train.plan_from_job(job)["estimator"] == "huber"
+
+
+def test_a_committee_spec_survives_the_same_round_trip(conn):
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                         "estimator": "voting", "members": LINEAR})
+    job = {"param": "muf", "tx": TX, "rx": RX, "method": "contour",
+           "spec": checked["spec"]}
+    assert train.plan_from_job(job)["members"] == LINEAR
+
+
+@pytest.mark.parametrize("kind", train.ENSEMBLES)
+def test_a_committee_registers_exactly_like_a_single_estimator(conn, kind):
+    """Same contract: trained, measured, bound, inactive, order recoverable.
+
+    An ensemble is a different estimator, not a different kind of model, and
+    nothing downstream of the registry should be able to tell.
+    """
+    seed(conn, days=8)
+    result = train.run(conn, plan(estimator=kind, members=LINEAR))
+    model = result["model"]
+
+    assert model["origin"] == "trained"
+    assert model["target_src"] == "measured"
+    assert (model["tx"], model["rx"]) == (TX, RX)
+    assert model["active"] == 0, "training promoted a committee on its own"
+
+    # The column order survives the wrapper. sklearn's meta-estimators set
+    # `feature_names_in_` from the frame they were fitted on, so a committee
+    # is as recoverable as the single estimators inside it -- but it is
+    # recoverable through a different code path, and that is worth pinning.
+    estimator, contract = artifacts.load(model["artifact"])
+    assert list(contract.features) == model["features"]
+    assert legacy_features.parse(contract.features, assumed=False) is not None
+
+
+@pytest.mark.parametrize("kind", train.ENSEMBLES)
+def test_a_committee_is_judged_on_the_same_holdout_as_anything_else(conn, kind):
+    seed(conn, days=8)
+    result = train.run(conn, plan(estimator=kind, members=LINEAR))
+
+    assert result["holdout"]["mae"] is not None
+    assert result["holdout"]["n"] > 0
+    assert result["persistence"] is not None, "nothing to compare it against"
+
+
+def test_voting_weights_are_earned_on_rows_the_fit_did_not_see(conn):
+    """The load-bearing one, and the reason this is not `muf`'s scheme.
+
+    Two properties, and losing either turns the weights into decoration:
+
+    * they are ranked on error, so the members are ordered by forecasting
+      skill rather than by the size of their coefficients;
+    * the block they are ranked on is carved out of the **training** rows.
+      Weighting on the holdout would consult the judge, and the MAE this run
+      reports would describe a model that had already read the answer.
+    """
+    seed(conn, days=8)
+    result = train.run(conn, plan(estimator="voting", members=LINEAR))
+    ensemble = result["ensemble"]
+
+    assert ensemble["basis"] == "inverse-mae"
+    assert set(ensemble["weight"]) == set(LINEAR)
+    assert abs(sum(ensemble["weight"].values()) - 1.0) < 1e-6
+
+    # The inner split partitions the fitted rows and nothing else: the holdout
+    # begins after the last of them.
+    assert (ensemble["n_inner_train"] + ensemble["n_inner_validation"]
+            == result["n_train"])
+    assert ensemble["n_inner_validation"] > 0
+
+    # Lower error, larger share. Stated as an ordering rather than as numbers
+    # because the fixture's two linear members are near-identical by design.
+    ranked = sorted(LINEAR, key=lambda name: ensemble["mae"][name])
+    weights = [ensemble["weight"][name] for name in ranked]
+    assert weights == sorted(weights, reverse=True)
+
+
+def test_the_committee_is_recorded_so_it_can_be_audited_later(conn):
+    """Who voted, how much say each had, and on what evidence.
+
+    A committee whose composition is not stored is a model nobody can reason
+    about six months later: the artifact holds the fitted members, but not
+    which of them the run *chose* to trust or why.
+    """
+    seed(conn, days=8)
+    result = train.run(conn, plan(estimator="voting", members=LINEAR))
+
+    stored = registry.get(conn, result["model"]["id"])["metrics"]["holdout"]
+    assert stored["estimator"] == "voting"
+    assert stored["ensemble"]["kind"] == "voting"
+    assert stored["ensemble"]["members"] == LINEAR
+    assert stored["ensemble"]["weight"].keys() == {"huber", "ridge"}
+
+
+def test_a_stack_records_that_its_inner_folds_are_not_chronological(conn):
+    """The one honest caveat in the port, kept where a reader will find it.
+
+    `StackingRegressor` builds its meta-features with `cross_val_predict`,
+    which requires folds that partition the rows; forward-chaining folds never
+    do. So the meta-learner sees out-of-fold predictions from members fitted
+    partly on later data. The flag is not decoration -- it is the difference
+    between a caveat somebody wrote down and one somebody discovers.
+    """
+    seed(conn, days=8)
+    result = train.run(conn, plan(estimator="stacking", members=LINEAR))
+
+    assert result["ensemble"]["cv_chronological"] is False
+    stored = registry.get(conn, result["model"]["id"])["metrics"]["holdout"]
+    assert stored["ensemble"]["cv_chronological"] is False
+
+
+def test_equal_weights_when_the_inner_block_would_be_noise(conn):
+    """Rather than ranking two forecasters on a handful of rows.
+
+    `_voting_weights` is called with the fitted rows; below the floor it says
+    so in `why` instead of quietly producing a ranking nobody should read.
+    """
+    frame = pd.DataFrame({"a": np.arange(20, dtype=float)},
+                         index=pd.date_range("2026-08-10", periods=20, freq="5min"))
+    members = [(name, train._estimator(name)) for name in LINEAR]
+
+    weights, detail = train._voting_weights(members, frame,
+                                            np.arange(20, dtype=float))
+
+    assert weights == [0.5, 0.5]
+    assert detail["basis"] == "equal"
+    assert "under" in detail["why"]
+
+
+def test_describe_names_the_committee_and_its_split(conn):
+    seed(conn, days=8)
+    result = train.run(conn, plan(estimator="voting", members=LINEAR))
+
+    line = train.describe(result)
+    assert "Voting of" in line
+    assert "huber" in line and "ridge" in line

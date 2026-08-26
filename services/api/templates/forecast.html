@@ -348,9 +348,20 @@
         {% endfor %}
       </select></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.train.estimator') }}
-      <select id="tr-estimator">
+      <select id="tr-estimator" onchange="showMembers()"
+              data-ensembles="{{ ensembles|join(',') }}">
         {% for e in estimators %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
       </select></label>
+    {# Only for a committee, and hidden rather than disabled: a members list
+       on a single estimator is refused at the door, so offering one would be
+       an input whose only outcome is a 400. #}
+    <span id="tr-members" hidden>
+      <span class="muted" style="font-size:.85rem">{{ t('forecast.train.members') }}</span>
+      {% for m in members %}
+      <label class="muted" style="font-size:.85rem">
+        <input type="checkbox" class="tr-member" value="{{ m }}" checked> {{ m }}</label>
+      {% endfor %}
+    </span>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.train.holdout') }}
       <input type="number" id="tr-holdout" value="2" min="0.5" step="0.5" size="4"></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
@@ -373,7 +384,8 @@
       <td><b>{{ j.tx }} &rarr; {{ j.rx }}</b></td>
       <td class="muted">{{ j.param|upper }}</td>
       <td class="muted">{{ j.lead_s|lead }}</td>
-      <td class="muted">{{ j.spec.estimator }}</td>
+      <td class="muted">{{ j.spec.estimator }}
+        {%- if j.spec.members %}<br><span class="note">{{ j.spec.members|join(' + ') }}</span>{% endif %}</td>
       <td class="muted">{{ j.requested_at }}</td>
       {# Spelled out rather than built from `j.state`: a key assembled at
          render time is a key `tests/test_i18n.py` cannot see, and the first
@@ -522,16 +534,37 @@ async function forget(id, name) {
 // Training
 // --------------------------------------------------------------------------
 
+// The committee picker only applies to an ensemble. `vet` refuses a members
+// list on a single estimator outright, so the field is hidden rather than
+// merely ignored -- and `sendTraining` omits it for the same reason.
+function isEnsemble() {
+  const select = document.getElementById('tr-estimator');
+  return (select.dataset.ensembles || '').split(',').includes(select.value);
+}
+
+function showMembers() {
+  document.getElementById('tr-members').hidden = !isEnsemble();
+}
+
 async function sendTraining(event) {
   event.preventDefault();
   const where = circuit('tr-circuit');
-  const r = await control('/models/train', 'POST', {
+  const body = {
     param: field('tr-param'), tx: where.tx, rx: where.rx,
     lead_h: parseFloat(field('tr-lead')),
     estimator: field('tr-estimator'),
     holdout_days: parseFloat(field('tr-holdout')),
     note: field('tr-note') || null,
-  });
+  };
+  if (isEnsemble()) {
+    body.members = [...document.querySelectorAll('.tr-member:checked')]
+                     .map(box => box.value);
+    if (body.members.length < 2) {
+      say(T('forecast.js.need_members'), true, 'say-train');
+      return;
+    }
+  }
+  const r = await control('/models/train', 'POST', body);
   if (!r.ok) { say(r.detail, true, 'say-train'); return; }
   say(r.body.detail + ' ' + T('forecast.js.queued_training'), false, 'say-train');
   setTimeout(() => location.reload(), 1500);

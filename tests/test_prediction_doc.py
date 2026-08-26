@@ -166,11 +166,38 @@ def test_the_store_layout_is_quoted_as_the_code_builds_it(doc):
 def test_the_estimators_the_document_lists_are_the_ones_that_exist(doc):
     from services.prediction import train
 
-    assert train.ESTIMATORS == ("huber", "ridge", "xgboost")
     assert train.DEFAULT_ESTIMATOR == "huber"
-    quoted = re.search(r"Estimators are `(\w+)` \(default\), `(\w+)` and `(\w+)`", doc)
-    assert quoted, "the document no longer lists the estimators"
-    assert set(quoted.groups()) == set(train.ESTIMATORS)
+
+    # Read out of the sentence rather than compared against a copy of the
+    # tuple: the list has grown once already, and a guard that has to be
+    # edited in step with the thing it guards stops being a guard.
+    sentence = re.search(r"Estimators are ([^.]+)\.", doc)
+    assert sentence, "the document no longer lists the estimators"
+    listed = set(re.findall(r"`(\w+)`", sentence.group(1)))
+    assert listed == set(train.ESTIMATORS), (
+        f"the document lists {sorted(listed)}; the module offers "
+        f"{sorted(train.ESTIMATORS)}")
+    assert f"`{train.DEFAULT_ESTIMATOR}` (default)" in sentence.group(1)
+
+
+def test_the_committee_members_are_documented_with_their_weighting(doc):
+    """The port's one deliberate divergence from `muf`, and its caveat.
+
+    Both are the kind of thing a reader has to be able to find six months
+    later: why the voting weights are not `muf`'s, and why the stack's inner
+    folds are not chronological. Losing either from the document leaves a
+    reimplementation that looks like a faithful port and is not.
+    """
+    from services.prediction import train
+
+    for member in train.MEMBERS:
+        assert f"`{member}`" in doc, f"committee member undocumented: {member}"
+    for kind in train.ENSEMBLES:
+        assert f"`{kind}`" in doc
+
+    assert "inverse MAE" in doc, "the voting weights' basis is not stated"
+    assert "cross_val_predict" in doc, "the stacking caveat is not stated"
+    assert "cv_chronological" in doc
 
 
 def test_the_console_routes_exist_and_are_named(doc, architecture):

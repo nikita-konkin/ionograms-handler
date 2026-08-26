@@ -385,6 +385,10 @@ def frame(rows, *, model: str = "iri", forecasts: dict | None = None) -> dict:
         "hmf2_km": EQUIVALENT_HMF2_KM,
         "any_model": any(c["model"].get("muf") for c in circuits),
         "any_forecast": any(c["forecast"] for c in circuits),
+        # Whether anything on this page has a recorded training window, which
+        # is what decides if the band's explanation is printed at all.
+        "any_trained": any(entry.get("trained_from") and entry.get("trained_to")
+                           for c in circuits for entry in c["forecast"]),
     }
 
 

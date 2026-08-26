@@ -275,6 +275,7 @@ MESSAGES: dict[str, str] = {
         "stays a separate decision.",
     "forecast.train.lead": "Lead",
     "forecast.train.estimator": "Estimator",
+    "forecast.train.members": "Committee",
     "forecast.train.holdout": "Hold back (days)",
     "forecast.train.submit": "Queue training",
     "forecast.train.jobs": "Training runs",
@@ -330,6 +331,9 @@ MESSAGES: dict[str, str] = {
     "forecast.js.slow":
         "{name} is still queued. The registrar polls every few seconds; if it "
         "is not running, nothing will open this file.",
+    "forecast.js.need_members":
+        "A committee needs at least two members. Tick another, or pick a "
+        "single estimator instead.",
     "forecast.js.queued_training":
         "Queued. The trainer picks it up within a minute; a fit takes minutes, "
         "not seconds.",
@@ -484,6 +488,11 @@ MESSAGES: dict[str, str] = {
         "is meant to predict. Only models that have written rows for this "
         "circuit are offered. A candidate is dotted; the operational "
         "forecast, when there is one, is dashed.",
+    "series.trained_note":
+        "A shaded span marks the hours a trained model was fitted on. Its "
+        "curve there is recital, not prediction \u2014 judge it only where "
+        "the ground is clear. Imported models show no span: they were fitted "
+        "elsewhere and the window was never recorded.",
     "series.family.context": "Sweep top / hmF2",
     "series.drag_hint":
         "&mdash; Drag to zoom, double-click to reset, click a point to open "
@@ -972,6 +981,7 @@ MESSAGES: dict[str, str] = {
     "series.js.trace.forecast": "{param} forecast",
     "series.js.trace.forecast_band": "{param} forecast \u00b1\u03c3",
     "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
+    "series.js.trained_span": "fitted here \u00b7 {model}",
     "series.hover.muf_ceiling": "MUF at the top of the sweep",
     "series.hover.muf_smooth": "MUF, smoothed by track",
     "series.hover.lof_floor": "LOF at the band floor",

@@ -262,6 +262,7 @@ MESSAGES: dict[str, str] = {
         "решением.",
     "forecast.train.lead": "Заблаговременность",
     "forecast.train.estimator": "Алгоритм",
+    "forecast.train.members": "Состав ансамбля",
     "forecast.train.holdout": "Удержать (суток)",
     "forecast.train.submit": "Поставить в очередь",
     "forecast.train.jobs": "Запуски обучения",
@@ -318,6 +319,9 @@ MESSAGES: dict[str, str] = {
     "forecast.js.slow":
         "{name} всё ещё в очереди. Регистратор опрашивает её каждые несколько "
         "секунд; если он не запущен, файл никто не откроет.",
+    "forecast.js.need_members":
+        "В ансамбле должно быть не менее двух моделей. Отметьте ещё одну "
+        "или выберите одиночный алгоритм.",
     "forecast.js.queued_training":
         "Поставлено в очередь. Тренер возьмёт задание в течение минуты; "
         "обучение занимает минуты, а не секунды.",
@@ -483,6 +487,11 @@ MESSAGES: dict[str, str] = {
         "которые она должна предсказывать. Предлагаются только модели, "
         "записавшие строки для этой трассы. Кандидат — пунктиром, "
         "рабочий прогноз, если он есть, — штрихами.",
+    "series.trained_note":
+        "Затенённый интервал — часы, на которых обучена модель. Там её "
+        "кривая не прогноз, а пересказ; судить о качестве можно только вне "
+        "затенения. У импортированных моделей интервала нет: они обучены "
+        "в другом месте, и окно не записано.",
     "series.family.context": "Верх полосы / hmF2",
     "series.drag_hint":
         "&mdash; Протяните, чтобы приблизить, двойной щелчок сбрасывает, "
@@ -985,6 +994,7 @@ MESSAGES: dict[str, str] = {
     "series.js.trace.forecast": "Прогноз {param}",
     "series.js.trace.forecast_band": "Прогноз {param} \u00b1\u03c3",
     "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
+    "series.js.trained_span": "обучена здесь \u00b7 {model}",
     "series.hover.muf_ceiling": "MUF на верхнем краю полосы",
     "series.hover.muf_smooth": "MUF, сглаженный трекером",
     "series.hover.lof_floor": "LOF на дне полосы",
