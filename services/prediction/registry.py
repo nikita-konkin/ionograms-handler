@@ -187,6 +187,78 @@ def retire(conn: sqlite3.Connection, model_id: int) -> dict | None:
     return get(conn, model_id)
 
 
+def forecasts_of(conn: sqlite3.Connection, model_id: int) -> dict:
+    """What a delete would take with it, counted before anything is removed.
+
+    The console shows this on the button, because "delete model #6" and
+    "delete model #6 and the 22,823 forecasts its scores were computed from"
+    are different decisions and only one of them is reversible by re-training.
+    """
+    return {
+        "forecasts": db.one(
+            conn, "SELECT COUNT(*) AS n FROM forecast WHERE model_id = ?",
+            (model_id,))["n"],
+        "scores": db.one(
+            conn, "SELECT COUNT(*) AS n FROM score WHERE subject = ?",
+            (f"model:{model_id}",))["n"],
+    }
+
+
+def delete(conn: sqlite3.Connection, model_id: int) -> dict | None:
+    """Remove a model, its forecasts and its scores. Returns what went.
+
+    **This is not retirement and does not pretend to be.** `retire` exists
+    because a promotion has to be reversible; this exists because a training
+    session leaves a dozen rows that were never meant to outlive the
+    afternoon, and a registry nobody can prune is a registry nobody reads.
+
+    One refusal, and only one: an **active** model. Not because deleting it
+    would be unrecoverable -- everything here is -- but because "the live
+    forecast" is a role held by exactly one row per circuit, and dropping it
+    silently leaves the circuit with no forecast at all. Retire it first and
+    the decision has been made deliberately, which is the whole difference.
+
+    `forecast` and `score` do not cascade off `model_registry` on their own --
+    `forecast` does, `score` keys on the `subject` string and cannot -- so the
+    score rows are removed explicitly. Leaving them would put a leaderboard
+    entry in the database whose model cannot be looked up.
+
+    The artifact is reaped only when no other row references the same digest.
+    A `.sav` serving two circuits is two rows sharing a `sha256` (see the
+    `model_registry` comment), and deleting one of them must not pull the file
+    out from under the other.
+    """
+    row = get(conn, model_id)
+    if row is None:
+        return None
+    if row.get("active"):
+        raise RegistryError(
+            f"{row['name']} is the live forecast for {row['param']} on "
+            f"{row['tx']} -> {row['rx']}. Retire it first -- deleting the "
+            f"active model would leave the circuit with no forecast at all, "
+            f"and that should be a decision, not a side effect.")
+
+    counts = forecasts_of(conn, model_id)
+    with conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM forecast WHERE model_id = ?", (model_id,))
+        conn.execute("DELETE FROM score WHERE subject = ?",
+                     (f"model:{model_id}",))
+        conn.execute("DELETE FROM model_registry WHERE id = ?", (model_id,))
+
+    shared = db.one(conn, "SELECT COUNT(*) AS n FROM model_registry "
+                          "WHERE sha256 = ?", (row["sha256"],))["n"]
+    reaped = False
+    if not shared:
+        from . import store
+        try:
+            reaped = store.unlink(row["sha256"])
+        except store.StoreError:
+            reaped = False
+
+    return {**row, **counts, "reaped": reaped, "still_referenced": int(shared)}
+
+
 def set_metrics(conn: sqlite3.Connection, model_id: int, metrics: dict) -> None:
     """Merge into the metrics column. Two writers share it.
 

@@ -211,6 +211,42 @@ MESSAGES: dict[str, str] = {
     "forecast.state.active": "ACTIVE",
     "forecast.state.comparison": "Comparison",
     "forecast.activate": "Activate",
+    "forecast.delete": "Delete",
+    "forecast.delete_title":
+        "Remove this model, its forecasts and its scores. The active model is "
+        "refused -- retire it first.",
+    "forecast.js.delete_confirm":
+        "Delete {name}?\n\nThis also removes {forecasts} forecast(s) and "
+        "{scores} score row(s). They are what its leaderboard entry was "
+        "computed from, and re-training does not bring them back.",
+    "forecast.js.delete_confirm_unknown":
+        "Delete {name}, with its forecasts and scores?",
+
+    "circuits.title": "Circuits in the database",
+    "circuits.intro":
+        "Every transmitter-receiver pair that has been ingested, whether or "
+        "not anyone configured it. Chirp v2 writes `unkown` when it cannot "
+        "identify the transmitter, so every unidentified emitter arrives "
+        "under one name and shows up here as one circuit that is really "
+        "many. Muting stops it arriving; deleting clears what is already in.",
+    "circuits.col.circuit": "Circuit",
+    "circuits.col.soundings": "Soundings",
+    "circuits.col.extractions": "Extractions",
+    "circuits.col.span": "Span",
+    "circuits.col.models": "Models",
+    "circuits.mute": "Mute",
+    "circuits.unmute": "Unmute",
+    "circuits.muted": "muted",
+    "circuits.delete": "Delete data",
+    "circuits.none": "Nothing has been ingested yet.",
+    "circuits.rules": "Mute rules in force:",
+    "circuits.any_rx": "any receiver",
+    "circuits.js.confirm":
+        "Removes {soundings} sounding(s) and {extractions} extraction(s). "
+        "The files are untouched. Press again to confirm.",
+    "circuits.js.confirm_unknown":
+        "Removes this circuit's soundings and extractions. The files are "
+        "untouched. Press again to confirm.",
     "forecast.retire": "Retire",
     "forecast.activate.modelled_title":
         "Fitted against a modelled target, so it can be compared for ever and "

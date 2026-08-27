@@ -152,12 +152,12 @@ estimators would otherwise mistake for signal.
 All four consume the same array and hand a per-frequency "trace present here"
 array to one shared decision rule (`muf/pick.py`), so they stay comparable.
 
-| Method | How it finds the trace | From |
-|---|---|---|
-| `algo` | three vertically adjacent above-threshold cells whose range-neighbours are also lit | `stuffr.filter2_np_nb_MUF`, vectorised |
-| `kmeans` | K-means over dB values; keep clusters whose centroid stands above the noise | `MUF_clustering/ionogr_clustering_0.026.py` |
-| `contour` | dB threshold, morphological open/dilate, external contours, then intersected back with the cells that were above threshold | `MUF_clustering/segment_ionogram.py` |
-| `cnn` | autoencoder denoises, then `contour` reads the result | `MUF_clustering/myCNN_0.02.py` (experimental) |
+| Method    | How it finds the trace                                                                                                     | From                                          |
+|-----------|----------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------|
+| `algo`    | three vertically adjacent above-threshold cells whose range-neighbours are also lit                                        | `stuffr.filter2_np_nb_MUF`, vectorised        |
+| `kmeans`  | K-means over dB values; keep clusters whose centroid stands above the noise                                                | `MUF_clustering/ionogr_clustering_0.026.py`   |
+| `contour` | dB threshold, morphological open/dilate, external contours, then intersected back with the cells that were above threshold | `MUF_clustering/segment_ionogram.py`          |
+| `cnn`     | autoencoder denoises, then `contour` reads the result                                                                      | `MUF_clustering/myCNN_0.02.py` (experimental) |
 
 The shared rule requires the trace to persist over several consecutive
 frequency bins before it will call something the MUF. Every source method ended
@@ -186,7 +186,7 @@ removes the speckle it exists for (8–31% of cells) while a one-bin trace
 survives. A real echo persists across frequency; noise does not, and that is
 the axis the test belongs on.
 
-**Dilation and `cv2.FILLED` invented detections.** Only 32–46% of the cells in
+**Dilation and** `cv2.FILLED` **invented detections.** Only 32–46% of the cells in
 the old mask were ever above threshold; the rest were the dilation skirt and
 the filled interior of a contour's outline. **8–18% of the runs** handed to
 `trace.extract_points` contained no above-threshold cell at all, so their
@@ -196,11 +196,11 @@ now intersected back with the cells that were actually above threshold.
 
 Measured over every fourth sounding of 2026-02-04 (n=72):
 
-| | old | fixed |
-|---|---|---|
-| soundings with a detection | 64 | **66** |
-| trace points emitted | 8,728 | **21,099** |
-| points on cells never above threshold | **11.2%** | **0%** |
+|                                       | old       | fixed      |
+|---------------------------------------|-----------|------------|
+| soundings with a detection            | 64        | **66**     |
+| trace points emitted                  | 8,728     | **21,099** |
+| points on cells never above threshold | **11.2%** | **0%**     |
 
 Coverage in the table above reads *lower* after the fix (90.3% → 88.5%) and
 that is the fix working: the trace now reaches the top of the sweep where the
@@ -212,22 +212,22 @@ moved from `n_picked` to `n_band_limited`, not into the bin.
 
 288 soundings, Cyprus -> Yoshkar-Ola, 7.5-32.5 MHz:
 
-| Method | Coverage | Band-limited | MUF range |
-|---|---|---|---|
-| `algo` | 90.6% | 1 | 9.4-32.1 MHz |
-| `contour` | 88.5% | 11 | 10.7-32.1 MHz |
-| `kmeans` | 86.8% | 13 | 11.0-32.4 MHz |
+| Method    | Coverage | Band-limited | MUF range     |
+|-----------|----------|--------------|---------------|
+| `algo`    | 90.6%    | 1            | 9.4-32.1 MHz  |
+| `contour` | 88.5%    | 11           | 10.7-32.1 MHz |
+| `kmeans`  | 86.8%    | 13           | 11.0-32.4 MHz |
 
-| Pair | RMSE | MAE | R² |
-|---|---|---|---|
+| Pair              | RMSE | MAE      | R²        |
+|-------------------|------|----------|-----------|
 | kmeans vs contour | 0.87 | **0.17** | **0.986** |
-| algo vs contour | 1.35 | 0.41 | 0.967 |
-| algo vs kmeans | 1.66 | 0.57 | 0.950 |
+| algo vs contour   | 1.35 | 0.41     | 0.967     |
+| algo vs kmeans    | 1.66 | 0.57     | 0.950     |
 
 The diurnal curve behaves as it should: ~12 MHz at night, climbing through
 sunrise to ~32 MHz around midday, falling back after sunset.
 
-**`contour` changed sides when its mask was fixed** (see below). It used to
+`contour` **changed sides when its mask was fixed** (see below). It used to
 track `algo` at 0.23 MHz MAE and sit 0.41 from `kmeans`; those numbers are now
 exactly swapped. The reading: the old 3×3 opening left only the strongest,
 most compact cells — the same conservative core `algo`'s three-in-a-row rule
@@ -389,10 +389,10 @@ muf track out --method algo --plot
 Rauch-Tung-Striebel backward pass, weighting each sounding by its own pick
 quality (`run_`, `snr_`). On 2026-02-04:
 
-| | raw | tracked |
-|---|---|---|
+|                                            | raw           | tracked      |
+|--------------------------------------------|---------------|--------------|
 | largest jump between consecutive soundings | **12.06 MHz** | **0.91 MHz** |
-| mean step | 0.562 MHz | 0.176 MHz |
+| mean step                                  | 0.562 MHz     | 0.176 MHz    |
 
 252 measured, 27 gaps filled, 9 outliers rejected. Every point carries a
 standard deviation -- 0.17 MHz where measured, 0.51 MHz where filled -- so
@@ -411,10 +411,10 @@ with both present the vertex is bracketed by data rather than extrapolated off
 one side:
 
 | against the extractors' pick | one branch | both branches |
-|---|---|---|
-| bias | −0.12 MHz | **−0.05 MHz** |
-| MAE | 0.74 MHz | **0.37 MHz** |
-| median residual | 0.31 MHz | **0.18 MHz** |
+|------------------------------|------------|---------------|
+| bias                         | −0.12 MHz  | **−0.05 MHz** |
+| MAE                          | 0.74 MHz   | **0.37 MHz**  |
+| median residual              | 0.31 MHz   | **0.18 MHz**  |
 
 It is **also an outlier detector**. Where the vertex disagrees with the pick by
 more than 3 MHz, the pick is wrong:
@@ -431,19 +431,8 @@ outlier mechanism.
 
 Two things it does **not** do, both tested:
 
-- **Not a reliability filter — a finding that no longer replicates.** The
-  original measurement, against the pre-fix `thresh` mask, was that filtering on
-  `fitres < 0.3` made agreement *worse* (MAE 0.302 against 0.245 unfiltered),
-  because bad picks tend to have excellent residuals: the trace fits a clean
-  parabola, the pick just landed on the wrong part of it. Against the fixed
-  `contour` mask the same filter now *helps* — 0.251 MHz over 177 soundings
-  against 0.410 unfiltered over 251. Both numbers are agreement between two
-  estimators, not accuracy, and the reference moved underneath the test, so
-  neither result establishes anything about `fitres_` yet. Treat this as open;
-  see BACKLOG §13.
-- **Does not recover band-limited MUF.** Of the soundings flagged `limited_`,
-  none produce a usable extrapolation: when the trace runs to the top of the
-  sweep the nose was never reached, so the fit correctly declines.
+- **Not a reliability filter — a finding that no longer replicates.** The original measurement, against the pre-fix `thresh` mask, was that filtering on `fitres < 0.3` made agreement *worse* (MAE 0.302 against 0.245 unfiltered), because bad picks tend to have excellent residuals: the trace fits a clean parabola, the pick just landed on the wrong part of it. Against the fixed `contour` mask the same filter now *helps* — 0.251 MHz over 177 soundings against 0.410 unfiltered over 251. Both numbers are agreement between two estimators, not accuracy, and the reference moved underneath the test, so neither result establishes anything about `fitres_` yet. Treat this as open; see BACKLOG §13.
+- **Does not recover band-limited MUF.** Of the soundings flagged `limited_`, none produce a usable extrapolation: when the trace runs to the top of the sweep the nose was never reached, so the fit correctly declines.
 
 ### Trace segmentation and reconstruction
 
@@ -454,10 +443,10 @@ is usually **more than one propagation mode stitched together**.
 
 `muf/trace.py` measures the gaps and finds two clear classes:
 
-| change in range across a gap | what it is |
-|---|---|
-| +15 to +37 km | a fade inside one trace — safe to bridge |
-| **−130 to −180 km** | **a mode boundary** — bridging it would be nonsense |
+| change in range across a gap | what it is                                          |
+|------------------------------|-----------------------------------------------------|
+| +15 to +37 km                | a fade inside one trace — safe to bridge            |
+| **−130 to −180 km**          | **a mode boundary** — bridging it would be nonsense |
 
 Virtual range *falling* as frequency rises is backwards for a single trace, so a
 large drop marks where another mode takes over. A 06:00 sounding has a 5.5 MHz
@@ -471,13 +460,13 @@ E and others arrive together — but the extractors see none of it.
 `nseg_` turns out to be a good proxy for how strong a sounding is, in the
 direction opposite to intuition:
 
-| modes resolved | n | `algo` vs `contour` MAE |
-|---|---|---|
-| 1 | 77 | 0.281 MHz |
-| 2 | 117 | 0.633 MHz |
-| 3 | 46 | 0.132 MHz |
-| 4 | 9 | 0.112 MHz |
-| 5+ | 2 | **0.061 MHz** |
+| modes resolved | n   | algo vs contour MAE |
+|----------------|-----|---------------------|
+| 1              | 77  | 0.281 MHz           |
+| 2              | 117 | 0.633 MHz           |
+| 3              | 46  | 0.132 MHz           |
+| 4              | 9   | 0.112 MHz           |
+| 5+             | 2   | **0.061 MHz**       |
 
 From three modes upward the reading holds: a sounding rich enough to resolve
 several modes is well above noise, and the estimators converge. Below that it
@@ -564,12 +553,12 @@ appear. `muf/reference/` compares against sources outside the pipeline:
 muf compare out --ref-model all
 ```
 
-| Reference | What it is | Needs |
-|---|---|---|
-| `giro` | real ionosonde measurements, converted through the secant law | network; a station near the control point |
-| `iri` | the International Reference Ionosphere | `pip install PyIRI` |
-| `chapman` | transparent solar-zenith model; **shape only**, amplitude fitted | nothing |
-| `minimuf` | not implemented -- see `muf/reference/minimuf.py` | verified coefficients |
+| Reference | What it is                                                       | Needs                                     |
+|-----------|------------------------------------------------------------------|-------------------------------------------|
+| `giro`    | real ionosonde measurements, converted through the secant law    | network; a station near the control point |
+| `iri`     | the International Reference Ionosphere                           | `pip install PyIRI`                       |
+| `chapman` | transparent solar-zenith model; **shape only**, amplitude fitted | nothing                                   |
+| `minimuf` | not implemented -- see `muf/reference/minimuf.py`                | verified coefficients                     |
 
 For Cyprus -> Yoshkar-Ola the control point is 45.99N 39.09E and **RV149 Rostov**
 sits 146 km away, well inside the F2 correlation scale.
@@ -668,8 +657,7 @@ Two entries are called `foF2` and neither is "the" one: the secant-law value is
 this instrument's own MUF converted back to a vertical critical frequency under
 a 300 km assumption, the IRI value is an independent model's. `ModelName` is
 what tells them apart, so `Characteristic.model` carries it and
-`record.characteristic("foF2", "IRI")` selects one. **`record.muf` always means
-the measured MUF** — a modelled value is never reachable as though the
+`record.characteristic("foF2", "IRI")` selects one. `record.muf` **always means** — a modelled value is never reachable as though the
 instrument had produced it, and there is a test that says so.
 
 The secant-law conversion is taken over **one hop**: `hop=` is the ground
@@ -695,15 +683,15 @@ floor:
 $ muf export …/cyprus1_20260204_210010.lfs --methods contour --iri --band-floor 8.0 --out sao
 ```
 
-| characteristic | value | letter |
-|---|---|---|
-| `MUF` | 14.658 MHz | |
-| `MUFNoseFit` | 14.515 ± 0.119 MHz | |
-| `LOF` | 8.022 MHz | **E** |
-| `LOF@43dB` | 8.022 MHz | **E** |
-| `LOF@50dB` | 8.022 MHz | **E** |
-| `LOF@57dB` | 9.292 MHz | |
-| `MUF` (IRI) | 10.126 MHz | |
+| characteristic | value              | letter |
+|----------------|--------------------|--------|
+| `MUF`          | 14.658 MHz         |        |
+| `MUFNoseFit`   | 14.515 ± 0.119 MHz |        |
+| `LOF`          | 8.022 MHz          | **E**  |
+| `LOF@43dB`     | 8.022 MHz          | **E**  |
+| `LOF@50dB`     | 8.022 MHz          | **E**  |
+| `LOF@57dB`     | 9.292 MHz          |        |
+| `MUF` (IRI)    | 10.126 MHz         |        |
 
 A night-time sounding: the propagation window runs 8.0–14.7 MHz, and the two
 lower rungs are pinned at the floor, so the real window is wider at the bottom
@@ -996,7 +984,7 @@ for a bistatic path and no extension mechanism. SAO.XML 5.0 has three:
 under `<SystemInfo>`, with §1.3.1 requiring readers to skip what they do not
 recognise.
 
-**The MUF is a `<Custom>`, never URSI ID 03 or 07.** UAG-23A §1.50 says the
+**The MUF is a** `<Custom>`**, never URSI ID 03 or 07.** UAG-23A §1.50 says the
 MUF-factor method gives a *Standard MUF* from "a rather simplified propagation
 model" and that "it is now known that this Standard MUF is not necessarily
 identical with the Operational MUF of a radio circuit". URSI's `MUF(3000)` is a
@@ -1011,7 +999,7 @@ doubtful", for a trace "obscured by interference, noise, instrumental defects")
 for weak or ragged picks.
 
 Exporting all 288 soundings of 2026-02-04 gives 791 records carrying a MUF, of
-which **25 earn `D` and none earn `U`**. Both numbers deserve a caveat.
+which **25 earn** `D` **and none earn** `U`. Both numbers deserve a caveat.
 
 **D inherits the midday blind spot** described above. Twenty-five is exactly the
 `limited_` count, and it splits very unevenly — `kmeans` 13, `contour` 11,
@@ -1053,19 +1041,19 @@ different interpretations of one ionogram, not something to merge.
 
 ## Commands
 
-| Command | Purpose |
-|---|---|
-| `muf run TARGET` | extract MUF; writes `out/<date>.csv` |
-| `muf plot TARGET` | render ionograms (`--no-axes` for bare rasters) |
-| `muf daily TABLE` | interpolate onto a 5-minute grid and smooth |
-| `muf track TABLE` | Kalman-track through time: fill gaps, reject outliers |
-| `muf compare TABLE` | agreement between methods, `--ref` series and `--ref-model` |
-| `muf export TARGET` | write soundings as SAO.XML 5.0 (URSI/INAG interchange) |
-| `muf plot-sao TARGET` | draw exported SAO.XML records, over their ionograms |
-| `muf lof TARGET` | measure the band floor and summarise LOF |
-| `muf info TARGET` | header and derived geometry, no processing |
-| `muf detect TARGET` | census a chirpsounder2 detection tree: which transmitters, on what schedule |
-| `muf stations` | print the station coordinate registry |
+| Command               | Purpose                                                                     |
+|-----------------------|-----------------------------------------------------------------------------|
+| `muf run TARGET`      | extract MUF; writes `out/<date>.csv`                                        |
+| `muf plot TARGET`     | render ionograms (`--no-axes` for bare rasters)                             |
+| `muf daily TABLE`     | interpolate onto a 5-minute grid and smooth                                 |
+| `muf track TABLE`     | Kalman-track through time: fill gaps, reject outliers                       |
+| `muf compare TABLE`   | agreement between methods, `--ref` series and `--ref-model`                 |
+| `muf export TARGET`   | write soundings as SAO.XML 5.0 (URSI/INAG interchange)                      |
+| `muf plot-sao TARGET` | draw exported SAO.XML records, over their ionograms                         |
+| `muf lof TARGET`      | measure the band floor and summarise LOF                                    |
+| `muf info TARGET`     | header and derived geometry, no processing                                  |
+| `muf detect TARGET`   | census a chirpsounder2 detection tree: which transmitters, on what schedule |
+| `muf stations`        | print the station coordinate registry                                       |
 
 ### Which commands read which format
 
@@ -1108,20 +1096,9 @@ registered transmitter. At DOB there are four: Juliusruh (864 km), Ramfjordmoen
 Three things differ from a chirp product, and `muf/io_digisonde.py` documents
 each at the decision:
 
-- **`SNR` is `(2, n_freq, n_range)`** — two polarizations. Physically these are
-  O and X, but nothing in the product records which channel is which, so the
-  reader never claims: they are channel 0 and 1, summed by default, exactly as
-  upstream's own plot shows them. `io_digisonde.load(path, pol=0)` selects one.
-- **NaN means "below threshold", not "missing".** `receive_digisonde.py:535`
-  writes `SNR[SNR < snr_threshold] = nan`, so ~90% of a real array is NaN by
-  construction. Those cells are read back as the noise level rather than
-  propagated into estimators that would each have to special-case them.
-- **The stored range axis starts at zero.** The absolute axis is that plus
-  `offset_us × c` — 600 km at the usual setting — which is how upstream plots
-  it. That offset is *configured*, not measured, so
-  `DigisondeHeader.range_is_configured` says so: differences are right, and the
-  zero is only as good as the ini. Same distinction as
-  `ChirpHeader.range_is_relative`, reached from the other side.
+- `SNR` **is** `(2, n_freq, n_range)` — two polarizations. Physically these are O and X, but nothing in the product records which channel is which, so the reader never claims: they are channel 0 and 1, summed by default, exactly as upstream's own plot shows them. `io_digisonde.load(path, pol=0)` selects one.
+- **NaN means "below threshold", not "missing".** `receive_digisonde.py:535` writes `SNR[SNR < snr_threshold] = nan`, so ~90% of a real array is NaN by construction. Those cells are read back as the noise level rather than propagated into estimators that would each have to special-case them.
+- **The stored range axis starts at zero.** The absolute axis is that plus `offset_us × c` — 600 km at the usual setting — which is how upstream plots it. That offset is *configured*, not measured, so `DigisondeHeader.range_is_configured` says so: differences are right, and the zero is only as good as the ini. Same distinction as `ChirpHeader.range_is_relative`, reached from the other side.
 
 The power scale is deliberately `io_chirp`'s. Both instruments define SNR as
 `(P − median)/median`, so both go through `snr_to_power` and the 43 dB level
@@ -1138,10 +1115,10 @@ height, the far edge `DEFAULT_MAX_HOPS` at the highest, both from
 `trace.hop_range_km` so a gate and a hop label cannot disagree about what a
 range means.
 
-| path | stored | geometry gate | kept |
-|---|---|---|---|
-| Juliusruh, 864 km | 600–3597 km | 898–3222 km | 775 of 1000 bins |
-| Chilton, 1325 km | 600–3597 km | 1317–3380 km | 687 of 1000 bins |
+| path              | stored      | geometry gate | kept             |
+|-------------------|-------------|---------------|------------------|
+| Juliusruh, 864 km | 600–3597 km | 898–3222 km   | 775 of 1000 bins |
+| Chilton, 1325 km  | 600–3597 km | 1317–3380 km  | 687 of 1000 bins |
 
 On the 864 km path nothing can arrive before ~998 km, and the near third of
 the stored window is where the interference sits. Gating it removed two
@@ -1174,12 +1151,12 @@ traversed in the frequency axis".
 
 Measured against a real trace, it is not aggressive:
 
-| | raw run | after the range test |
-|---|---|---|
-| `cyprus1_20260204_030010.lfs` | 39 bins | **22** |
-| `cyprus1_20260204_031010.lfs` | 31 bins | **28** |
-| Juliusruh digisonde | 14 bins | **2** |
-| Ramfjordmoen digisonde | 6 bins | **1** |
+|                               | raw run | after the range test |
+|-------------------------------|---------|----------------------|
+| `cyprus1_20260204_030010.lfs` | 39 bins | **22**               |
+| `cyprus1_20260204_031010.lfs` | 31 bins | **28**               |
+| Juliusruh digisonde           | 14 bins | **2**                |
+| Ramfjordmoen digisonde        | 6 bins  | **1**                |
 
 A genuine trace keeps 60–70% of its run, well above `min_run = 5`. The
 digisonde runs collapse to 1–2 bins, and **all 334 soundings now yield no
@@ -1195,11 +1172,11 @@ Ramfjordmoen at 69.6°N.
 what the transmitter measured directly overhead at the same instant, and
 `geometry.fof2_to_muf` converts it to the oblique MUF this receiver should see:
 
-| station | path | its own foF2, 00–11:30Z | implied oblique MUF |
-|---|---|---|---|
-| Juliusruh | 864 km | 1.85 → 6.25 MHz | **3.4 → 11.5 MHz** |
-| Dourbes | 1360 km | 2.85 → 8.00 MHz | **6.7 → 18.8 MHz** |
-| Tromsø | 951 km | 3.50 → 5.12 MHz | **7.2 → 10.5 MHz** |
+| station   | path    | its own foF2, 00–11:30Z | implied oblique MUF |
+|-----------|---------|-------------------------|---------------------|
+| Juliusruh | 864 km  | 1.85 → 6.25 MHz         | **3.4 → 11.5 MHz**  |
+| Dourbes   | 1360 km | 2.85 → 8.00 MHz         | **6.7 → 18.8 MHz**  |
+| Tromsø    | 951 km  | 3.50 → 5.12 MHz         | **7.2 → 10.5 MHz**  |
 
 So the ionosphere was varying strongly — the implied MUF roughly triples
 through the morning — while every pick sat flat at 3.05 MHz. The picks were
@@ -1211,11 +1188,11 @@ measured rather than assumed.** On a 09:00Z Juliusruh sounding, where the
 station's own foF2 implies a MUF near 10.3 MHz:
 
 | threshold | lit bins | longest run | after the range test |
-|---|---|---|---|
-| 43 dB | 18 | 8 | **0** |
-| 37 dB | 34 | 8 | **0** |
-| 34 dB | 57 | 10 | **0** |
-| 28 dB | 172 | 34 | **0** |
+|-----------|----------|-------------|----------------------|
+| 43 dB     | 18       | 8           | **0**                |
+| 37 dB     | 34       | 8           | **0**                |
+| 34 dB     | 57       | 10          | **0**                |
+| 28 dB     | 172      | 34          | **0**                |
 
 28 dB is barely above the 25.6 dB noise median, and still nothing
 range-consistent appears. `--reject-interference` removes 5 rows and changes
@@ -1237,16 +1214,8 @@ from it clears the noise on a range-consistent path.
 
 Two flags change meaning across formats:
 
-- **`--window` and `--zero-periods` are ignored for `.h5`, with a warning.** v2
-  fixed the FFT window when it wrote the product and the raw IQ is not in the
-  file, so the sounding cannot be re-derived at another one (§3.4). They warn
-  rather than silently no-op, because a run whose `--window` was quietly
-  dropped produces a table indistinguishable from one where it was applied.
-- **`--cache-dir` does nothing for `.h5`.** The cache exists to skip FFTs and
-  there are none: reading a v2 product is 26 ms against seconds for `.lfs`, so
-  an entry would cost 8 MB on disk to save 26 ms. Cache keys still carry a
-  format tag so a `sounding.lfs` and a `sounding.h5` cannot overwrite each
-  other.
+- `--window` **and** `--zero-periods` **are ignored for** `.h5`**, with a warning.** v2 fixed the FFT window when it wrote the product and the raw IQ is not in the file, so the sounding cannot be re-derived at another one (§3.4). They warn rather than silently no-op, because a run whose `--window` was quietly dropped produces a table indistinguishable from one where it was applied.
+- `--cache-dir` **does nothing for** `.h5`**.** The cache exists to skip FFTs and there are none: reading a v2 product is 26 ms against seconds for `.lfs`, so an entry would cost 8 MB on disk to save 26 ms. Cache keys still carry a format tag so a `sounding.lfs` and a `sounding.h5` cannot overwrite each other.
 
 ### Shared processing flags
 
@@ -1254,14 +1223,14 @@ These four appear on `run`, `plot`, `export` and `lof`, and describe how the
 ionogram is formed rather than how it is read. They are meaningless for `.h5`
 products, where v2 fixed the window at archive time.
 
-| Flag | Meaning |
-|---|---|
-| `--window N` | FFT window length, default 8192. Sets range resolution and, with `--zero-periods`, the range bin count. |
-| `--zero-periods N` | Zero-padding periods. Subdivides range bins **without improving resolution** — it interpolates, it does not resolve. |
-| `--gate LO,HI` | Virtual-range gate in km. Default comes from the file header's geometry. Narrowing it is the main lever on runtime. |
+| Flag                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                |
+|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--window N`            | FFT window length, default 8192. Sets range resolution and, with `--zero-periods`, the range bin count.                                                                                                                                                                                                                                                                                                                |
+| `--zero-periods N`      | Zero-padding periods. Subdivides range bins **without improving resolution** — it interpolates, it does not resolve.                                                                                                                                                                                                                                                                                                   |
+| `--gate LO,HI`          | Virtual-range gate in km. Default comes from the file header's geometry. Narrowing it is the main lever on runtime.                                                                                                                                                                                                                                                                                                    |
 | `--reject-interference` | Flatten frequency rows whose above-43 dB energy occupies more than 800 km of range. A burst has no delay and smears across every range bin; an echo is narrow in range and continuous in frequency. Off by default because it changes results — and measured over three archives it changed a MUF about once in twenty soundings, so treat it as a diagnostic first. See `muf/interference.py` for the measured yield. |
-| `--gate auto` | **`plot` only.** Fit the range window to where the echo actually is, per sounding. On DOB's search-mode products the stored axis is ±3998 km and the trace occupies a few hundred, so the default plot is a hairline in an empty field; this is a ~15× vertical zoom. Soundings with no range concentration are left at full extent and counted at the end, rather than cropped to an invented window. |
-| `--cache-dir DIR` | Cache the gated array per sounding, so re-running with different estimator settings skips the FFTs entirely. The useful mode when tuning. |
+| `--gate auto`           | `plot` **only.** Fit the range window to where the echo actually is, per sounding. On DOB's search-mode products the stored axis is ±3998 km and the trace occupies a few hundred, so the default plot is a hairline in an empty field; this is a ~15× vertical zoom. Soundings with no range concentration are left at full extent and counted at the end, rather than cropped to an invented window.                 |
+| `--cache-dir DIR`       | Cache the gated array per sounding, so re-running with different estimator settings skips the FFTs entirely. The useful mode when tuning.                                                                                                                                                                                                                                                                              |
 
 `--stations FILE` is shared the same way. v2 products carry `txname` and
 `station_name` as bare strings and **no coordinates**, so without a registry
@@ -1310,106 +1279,106 @@ measured.
 
 ### Per-command flags
 
-**`run`** — extract MUF and LOF; writes `out/<date>.csv`
+`run` — extract MUF and LOF; writes `out/<date>.csv`
 
-| Flag | Meaning |
-|---|---|
-| `--out DIR` | Output directory, default `out`. |
-| `--methods LIST` | `algo,kmeans,contour`, or `all`. Comma-separated. |
-| `--min-run N` | Consecutive frequency bins required before a pick is believed. The single most effective guard against calling a carrier a trace — an echo spans frequencies, RFI spans ranges. |
-| `--percentile P` | Percentile used by the percentile-based estimators. |
-| `--threshold-db DB` | Detection threshold for `contour`, in the shared 43 dB convention. |
-| `-k N` | Cluster count for `kmeans`. |
-| `--legacy-algo` | Reproduce the pre-fix `algo` decision rule, for comparison against old results only. |
-| `--jobs N` | Parallel workers; `0` uses all but one core. |
-| `--format {csv,parquet}` | Output table format. |
-| `--plot` | Also render each ionogram. |
-| `--daily` | Also write the interpolated daily curve. |
-| `--combined` | Additionally write one table spanning every day, on top of the per-day files. |
-| `--quiet` | Suppress the progress bar. |
+| Flag                     | Meaning                                                                                                                                                                         |
+|--------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--out DIR`              | Output directory, default `out`.                                                                                                                                                |
+| `--methods LIST`         | `algo,kmeans,contour`, or `all`. Comma-separated.                                                                                                                               |
+| `--min-run N`            | Consecutive frequency bins required before a pick is believed. The single most effective guard against calling a carrier a trace — an echo spans frequencies, RFI spans ranges. |
+| `--percentile P`         | Percentile used by the percentile-based estimators.                                                                                                                             |
+| `--threshold-db DB`      | Detection threshold for `contour`, in the shared 43 dB convention.                                                                                                              |
+| `-k N`                   | Cluster count for `kmeans`.                                                                                                                                                     |
+| `--legacy-algo`          | Reproduce the pre-fix `algo` decision rule, for comparison against old results only.                                                                                            |
+| `--jobs N`               | Parallel workers; `0` uses all but one core.                                                                                                                                    |
+| `--format {csv,parquet}` | Output table format.                                                                                                                                                            |
+| `--plot`                 | Also render each ionogram.                                                                                                                                                      |
+| `--daily`                | Also write the interpolated daily curve.                                                                                                                                        |
+| `--combined`             | Additionally write one table spanning every day, on top of the per-day files.                                                                                                   |
+| `--quiet`                | Suppress the progress bar.                                                                                                                                                      |
 
-**`plot`** — render ionograms
+`plot` — render ionograms
 
-| Flag | Meaning |
-|---|---|
-| `--out DIR` | Output directory. |
-| `--methods LIST` | Which estimators' picks to mark. |
-| `--no-axes` | Bare raster, no axes or annotation. |
-| `--no-muf` | Do not run the estimators or mark their picks. |
+| Flag               | Meaning                                                                                  |
+|--------------------|------------------------------------------------------------------------------------------|
+| `--out DIR`        | Output directory.                                                                        |
+| `--methods LIST`   | Which estimators' picks to mark.                                                         |
+| `--no-axes`        | Bare raster, no axes or annotation.                                                      |
+| `--no-muf`         | Do not run the estimators or mark their picks.                                           |
 | `--trace [METHOD]` | Overlay the detected trace, split by propagation mode. Takes an optional estimator name. |
-| `--dpi N` | Output resolution. |
+| `--dpi N`          | Output resolution.                                                                       |
 
-**`daily`** — interpolate onto a 5-minute grid and smooth
+`daily` — interpolate onto a 5-minute grid and smooth
 
-| Flag | Meaning |
-|---|---|
+| Flag            | Meaning                                     |
+|-----------------|---------------------------------------------|
 | `--method NAME` | Default: every method present in the table. |
-| `--out DIR` | Output directory. |
-| `--no-smooth` | Interpolate but do not smooth. |
-| `--plot` | Also draw the curve. |
+| `--out DIR`     | Output directory.                           |
+| `--no-smooth`   | Interpolate but do not smooth.              |
+| `--plot`        | Also draw the curve.                        |
 
-**`track`** — Kalman-track through time: fill gaps, reject outliers
+`track` — Kalman-track through time: fill gaps, reject outliers
 
-| Flag | Meaning |
-|---|---|
-| `--method NAME` | Default: every method present. |
-| `--out DIR` | Output directory. |
+| Flag                           | Meaning                                                                                                            |
+|--------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `--method NAME`                | Default: every method present.                                                                                     |
+| `--out DIR`                    | Output directory.                                                                                                  |
 | `--process-noise MHZ_PER_HOUR` | How fast the MUF is allowed to change. Too small and the filter lags a sunrise; too large and it follows outliers. |
-| `--gate-sigma N` | Reject picks further than this many sigma from the prediction. |
-| `--plot` | Also draw the tracked series. |
+| `--gate-sigma N`               | Reject picks further than this many sigma from the prediction.                                                     |
+| `--plot`                       | Also draw the tracked series.                                                                                      |
 
-**`compare`** — agreement between methods, and against references
+`compare` — agreement between methods, and against references
 
-| Flag | Meaning |
-|---|---|
-| `--ref FILE` | A historical CSV, e.g. `MUF_cyprus1_20220320.csv`. |
-| `--ref-model NAMES` | External models to evaluate: `iri`, `giro`, `chapman`, or `all`. |
-| `--exclude START..STOP` | Exclude a time span, for a known outage. |
-| `--out DIR` | Output directory. |
+| Flag                    | Meaning                                                          |
+|-------------------------|------------------------------------------------------------------|
+| `--ref FILE`            | A historical CSV, e.g. `MUF_cyprus1_20220320.csv`.               |
+| `--ref-model NAMES`     | External models to evaluate: `iri`, `giro`, `chapman`, or `all`. |
+| `--exclude START..STOP` | Exclude a time span, for a known outage.                         |
+| `--out DIR`             | Output directory.                                                |
 
-**`export`** — write soundings as SAO.XML 5.0 (URSI/INAG interchange)
+`export` — write soundings as SAO.XML 5.0 (URSI/INAG interchange)
 
-| Flag | Meaning |
-|---|---|
-| `--out DIR` | Output directory. |
-| `--methods LIST` | One `<SAORecord>` per method, per the spec's separate-storage rule (1.3.4). |
-| `--ursi-code CODE` | URSI station code, if one has been issued for this path. |
-| `--station NAME` | `StationName` attribute; default is the receiver name. |
-| `--iri` | Add IRI's MUF, foF2 and hmF2 as `<Modeled>` beside the measured values. |
-| `--offline` | With `--iri`, use cached solar indices only — no network. |
+| Flag               | Meaning                                                                     |
+|--------------------|-----------------------------------------------------------------------------|
+| `--out DIR`        | Output directory.                                                           |
+| `--methods LIST`   | One `<SAORecord>` per method, per the spec's separate-storage rule (1.3.4). |
+| `--ursi-code CODE` | URSI station code, if one has been issued for this path.                    |
+| `--station NAME`   | `StationName` attribute; default is the receiver name.                      |
+| `--iri`            | Add IRI's MUF, foF2 and hmF2 as `<Modeled>` beside the measured values.     |
+| `--offline`        | With `--iri`, use cached solar indices only — no network.                   |
 
-**`plot-sao`** — draw exported SAO.XML records
+`plot-sao` — draw exported SAO.XML records
 
-| Flag | Meaning |
-|---|---|
-| `--out DIR` | Output directory. |
-| `--ionogram TARGET...` | Draw each record over its own sounding, matched by file name. |
-| `--method NAME` | Draw only the record from this estimator. |
-| `--full-band` | Show the whole sweep instead of framing the trace. |
-| `--trace` / `--no-trace` | Overlay the scaled trace points, or never. |
-| `--dpi N` | Output resolution. |
+| Flag                     | Meaning                                                       |
+|--------------------------|---------------------------------------------------------------|
+| `--out DIR`              | Output directory.                                             |
+| `--ionogram TARGET...`   | Draw each record over its own sounding, matched by file name. |
+| `--method NAME`          | Draw only the record from this estimator.                     |
+| `--full-band`            | Show the whole sweep instead of framing the trace.            |
+| `--trace` / `--no-trace` | Overlay the scaled trace points, or never.                    |
+| `--dpi N`                | Output resolution.                                            |
 
 Takes the shared gate and window flags too, so the raster matches what was
 exported rather than a differently-gated version of the same sounding.
 
-**`lof`** — measure the band floor and summarise LOF
+`lof` — measure the band floor and summarise LOF
 
-| Flag | Meaning |
-|---|---|
+| Flag         | Meaning                                                        |
+|--------------|----------------------------------------------------------------|
 | `--level DB` | Detection level for the floor measurement, in raw ionogram dB. |
-| `--out FILE` | Write the per-sounding ladder to this CSV. |
+| `--out FILE` | Write the per-sounding ladder to this CSV.                     |
 
-**`info`** — header and derived geometry, no processing
+`info` — header and derived geometry, no processing
 
-| Flag | Meaning |
-|---|---|
-| `--limit N` | How many soundings to describe, default 3. |
+| Flag                             | Meaning                                                              |
+|----------------------------------|----------------------------------------------------------------------|
+| `--limit N`                      | How many soundings to describe, default 3.                           |
 | `--window N`, `--zero-periods N` | Only affect the derived axes that are printed; nothing is processed. |
 
-**`stations`** — print the station coordinate registry
+`stations` — print the station coordinate registry
 
-| Flag | Meaning |
-|---|---|
+| Flag              | Meaning                                                                        |
+|-------------------|--------------------------------------------------------------------------------|
 | `--stations FILE` | Merge a JSON registry or a chirpsounder2 `server.ini` over the built-in table. |
 
 ```
@@ -1429,7 +1398,7 @@ table is inferred from measurements: a range measured through the ionosphere
 carries a virtual-height excess of a few percent and, on an uncalibrated
 receiver, an epoch error of any size at all.
 
-**`cyprus1` is an alias of `NIC`**, resolving to v2's five-decimal position.
+`cyprus1` **is an alias of** `NIC`, resolving to v2's five-decimal position.
 That is one site under two names — the `.lfs` archive's and v2's — and it is
 the only entry whose position was *chosen* rather than copied. The data could
 not decide it: after removing the DOB receiver's 0.9557 s epoch error the four
@@ -1446,7 +1415,7 @@ cyprus1 -> yoshkar-ola   2588.4 -> 2587.8 km    (-0.6 km)
 cyprus1 -> DOB           3476.3 -> 3435.9 km   (-40.3 km, 20 range bins)
 ```
 
-**`.lfs` soundings follow the table too**, as of 2026-08-14. An `.lfs` header
+`.lfs` **soundings follow the table too**, as of 2026-08-14. An `.lfs` header
 carries its own lat/lon, so there the registry is a *correction* rather than a
 lookup — without one the file's numbers are used verbatim, and `stations={}`
 still means no table — but the correction is applied, and the path
@@ -1471,21 +1440,21 @@ v2's marker for an unidentified transmitter — `unkown`, upstream's spelling �
 never resolves. Every unidentified emitter in an archive shares that string, so
 a match would give a whole night of distinct transmitters one position.
 
-**`detect`** — census a chirpsounder2 detection tree
+`detect` — census a chirpsounder2 detection tree
 
 Reads `par-*.h5` timing solutions (or `chirp-*.h5` with `--raw`) and groups
 them into transmitters by chirp rate and arrival phase.
 
-| Flag | Meaning |
-|---|---|
-| `--cycle SECONDS` | Schedule cycle, default 300. Matches the Twente chirp list's `300:235` notation — period 300 s, starts at second 235. |
-| `--min-count N` | How many sightings make an emitter rather than a false alarm, default 3. A search-mode tree is mostly noise, and a one-off detection carries no schedule. `--min-count 1` shows them anyway. |
-| `--raw` | Census `chirp-*.h5` detections instead of `par-*.h5`. Noisier, and the only option before `find_timings` has run. |
-| `--reference-km KM` | Great-circle distance to a transmitter you can identify independently. **Supplying it is what enables transmit seconds and ranges to be printed at all.** |
-| `--reference-slots LIST` | Its published transmit seconds, comma separated. Default `235,240,245` — cyprus1 per the Twente list. |
-| `--reference-rate HZ_PER_S` | Its chirp rate, default `100e3`. |
-| `--reference-name NAME` | Label for the report. |
-| `--reference-window SECONDS` | How far from a published slot a sighting may land and still count, default 1.5. Widen past 1 s only when the epoch error is known to exceed it. |
+| Flag                         | Meaning                                                                                                                                                                                      |
+|------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--cycle SECONDS`            | Schedule cycle, default 300. Matches the Twente chirp list's `300:235` notation — period 300 s, starts at second 235.                                                                        |
+| `--min-count N`              | How many sightings make an emitter rather than a false alarm, default 3. A search-mode tree is mostly noise, and a one-off detection carries no schedule. `--min-count 1` shows them anyway. |
+| `--raw`                      | Census `chirp-*.h5` detections instead of `par-*.h5`. Noisier, and the only option before `find_timings` has run.                                                                            |
+| `--reference-km KM`          | Great-circle distance to a transmitter you can identify independently. **Supplying it is what enables transmit seconds and ranges to be printed at all.**                                    |
+| `--reference-slots LIST`     | Its published transmit seconds, comma separated. Default `235,240,245` — cyprus1 per the Twente list.                                                                                        |
+| `--reference-rate HZ_PER_S`  | Its chirp rate, default `100e3`.                                                                                                                                                             |
+| `--reference-name NAME`      | Label for the report.                                                                                                                                                                        |
+| `--reference-window SECONDS` | How far from a published slot a sighting may land and still count, default 1.5. Widen past 1 s only when the epoch error is known to exceed it.                                              |
 
 Without the `--reference-*` flags, `detect` prints only what the files say —
 seconds **as received** and arrival phase — and says so. That reticence is the
@@ -1651,8 +1620,7 @@ recording imposes is compared against the frequency it actually reached, so a
 truncated sounding whose MUF falls below that ceiling is a perfectly good
 measurement, while one that runs into it is already caught by `limited_`.
 
-`muf track` writes `datetime, method, muf, rate_mhz_per_hour, sigma, measured,
-rejected`; `muf daily` writes `datetime, date, muf, muf_smooth, method`.
+`muf track` writes `datetime, method, muf, rate_mhz_per_hour, sigma, measured, rejected`; `muf daily` writes `datetime, date, muf, muf_smooth, method`.
 
 `muf export` writes one `<file stem>.xml` per sounding rather than a table —
 the results table has room for a MUF per method but not for the trace behind
@@ -1730,7 +1698,7 @@ git show f94f561^:MUF.py
 
 A temporary Docker rig brings up the api, the web console and a simulated
 station. Full instructions, including how to point the real acquisition laptop
-at it, are in **[`deploy/README.md`](deploy/README.md)**.
+at it, are in [`deploy/README.md`](deploy/README.md).
 
 ```bash
 cp deploy/.env.example deploy/.env          # set CONTROL_TOKEN
@@ -1748,10 +1716,10 @@ python -m services.api.ingest F:/MyData/ND/lfs/ionozond_data2/2026-08-05 \
     --methods algo,kmeans,contour
 ```
 
-Two things about it worth knowing before you rely on it. **`CONTROL_TOKEN`
-unset disables control rather than opening it** — a missing secret must never
+Two things about it worth knowing before you rely on it. `CONTROL_TOKEN`
+**unset disables control rather than opening it** — a missing secret must never
 be the same as a granted one, since these endpoints can stop a radio. And the
-service **binds to `127.0.0.1` by default**; reaching it from the sounding
+service **binds to** `127.0.0.1` **by default**; reaching it from the sounding
 laptop means naming a LAN address on purpose, or tunnelling, which
 `deploy/README.md` covers.
 
@@ -1776,10 +1744,10 @@ The agent is stdlib-only and Python 3.7-clean, so the sounder's own virtualenv
 runs it. Two files, both outside the checkout so `git pull` cannot touch them
 and `git add -A` cannot publish them:
 
-| | |
-|---|---|
-| `~/agent.json` | station name, `server_url`, paths, `units` — from `deploy/station-dob.json.example` |
-| `/etc/default/chirp-agent` | one line, `AGENT_TOKEN=<the server's CONTROL_TOKEN>`, root-owned `0600` |
+|                            |                                                                                     |
+|----------------------------|-------------------------------------------------------------------------------------|
+| `~/agent.json`             | station name, `server_url`, paths, `units` — from `deploy/station-dob.json.example` |
+| `/etc/default/chirp-agent` | one line, `AGENT_TOKEN=<the server's CONTROL_TOKEN>`, root-owned `0600`             |
 
 `chirp-agent.service` is deliberately **not** `PartOf=chirp.target`: it has to
 survive a stop of acquisition, or "stop sounding" would be the last command the
@@ -1788,8 +1756,7 @@ server could ever issue. It also names the venv interpreter explicitly —
 interpreter repeats a SyntaxError every 30 s forever. `services/agent/__init__`
 is 3.5-syntax on purpose so it can say so instead.
 
-**A station whose acquisition is run by a script, not systemd, sets `units` to
-`[]` and `target` to `""`.** `systemctl is-active` cannot see another
+**A station whose acquisition is run by a script, not systemd, sets** `units` **to**`[]` **and** `target` **to** `""`**.** `systemctl is-active` cannot see another
 supervisor's children, so listing units there is eleven permanent red lights;
 and `systemctl restart chirp.target` would not restart that script's recorder,
 it would start a *second* one against the same USRP. With no target the agent
@@ -1802,40 +1769,11 @@ Every collector returns its own failure as a value, and a metric that cannot be
 measured is `None`, never zero — "no soundings in the last hour" and "could not
 tell" need different responses.
 
-- **`newest_product_age_s` reads the sounding's `t0` from the filename**, not
-  the file's mtime. mtime belongs to whichever clock touched the file last, and
-  on one station that has been wrong three ways: an RTC that booted at
-  2021-04-02, a CIFS server running 5 h 36 m fast, and the stamps that outlived
-  the fix. `t0` is on the recorder's GPS-disciplined epoch. It is also what the
-  question actually means — when did we last hear the ionosphere, not when did
-  a file appear — and it avoids `stat()`ing a large archive over a network
-  share. The threshold covers pipeline latency, which is ~960 s on DOB.
-- **A file newer than the clock is unknown, not fresh.** `age < threshold` is
-  trivially true for every negative number, so the one metric watching for
-  acquisition stopping once passed unconditionally at −20420 s and would have
-  gone on passing with the recorder dead.
-- **"Files newer than me" only convicts *my* clock if my clock wrote them.**
-  On a network archive `system_clock_s` reports the NTP state instead and
-  carries the skew as a note — it once accused a host sitting 47 ms from its
-  NTP server, and worse, returned before the NTP check ran at all.
-- **The digisonde receivers are watched but cannot fail the station.** Each
-  `chirp-digisonde@…` instance is an oblique reception of a *remote vertical*
-  sounder — an extra circuit, and one this station is normally better off
-  without: they are ringbuffer consumers at 25 MS/s and the cause of the 45 %
-  sample loss, which is why none should be enabled here at all. Stopped is
-  therefore the *correct* state, and painting four permanent reds for it is how
-  a status column stops being read. Their state is still reported, as `?`
-  rather than `FAIL`, because "Dourbes has been down since Tuesday" is worth
-  reading and "not running" and "wrong" are different claims. `optional_units`
-  in `~/agent.json` is the list, matched as a substring of the unit name; set
-  it to `[]` on a receiver that really does depend on one. The exemption is a
-  safety net for a station whose unit list has not been cleaned up yet — it
-  makes an enabled receiver quiet, not cheap.
-- **`epoch_offset_s` needs `par-*.h5`**, which only search mode produces. It is
-  the only external check on the recorder's clock — it caught a 0.956 s offset
-  that displaced every echo by 286,000 km while every product stayed
-  self-consistent — so consider leaving `find_timings.py` running even in
-  scheduled mode, and keep `chirp-timings.service` in `units` to match.
+- `newest_product_age_s` **reads the sounding's** `t0` **from the filename**, not the file's mtime. mtime belongs to whichever clock touched the file last, and on one station that has been wrong three ways: an RTC that booted at 2021-04-02, a CIFS server running 5 h 36 m fast, and the stamps that outlived the fix. `t0` is on the recorder's GPS-disciplined epoch. It is also what the question actually means — when did we last hear the ionosphere, not when did a file appear — and it avoids `stat()`ing a large archive over a network share. The threshold covers pipeline latency, which is ~960 s on DOB.
+- **A file newer than the clock is unknown, not fresh.** `age < threshold` is trivially true for every negative number, so the one metric watching for acquisition stopping once passed unconditionally at −20420 s and would have gone on passing with the recorder dead.
+- **"Files newer than me" only convicts *my* clock if my clock wrote them.** On a network archive `system_clock_s` reports the NTP state instead and carries the skew as a note — it once accused a host sitting 47 ms from its NTP server, and worse, returned before the NTP check ran at all.
+- **The digisonde receivers are watched but cannot fail the station.** Each `chirp-digisonde@…` instance is an oblique reception of a *remote vertical* sounder — an extra circuit, and one this station is normally better off without: they are ringbuffer consumers at 25 MS/s and the cause of the 45 % sample loss, which is why none should be enabled here at all. Stopped is therefore the *correct* state, and painting four permanent reds for it is how a status column stops being read. Their state is still reported, as `?` rather than `FAIL`, because "Dourbes has been down since Tuesday" is worth reading and "not running" and "wrong" are different claims. `optional_units` in `~/agent.json` is the list, matched as a substring of the unit name; set it to `[]` on a receiver that really does depend on one. The exemption is a safety net for a station whose unit list has not been cleaned up yet — it makes an enabled receiver quiet, not cheap.
+- `epoch_offset_s` **needs** `par-*.h5`, which only search mode produces. It is the only external check on the recorder's clock — it caught a 0.956 s offset that displaced every echo by 286,000 km while every product stayed self-consistent — so consider leaving `find_timings.py` running even in scheduled mode, and keep `chirp-timings.service` in `units` to match.
 
 ### The picture the station sends of itself
 
@@ -1851,7 +1789,7 @@ the **archive**, which reaches the server only on `chirp-archive-sync`'s timer
 and is routinely hours behind — the note under that table has always said so.
 This is the one thing in the console that is current.
 
-**It is affordable because a v2 `.h5` holds the ionogram already computed.**
+**It is affordable because a v2** `.h5` **holds the ionogram already computed.**
 There is no FFT here, only a read, a decimation and a PNG: measured at 2.5 ms
 for an ordinary DOB product and 18 ms for a search-mode one, once per 60 s
 push, against a full server-side render's ~200 ms of matplotlib. At most four
@@ -1860,22 +1798,10 @@ idle circuit costs nothing at all.
 
 Four decisions in `services/agent/preview.py` are not free choices:
 
-- **The range axis is reversed.** v2 stores it ascending, this pipeline uses
-  descending virtual range, and `render` puts the largest range at the top.
-  Skip the reversal and the thumbnail is upside down and entirely plausible.
-- **Decimation keeps the maximum of each block**, not the mean and not a
-  stride. A trace is one bright cell among noise; at the ~30× reduction a
-  search-mode product needs, averaging dilutes it below the noise floor and
-  point-sampling misses it. This is the difference between a picture with a
-  trace in it and a picture of noise.
-- **The dB scale is the renderer's**, 20–75 dB through the same `jet`, so
-  brightness means one thing across both. NaN — v2's "below the storage
-  threshold" — lands at 25.6 dB, well under the 43 dB a detection needs, so the
-  sparsification cannot invent a trace.
-- **The PNG is written with `zlib` and `struct`**, about twenty lines, because
-  the acquisition laptop has no Pillow and adding a dependency there to make a
-  3 KB picture would be a poor trade. Four bits per pixel and a 16-entry
-  palette: the colours of the full render for the size of greyscale.
+- **The range axis is reversed.** v2 stores it ascending, this pipeline uses descending virtual range, and `render` puts the largest range at the top. Skip the reversal and the thumbnail is upside down and entirely plausible.
+- **Decimation keeps the maximum of each block**, not the mean and not a stride. A trace is one bright cell among noise; at the ~30× reduction a search-mode product needs, averaging dilutes it below the noise floor and point-sampling misses it. This is the difference between a picture with a trace in it and a picture of noise.
+- **The dB scale is the renderer's**, 20–75 dB through the same `jet`, so brightness means one thing across both. NaN — v2's "below the storage threshold" — lands at 25.6 dB, well under the 43 dB a detection needs, so the sparsification cannot invent a trace.
+- **The PNG is written with** `zlib` **and** `struct`, about twenty lines, because the acquisition laptop has no Pillow and adding a dependency there to make a 3 KB picture would be a poor trade. Four bits per pixel and a 16-entry palette: the colours of the full render for the size of greyscale.
 
 Server-side it is a separate endpoint and a separate table, **not** a field in
 the health document. That document is stored verbatim forever, written 1440×
@@ -1906,13 +1832,8 @@ subscript and no default — `chirp-rate`, `rep`, `chirpt`, `id` and
 detection says who sent it. So a row is **identified** first and scheduled
 after:
 
-1. **Identify**, on `/ui/sources`. Pick a census row, give it a code, and it is
-   saved as a verified transmitter for that receiver, with the census row it
-   was read off kept as evidence. This is the same judgement that resolved
-   `cyprus1` to `NIC`, and it is written down instead of being remembered.
-2. **Schedule**, on `/ui`. Tick verified transmitters and apply. The page
-   composes the `sounder_timings` list **by name**, never by row number, and
-   posts it as one `set_config` command with the mode.
+1. **Identify**, on `/ui/sources`. Pick a census row, give it a code, and it is saved as a verified transmitter for that receiver, with the census row it was read off kept as evidence. This is the same judgement that resolved `cyprus1` to `NIC`, and it is written down instead of being remembered.
+2. **Schedule**, on `/ui`. Tick verified transmitters and apply. The page composes the `sounder_timings` list **by name**, never by row number, and posts it as one `set_config` command with the mode.
 
 The two steps are on two pages on purpose. Identifying is archive work and
 belongs where the census is; choosing who to sound and pressing start are one
@@ -1954,12 +1875,12 @@ That schedule is arithmetic on the ini, and **it stays true with the recorder
 dead** — so the panel leads with a separate indicator for whether anything is
 actually being recorded, and refuses to call a slot a sounding unless it is:
 
-| pill | means |
-|---|---|
-| `ACQUIRING` | products are arriving, or the supervisor says the recorder is up |
-| `NOT ACQUIRING` | a process acquisition needs is definitely down |
-| `NO PRODUCTS` | nothing is being produced while nothing reports itself dead |
-| `ACQUIRING?` | no report current enough to answer with |
+| pill            | means                                                            |
+|-----------------|------------------------------------------------------------------|
+| `ACQUIRING`     | products are arriving, or the supervisor says the recorder is up |
+| `NOT ACQUIRING` | a process acquisition needs is definitely down                   |
+| `NO PRODUCTS`   | nothing is being produced while nothing reports itself dead      |
+| `ACQUIRING?`    | no report current enough to answer with                          |
 
 `newest_product_age_s` leads, because it measures the acquisition rather than
 the supervisor and because DOB reports **no unit states at all** — `dombas.sh`
@@ -1978,11 +1899,11 @@ A search-mode archive is mostly interference, so three filters run first, all
 on **shape rather than strength** — the loudest group in one real archive had a
 higher median SNR than cyprus1 and was pure noise:
 
-| test | default | what it catches |
-|---|---|---|
-| arrival-phase scatter | 5 ms | 500 kHz/s "emitter" whose phase wandered ±274 ms |
-| share of the cycle | 25% | a group claiming all 300 seconds of a 300 s cycle |
-| detections per slot | 3 | thirteen groups that saw each second exactly once |
+| test                  | default | what it catches                                   |
+|-----------------------|---------|---------------------------------------------------|
+| arrival-phase scatter | 5 ms    | 500 kHz/s "emitter" whose phase wandered ±274 ms  |
+| share of the cycle    | 25%     | a group claiming all 300 seconds of a 300 s cycle |
+| detections per slot   | 3       | thirteen groups that saw each second exactly once |
 
 Rejects are **listed with their reason**, not dropped silently: if the row you
 came for is among them, the thresholds are wrong, not the transmitter.
@@ -2204,13 +2125,13 @@ Absolute timings do not travel between machines, so nothing is compared against
 a figure from somewhere else. The verdicts come from ratios that mean the same
 thing everywhere, and from this same box on an earlier day:
 
-| what it watches | why it matters |
-|---|---|
-| parallel speed-up | below ~3x on four or more cores, the workers are fighting each other for threads rather than sharing the machine — check `MUF_PIN_THREADS` |
-| share of a sounding spent reading it | about 3 % on a local disk; far above that is the archive mount, and it moves long before a page looks slow |
-| peak RSS across the sample | a worker should settle after its first file |
-| soundings that raised | a correctness problem wearing a performance costume — see `tools/diagnose_reception.py` |
-| the picks themselves | with `--picks`, a later run proves a speed-up did not move a measurement |
+| what it watches                      | why it matters                                                                                                                             |
+|--------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| parallel speed-up                    | below ~3x on four or more cores, the workers are fighting each other for threads rather than sharing the machine — check `MUF_PIN_THREADS` |
+| share of a sounding spent reading it | about 3 % on a local disk; far above that is the archive mount, and it moves long before a page looks slow                                 |
+| peak RSS across the sample           | a worker should settle after its first file                                                                                                |
+| soundings that raised                | a correctness problem wearing a performance costume — see `tools/diagnose_reception.py`                                                    |
+| the picks themselves                 | with `--picks`, a later run proves a speed-up did not move a measurement                                                                   |
 
 It exits non-zero when it finds something serious, so it can be run from cron
 and left to stay quiet.
@@ -2223,12 +2144,12 @@ models run on. That dependency is otherwise invisible in the output — with no
 route out, `muf.reference.indices` falls back to its cache and keeps answering,
 and a driver from six months ago renders exactly like a fresh one.
 
-| pill | means |
-|---|---|
-| `INTERNET OK` | every index host answered |
-| `PARTIAL` | some answered; the panel names the ones that did not |
-| `NO INTERNET` | none answered — models run on cache, or not at all |
-| `INTERNET?` | no reading current enough to answer with |
+| pill          | means                                                |
+|---------------|------------------------------------------------------|
+| `INTERNET OK` | every index host answered                            |
+| `PARTIAL`     | some answered; the panel names the ones that did not |
+| `NO INTERNET` | none answered — models run on cache, or not at all   |
+| `INTERNET?`   | no reading current enough to answer with             |
 
 **It probes those hosts, not the internet.** A ping to a public resolver
 answers a question nobody asked: it stays green behind a proxy that blocks
@@ -2250,14 +2171,14 @@ Six files on three hosts, and the redundancy is the point — any one of them ca
 be down or firewalled without a model losing its driver, because
 `solar_indices` raises only when *nothing* answered and nothing is cached:
 
-| source | file | carries |
-|---|---|---|
-| SILSO | `SN_d_tot_V2.0.csv` | daily international sunspot number |
-| SILSO | `EISN_current.csv` | estimated SSN for the current month |
-| SILSO | `SN_ms_tot_V2.0.csv` | 13-month smoothed R12 |
-| NOAA SWPC | `observed-solar-cycle-indices.json` | monthly SSN and F10.7 |
-| NOAA SWPC | `f107_cm_flux.json` | daily 10.7 cm flux, last 42 days |
-| irimodel.org | `apf107.dat` | daily F10.7, its 81-day mean, and `ap`, since 1958 |
+| source       | file                                | carries                                            |
+|--------------|-------------------------------------|----------------------------------------------------|
+| SILSO        | `SN_d_tot_V2.0.csv`                 | daily international sunspot number                 |
+| SILSO        | `EISN_current.csv`                  | estimated SSN for the current month                |
+| SILSO        | `SN_ms_tot_V2.0.csv`                | 13-month smoothed R12                              |
+| NOAA SWPC    | `observed-solar-cycle-indices.json` | monthly SSN and F10.7                              |
+| NOAA SWPC    | `f107_cm_flux.json`                 | daily 10.7 cm flux, last 42 days                   |
+| irimodel.org | `apf107.dat`                        | daily F10.7, its 81-day mean, and `ap`, since 1958 |
 
 The last three are what IRI actually wanted. Before them the only flux
 available was SWPC's **monthly** figure; `apf107.dat` is the driver file IRI
@@ -2269,8 +2190,7 @@ on whitespace merges them (2003-10-29 reads `400300207236...`), and
 irimodel.org runs mod_security, which refuses urllib's default `User-Agent`
 with a 406 — and `curl`'s as well.
 
-`SolarIndices.f107` is the observed daily flux and **`f107_driver` is what a
-model is given**. They are separate fields on purpose: the CCIR and URSI maps
+`SolarIndices.f107` is the observed daily flux and `f107_driver` **is what a**. They are separate fields on purpose: the CCIR and URSI maps
 IRI interpolates were fitted against a smoothed index, so `f107_driver` prefers
 the 81-day mean and falls back through monthly to daily. Feeding a map the
 day's flux would swing foF2 across a solar rotation in a way the climatology
@@ -2278,8 +2198,7 @@ never claimed to predict.
 
 Roughly 5 MB lands in the cache, at `$HOME/.cache/muf/indices` by default. In a
 container `$HOME` is an image layer, so `MUF_INDEX_CACHE` points it at
-`/data/indices` — the volume the database already uses — and a `docker compose
-pull` stops throwing it away.
+`/data/indices` — the volume the database already uses — and a `docker compose pull` stops throwing it away.
 
 Two things the `/ui/sources` page cannot do for you, both settled in the
 identify form. Rows
@@ -2340,88 +2259,34 @@ runs on the numeric array, and both halves live here.
 
 **Corrections**
 
-- **The virtual-range axis was inverted.** The echo in
-  `cyprus1_20260204_000010.lfs` sits at fftshifted bin 3909. Under the
-  ascending axis used at `MUF.py:116` that is **-2732 km**, which no echo can
-  occupy; under `R - idx*step` it is **+2739 km**, correct for a 2,588 km path.
-  The plot looked right only because it was reversed with `[::-1]` at draw
-  time, and `MUF.py:297`'s `if vrng < 0: vrng = R + vrng` was patching over the
-  sign error. The axis is now defined once, in `calibrate.py`.
-- **`rx_longitude` was reading the latitude.** `lfs_header.py:108` seeks offset
-  150, which is `rx_latitude`'s; the longitude is at 154. Yoshkar-Ola now reads
-  47.53E rather than 56.38.
-- **Three defects in the algorithmic estimator**, documented in
-  `extractors/algorithmic.py`: an uninitialised buffer, an `np.append` whose
-  result was discarded, and an `np.amax(axis=0)` that assembled its returned
-  `(frequency, range, row)` triple from *different* detections — so the
-  reported range was not the range at the reported MUF. `--legacy-algo`
-  reproduces the old decision where that is possible.
-- **K-means invented MUFs out of noise.** On a recording containing no echo it
-  still reported a value at the top of the band, because the selection rule fell
-  back to "keep the brightest cluster" when nothing passed the threshold. It now
-  returns no pick.
-- **Pixel-position calibration is gone.** The scripts assumed 1,220 columns and
-  a 3500-2500 km height span; the renderer actually produced 2500-4000 km. Axes
-  now come from the file header. (`ion_col_num = 1220` was right by accident —
-  it is `len(iq) // 8192` for this instrument.)
-- **Truncated recordings are no longer stretched.** A recording cut short still
-  declares the full sweep in its header — 10 files in `2026.02.05` hold 347
-  windows instead of 1,220 while claiming `dur=250`. Mapping the axis onto the
-  nominal 32.5 MHz endpoint would place their last bin there when the
-  transmitter had only reached 14.6 MHz, inflating MUF by up to 2.2x. The
-  frequency axis is now derived from the chirp rate and elapsed time, which is
-  what physically sets it; `sweep_complete` and `sweep_fraction` record the
-  shortfall.
+- **The virtual-range axis was inverted.** The echo in `cyprus1_20260204_000010.lfs` sits at fftshifted bin 3909. Under the ascending axis used at `MUF.py:116` that is **-2732 km**, which no echo can occupy; under `R - idx*step` it is **+2739 km**, correct for a 2,588 km path. The plot looked right only because it was reversed with `[::-1]` at draw time, and `MUF.py:297`'s `if vrng < 0: vrng = R + vrng` was patching over the sign error. The axis is now defined once, in `calibrate.py`.
+- `rx_longitude` **was reading the latitude.** `lfs_header.py:108` seeks offset 150, which is `rx_latitude`'s; the longitude is at 154. Yoshkar-Ola now reads 47.53E rather than 56.38.
+- **Three defects in the algorithmic estimator**, documented in `extractors/algorithmic.py`: an uninitialised buffer, an `np.append` whose result was discarded, and an `np.amax(axis=0)` that assembled its returned `(frequency, range, row)` triple from *different* detections — so the reported range was not the range at the reported MUF. `--legacy-algo` reproduces the old decision where that is possible.
+- **K-means invented MUFs out of noise.** On a recording containing no echo it still reported a value at the top of the band, because the selection rule fell back to "keep the brightest cluster" when nothing passed the threshold. It now returns no pick.
+- **Pixel-position calibration is gone.** The scripts assumed 1,220 columns and a 3500-2500 km height span; the renderer actually produced 2500-4000 km. Axes now come from the file header. (`ion_col_num = 1220` was right by accident — it is `len(iq) // 8192` for this instrument.)
+- **Truncated recordings are no longer stretched.** A recording cut short still declares the full sweep in its header — 10 files in `2026.02.05` hold 347 windows instead of 1,220 while claiming `dur=250`. Mapping the axis onto the nominal 32.5 MHz endpoint would place their last bin there when the transmitter had only reached 14.6 MHz, inflating MUF by up to 2.2x. The frequency axis is now derived from the chirp rate and elapsed time, which is what physically sets it; `sweep_complete` and `sweep_fraction` record the shortfall.
 
 **Additions**
 
-- Range gating from the header, applied inside the FFT loop — 40x less data,
-  and the biggest single accuracy gain.
-- The algorithmic estimator vectorised: a triple-nested Python loop over ~110M
-  cells becomes a handful of array operations.
-- One shared, tunable MUF decision rule with a continuity requirement, replacing
-  three partial ad-hoc versions.
+- Range gating from the header, applied inside the FFT loop — 40x less data, and the biggest single accuracy gain.
+- The algorithmic estimator vectorised: a triple-nested Python loop over ~110M cells becomes a handful of array operations.
+- One shared, tunable MUF decision rule with a continuity requirement, replacing three partial ad-hoc versions.
 - Band-limited and truncated soundings detected and excluded from statistics.
-- **Temporal tracking** (`muf track`) — Kalman filter with RTS smoothing, which
-  fills gaps, rejects outliers and attaches an uncertainty to every point.
-- **Trace fitting** (`muf/fit.py`) — an outlier detector that agrees 100% with
-  `track`'s independent rejections, and repairs the values it flags.
-- **Mode segmentation and reconstruction** (`muf/trace.py`) — splits a trace at
-  propagation-mode boundaries and fits a weighted smoothing spline to one mode,
-  turning a sparse scattered point set into a continuous `h(f)`. Revealed that
-  87% of soundings carry more than one propagation mode.
-- **External references** (`muf/reference/`) — IRI, GIRO and a transparent
-  solar-zenith model, with solar indices fetched and cached from SILSO and NOAA.
-  This is what revealed the out-of-band problem above.
-- **SAO.XML 5.0 export** (`muf export`) — the URSI/INAG interchange format GIRO
-  publishes, so the segmented trace becomes an archivable product rather than a
-  plot overlay. The MUF is emitted as a `<Custom>` characteristic, not URSI
-  `MUF(3000)`, because UAG-23A §1.50 states those are different quantities; the
-  band-limited flag becomes UAG-23A's qualifying letter `D`. `muf plot-sao`
-  reads a record back and draws it — over its own ionogram when the `.lfs` is
-  to hand, and from the XML alone when it is not, which is what distinguishes a
-  published format from a private file with angle brackets. `--iri` adds the
-  reference model's MUF, foF2 and hmF2 as `<Modeled>` characteristics, so the
-  panel shows measured and modelled side by side without ever conflating them.
-- **The low-frequency end** (`muf/lof.py`, `muf lof`) — LOF at the estimator's
-  own trace and at a ladder of detection thresholds, with the threshold carried
-  in every result. Correlates with the cosine of the solar zenith angle at
-  r = +0.86, which is the D-region absorption signature. Found that the
-  transmitter's real band floor is 8.0 MHz against a declared sweep start of
-  7.5, so 102 of 266 LOF values are upper bounds and earn URSI's `E`.
-- **Several days at once**, written one file per day; `daily`, `track` and
-  `compare` accept multiple tables or a directory of them.
+- **Temporal tracking** (`muf track`) — Kalman filter with RTS smoothing, which fills gaps, rejects outliers and attaches an uncertainty to every point.
+- **Trace fitting** (`muf/fit.py`) — an outlier detector that agrees 100% with `track`'s independent rejections, and repairs the values it flags.
+- **Mode segmentation and reconstruction** (`muf/trace.py`) — splits a trace at propagation-mode boundaries and fits a weighted smoothing spline to one mode, turning a sparse scattered point set into a continuous `h(f)`. Revealed that 87% of soundings carry more than one propagation mode.
+- **External references** (`muf/reference/`) — IRI, GIRO and a transparent solar-zenith model, with solar indices fetched and cached from SILSO and NOAA. This is what revealed the out-of-band problem above.
+- **SAO.XML 5.0 export** (`muf export`) — the URSI/INAG interchange format GIRO publishes, so the segmented trace becomes an archivable product rather than a plot overlay. The MUF is emitted as a `<Custom>` characteristic, not URSI `MUF(3000)`, because UAG-23A §1.50 states those are different quantities; the band-limited flag becomes UAG-23A's qualifying letter `D`. `muf plot-sao` reads a record back and draws it — over its own ionogram when the `.lfs` is to hand, and from the XML alone when it is not, which is what distinguishes a published format from a private file with angle brackets. `--iri` adds the reference model's MUF, foF2 and hmF2 as `<Modeled>` characteristics, so the panel shows measured and modelled side by side without ever conflating them.
+- **The low-frequency end** (`muf/lof.py`, `muf lof`) — LOF at the estimator's own trace and at a ladder of detection thresholds, with the threshold carried in every result. Correlates with the cosine of the solar zenith angle at r = +0.86, which is the D-region absorption signature. Found that the transmitter's real band floor is 8.0 MHz against a declared sweep start of 7.5, so 102 of 266 LOF values are upper bounds and earn URSI's `E`.
+- **Several days at once**, written one file per day; `daily`, `track` and `compare` accept multiple tables or a directory of them.
 - `--jobs` parallelism and a gated-array cache.
-- `pyproject.toml` (installable, gives a `muf` command), `requirements.txt`,
-  and `data/`/`*.lfs` added to `.gitignore` — the recordings
-  were untracked but *not* ignored, so a single `git add .` would have committed
-  tens of gigabytes.
+- `pyproject.toml` (installable, gives a `muf` command), `requirements.txt`, and `data/`/`*.lfs` added to `.gitignore` — the recordings were untracked but *not* ignored, so a single `git add .` would have committed tens of gigabytes.
 
 See `BACKLOG.md` for what is deliberately not done: the archive-format analysis,
 the machine-learning options and the literature behind them, and the historical
 database values that need re-deriving.
 
-**Note on `--zero-periods`**
+**Note on** `--zero-periods`
 
 Zero-padding subdivides range bins without resolving anything further: the true
 resolution is set by the bandwidth swept during one window (14.65 km here) and

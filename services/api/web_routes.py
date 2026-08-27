@@ -513,6 +513,10 @@ def archives_page(request: Request):
         # exactly when someone opens it. The list arrives by fetch instead.
         "candidates": archives_mod.candidates_cached(
             conn, request.app.state.archive_root)["items"],
+        # Every (tx, rx) the database holds, not the ones anybody configured.
+        # `unkown -> DOB` is here precisely because nobody configured it.
+        "circuits": db.circuits(conn),
+        "muted": db.muted_circuits(conn),
         "status": archives_mod.status(),
         "formats": loader.FORMATS,
         "methods": archives_mod.method_availability(),

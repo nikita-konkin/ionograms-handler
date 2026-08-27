@@ -263,6 +263,25 @@ def inference_runs(request: Request, state: str | None = None,
     return {"count": len(rows), "runs": rows}
 
 
+@router.get("/models/{model_id}/holdings")
+def model_holdings(model_id: int, request: Request) -> dict:
+    """What deleting this model would take with it, counted first.
+
+    Open, like the other reads, and asked by the console before it puts the
+    question: "delete this model" and "delete this model and the 22,823
+    forecasts its scores were computed from" are different decisions, and the
+    operator should be answering the second one.
+    """
+    from ..prediction import registry
+
+    conn = request.app.state.db
+    row = registry.get(conn, model_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no model {model_id}")
+    return {"id": model_id, "name": row["name"], "active": bool(row["active"]),
+            **registry.forecasts_of(conn, model_id)}
+
+
 @router.get("/models/{model_id}/artifact")
 def model_artifact(model_id: int, request: Request):
     """The artifact itself, so another deployment can pull a model.

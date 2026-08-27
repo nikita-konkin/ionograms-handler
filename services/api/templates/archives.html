@@ -141,6 +141,70 @@
   <div id="say" class="note" style="margin-top:.5rem"></div>
 </div>
 
+{# Circuits, and ruling one out.
+
+   A circuit here is a (tx, rx) the database holds, not one anybody
+   configured -- which is the point. `unkown -> DOB` was configured by nobody:
+   chirp v2 writes `unkown` when it cannot identify the transmitter, so every
+   unidentified emitter arrives under one string and lands as one row here.
+
+   Mute is offered before delete, and delete is refused without it, because
+   deleting alone does not stick: the next scan reads every one of those files
+   straight back in. #}
+<div class="panel">
+  <h2>{{ t('circuits.title') }}</h2>
+  <p class="note">{{ t('circuits.intro') }}</p>
+
+  <table>
+    <thead><tr>
+      <th>{{ t('circuits.col.circuit') }}</th>
+      <th style="text-align:right">{{ t('circuits.col.soundings') }}</th>
+      <th style="text-align:right">{{ t('circuits.col.extractions') }}</th>
+      <th>{{ t('circuits.col.span') }}</th>
+      <th style="text-align:right">{{ t('circuits.col.models') }}</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+    {% for c in circuits %}
+      <tr{% if c.muted %} class="muted"{% endif %}>
+        <td><code>{{ c.tx or '—' }}</code> &rarr; <code>{{ c.rx or '—' }}</code>
+          {%- if c.muted %} <span class="pill unk">{{ t('circuits.muted') }}</span>{% endif %}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums">{{ '{:,}'.format(c.soundings) }}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums">{{ '{:,}'.format(c.extractions) }}</td>
+        <td class="note">{{ c.first_at[:10] }} … {{ c.last_at[:10] }}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums">{{ c.models or '' }}</td>
+        <td style="text-align:right">
+          {%- if c.muted %}
+          {# Single-quoted, like the model buttons: `tojson` does not escape
+             `"`, so a double-quoted handler carrying a station name would be
+             truncated to a syntax error and the button would silently do
+             nothing. `tests/test_web_handlers.py` enforces it. #}
+          <button onclick='dropCircuit(this, {{ c.tx|tojson }}, {{ (c.rx or "*")|tojson }})'>{{
+            t('circuits.delete') }}</button>
+          {%- else %}
+          <button onclick='muteCircuit({{ c.tx|tojson }}, {{ (c.rx or "*")|tojson }})'>{{
+            t('circuits.mute') }}</button>
+          {%- endif %}
+          <div class="note"></div></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="note">{{ t('circuits.none') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if muted %}
+  <p class="note" style="margin-top:.6rem">{{ t('circuits.rules') }}</p>
+  <ul class="note">
+    {% for m in muted %}
+    <li><code>{{ m.tx }}</code> &rarr; <code>{{ m.rx or t('circuits.any_rx') }}</code>
+      &middot; {{ m.muted_at[:16] }}{% if m.muted_by %} &middot; {{ m.muted_by }}{% endif %}
+      <button onclick="unmuteCircuit({{ m.id }})">{{ t('circuits.unmute') }}</button></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
 <div class="panel">
   <h2>{{ t('archives.add') }}</h2>
   <p class="note">{{ t('archives.add_note', root=archive_root) }}</p>
@@ -541,6 +605,57 @@ async function loadCandidates(attempt) {
   if (box.querySelector('table')) return;
   location.reload();
 }
+// --------------------------------------------------------------------------
+// Circuits
+// --------------------------------------------------------------------------
+//
+// Mute is one click; delete is armed then confirmed, the same two-step the
+// orphan drop uses. Deleting a circuit is the larger of the two acts -- it
+// takes the extractions and modelled values with it -- so it gets the step
+// that makes a mis-click impossible rather than merely regrettable.
+
+async function muteCircuit(tx, rx) {
+  const r = await control('/circuits/mute', 'POST', {tx: tx, rx: rx});
+  if (!r.ok) { say(r.detail, true); return; }
+  say(r.body.detail);
+  setTimeout(() => location.reload(), 1200);
+}
+
+async function unmuteCircuit(id) {
+  const r = await control('/circuits/mute/' + id, 'DELETE');
+  if (!r.ok) { say(r.detail, true); return; }
+  say(r.body.detail);
+  setTimeout(() => location.reload(), 1200);
+}
+
+let armedCircuit = null;
+async function dropCircuit(button, tx, rx) {
+  const key = tx + '\u0000' + rx;
+  const note = button.parentElement.querySelector('.note');
+  if (armedCircuit !== key) {
+    armedCircuit = key;
+    const h = await fetch('/circuits/' + encodeURIComponent(tx) + '/'
+                          + encodeURIComponent(rx))
+                    .then(x => x.json()).catch(() => null);
+    note.textContent = h
+      ? T('circuits.js.confirm', {soundings: h.soundings,
+                                  extractions: h.extractions})
+      : T('circuits.js.confirm_unknown');
+    // Disarms itself, so a page left open does not keep a loaded button.
+    clearTimeout(armedTimer);
+    armedTimer = setTimeout(() => { armedCircuit = null; note.textContent = ''; },
+                            30000);
+    return;
+  }
+  armedCircuit = null;
+  note.textContent = '';
+  const r = await control('/circuits/' + encodeURIComponent(tx) + '/'
+                          + encodeURIComponent(rx), 'DELETE');
+  if (!r.ok) { say(r.detail, true); return; }
+  say(r.body.note);
+  setTimeout(() => location.reload(), 1500);
+}
+
 {% for a in archives %}{% if a.format %}refreshOrphans({{ a.id }});{% endif %}{% endfor %}
 if (!document.querySelector('#cands table')) loadCandidates();
 </script>

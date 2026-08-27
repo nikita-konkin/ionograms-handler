@@ -164,6 +164,12 @@
         <button onclick='activate({{ m.id }}, {{ m.name|tojson }},
           {{ (m.tx ~ " -> " ~ m.rx)|tojson }}, {{ m.param|tojson }})'>{{ t('forecast.activate') }}</button>
         {% endif %}
+        {# Deleting is the operator's call, so it is offered on every row --
+           including the active one, where the api refuses it and says to
+           retire first. A button that is simply absent teaches nothing; one
+           that explains the order of operations does. #}
+        <button onclick='removeModel({{ m.id }}, {{ m.name|tojson }})'
+          title="{{ t('forecast.delete_title') }}">{{ t('forecast.delete') }}</button>
       </td>
     </tr>
     {% endfor %}
@@ -516,6 +522,22 @@ async function retire(id, name) {
   const r = await control('/models/' + id + '/retire', 'POST');
   say(r.ok ? r.body.detail : r.detail, !r.ok);
   if (r.ok) setTimeout(() => location.reload(), 700);
+}
+
+// Asks with the counts in the question. "Delete #6" and "delete #6 and the
+// 22,823 forecasts its scores were computed from" are different decisions,
+// and only the second one is what actually happens.
+async function removeModel(id, name) {
+  const h = await fetch('/models/' + id + '/holdings')
+                  .then(x => x.json()).catch(() => null);
+  const question = h
+    ? T('forecast.js.delete_confirm',
+        {name: name, forecasts: h.forecasts, scores: h.scores})
+    : T('forecast.js.delete_confirm_unknown', {name: name});
+  if (!confirm(question)) return;
+  const r = await control('/models/' + id, 'DELETE');
+  say(r.ok ? r.body.detail : r.detail, !r.ok);
+  if (r.ok) setTimeout(() => location.reload(), 1200);
 }
 
 // --------------------------------------------------------------------------

@@ -76,8 +76,15 @@ def _clean(value):
 
 
 def ingest_row(conn: sqlite3.Connection, row: dict, path: Path,
-               archive_root: Path, methods) -> int | None:
-    """One pipeline row into ``sounding`` + ``extraction``. Returns the id."""
+               archive_root: Path, methods, muted=None) -> int | None:
+    """One pipeline row into ``sounding`` + ``extraction``. Returns the id.
+
+    ``muted`` is `db.muted_matcher`'s callable, or None to look the rules up
+    here. Refusing at the write is the only place that makes a circuit
+    deletion stick: `find_new` treats a file with no row as new forever, so a
+    circuit removed from the database is back on the very next scan unless
+    something declines to write it again.
+    """
     # `_clean`, not a bare truth test: pandas fills the absent `error` cell of
     # a *successful* row with NaN, and `bool(nan)` is True. Testing it directly
     # marks every good sounding as failed and ingests nothing.
@@ -86,6 +93,10 @@ def ingest_row(conn: sqlite3.Connection, row: dict, path: Path,
     when = _clean(row.get("datetime"))
     if when is None or (hasattr(when, "__class__")
                         and when.__class__.__name__ == "NaTType"):
+        return None
+
+    tx, rx = _clean(row.get("tx")), _clean(row.get("rx"))
+    if muted(tx, rx) if muted is not None else db.is_muted(conn, tx, rx):
         return None
 
     try:
@@ -142,18 +153,29 @@ def ingest(targets, conn: sqlite3.Connection, options=None,
         for path in pipeline.find_soundings([target], format=options.format):
             by_name[path.name] = path
 
-    loaded = skipped = 0
+    # Read once for the whole pass rather than per row: see `muted_matcher`.
+    muted = db.muted_matcher(conn)
+
+    loaded = skipped = declined = 0
     for record in frame.to_dict("records"):
         path = by_name.get(record.get("file"))
         if path is None:
             skipped += 1
             continue
-        if ingest_row(conn, record, path, archive_root, options.methods) is None:
+        # Counted apart from `skipped`, because "the operator ruled this
+        # circuit out" and "the pipeline could not read it" are different
+        # answers and only one of them wants investigating.
+        if muted(_clean(record.get("tx")), _clean(record.get("rx"))):
+            declined += 1
+            continue
+        if ingest_row(conn, record, path, archive_root, options.methods,
+                      muted=muted) is None:
             skipped += 1
         else:
             loaded += 1
     conn.commit()
-    return {"loaded": loaded, "skipped": skipped, "total": len(frame)}
+    return {"loaded": loaded, "skipped": skipped, "muted": declined,
+            "total": len(frame)}
 
 
 def main(argv: list[str] | None = None) -> int:

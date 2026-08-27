@@ -497,6 +497,42 @@ def retire_model(model_id: int, request: Request,
                       f"rows and its forecasts are kept."}
 
 
+@router.delete("/models/{model_id}")
+def delete_model(model_id: int, request: Request,
+                 who: str = Depends(require_control)) -> dict:
+    """Remove a model, its forecasts and its scores.
+
+    The counterpart to retirement, not a louder version of it. A training
+    session leaves a dozen rows that were never meant to outlive the
+    afternoon; without this the registry only grows, and a leaderboard nobody
+    can prune is a leaderboard nobody reads.
+
+    The one refusal is an active model, and `registry.delete` explains why in
+    the sentence it raises with. Everything else goes on the operator's say-so
+    -- the console asks first and names the count it is about to destroy.
+    """
+    from ..prediction import registry
+
+    try:
+        gone = registry.delete(request.app.state.db, model_id)
+    except registry.RegistryError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    if gone is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no model {model_id}")
+
+    kept = ("" if gone["reaped"] else
+            f" Its artifact stays: {gone['still_referenced']} other "
+            f"registry row(s) share the same file.")
+    return {"ok": True,
+            "deleted": {"id": gone["id"], "name": gone["name"],
+                        "forecasts": gone["forecasts"],
+                        "scores": gone["scores"]},
+            "reaped": gone["reaped"],
+            "detail": f"{gone['name']} is gone, with {gone['forecasts']} "
+                      f"forecast(s) and {gone['scores']} score row(s)."
+                      + kept}
+
+
 # --------------------------------------------------------------------------
 # Adding a model from the console
 # --------------------------------------------------------------------------

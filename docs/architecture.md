@@ -700,6 +700,70 @@ convention.
 `reference`, not `extraction` — it is a secant-law inference resting on a
 300 km `hmF2` fallback, not a measurement.
 
+### 5.2.1 Pruning: what may be removed, and what makes it stick **[built 2026-08-28]**
+
+Two things accumulate that nothing was able to remove: registry rows from
+training sessions, and circuits nobody configured.
+
+**Models.** `retire` was the only verb, and deliberately so -- the forecasts a
+model issued are what its scores were computed from, and re-activating it is
+how a promotion is rolled back. But an afternoon of experiments leaves a dozen
+rows that were never meant to outlive it (17 on the rig by 2026-08-28, 12 of
+them from one day), and a registry nobody can prune is a registry nobody
+reads. `DELETE /models/{id}` removes the row, its forecasts and its scores.
+
+`score` keys on a `subject` *string* (`model:15`), not a foreign key, so it
+cannot cascade off `model_registry` and is deleted explicitly. Leaving those
+rows behind would put a leaderboard entry in the database whose model cannot
+be looked up.
+
+One refusal: the **active** model. Not because it is unrecoverable -- nothing
+here is -- but because "the live forecast" is a role held by exactly one row
+per circuit, and dropping it silently would leave the circuit with no forecast
+at all. Retire first, and the decision has been made deliberately.
+
+The artifact is reaped only when no other row shares its `sha256`: one `.sav`
+serving two circuits is two rows, and deleting one must not pull the file out
+from under the other.
+
+**Circuits, and why deleting is not enough.** A circuit in this database is a
+`(tx, rx)` that was *ingested*, not one that was configured. `unkown -> DOB`
+held 981 soundings and 2,943 extractions on the rig, and `unkown` is chirp v2's
+marker for a transmitter it could not identify (`muf/stations.py:UNIDENTIFIED`,
+upstream's spelling). So it is not one circuit at all -- it is every
+unidentified emitter in the archive sharing one string, on a range axis with no
+absolute zero (§3.4).
+
+The trap is that deleting the rows does nothing lasting. `find_new` treats a
+file with no row as **new forever**, so the next scan reads all 981 back in.
+That is the same trap `DELETE /archives/{id}/orphans` refuses to walk into --
+it will not run on an archive that admits every format, because the format is
+what keeps the orphans gone.
+
+`muted_circuit` is the equivalent rule for a circuit. `ingest` declines to
+write a muted `(tx, rx)`, so the deletion stays done, and
+`DELETE /circuits/{tx}/{rx}` **refuses unless the circuit is muted first**.
+Unmuting and re-scanning is the undo, and it works because nothing here touches
+a file: the mount is read-only.
+
+Two details that are easy to get wrong, and were:
+
+* **Case is folded on both sides.** v2 writes `DOB`, `.lfs` writes
+  `yoshkar-ola`, and a rule that missed `Unkown` because the file said `unkown`
+  would be a rule that silently does nothing -- the worst behaviour available
+  to a filter.
+* **`rx = NULL` means *every* receiver, not "rx IS NULL".** The first
+  implementation stored the wildcard as NULL in the rule and then matched it
+  with `lower(rx) IS NULL` in the delete, so a mute that read as applied
+  deleted nothing at all. One spelling, one meaning, in both places --
+  `db._circuit_where` is the single point that guarantees it.
+
+The rules are read **once per scan** (`db.muted_matcher`), not per sounding:
+per-row it would be tens of thousands of queries for an answer that did not
+change during the pass. Read-once also means a rule added mid-scan takes effect
+on the next one, which is the behaviour worth having -- a filter that changes
+under a running pass ingests half an archive under each ruleset.
+
 ### 5.3 Server-internal: REST **[settled]**
 
 `api` ↔ web client. Services do not push payloads to one another; `renderer`

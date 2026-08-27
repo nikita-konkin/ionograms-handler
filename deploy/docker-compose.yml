@@ -13,6 +13,13 @@ name: ionograms
 
 services:
   api:
+    # PID 1 in this container is uvicorn, which does not reap. A worker that
+    # exits while the api is being recreated becomes a zombie, and Docker then
+    # cannot stop the container at all -- the recreate half-completes, leaving
+    # an orphan holding the container name and the next `up` failing on a name
+    # conflict. Seen three times on 2026-08-28. `init: true` runs tini as PID 1
+    # to reap them, which is precisely what the daemon's own error suggests.
+    init: true
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api

@@ -691,6 +691,193 @@ def delete_archive_orphans(conn: sqlite3.Connection, archive_id: int) -> int:
     return cur.rowcount
 
 
+# --------------------------------------------------------------------------
+# Circuits the operator has ruled out
+# --------------------------------------------------------------------------
+
+def _fold(value: str | None) -> str | None:
+    """The form a circuit name is stored and matched in.
+
+    The two formats disagree about case -- v2 writes ``DOB``, ``.lfs`` writes
+    ``yoshkar-ola`` -- and `muf.stations.Registry` already folds case for
+    exactly that reason. A mute rule that missed ``Unkown`` because the file
+    said ``unkown`` would be a rule that silently does nothing, which is the
+    worst behaviour available to a filter.
+    """
+    if value is None:
+        return None
+    folded = value.strip().lower()
+    return folded or None
+
+
+def muted_circuits(conn: sqlite3.Connection) -> list[dict]:
+    """Every mute rule, newest first."""
+    return rows(conn, "SELECT * FROM muted_circuit ORDER BY muted_at DESC, id DESC")
+
+
+def is_muted(conn: sqlite3.Connection, tx: str | None, rx: str | None) -> bool:
+    """Does any rule cover this circuit?
+
+    A rule with ``rx IS NULL`` covers the transmitter against every receiver,
+    which is the shape wanted for a marker like ``unkown`` -- it is not one
+    emitter, so pinning it to one receiver would leave the others arriving.
+    """
+    tx, rx = _fold(tx), _fold(rx)
+    if tx is None:
+        return False
+    row = one(conn,
+              "SELECT 1 AS hit FROM muted_circuit"
+              " WHERE tx = ? AND (rx IS NULL OR rx = ?) LIMIT 1",
+              (tx, rx))
+    return row is not None
+
+
+def muted_matcher(conn: sqlite3.Connection):
+    """The mute rules as one callable, read once.
+
+    `is_muted` is a query, and a scan calls it per sounding -- tens of
+    thousands of round trips to answer a question whose answer is a handful of
+    rows that did not change during the pass. This reads them once and hands
+    back `matcher(tx, rx) -> bool`.
+
+    Read once also means a rule added mid-scan does not take effect until the
+    next one, which is the behaviour worth having: a filter that changes under
+    a running pass ingests half an archive under each ruleset.
+    """
+    exact: set[tuple[str, str | None]] = set()
+    wild: set[str] = set()
+    for rule in rows(conn, "SELECT tx, rx FROM muted_circuit"):
+        if rule["rx"] is None:
+            wild.add(rule["tx"])
+        else:
+            exact.add((rule["tx"], rule["rx"]))
+
+    def matcher(tx: str | None, rx: str | None) -> bool:
+        folded = _fold(tx)
+        if folded is None:
+            return False
+        return folded in wild or (folded, _fold(rx)) in exact
+
+    return matcher
+
+
+def mute_circuit(conn: sqlite3.Connection, tx: str, rx: str | None = None, *,
+                 note: str | None = None, by: str | None = None) -> dict:
+    """Add a rule, or return the one already there.
+
+    Idempotent on purpose: muting a circuit twice is what happens when two
+    operators look at the same bad data, and it should not be an error.
+    """
+    folded_tx, folded_rx = _fold(tx), _fold(rx)
+    if not folded_tx:
+        raise ValueError("a mute rule needs a transmitter")
+    conn.execute(
+        "INSERT OR IGNORE INTO muted_circuit (tx, rx, note, muted_at, muted_by)"
+        " VALUES (?,?,?,?,?)",
+        (folded_tx, folded_rx, note, utcnow(), by))
+    conn.commit()
+    return one(conn, "SELECT * FROM muted_circuit WHERE tx = ?"
+                     " AND COALESCE(rx, '') = COALESCE(?, '')",
+               (folded_tx, folded_rx))
+
+
+def unmute_circuit(conn: sqlite3.Connection, rule_id: int) -> dict | None:
+    """Drop a rule. The soundings it kept out are read again on the next scan.
+
+    That re-ingest is the honest undo, and the reason this is a rule table
+    rather than a one-way delete: nothing about muting destroys a file.
+    """
+    row = one(conn, "SELECT * FROM muted_circuit WHERE id = ?", (rule_id,))
+    if row is None:
+        return None
+    conn.execute("DELETE FROM muted_circuit WHERE id = ?", (rule_id,))
+    conn.commit()
+    return row
+
+
+def circuits(conn: sqlite3.Connection) -> list[dict]:
+    """Every (tx, rx) in the database, with what hangs off it.
+
+    What the console lists to decide from. `muted` is folded in here rather
+    than joined in SQL because the rule's `rx IS NULL` wildcard is not an
+    equality and expressing it as one is how a wildcard quietly stops matching.
+    """
+    found = rows(
+        conn,
+        "SELECT s.tx AS tx, s.rx AS rx, COUNT(*) AS soundings,"
+        "       MIN(s.datetime) AS first_at, MAX(s.datetime) AS last_at,"
+        "       COUNT(DISTINCT s.format) AS formats,"
+        "       (SELECT COUNT(*) FROM extraction e"
+        "         WHERE e.sounding_id IN"
+        "               (SELECT id FROM sounding t"
+        "                 WHERE t.tx IS s.tx AND t.rx IS s.rx)) AS extractions"
+        "  FROM sounding s GROUP BY s.tx, s.rx ORDER BY soundings DESC")
+    for row in found:
+        row["muted"] = is_muted(conn, row["tx"], row["rx"])
+        where, args = _circuit_where(row["tx"], row["rx"])
+        row["models"] = one(
+            conn, f"SELECT COUNT(*) AS n FROM model_registry WHERE {where}",
+            args)["n"]
+    return found
+
+
+def _circuit_where(tx: str | None, rx: str | None) -> tuple[str, tuple]:
+    """The predicate a circuit is selected by, and its arguments.
+
+    Two rules, and the second one is the reason this is a function rather than
+    an f-string at each call site:
+
+    * **Case is folded.** v2 writes `DOB`, `.lfs` writes `yoshkar-ola`, and
+      `cyprus1 -> yoshkar-ola` and `cyprus1 -> Yoshkar-Ola` are the same path
+      -- only the two formats disagree about how to spell it.
+    * **`rx is None` means every receiver**, not `rx IS NULL`. It is the same
+      wildcard a mute rule stores as a NULL `rx`, and having the two disagree
+      is exactly the bug this replaced: the rule muted `unkown` against every
+      receiver while the delete matched only rows whose `rx` was itself NULL,
+      so a mute that read as applied deleted nothing. One spelling, one
+      meaning, in both places.
+    """
+    if rx is None:
+        return "lower(tx) IS ?", (_fold(tx),)
+    return "lower(tx) IS ? AND lower(rx) IS ?", (_fold(tx), _fold(rx))
+
+
+def circuit_holdings(conn: sqlite3.Connection, tx: str | None,
+                     rx: str | None) -> dict:
+    """What deleting one circuit would take with it, counted first."""
+    where, args = _circuit_where(tx, rx)
+    ids = f"SELECT id FROM sounding WHERE {where}"
+    return {
+        "tx": tx, "rx": rx,
+        "soundings": one(conn, f"SELECT COUNT(*) AS n FROM sounding"
+                               f" WHERE {where}", args)["n"],
+        "extractions": one(conn, f"SELECT COUNT(*) AS n FROM extraction"
+                                 f" WHERE sounding_id IN ({ids})", args)["n"],
+        "references": one(conn, f"SELECT COUNT(*) AS n FROM reference"
+                                f" WHERE sounding_id IN ({ids})", args)["n"],
+        "models": one(conn, f"SELECT COUNT(*) AS n FROM model_registry"
+                            f" WHERE {where}", args)["n"],
+    }
+
+
+def delete_circuit(conn: sqlite3.Connection, tx: str | None,
+                   rx: str | None) -> int:
+    """Delete exactly what `circuit_holdings` counted. Returns the row count.
+
+    `extraction` and `reference` cascade off `sounding`, but only when foreign
+    keys are enforced on this connection -- hence the PRAGMA rather than
+    trusting the caller's, the same care `delete_archive_orphans` takes.
+
+    **The files are not touched.** The mount is read-only and this is a
+    database operation; unmuting and re-scanning reads them again.
+    """
+    where, args = _circuit_where(tx, rx)
+    conn.execute("PRAGMA foreign_keys = ON")
+    cur = conn.execute(f"DELETE FROM sounding WHERE {where}", args)
+    conn.commit()
+    return cur.rowcount
+
+
 def record_scan(conn: sqlite3.Connection, archive_id: int, *,
                 result: str, ok: bool) -> None:
     conn.execute(

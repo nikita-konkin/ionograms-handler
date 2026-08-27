@@ -528,3 +528,43 @@ CREATE TABLE IF NOT EXISTS infer_job (
 );
 
 CREATE INDEX IF NOT EXISTS infer_job_state ON infer_job(state, requested_at);
+
+
+-- --------------------------------------------------------------------------
+-- Circuits the operator has ruled out
+-- --------------------------------------------------------------------------
+
+-- A (tx, rx) pair that must not be ingested, and the reason it was ruled out.
+--
+-- **Deleting soundings without this does not stick.** `find_new` treats a file
+-- with no row as new forever, so a circuit removed from the database is back
+-- on the next scan -- the same trap `archive.format` guards the orphan
+-- deletion against, and the reason that endpoint refuses to run on an archive
+-- that admits every format. This is the equivalent rule for a circuit.
+--
+-- The case that motivated it: chirp v2 writes `unkown` when it cannot identify
+-- the transmitter (`muf/stations.py:UNIDENTIFIED`, upstream's spelling), so
+-- every unidentified emitter in an archive collapses into one bucket sharing
+-- one string. `unkown -> DOB` is not a circuit; it is a pile of different
+-- paths wearing one name, on a range axis with no absolute zero. Nothing
+-- downstream can use it and everything downstream has to skip it by hand.
+--
+-- Stored folded to lower case and matched that way. The two formats disagree
+-- about case -- v2 writes `DOB`, `.lfs` writes `yoshkar-ola` -- and a rule
+-- that missed `Unkown` because it was written `unkown` would be a rule that
+-- silently does nothing. `rx` may be NULL, meaning "this transmitter against
+-- any receiver", which is what you want for a marker like `unkown`.
+CREATE TABLE IF NOT EXISTS muted_circuit (
+    id        INTEGER PRIMARY KEY,
+    tx        TEXT NOT NULL,           -- folded to lower case on write
+    rx        TEXT,                    -- NULL = any receiver
+    note      TEXT,
+    muted_at  TEXT NOT NULL,
+    muted_by  TEXT
+);
+
+-- Identity, with the same COALESCE trick `model_registry_identity` uses and
+-- for the same reason: NULL is not equal to NULL in a unique constraint, so
+-- two identical "any receiver" rules would both be accepted otherwise.
+CREATE UNIQUE INDEX IF NOT EXISTS muted_circuit_identity
+    ON muted_circuit(tx, COALESCE(rx, ''));

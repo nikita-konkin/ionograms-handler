@@ -26,6 +26,18 @@ from .auth import require_control
 router = APIRouter(tags=["archives"])
 
 
+def _any(value: str | None) -> str | None:
+    """``*`` and the empty string both mean "every receiver".
+
+    A path segment cannot be empty, so the wildcard needs a spelling that
+    survives a URL. `*` is the one every operator already reaches for.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    return None if value in ("", "*") else value
+
+
 def _clean_methods(value) -> str:
     """Comma-separated method names, defaulted and checked against what exists.
 
@@ -353,3 +365,113 @@ def delete_archive(archive_id: int, request: Request,
             "note": f"unregistered. {kept} sounding(s) and their extractions "
                     f"stay in the database -- this stops the indexing, it "
                     f"does not discard what was measured."}
+
+
+# --------------------------------------------------------------------------
+# Circuits, and ruling one out
+# --------------------------------------------------------------------------
+#
+# A circuit here is a (tx, rx) pair the database actually holds, not one
+# anybody configured. That is the point: `unkown -> DOB` was never configured
+# by anyone -- chirp v2 writes `unkown` when it cannot identify the
+# transmitter (`muf/stations.py:UNIDENTIFIED`, upstream's spelling), so every
+# unidentified emitter in an archive arrives under one string. The result is
+# not a circuit; it is a pile of different paths wearing one name, on a range
+# axis with no absolute zero.
+#
+# **Deleting the rows is not enough on its own.** `find_new` treats a file
+# with no row as new forever, so the next scan reads them straight back in.
+# That is the same trap `delete_orphans` refuses to walk into, and a mute rule
+# is the equivalent guard for a circuit: `ingest` declines to write a muted
+# one, so the deletion stays done. Unmuting and re-scanning is the undo, and
+# it works because nothing here touches a file -- the mount is read-only.
+
+@router.get("/circuits")
+def list_circuits(request: Request) -> dict:
+    """Every circuit in the database, with what hangs off it.
+
+    Open, like the other reads. It counts; it does not remove.
+    """
+    conn = request.app.state.db
+    return {"circuits": db.circuits(conn), "muted": db.muted_circuits(conn)}
+
+
+@router.get("/circuits/{tx}/{rx}")
+def circuit_holdings(tx: str, rx: str, request: Request) -> dict:
+    """What deleting this circuit would take with it, counted before anything.
+
+    The same query the delete uses, so what was shown is what goes.
+    """
+    return db.circuit_holdings(request.app.state.db, tx, _any(rx))
+
+
+@router.post("/circuits/mute")
+def mute_circuit(request: Request, spec: dict = Body(...),
+                 who: str = Depends(require_control)) -> dict:
+    """Refuse this circuit at ingest from here on.
+
+    `rx` omitted or `*` means every receiver, which is what a marker like
+    `unkown` wants: it is not one emitter, so pinning the rule to one receiver
+    would leave the same bad string arriving on the others.
+
+    Muting alone removes nothing. It stops the bleeding; `DELETE
+    /circuits/{tx}/{rx}` is what clears what is already there.
+    """
+    conn = request.app.state.db
+    tx = (spec.get("tx") or "").strip()
+    if not tx:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "a mute rule needs a transmitter")
+    rx = _any(spec.get("rx"))
+    rule = db.mute_circuit(conn, tx, rx, note=spec.get("note"), by=who)
+    holds = db.circuit_holdings(conn, tx, rx)
+    scope = f"{tx} -> {rx}" if rx else f"{tx} -> any receiver"
+    return {"ok": True, "muted": rule, "holds": holds,
+            "detail": f"{scope} will not be ingested again. "
+                      + (f"{holds['soundings']} sounding(s) are already in the "
+                         f"database -- muting does not remove them."
+                         if holds["soundings"] else
+                         "Nothing of it is in the database.")}
+
+
+@router.delete("/circuits/mute/{rule_id}")
+def unmute_circuit(rule_id: int, request: Request,
+                   _: str = Depends(require_control)) -> dict:
+    """Drop a mute rule. The next scan reads those files again."""
+    row = db.unmute_circuit(request.app.state.db, rule_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no mute rule {rule_id}")
+    scope = f"{row['tx']} -> {row['rx'] or 'any receiver'}"
+    return {"ok": True, "unmuted": row,
+            "detail": f"{scope} is no longer refused. The files were never "
+                      f"touched, so the next scan reads them again."}
+
+
+@router.delete("/circuits/{tx}/{rx}")
+def delete_circuit(tx: str, rx: str, request: Request,
+                   _: str = Depends(require_control)) -> dict:
+    """Remove a circuit's soundings, with their extractions and references.
+
+    **Refused unless the circuit is muted first**, for the reason
+    `delete_orphans` refuses on an archive that admits every format: without a
+    rule keeping them out, the next scan ingests every one of these files
+    again and the delete was theatre. Mute, then delete, and it stays done.
+    """
+    conn = request.app.state.db
+    rx = _any(rx)
+    if not db.is_muted(conn, tx, rx):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{tx} -> {rx or 'any receiver'} is not muted. Mute it first -- "
+            f"otherwise the next scan ingests every one of these files again "
+            f"and nothing has been achieved.")
+    before = db.circuit_holdings(conn, tx, rx)
+    if not before["soundings"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no soundings for {tx} -> {rx or 'any receiver'}")
+    removed = db.delete_circuit(conn, tx, rx)
+    return {"ok": True, "removed": removed, "was": before,
+            "note": f"{removed} sounding(s) removed, with "
+                    f"{before['extractions']} extraction(s) and "
+                    f"{before['references']} modelled value(s). The files are "
+                    f"untouched -- unmute and the next scan reads them again."}

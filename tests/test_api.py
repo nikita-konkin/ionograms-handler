@@ -3651,3 +3651,157 @@ def test_the_leaderboard_is_drawn_for_the_circuit_that_was_asked_for(client,
 
     assert "1.11" in muf and "9.99" not in muf
     assert "9.99" in lof and "1.11" not in lof
+
+
+# --------------------------------------------------------------------------
+# Pruning: models, and circuits nobody configured
+#
+# 2026-08-28: a training session leaves a dozen registry rows that were never
+# meant to outlive the afternoon, and `unkown -> DOB` had 981 soundings behind
+# it. `unkown` is chirp v2's marker for a transmitter it could not identify
+# (`muf/stations.py:UNIDENTIFIED`), so that is not one circuit -- it is every
+# unidentified emitter in the archive sharing one string, on a range axis with
+# no absolute zero.
+#
+# The hard part is not the DELETE. It is that `find_new` treats a file with no
+# row as new forever, so deleting the soundings alone means the next scan
+# reads every one of them straight back in. `delete_orphans` refuses to walk
+# into that trap and this must refuse too.
+# --------------------------------------------------------------------------
+
+def test_a_model_can_be_deleted_with_its_forecasts(client, api_db):
+    conn = api_db
+    model = _register(conn, "throwaway", active=0)
+    _forecast(conn, model, stamps=["2026-02-05T06:00:00Z", "2026-02-05T07:00:00Z"])
+    conn.commit()
+
+    holds = client.get(f"/models/{model}/holdings").json()
+    assert holds["forecasts"] == 2
+
+    r = client.delete(f"/models/{model}", headers=CTL)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"]["forecasts"] == 2
+    assert client.get(f"/models/{model}/holdings").status_code == 404
+    assert db.one(conn, "SELECT COUNT(*) AS n FROM forecast WHERE model_id = ?",
+                  (model,))["n"] == 0
+
+
+def test_the_active_model_is_refused_and_told_to_retire_first(client, api_db):
+    """Dropping the live forecast should be a decision, not a side effect."""
+    conn = api_db
+    model = _register(conn, "live", active=1)
+    conn.commit()
+
+    r = client.delete(f"/models/{model}", headers=CTL)
+    assert r.status_code == 409
+    assert "retire it first" in r.json()["detail"].lower()
+    assert db.one(conn, "SELECT COUNT(*) AS n FROM model_registry WHERE id = ?",
+                  (model,))["n"] == 1
+
+
+def test_deleting_a_model_leaves_an_artifact_another_row_still_uses(client,
+                                                                   api_db):
+    """One `.sav` serving two circuits is two rows sharing a sha256."""
+    conn = api_db
+    first = _register(conn, "shared", tx="NIC3", rx="Yoshkar-Ola")
+    second = _register(conn, "shared", tx="NIC1", rx="Yoshkar-Ola")
+    conn.execute("UPDATE model_registry SET sha256 = 'samedigest' WHERE id IN (?,?)",
+                 (first, second))
+    conn.commit()
+
+    body = client.delete(f"/models/{first}", headers=CTL).json()
+    assert body["reaped"] is False
+    assert "share the same file" in body["detail"]
+
+
+def test_a_circuit_cannot_be_deleted_until_it_is_muted(client, api_db, tmp_path):
+    """Otherwise the next scan ingests every one of them again."""
+    conn = api_db
+    _mk(conn, tmp_path, "u1.h5", "2026-08-09 00:00:00", tx="unkown", fmt="chirp2")
+    conn.commit()
+
+    r = client.delete("/circuits/unkown/*", headers=CTL)
+    assert r.status_code == 409
+    assert "mute it first" in r.json()["detail"].lower()
+    assert db.one(conn, "SELECT COUNT(*) AS n FROM sounding")["n"] == 1
+
+
+def test_muting_then_deleting_clears_the_circuit(client, api_db, tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "u1.h5", "2026-08-09 00:00:00", tx="unkown", fmt="chirp2")
+    _mk(conn, tmp_path, "u2.h5", "2026-08-09 01:00:00", tx="unkown", fmt="chirp2")
+    _mk(conn, tmp_path, "k.h5", "2026-08-09 02:00:00", tx="NIC3", fmt="chirp2")
+    conn.commit()
+
+    assert client.post("/circuits/mute", json={"tx": "unkown"},
+                       headers=CTL).status_code == 200
+    body = client.delete("/circuits/unkown/*", headers=CTL).json()
+    assert body["removed"] == 2
+    # The circuit nobody muted is untouched.
+    assert db.one(conn, "SELECT COUNT(*) AS n FROM sounding")["n"] == 1
+
+
+def test_a_mute_rule_matches_whatever_case_the_format_wrote(client, api_db,
+                                                            tmp_path):
+    """v2 writes `DOB`, `.lfs` writes `yoshkar-ola`; a rule must not care.
+
+    A filter that silently stops matching is the worst behaviour available to
+    a filter, so this is pinned rather than left to the reader.
+    """
+    conn = api_db
+    _mk(conn, tmp_path, "a.h5", "2026-08-09 00:00:00", tx="Unkown", fmt="chirp2")
+    conn.commit()
+
+    client.post("/circuits/mute", json={"tx": "UNKOWN"},
+                headers=CTL)
+    assert db.is_muted(conn, "unkown", "DOB") is True
+    assert client.delete("/circuits/Unkown/*", headers=CTL).json()["removed"] == 1
+
+
+def test_a_muted_circuit_is_declined_at_ingest(api_db, tmp_path):
+    """The rule has to bite at the write, or the delete does not stick."""
+    from services.api import ingest
+
+    conn = api_db
+    db.mute_circuit(conn, "unkown")
+    muted = db.muted_matcher(conn)
+
+    row = {"file": "x.h5", "datetime": "2026-08-09T00:00:00",
+           "tx": "unkown", "rx": "DOB", "format": "chirp2"}
+    assert ingest.ingest_row(conn, row, tmp_path / "x.h5", tmp_path,
+                             ("contour",), muted=muted) is None
+    assert db.one(conn, "SELECT COUNT(*) AS n FROM sounding")["n"] == 0
+
+    # Un-muted, the identical row lands.
+    rule = db.muted_circuits(conn)[0]
+    db.unmute_circuit(conn, rule["id"])
+    assert ingest.ingest_row(conn, row, tmp_path / "x.h5", tmp_path,
+                             ("contour",), muted=db.muted_matcher(conn))
+
+
+def test_a_rule_with_a_receiver_leaves_the_other_receivers_alone(api_db):
+    conn = api_db
+    db.mute_circuit(conn, "NIC3", "DOB")
+    assert db.is_muted(conn, "NIC3", "DOB") is True
+    assert db.is_muted(conn, "NIC3", "Yoshkar-Ola") is False
+
+
+def test_muting_twice_is_not_an_error(client, api_db):
+    """Two operators looking at the same bad data is the normal case."""
+    assert client.post("/circuits/mute", json={"tx": "unkown"},
+                       headers=CTL).status_code == 200
+    assert client.post("/circuits/mute", json={"tx": "unkown"},
+                       headers=CTL).status_code == 200
+    assert len(db.muted_circuits(api_db)) == 1
+
+
+def test_the_circuit_list_counts_what_hangs_off_each_one(client, api_db,
+                                                         tmp_path):
+    conn = api_db
+    _mk(conn, tmp_path, "a.h5", "2026-08-09 00:00:00", tx="unkown", fmt="chirp2")
+    _mk(conn, tmp_path, "b.h5", "2026-08-09 01:00:00", tx="NIC3", fmt="chirp2")
+    conn.commit()
+
+    found = {(c["tx"], c["rx"]): c for c in client.get("/circuits").json()["circuits"]}
+    assert found[("unkown", "rx")]["soundings"] == 1
+    assert found[("unkown", "rx")]["muted"] is False
