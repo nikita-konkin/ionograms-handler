@@ -970,3 +970,44 @@ def test_a_permutation_that_raises_costs_a_metric_and_not_the_run():
 
     assert result["basis"] == "unavailable"
     assert "no predict" in result["why"]
+
+
+def test_a_spec_the_worker_cannot_re_vet_names_the_build_disagreement(conn,
+                                                                      monkeypatch):
+    """The failure that sent an operator looking for a features bug.
+
+    `control_routes.queue_training` vets before it inserts, so a queued row was
+    accepted by some api. A worker refusing the same spec is not an invalid
+    request -- it is two builds disagreeing, and the message has to say so or
+    the next person reads "unknown time: [...]" as their own mistake.
+    """
+    from services.prediction import trainer
+
+    seed(conn, days=8)
+    queues.add_job(conn, param="muf", tx=TX, rx=RX, method="contour",
+                   spec={"estimator": "huber", "lag": 288,
+                         "time": ["from_a_newer_api"]})
+    job = queues.claim_job(conn)
+
+    settled = trainer.settle(conn, job)
+
+    assert settled["state"] == queues.FAILED
+    assert "from_a_newer_api" in settled["detail"], "the refusal itself is kept"
+    assert "accepted when it was queued" in settled["detail"]
+    assert "pull and recreate" in settled["detail"]
+
+
+def test_a_fit_that_fails_on_its_own_terms_does_not_blame_the_build(conn):
+    """The other half of the split. Not enough archive is a data limit, and
+    telling an operator to redeploy over it would waste their afternoon."""
+    from services.prediction import trainer
+
+    seed(conn, days=8)
+    queues.add_job(conn, param="muf", tx=TX, rx=RX, method="contour",
+                   spec={"estimator": "huber", "lag": 288, "holdout_days": 7})
+    job = queues.claim_job(conn)
+
+    settled = trainer.settle(conn, job)
+
+    assert settled["state"] == queues.FAILED
+    assert "pull and recreate" not in settled["detail"]

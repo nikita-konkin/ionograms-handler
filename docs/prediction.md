@@ -659,6 +659,18 @@ takes a series and nothing else, so the circuit's control point has to reach it
 through the recipe and be stored in the artifact contract, or `infer` cannot
 rebuild the column.
 
+**A refusal that is really a stale worker says so.** `queue_training` vets
+before it inserts, so a row in `train_job` was accepted by *some* api. If the
+worker's own `vet` then refuses the same spec, the request was never the
+problem — the two builds disagree, and `trainer.settle` separates that failure
+from a genuine one and names the build that refused it. `api` and `watch` are
+watchtower-labelled and update themselves; `trainer`, `registrar` and `infer`
+are not and stay on whatever image created them, which makes "updated api
+offers a thing, months-old worker rejects it" the normal failure mode of this
+deployment. It happened on 2026-08-26 with `voting`/`stacking` and again on
+2026-08-27 with the cyclical time columns — both times the message described
+the running code perfectly and gave no hint that the running code was stale.
+
 Refusals state the arithmetic: how many grid points the circuit has, how many a
 lag-*N* model with a *W*-sample window needs before it can build one row, and
 how many measured rows fall before the holdout cut. Those are data limits, not

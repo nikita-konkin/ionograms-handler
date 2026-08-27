@@ -46,8 +46,32 @@ def settle(conn: sqlite3.Connection, job: dict) -> dict:
     a worker that exits leaves every later job queued behind a fault that has
     already happened.
     """
+    # Re-vetting the stored spec is separated from running it, because the two
+    # failures mean opposite things and until 2026-08-27 they read the same.
+    #
+    # `control_routes.queue_training` vets before it inserts, so a row in
+    # `train_job` was accepted by *some* api. If this worker's `vet` then
+    # refuses the same spec, the request was never the problem -- the two
+    # builds disagree about what is valid. That is not hypothetical: `api` and
+    # `watch` are watchtower-labelled and update themselves while `trainer`,
+    # `registrar` and `infer` are not, so an updated api offering a new
+    # estimator or a new feature column while a months-old trainer rejects it
+    # is the normal failure mode of this deployment. It happened on 2026-08-26
+    # with `voting`/`stacking` and again on 2026-08-27 with the cyclical time
+    # columns, and both times the message described the running code perfectly
+    # and gave no hint that the running code was stale.
     try:
         plan = train.plan_from_job(job)
+    except train.TrainError as exc:
+        return queues.settle_job(
+            conn, job["id"], queues.FAILED,
+            f"{exc}\n\nThis spec was accepted when it was queued, so the api "
+            f"that queued it and this worker (build {db.build_id()}) do not "
+            f"agree about what is valid -- which usually means this worker is "
+            f"the older of the two. `trainer`, `registrar` and `infer` do not "
+            f"update themselves: pull and recreate them, then queue it again.")
+
+    try:
         result = train.run(conn, plan)
     except train.TrainError as exc:
         return queues.settle_job(conn, job["id"], queues.FAILED, str(exc))
