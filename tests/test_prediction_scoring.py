@@ -503,3 +503,103 @@ def test_diurnal_reports_only_the_hours_that_have_pairs():
     assert [h["hour"] for h in hours] == [6, 18]
     assert [h["n"] for h in hours] == [2, 1]
     assert hours[0]["mae"] == pytest.approx(0.5)
+
+
+# --------------------------------------------------------------------------
+# Is the difference real, or is it the window?
+#
+# The failure these exist for: on 2026-08-27 a voting model read 1.10 MHz on
+# one day and 1.58 on the next and looked like a regression, while persistence
+# -- which involves no model at all -- moved 1.07 to 1.47 over the same two
+# windows. Most of the change was the ionosphere. Only a paired comparison and
+# a ratio can tell those apart.
+# --------------------------------------------------------------------------
+
+def _pairs(when, predicted, observed):
+    return scoring.Pairs(valid_at=pd.DatetimeIndex(when),
+                         predicted=np.asarray(predicted, dtype=float),
+                         observed=np.asarray(observed, dtype=float),
+                         censored=np.zeros(len(when), dtype=bool))
+
+
+def test_a_real_difference_is_called_distinguishable():
+    when = pd.date_range("2026-08-01", periods=300, freq="h")
+    rng = np.random.default_rng(1)
+    truth = 20 + rng.normal(0, 1.0, len(when))
+    good = _pairs(when, truth + rng.normal(0, 0.2, len(when)), truth)
+    bad = _pairs(when, truth + rng.normal(0, 2.0, len(when)), truth)
+
+    result = scoring.compare(good, bad, "muf")
+
+    assert result["distinguishable"] is True
+    assert result["delta"] < 0, "the better forecast has the negative delta"
+    assert result["delta_hi"] < 0, "the interval clears zero"
+    assert result["skill"] > 0.5
+
+
+def test_a_tenth_of_a_megahertz_on_a_short_window_is_not_a_finding():
+    """The case the console kept reporting as 'loses to persistence'."""
+    when = pd.date_range("2026-08-01", periods=140, freq="h")
+    rng = np.random.default_rng(2)
+    truth = 20 + rng.normal(0, 2.0, len(when))
+    ours = _pairs(when, truth + rng.normal(0, 1.5, len(when)), truth)
+    theirs = _pairs(when, truth + rng.normal(0, 1.45, len(when)), truth)
+
+    result = scoring.compare(ours, theirs, "muf")
+
+    assert result["distinguishable"] is False
+    assert result["delta_lo"] < 0 < result["delta_hi"], "the interval straddles zero"
+
+
+def test_skill_survives_a_window_that_got_harder():
+    """The ratio is what makes two holdout windows comparable.
+
+    Same model quality throughout -- errors scaled by the same factor as the
+    baseline's -- so the absolute MAE doubles and the skill does not move.
+    """
+    when = pd.date_range("2026-08-01", periods=300, freq="h")
+    rng = np.random.default_rng(3)
+    truth = np.zeros(len(when))
+    ours = rng.normal(0, 1.0, len(when))
+    theirs = rng.normal(0, 1.25, len(when))
+
+    quiet = scoring.compare(_pairs(when, ours, truth),
+                            _pairs(when, theirs, truth), "muf")
+    stormy = scoring.compare(_pairs(when, ours * 2, truth),
+                             _pairs(when, theirs * 2, truth), "muf")
+
+    # Tolerances are set by the 4-decimal rounding the stored values carry,
+    # not by the arithmetic, which is exact.
+    assert stormy['mae'] == pytest.approx(2 * quiet['mae'], abs=1e-3)
+    assert stormy['skill'] == pytest.approx(quiet['skill'], abs=1e-3)
+
+
+def test_a_comparison_uses_only_the_instants_both_forecasts_covered():
+    when = pd.date_range("2026-08-01", periods=200, freq="h")
+    truth = np.full(len(when), 20.0)
+    ours = _pairs(when, truth + 0.5, truth)
+    theirs = _pairs(when[:120], truth[:120] + 1.0, truth[:120])
+
+    result = scoring.compare(ours, theirs, "muf")
+
+    assert result["n"] == 120
+
+
+def test_too_few_shared_instants_get_no_comparison_at_all():
+    when = pd.date_range("2026-08-01", periods=10, freq="h")
+    truth = np.full(len(when), 20.0)
+
+    assert scoring.compare(_pairs(when, truth + 0.5, truth),
+                           _pairs(when, truth + 1.0, truth), "muf") is None
+
+
+def test_the_interval_does_not_move_between_two_reads():
+    """A table that changes on reload is a table nobody can quote."""
+    when = pd.date_range("2026-08-01", periods=200, freq="h")
+    rng = np.random.default_rng(4)
+    truth = 20 + rng.normal(0, 1, len(when))
+    ours = _pairs(when, truth + rng.normal(0, 1, len(when)), truth)
+    theirs = _pairs(when, truth + rng.normal(0, 1, len(when)), truth)
+
+    assert scoring.compare(ours, theirs, "muf") == \
+        scoring.compare(ours, theirs, "muf")

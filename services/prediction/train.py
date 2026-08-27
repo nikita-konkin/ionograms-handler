@@ -937,8 +937,16 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
                                           y[scored_rows])
 
     horizon_s = int(plan["lag"] * dataset.DEFAULT_STEP_S)
-    baseline = _persistence(conn, plan, parts["observed"],
-                            pd.DatetimeIndex(held.index), horizon_s, cut)
+    baseline_pairs = _persistence(conn, plan, parts["observed"],
+                                  pd.DatetimeIndex(held.index), horizon_s, cut)
+    baseline = (scoring.summarise(baseline_pairs, plan["param"])
+                if baseline_pairs is not None else None)
+
+    # Paired, over the instants both forecasts covered. An unpaired comparison
+    # of two MAEs on 140 picks cannot see a tenth of a megahertz, and this
+    # service kept reporting "beats"/"loses to" on exactly that.
+    versus = (scoring.compare(pairs, baseline_pairs, plan["param"])
+              if baseline_pairs is not None else None)
 
     name = plan.get("name") or default_name(plan)
     with tempfile.TemporaryDirectory() as scratch:
@@ -973,6 +981,7 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
         **({"ensemble": ensemble} if ensemble else {}),
         **holdout,
         "persistence": baseline,
+        **({"vs_persistence": versus} if versus else {}),
     }, "diurnal": diurnal,
         **({"learning": curve} if curve else {}),
         **({"influence": influence} if influence else {}),
@@ -981,6 +990,7 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
     return {
         "model": registry.get(conn, model["id"]),
         "holdout": holdout, "persistence": baseline,
+        "vs_persistence": versus,
         "horizon_s": horizon_s, "cut": cut,
         "diurnal": diurnal, "learning": curve, "influence": influence,
         "permutation": permutation,
@@ -993,8 +1003,13 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
 
 def _persistence(conn, plan: dict, observed: pd.DataFrame,
                  at: pd.DatetimeIndex, horizon_s: int,
-                 cut: pd.Timestamp) -> dict | None:
+                 cut: pd.Timestamp) -> "scoring.Pairs | None":
     """Persistence over the same holdout, so the number has something to beat.
+
+    Returns the *pairs*, not a summary, because the caller needs both: a
+    summary for the stored metrics and the per-instant errors for the paired
+    comparison. Summarising here and comparing later would mean pairing the
+    two forecasts a second time, by a second rule.
 
     A model that cannot beat "the value one lead ago" is not worth promoting,
     and finding that out at fit time is cheaper than finding it out on the
@@ -1009,7 +1024,7 @@ def _persistence(conn, plan: dict, observed: pd.DataFrame,
         return None
     if series.empty:
         return None
-    return scoring.summarise(scoring.pair(series, observed), plan["param"])
+    return scoring.pair(series, observed)
 
 
 def _already_registered(conn, digest: str) -> bool:
@@ -1025,8 +1040,36 @@ def describe(result: dict) -> str:
     baseline = result["persistence"] or {}
     mae = holdout.get("mae")
     theirs = baseline.get("mae")
+    # "beats" and "loses to" are claims about a difference, so they are only
+    # made when the paired interval actually excludes zero. On a one-day
+    # holdout it usually does not, and saying so is the honest report --
+    # a tenth of a megahertz on 140 picks is a coin flip with a decimal point.
     verdict = ""
-    if mae is not None and theirs is not None:
+    versus = result.get("vs_persistence") or {}
+    if versus:
+        skill = versus.get("skill")
+        band = (f"95% CI {versus['delta_lo']:+.2f}..{versus['delta_hi']:+.2f}")
+        # Both sides of the comparison come from `versus`, never one from
+        # `versus` and the other from the headline. Persistence at a 24 h lead
+        # only exists where the archive holds an observation 24 h earlier, so
+        # the shared set is routinely a fraction of the holdout -- 126 of 287
+        # on NIC3 -> Yoshkar-Ola -- and the model's MAE over that fraction is
+        # its own number (2.02 there, against a 1.64 headline). Printing the
+        # headline beside the paired delta invited a subtraction that gave the
+        # opposite of the verdict in the same sentence. **[caught 2026-08-28]**
+        over = (f" over {versus['n']} shared"
+                if versus["n"] != holdout.get("n") else "")
+        if versus.get("distinguishable"):
+            verdict = (f", {'beats' if versus['delta'] < 0 else 'loses to'} "
+                       f"persistence {versus['mae']:.2f} v "
+                       f"{versus['baseline_mae']:.2f}{over} by "
+                       f"{abs(versus['delta']):.2f} MHz "
+                       f"[{100 * skill:+.0f}% skill, {band}]")
+        else:
+            verdict = (f", not distinguishable from persistence "
+                       f"({versus['mae']:.2f} v {versus['baseline_mae']:.2f}"
+                       f"{over}; {versus['delta']:+.2f} MHz, {band})")
+    elif mae is not None and theirs is not None:
         verdict = (f", {'beats' if mae < theirs else 'loses to'} persistence "
                    f"({theirs:.2f})")
     committee = ""

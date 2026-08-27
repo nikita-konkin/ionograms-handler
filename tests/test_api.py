@@ -3541,3 +3541,113 @@ def test_no_permutation_run_leaves_the_column_off_entirely(client, api_db):
 
     assert "Permuted" not in page
     assert "muf_lag_288" in page
+
+
+def _circuit(conn, n=6):
+    """Enough `contour` picks that the forecast page has a circuit to draw.
+
+    Written straight in rather than through `_mk`, which ingests as `algo`.
+    The forecast page builds its circuit list from `contour`, so an `algo`-only
+    fixture renders "no circuits" and hides the whole training form -- which
+    looks exactly like the assertion under test having failed.
+    """
+    for k in range(n):
+        cursor = conn.execute(
+            "INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at, "
+            "tx_lat, tx_lon, rx_lat, rx_lon) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (f"c{k}.lfs", f"c{k}.lfs", f"2026-02-04 0{k}:00:00", "cyprus1",
+             "rx", db.utcnow(), 35.0, 34.0, 56.38, 47.53))
+        conn.execute(
+            "INSERT INTO extraction (sounding_id, method, muf, limited, loflim) "
+            "VALUES (?,?,?,?,?)",
+            (cursor.lastrowid, "contour", 20.0 + k, 0, 0))
+    conn.commit()
+
+
+def test_the_leaderboard_shows_the_relative_number_under_the_absolute_one(
+        client, api_db, tmp_path):
+    """A live MAE cannot be read across weeks on its own.
+
+    A quiet week and a disturbed one give different megahertz from one model;
+    only the skill against a baseline that saw the same instants separates the
+    model from the ionosphere.
+    """
+    import json
+    _circuit(api_db)
+    model = _register(api_db, "huber_lag288", active=1, tx="cyprus1")
+    api_db.execute(
+        "INSERT INTO score (subject, param, tx, rx, horizon_s, scored_at, n, "
+        "mae, detail) VALUES (?,?,?,?,?,?,?,?,?)",
+        (f"model:{model}", "muf", "cyprus1", "rx", 86400, db.utcnow(), 300,
+         1.64, json.dumps({"vs_persistence": {
+             "n": 300, "skill": 0.062, "delta": -0.11, "delta_lo": -0.24,
+             "delta_hi": 0.02, "distinguishable": False}})))
+    api_db.commit()
+
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+
+    assert "1.64" in page
+    assert "+6%" in page, "the relative number is missing"
+    # Marked uncertain, because the paired interval contains zero.
+    assert "+6%?" in page
+
+
+def test_an_overtaking_that_is_not_distinguishable_says_so(client, api_db,
+                                                          tmp_path):
+    """"Overtaken by 0.1 MHz on 140 pairs" is not a reason to change a model."""
+    import json
+    _circuit(api_db)
+    model = _register(api_db, "huber_lag288", active=1, tx="cyprus1")
+    for subject, mae, detail in (
+            (f"model:{model}", 1.64, json.dumps({"vs_persistence": {
+                "n": 140, "skill": -0.05, "delta": 0.08, "delta_lo": -0.12,
+                "delta_hi": 0.29, "distinguishable": False}})),
+            ("baseline:persistence", 1.56, None)):
+        api_db.execute(
+            "INSERT INTO score (subject, param, tx, rx, horizon_s, scored_at, "
+            "n, mae, detail) VALUES (?,?,?,?,?,?,?,?,?)",
+            (subject, "muf", "cyprus1", "rx", 86400, db.utcnow(), 140, mae,
+             detail))
+    api_db.commit()
+
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+
+    assert "Possibly overtaken" in page
+    assert "not distinguishable over this window" in page
+    assert "Overtaken</span>" not in page, "asserted a difference it cannot see"
+
+
+def test_the_training_form_offers_a_recipe_so_two_can_share_one_holdout(
+        client, api_db, tmp_path):
+    _circuit(api_db)
+
+    page = client.get("/ui/forecast").text
+
+    assert 'id="tr-recipe"' in page
+    assert "muf parity" in page
+    assert "lag + one 4 h window" in page
+
+
+def test_the_leaderboard_is_drawn_for_the_circuit_that_was_asked_for(client,
+                                                                     api_db):
+    """The circuit selector links carry all three of param, tx and rx.
+
+    A loop over ("muf", "lof") used to bind the route's own `param` argument,
+    so it always held "lof" by the time the board was selected: following a
+    MUF link drew the LOF board, and passing nothing drew LOF rather than the
+    first scored circuit, because a shadowed `param` is never falsy.
+    """
+    _circuit(api_db)
+    for family, mae in (("muf", 1.11), ("lof", 9.99)):
+        api_db.execute(
+            "INSERT INTO score (subject, param, tx, rx, horizon_s, scored_at, "
+            "n, mae) VALUES (?,?,?,?,?,?,?,?)",
+            (f"baseline:persistence", family, "cyprus1", "rx", 86400,
+             db.utcnow(), 200, mae))
+    api_db.commit()
+
+    muf = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    lof = client.get("/ui/forecast?param=lof&tx=cyprus1&rx=rx").text
+
+    assert "1.11" in muf and "9.99" not in muf
+    assert "9.99" in lof and "1.11" not in lof

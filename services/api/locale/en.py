@@ -182,6 +182,19 @@ MESSAGES: dict[str, str] = {
         "{circuit} / {param}: <b>{model}</b> scores {mae} MHz at {lead} where "
         "<b>{baseline}</b> scores {baseline_mae}, over {n} pairs. "
         "Surfaced, not demoted.",
+    "forecast.overtaken_maybe": "Possibly overtaken",
+    "forecast.drift_noise":
+        "The paired interval on that gap contains zero, so the two are not "
+        "distinguishable over this window \u2014 it is not yet a reason to "
+        "change anything.",
+    "forecast.drift_unmeasured":
+        "No paired comparison was run against this baseline, so the gap has "
+        "no error bar. Only persistence gets one.",
+    "forecast.skill_title":
+        "Skill against persistence over the instants both covered: "
+        "1 - MAE/baseline. That set is often a fraction of the pairs behind "
+        "the MAE above, so the two MAE columns will not divide into this "
+        "number. A trailing ? means the paired 95% interval contains zero.",
     "forecast.nothing_live":
         "Nothing is live. That is the normal state of a fresh deployment, not "
         "a fault &mdash; add a model below, or train one on this circuit's own "
@@ -276,6 +289,11 @@ MESSAGES: dict[str, str] = {
     "forecast.train.lead": "Lead",
     "forecast.train.estimator": "Estimator",
     "forecast.train.members": "Committee",
+    "forecast.train.recipe": "Columns",
+    "forecast.train.recipe.parity": "muf parity (rolling + decomposition)",
+    "forecast.train.recipe.thin": "lag + one 4 h window",
+    "forecast.train.recipe.rolling": "rolling only",
+    "forecast.train.recipe.decomposition": "decomposition only",
     "forecast.train.cyclical": "time of day / season",
     "forecast.train.see_fit": "see the fit \u2192",
     "forecast.train.with_time": "+ time of day",
@@ -534,7 +552,14 @@ MESSAGES: dict[str, str] = {
     "model.bias": "bias",
     "model.pairs": "pairs",
     "model.against_persistence":
-        "persistence over the same window: {mae} MHz",
+        "persistence, over the {n} of those instants it could cover: "
+        "{mae} MHz",
+    "model.paired":
+        "Paired over the {n} instants both covered: {mae} v {baseline} MHz, "
+        "{delta} MHz (95% CI {lo} .. {hi})",
+    "model.skill": "skill {skill}% ({lo}% .. {hi}%)",
+    "model.distinguishable": "distinguishable",
+    "model.indistinguishable": "not distinguishable",
     "model.diurnal": "Error by hour of day",
     "model.diurnal_note":
         "One MAE averages the sunlit hours with the nightly minimum, and they "

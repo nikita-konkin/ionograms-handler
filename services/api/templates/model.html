@@ -45,9 +45,35 @@
           &middot; {{ t('model.bias') }} {{ '%+.3f'|format(holdout.bias)
               if holdout.bias is not none else '—' }}
           &middot; {{ holdout.n }} {{ t('model.pairs') }}
+          {# Persistence at a 24 h lead exists only where the archive holds
+             an observation 24 h earlier, so it routinely covers a fraction of
+             the holdout -- and the model's MAE over that fraction is its own
+             number. Both lines carry their own n for that reason: printing
+             the headline MAE beside a persistence MAE drawn from half as many
+             instants invited a subtraction that contradicted the verdict
+             sitting next to it. #}
           {%- if holdout.persistence and holdout.persistence.mae is not none %}
           <div class="note">{{ t('model.against_persistence',
-            mae='%.3f'|format(holdout.persistence.mae)) }}</div>{% endif %}</td></tr>
+            mae='%.3f'|format(holdout.persistence.mae),
+            n=holdout.persistence.n) }}</div>{% endif %}
+          {# Absolute and relative, both with the paired interval, and both
+             MAEs from the paired set so the arithmetic on this line closes.
+             Without the interval a tenth of a megahertz on a short holdout
+             reads as a result, and on 140 pairs it is a coin flip with a
+             decimal point. #}
+          {%- set v = holdout.vs_persistence %}
+          {%- if v %}
+          <div class="note">{{ t('model.paired', delta='%+.3f'|format(v.delta),
+              lo='%+.3f'|format(v.delta_lo), hi='%+.3f'|format(v.delta_hi),
+              mae='%.3f'|format(v.mae), baseline='%.3f'|format(v.baseline_mae),
+              n=v.n) }}
+            {% if v.skill is not none %}&middot; {{ t('model.skill',
+              skill='%+.1f'|format(v.skill * 100),
+              lo='%+.1f'|format(v.skill_lo * 100),
+              hi='%+.1f'|format(v.skill_hi * 100)) }}{% endif %}
+            <span class="pill {{ 'ok' if v.distinguishable else 'unk' }}">{{
+              t('model.distinguishable') if v.distinguishable
+              else t('model.indistinguishable') }}</span></div>{% endif %}</td></tr>
     <tr><td class="muted">{{ t('forecast.train.estimator') }}</td>
         <td>{{ holdout.estimator or '—' }}
           {%- if holdout.ensemble %}

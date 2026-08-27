@@ -588,6 +588,59 @@ def test_describe_names_the_committee_and_its_split(conn):
 
 
 # --------------------------------------------------------------------------
+# One sentence, one population
+#
+# 2026-08-28: a real run read "holdout MAE 1.64 MHz over 287 pairs, loses to
+# persistence (1.75) by 0.28 MHz". Subtract the printed numbers and the model
+# wins by 0.11; the verdict in the same sentence says it lost by 0.28. Both
+# were true of their own pair sets -- persistence at a 24 h lead only existed
+# for 126 of the 287 holdout instants, and over those 126 the model scored
+# 2.02, not 1.64. The headline and the paired delta were never comparable.
+# --------------------------------------------------------------------------
+
+def test_the_verdict_quotes_both_maes_from_the_set_it_compared_on():
+    """The sentence's own arithmetic has to close."""
+    result = {
+        "model": {"id": 15, "name": "xgboost-muf-24h"},
+        "n_train": 777,
+        # The holdout ran over 287 pairs; persistence covered 126 of them.
+        "holdout": {"n": 287, "mae": 1.6412},
+        "persistence": {"n": 126, "mae": 1.7476},
+        "vs_persistence": {"n": 126, "mae": 2.0236, "baseline_mae": 1.7476,
+                           "delta": 0.276, "delta_lo": 0.0527,
+                           "delta_hi": 0.5033, "skill": -0.1579,
+                           "distinguishable": True},
+    }
+    line = train.describe(result)
+
+    assert "loses to persistence 2.02 v 1.75" in line
+    assert "over 126 shared" in line
+    # The headline pair count still gets said, but never as a side of the
+    # comparison: 1.64 must not sit next to a persistence MAE it cannot be
+    # subtracted from.
+    assert "1.64 MHz over 287 pairs" in line
+    assert "persistence (1.75)" not in line
+
+
+def test_the_shared_count_is_dropped_when_it_is_the_whole_holdout():
+    """No parenthetical for a distinction that is not there."""
+    result = {
+        "model": {"id": 16, "name": "xgboost-muf-24h"},
+        "n_train": 884,
+        "holdout": {"n": 126, "mae": 1.7652},
+        "persistence": {"n": 126, "mae": 1.7476},
+        "vs_persistence": {"n": 126, "mae": 1.7652, "baseline_mae": 1.7476,
+                           "delta": 0.0176, "delta_lo": -0.1897,
+                           "delta_hi": 0.2288, "skill": -0.0101,
+                           "distinguishable": False},
+    }
+    line = train.describe(result)
+
+    assert "not distinguishable from persistence (1.77 v 1.75;" in line
+    assert "shared" not in line
+
+
+# --------------------------------------------------------------------------
 # Which build handled it
 #
 # 2026-08-26: `api` and `watch` carry the watchtower label and update

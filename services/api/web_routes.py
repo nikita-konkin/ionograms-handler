@@ -548,20 +548,26 @@ def forecast_page(request: Request, param: str | None = None,
     # One row per circuit and parameter that has data, whether or not anything
     # is live for it -- "no model" is the answer an operator most needs on a
     # fresh deployment, and a table built only from the models would omit it.
+    # `family`, not `param`: this loop used to bind the route's own `param`
+    # argument, so by the time the leaderboard was selected below it always
+    # held "lof" -- the last value the loop left behind. Following the circuit
+    # selector to a MUF circuit drew the LOF board, and asking for nothing
+    # drew LOF rather than the first circuit that had been scored, because a
+    # shadowed `param` is never falsy.
     live = []
-    for param in ("muf", "lof"):
-        for circuit in dataset.circuits(conn, param, "contour"):
-            model = registry.active(conn, param, circuit["tx"], circuit["rx"])
+    for family in ("muf", "lof"):
+        for circuit in dataset.circuits(conn, family, "contour"):
+            model = registry.active(conn, family, circuit["tx"], circuit["rx"])
             issued = db.one(
                 conn,
                 "SELECT MAX(issued_at) AS issued_at FROM forecast "
                 "WHERE param = ? AND tx = ? AND rx = ?",
-                (param, circuit["tx"], circuit["rx"]),
+                (family, circuit["tx"], circuit["rx"]),
             )
             issued_at = (issued or {}).get("issued_at")
             age = _age_seconds(issued_at) if issued_at else None
             live.append({
-                "tx": circuit["tx"], "rx": circuit["rx"], "param": param,
+                "tx": circuit["tx"], "rx": circuit["rx"], "param": family,
                 "model": model, "issued_at": issued_at, "age_s": age,
                 # Stale against the default cadence, with slack: a run that is
                 # merely late is not a fault, one that is a whole cycle late is.
@@ -641,6 +647,10 @@ def forecast_page(request: Request, param: str | None = None,
         # `legacy_features.SEASONAL`. It stays available to a caller that
         # names it.
         "cyclical": list(legacy_features.DIURNAL),
+        # Named for the recipe picker's "muf parity" label, so the option says
+        # what it will actually send rather than a number somebody typed once.
+        "parity_windows": list(train.DEFAULT_WINDOWS),
+        "parity_stats": list(train.DEFAULT_STATS),
     })
 
 

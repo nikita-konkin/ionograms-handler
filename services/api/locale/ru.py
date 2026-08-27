@@ -176,6 +176,18 @@ MESSAGES: dict[str, str] = {
         "{circuit} / {param}: <b>{model}</b> даёт {mae} МГц на {lead}, тогда "
         "как <b>{baseline}</b> даёт {baseline_mae}, по {n} {pair_unit}. "
         "Показано, но не снято с работы.",
+    "forecast.overtaken_maybe": "Возможно, обойдена",
+    "forecast.drift_noise":
+        "Парный интервал для этого разрыва включает ноль — на этом окне "
+        "различить их нельзя, и менять что-либо пока не из-за чего.",
+    "forecast.drift_unmeasured":
+        "Парное сравнение с этой опорой не проводилось, доверительного "
+        "интервала нет. Он считается только для инерционного прогноза.",
+    "forecast.skill_title":
+        "Умение относительно инерционного прогноза на моментах, покрытых "
+        "обоими: 1 - MAE/опора. Таких моментов обычно заметно меньше, чем "
+        "пар за MAE выше, поэтому два столбца MAE не дают это число. "
+        "Знак ? означает, что парный 95% интервал включает ноль.",
     "forecast.nothing_live":
         "Ничего не работает. Для свежего развёртывания это нормальное "
         "состояние, а не сбой &mdash; добавьте модель ниже или обучите её на "
@@ -263,6 +275,11 @@ MESSAGES: dict[str, str] = {
     "forecast.train.lead": "Заблаговременность",
     "forecast.train.estimator": "Алгоритм",
     "forecast.train.members": "Состав ансамбля",
+    "forecast.train.recipe": "Столбцы",
+    "forecast.train.recipe.parity": "как в muf (скользящие + разложение)",
+    "forecast.train.recipe.thin": "лаг и одно 4-часовое окно",
+    "forecast.train.recipe.rolling": "только скользящие",
+    "forecast.train.recipe.decomposition": "только разложение",
     "forecast.train.cyclical": "время суток / сезон",
     "forecast.train.see_fit": "разбор обучения \u2192",
     "forecast.train.with_time": "+ время суток",
@@ -529,7 +546,14 @@ MESSAGES: dict[str, str] = {
     "model.bias": "смещение",
     "model.pairs": "пар",
     "model.against_persistence":
-        "инерционный прогноз на том же окне: {mae} МГц",
+        "инерционный прогноз, на тех {n} моментах из них, что он покрыл: "
+        "{mae} МГц",
+    "model.paired":
+        "Парное сравнение на {n} общих моментах: {mae} против {baseline} МГц, "
+        "{delta} МГц (95% ДИ {lo} .. {hi})",
+    "model.skill": "умение {skill}% ({lo}% .. {hi}%)",
+    "model.distinguishable": "различимо",
+    "model.indistinguishable": "неразличимо",
     "model.diurnal": "Ошибка по часам суток",
     "model.diurnal_note":
         "Одно значение MAE усредняет освещённые часы и ночной минимум, а это "

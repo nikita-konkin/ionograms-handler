@@ -250,6 +250,99 @@ rule changes it changes for the model and its competitors together.
 by log ratio.
 
 
+#### 3.4.1 "Beats persistence" is a claim about a difference
+
+Until 2026-08-28 the console said `beats persistence (1.07)` or `loses to
+persistence (1.47)` on the strength of comparing two MAEs. On a one-day
+holdout that is a coin flip with a decimal point, and the service was
+reporting it as a result.
+
+`scoring.compare` fixes it with a **paired** bootstrap over the instants the
+two forecasts share. Pairing is what makes the question answerable at all:
+both forecasts faced the same ionosphere at the same minute, so the difficulty
+of the hour is common to both and cancels in the difference. An unpaired
+comparison has to see through that difficulty; on a few hundred picks it
+cannot.
+
+Two numbers come back, and they answer different questions:
+
+* **absolute** — `delta`, the mean of (model error − baseline error) in MHz,
+  with a 95% interval. Negative is better.
+* **relative** — `skill`, `1 − MAE/baseline`, with its own interval. This is
+  what makes two runs on *different* holdout windows comparable.
+
+`distinguishable` is False whenever the interval on `delta` contains zero, and
+`train.describe`, the leaderboard and the drift banner all consult it before
+saying "beats" or "overtaken". On a short window it is usually False, and
+saying so is the honest report.
+
+**Why the relative number is not a nicety.** On 2026-08-27 a `voting` model on
+NIC3 → Yoshkar-Ola read 1.10 MHz one day and 1.58 the next, and looked like a
+large regression. Persistence — which involves no model at all — moved 1.07 to
+1.47 over the same two windows. Of the model's +43.6% change, **+37.4% was the
+ionosphere**; the part attributable to the recipe was about 4.5%, against a
+noise band of roughly ±13% at 140 pairs. Raw MAE across different holdout
+windows is not a comparison, and the ratio is the only thing on that page that
+was.
+
+Bootstrapping the same rig's holdout directly: 287 pairs, MAE 1.641,
+**95% CI 1.489 .. 1.796**. A width of 0.307 MHz, against a 20-column vs
+7-column difference of 0.074 and a model-vs-persistence gap of 0.109. Every
+effect anyone was tuning against sat inside the error bar.
+**[measured 2026-08-27]**
+
+The interval is seeded (`default_rng(0)`): a table whose numbers move on
+reload is a table nobody can quote.
+
+##### Persistence does not cover the holdout, and the gap is not random
+
+Persistence at a 24 h lead needs an observation 24 h before the instant it is
+predicting. Where the archive has a gap, it has no opinion. On the
+NIC3 -> Yoshkar-Ola holdout of 2026-08-28 it covered **126 of 287** instants --
+under half -- and the model's MAE over those 126 was **2.02**, against a **1.64**
+headline over all 287. The model is systematically worse exactly where
+persistence can speak, which is the well-sampled stretches; its headline is
+flattered by the instants after a gap, where nothing is there to contradict it.
+
+So the two numbers are not two views of one thing, and any line that prints
+them side by side has to say which set each came from. The first version of
+`train.describe` did not, and emitted
+
+> holdout MAE 1.64 MHz over 287 pairs, **loses to persistence (1.75) by 0.28 MHz**
+
+where subtracting the two printed figures gives the model winning by 0.11 while
+the verdict in the same sentence says it lost by 0.28. Both halves were true of
+their own populations. `describe`, `/ui/model/<id>` and the leaderboard tooltip
+now each quote a pair count next to every MAE, and the paired verdict takes
+*both* its MAEs from `compare`. **[caught 2026-08-28]**
+
+#### 3.4.2 What the controlled A/B actually said
+
+Two `xgboost` fits, same circuit, same 24 h lead, same two-day holdout, same
+287 pairs, same diurnal terms -- only the feature recipe differing:
+
+| recipe | columns | holdout MAE | paired vs persistence (126) | skill | 95% CI on delta |
+|---|---|---|---|---|---|
+| muf parity | 20 | 1.641 | 2.024 v 1.748 | -15.8% | +0.053 .. +0.503 |
+| thin (48-window, mean/std, no decomposition) | 7 | 1.567 | 1.765 v 1.748 | -1.0% | -0.190 .. +0.229 |
+
+Read it carefully, because the two rows do not say the same *kind* of thing:
+
+* The **parity** recipe is distinguishably **worse than persistence**. Its
+  interval excludes zero. Twenty columns bought a model that a one-line
+  baseline beats, and the error bar is narrow enough to say so.
+* The **thin** recipe is **not distinguishable from persistence** either way.
+  That is not a win; it is the honest ceiling of what seven columns and 884
+  rows support here.
+* The two recipes are **not distinguishable from each other**. Their intervals
+  overlap heavily, and no paired model-vs-model bootstrap was run. "Thin beats
+  parity" is not a claim this table licenses -- only "parity loses to
+  persistence and thin does not" is.
+
+That is still the first decisive thing the comparison has produced, and it
+matches what the feature table had been hinting since the `yearly_*` trap:
+column count is a cost, not a hedge. **[measured 2026-08-28]**
+
 ### 3.5 `store` — the hash is the address
 
 `artifacts.sha256` has said since it was written that *"a models volume is

@@ -91,14 +91,23 @@
      published forecast on its own -- that would change what every consumer
      receives with nothing in the logs having asked for it -- so the crossing
      is drawn here and the decision stays with whoever holds the token. #}
+  {# `distinguishable` is False when the paired interval on the gap contains
+     zero, and `None` when nobody measured it -- only persistence gets a
+     paired comparison. Those are different states and the banner says which,
+     because "overtaken by 0.1 MHz on 140 pairs" is not a finding. #}
   {% for d in drift %}
-  <p class="note"><span class="pill warn">{{ t('forecast.overtaken') }}</span>
+  <p class="note"><span class="pill {{ 'warn' if d.distinguishable
+      else 'unk' }}">{{ t('forecast.overtaken') if d.distinguishable
+      else t('forecast.overtaken_maybe') }}</span>
     {{ t('forecast.drift',
          circuit=chosen[1] ~ ' → ' ~ chosen[2], param=chosen[0]|upper,
          model=d.model, mae='%.2f'|format(d.model_mae),
          lead=d.horizon_s|lead, baseline=d.baseline,
          baseline_mae='%.2f'|format(d.baseline_mae),
-         n=d.n, pair_unit=plural(d.n, 'pair')) }}</p>
+         n=d.n, pair_unit=plural(d.n, 'pair')) }}
+    {%- if d.distinguishable is false %} {{ t('forecast.drift_noise') }}
+    {%- elif d.distinguishable is none %} {{ t('forecast.drift_unmeasured') }}
+    {%- endif %}</p>
   {% endfor %}
 
   {% if not live|selectattr('model')|list %}
@@ -199,10 +208,22 @@
     <tr>
       <td><b>{{ entry.name }}</b></td>
       <td class="muted">{{ entry.origin }}</td>
+      {# Absolute above, relative below. A live MAE cannot be read across
+         weeks on its own -- a quiet week and a disturbed one give different
+         megahertz from one model -- so the skill against persistence over the
+         same instants sits under it. Greyed when the paired interval contains
+         zero, which on a short window is the usual case and is exactly what
+         must not be read as a result. #}
       {% for h in horizons %}
       <td style="text-align:right; font-variant-numeric:tabular-nums">
         {%- set mae = entry.mae.get(h|string) -%}
+        {%- set skill = entry.skill.get(h|string) -%}
         {% if mae is not none %}{{ '%.2f'|format(mae) }}
+          {%- if skill is not none %}<br><span
+            class="note{% if not entry.sure.get(h|string) %} muted{% endif %}"
+            title="{{ t('forecast.skill_title') }}">{{
+            '%+.0f%%'|format(skill * 100) }}{% if not entry.sure.get(h|string)
+            %}?{% endif %}</span>{% endif %}
         {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
       {% endfor %}
       <td class="muted">{{ entry.n.values()|sum }}</td>
@@ -372,6 +393,20 @@
     <label class="muted" style="font-size:.85rem">
       <input type="checkbox" id="tr-cyclical" checked>
       {{ t('forecast.train.cyclical') }}</label>
+    {# The lagged blocks, so two recipes can be run against one holdout
+       window. Without this the only way to compare a wide recipe with a
+       narrow one was to queue them a day apart, and a day apart is a
+       different holdout: on 2026-08-27 a voting model read 1.10 then 1.58 MHz
+       across two such runs while persistence -- which involves no model at
+       all -- moved 1.07 to 1.47. Most of that was the ionosphere. #}
+    <label class="muted" style="font-size:.85rem">{{ t('forecast.train.recipe') }}
+      <select id="tr-recipe" data-parity="{{ parity_windows|join(',') }}"
+              data-parity-stats="{{ parity_stats|join(',') }}">
+        <option value="parity">{{ t('forecast.train.recipe.parity') }}</option>
+        <option value="thin">{{ t('forecast.train.recipe.thin') }}</option>
+        <option value="rolling">{{ t('forecast.train.recipe.rolling') }}</option>
+        <option value="decomposition">{{ t('forecast.train.recipe.decomposition') }}</option>
+      </select></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.train.holdout') }}
       <input type="number" id="tr-holdout" value="2" min="0.5" step="0.5" size="4"></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
@@ -577,6 +612,17 @@ async function sendTraining(event) {
   };
   if (document.getElementById('tr-cyclical').checked) {
     body.time = {{ cyclical|tojson }};
+  }
+  // Only the narrower recipes are spelled out. "parity" sends nothing and
+  // lets `vet` apply its own defaults, so the form cannot drift away from
+  // what the module considers the standard recipe.
+  const recipe = field('tr-recipe');
+  if (recipe === 'thin') {
+    body.windows = [48]; body.stats = ['mean', 'std']; body.components = [];
+  } else if (recipe === 'rolling') {
+    body.components = [];
+  } else if (recipe === 'decomposition') {
+    body.windows = []; body.stats = [];
   }
   if (isEnsemble()) {
     body.members = [...document.querySelectorAll('.tr-member:checked')]
