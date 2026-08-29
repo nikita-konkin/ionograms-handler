@@ -370,3 +370,33 @@ def test_an_account_can_still_read_when_reads_are_closed(client, monkeypatch):
     # Still not a way in: reads open, writes unchanged.
     assert client.post("/models/train", json={},
                        headers=bearer(token)).status_code == 403
+
+
+def test_an_unreadable_accounts_table_denies_rather_than_admits(client,
+                                                                monkeypatch):
+    """`identify` swallows a database error, and must fail *closed*.
+
+    Raised by a local first-pass review on 2026-08-29 as "authorization bypass
+    via unhandled exception". It had the direction backwards -- an unreadable
+    table means the token is not recognised, and an unrecognised token is
+    refused. But nothing asserted which way it fell, and "the accounts table
+    was briefly unreadable" is exactly the moment nobody is watching, so the
+    direction is pinned here rather than left to a reading of the code.
+    """
+    from services.api import db as db_mod
+
+    token = account(client, "root", "admin")
+
+    def broken(*args, **kwargs):
+        raise db_mod.sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db_mod, "principal_by_token", broken)
+
+    # Denied, not admitted -- and 401, because as far as the service can tell
+    # the token is simply not one it knows.
+    assert client.post("/models/train", json={},
+                       headers=bearer(token)).status_code == 401
+    # `CONTROL_TOKEN` still works: it is checked before the table is touched,
+    # which is the "way back in" the module docstring promises.
+    assert client.post("/circuits/mute", json={"tx": "zz"},
+                       headers=CTL).status_code == 200
