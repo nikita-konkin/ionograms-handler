@@ -1102,6 +1102,7 @@ MESSAGES: dict[str, str] = {
     "auth.js.cap_account": "учётные записи",
     "auth.js.cap_agent": "пути агента",
     "auth.js.signed_in": "вход как {name} ({role})",
+    "auth.js.sign_out": "Выйти",
     "auth.js.signed_out": "токен не введён — вставьте его, чтобы действовать",
     "auth.js.need_token":
         "Вставьте токен на консоли, чтобы воспользоваться этим.",

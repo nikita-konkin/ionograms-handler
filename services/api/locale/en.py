@@ -1094,6 +1094,7 @@ MESSAGES: dict[str, str] = {
     "auth.js.cap_account": "accounts",
     "auth.js.cap_agent": "agent paths",
     "auth.js.signed_in": "signed in as {name} ({role})",
+    "auth.js.sign_out": "Sign out",
     "auth.js.signed_out": "not signed in — paste a token to act",
     "auth.js.need_token": "Paste a token on the console to use this.",
     "auth.js.need_role":

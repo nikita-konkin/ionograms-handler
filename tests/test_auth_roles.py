@@ -400,3 +400,23 @@ def test_an_unreadable_accounts_table_denies_rather_than_admits(client,
     # which is the "way back in" the module docstring promises.
     assert client.post("/circuits/mute", json={"tx": "zz"},
                        headers=CTL).status_code == 200
+
+
+def test_every_page_carries_the_identity_slot_and_a_way_out(client):
+    """Signing out has to be reachable from wherever the gates are.
+
+    The gates disable buttons on /ui, /ui/forecast and /ui/archives alike, so a
+    teacher seeing greyed controls on the forecast page needs to be told who
+    they are and offered a way to stop being that person. Emptying the
+    console's token field by hand is not it: `ME` and the gates resolve once
+    per page load, so the screen would go on naming a signed-in person with
+    buttons enabled until something reloaded it -- and only /ui reloads itself.
+    """
+    for path in ("/ui", "/ui/forecast", "/ui/archives"):
+        page = client.get(path).text
+        assert 'id="who"' in page, f"{path} has nowhere to say who you are"
+        assert "function signOut()" in page, f"{path} offers no way out"
+        # The reload is the mechanism: it re-runs the gates from an empty
+        # token. Without it the buttons stay enabled on a signed-out page.
+        assert "sessionStorage.removeItem('tok')" in page
+        assert "location.reload()" in page

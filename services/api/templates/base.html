@@ -156,6 +156,46 @@
     agent: T('auth.js.cap_agent'),
   };
 
+  /* Signing out, from any page.
+
+     `sessionStorage` is per-tab, so closing the tab does this already. The
+     control exists because emptying the console's token field by hand does
+     *not*: `ME` and the gates resolve once per page load, so the console would
+     go on naming a signed-in person with its buttons enabled until something
+     reloaded it -- and only /ui reloads itself. Nothing is authenticated at
+     that point; the screen is simply lying, which on a shared machine is the
+     one thing it must not do.
+
+     The reload is the mechanism: it re-runs every gate from an empty token and
+     clears the accounts panel with it. There is no server call to make, and
+     that is worth stating rather than assuming -- a bearer token has no
+     session to end, so this removes the token from *this browser tab* and
+     nothing more. If the token itself leaked, rotate it; this is not that. */
+  function signOut() {
+    sessionStorage.removeItem('tok');
+    const field = document.getElementById('tok');
+    if (field) field.value = '';
+    location.reload();
+  }
+
+  /* Fills the header's identity slot. Runs on every page from base.html. */
+  ME.then(me => {
+    const box = document.getElementById('who');
+    if (!box || me.source === 'none') return;
+    box.style.display = '';
+    box.textContent = '';
+    const label = document.createElement('span');
+    // textContent: an account name is operator-supplied and this is the
+    // chrome of every page.
+    label.textContent = T('auth.js.signed_in',
+                          {name: me.name, role: ROLE_NAME[me.role] || me.role});
+    const out = document.createElement('button');
+    out.textContent = T('auth.js.sign_out');
+    out.onclick = signOut;
+    box.appendChild(label);
+    box.appendChild(out);
+  });
+
   async function gate(capability) {
     const me = await ME;
     if (me.capabilities.includes(capability)) return;
@@ -189,6 +229,14 @@
      moment the hint grew -- which Russian does by about 15%. Grouped, a tight
      header wraps the hint's own text instead and the toggle stays put. #}
   <span class="right">
+    {# Who you are, on every page rather than only the console.
+
+       The gates disable buttons wherever they appear, so identity is a
+       property of the whole console and belongs here; without it a teacher on
+       /ui/forecast sees greyed controls and no statement of why. Empty and
+       invisible until /whoami answers, so a signed-out page shows nothing
+       rather than flashing "anonymous". #}
+    <span id="who" class="note" style="display:none"></span>
     <span class="note">{% block hint %}{% endblock %}</span>
     {# The toggle carries the whole query string across, so changing language
        while looking at a filtered, sorted table does not also reset the

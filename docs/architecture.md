@@ -636,6 +636,17 @@ command. The actor now comes from the token in every case.
 keeps a model row: removing it would leave every audit column it wrote pointing
 at nobody.
 
+**Signing out is a browser act, not a server one.** A bearer token has no
+session to end: the console keeps it in `sessionStorage`, so closing the tab
+already discards it. The header still carries an explicit control on every
+page, because emptying the token field by hand does *not* sign you out of the
+screen — `/whoami` and the gates resolve once per page load, so the console
+would go on naming a signed-in person with its buttons enabled until something
+reloaded it, and only `/ui` reloads itself. Nothing is authenticated at that
+point; the screen is merely lying, which on a shared teaching machine is the
+one thing it must not do. The remedy for a token that has actually *leaked* is
+`rotate`, not this.
+
 **A named account reads too**, when `READ_TOKEN` closes reads. There is one
 `Authorization` header and a person has one token, so comparing it only against
 `READ_TOKEN` would have locked every account out of the whole console the day
