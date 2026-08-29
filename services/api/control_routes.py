@@ -50,6 +50,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -58,8 +59,8 @@ from fastapi import (APIRouter, Body, Depends, HTTPException, Query, Request,
 
 from muf.stations import default_registry
 
-from . import acquisition, db
-from .auth import require_control
+from . import acquisition, auth, db
+from .auth import Capability, Principal, require
 from .read_routes import _age_seconds
 
 router = APIRouter(tags=["control"])
@@ -89,7 +90,7 @@ WEB_EDITABLE = ("mode", "sounder_timings", "set_band")
 @router.post("/stations/{station}/commands")
 def enqueue(station: str, request: Request,
             payload: dict = Body(...),
-            _: str = Depends(require_control)) -> dict:
+            who: Principal = Depends(require(Capability.STATION))) -> dict:
     name = str(payload.get("name", "")).strip().lower().replace("-", "_")
     if name not in QUEUEABLE:
         raise HTTPException(
@@ -103,7 +104,12 @@ def enqueue(station: str, request: Request,
 
     command_id = db.enqueue(request.app.state.db, station, name,
                             params=params,
-                            issued_by=str(payload.get("issued_by") or "web"))
+        # The authenticated account, never the payload. Before there were
+        # accounts the client was the only thing that could say who it was, so
+        # this read `payload.get(...)`; with a real identity behind the request
+        # that field is a name anyone can claim, and the stop button is the
+        # last place to take a caller's word for who pressed it.
+                            issued_by=who.name)
     return {"ok": True, "id": command_id, "name": name, "station": station,
             "note": "queued; the station will collect it on its next pull"}
 
@@ -246,7 +252,7 @@ CODE_RE = re.compile(r"^[A-Za-z0-9_.]{1,24}$")
 @router.post("/stations/{station}/transmitters")
 def save_transmitter(station: str, request: Request,
                      payload: dict = Body(...),
-                     _: str = Depends(require_control)) -> dict:
+                     who: Principal = Depends(require(Capability.STATION))) -> dict:
     """Identify one emitter from the census as a named transmitter.
 
     Control scope, though it stops no radio. What it writes is what a later
@@ -292,7 +298,8 @@ def save_transmitter(station: str, request: Request,
         name=(str(payload.get("name")).strip() or None
               if payload.get("name") else None),
         evidence=payload.get("evidence"),
-        verified_by=str(payload.get("verified_by") or "web"),
+        # The account, not the payload -- see the note in `queue_command`.
+        verified_by=who.name,
         note=payload.get("note"))
     response = {"ok": True, "station": station, "transmitter": record}
 
@@ -320,7 +327,7 @@ def save_transmitter(station: str, request: Request,
 
 @router.delete("/stations/{station}/transmitters/{code}")
 def forget_transmitter(station: str, code: str, request: Request,
-                       _: str = Depends(require_control)) -> dict:
+                       who: Principal = Depends(require(Capability.STATION))) -> dict:
     """Forget an identification. Products already recorded keep the name."""
     removed = db.delete_transmitter(request.app.state.db, station, code)
     if not removed:
@@ -331,7 +338,7 @@ def forget_transmitter(station: str, code: str, request: Request,
 
 @router.delete("/stations/{station}")
 def forget_station(station: str, request: Request, force: bool = False,
-                   _: str = Depends(require_control)) -> dict:
+                   who: Principal = Depends(require(Capability.STATION))) -> dict:
     """Remove a renamed or retired receiver from the console.
 
     The console lists every station that has ever pushed, so a receiver that
@@ -379,7 +386,7 @@ def forget_station(station: str, request: Request, force: bool = False,
 @router.post("/stations/{station}/schedule")
 def set_schedule(station: str, request: Request,
                  payload: dict = Body(...),
-                 _: str = Depends(require_control)) -> dict:
+                 who: Principal = Depends(require(Capability.STATION))) -> dict:
     """Sound these verified transmitters, and nothing else.
 
     ``architecture.md`` sec. 4.3. The body names transmitters, not numbers:
@@ -422,7 +429,12 @@ def set_schedule(station: str, request: Request,
     changes = {"mode": mode, "sounder_timings": json.dumps(groups)}
     command_id = db.enqueue(conn, station, "set_config",
                             params=_vet_config({"changes": changes}),
-                            issued_by=str(payload.get("issued_by") or "web"))
+        # The authenticated account, never the payload. Before there were
+        # accounts the client was the only thing that could say who it was, so
+        # this read `payload.get(...)`; with a real identity behind the request
+        # that field is a name anyone can claim, and the stop button is the
+        # last place to take a caller's word for who pressed it.
+                            issued_by=who.name)
     return {
         "ok": True, "id": command_id, "station": station, "mode": mode,
         "ranks": len(groups),
@@ -441,7 +453,7 @@ def set_schedule(station: str, request: Request,
 
 @router.post("/models/{model_id}/activate")
 def activate_model(model_id: int, request: Request,
-                   who: str = Depends(require_control)) -> dict:
+                   who: Principal = Depends(require(Capability.PROMOTE))) -> dict:
     """Make a model the live forecast for its circuit.
 
     **Control scope, not read scope.** Nothing here touches a radio, so the
@@ -459,7 +471,7 @@ def activate_model(model_id: int, request: Request,
     from ..prediction import registry
 
     try:
-        result = registry.activate(request.app.state.db, model_id, by=who)
+        result = registry.activate(request.app.state.db, model_id, by=who.name)
     except registry.RegistryError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
@@ -480,7 +492,7 @@ def activate_model(model_id: int, request: Request,
 
 @router.post("/models/{model_id}/retire")
 def retire_model(model_id: int, request: Request,
-                 who: str = Depends(require_control)) -> dict:
+                 who: Principal = Depends(require(Capability.PROMOTE))) -> dict:
     """Take a model out of service, keeping its row and its forecasts.
 
     Retiring is not deleting. The forecasts it issued are what its scores were
@@ -499,7 +511,7 @@ def retire_model(model_id: int, request: Request,
 
 @router.delete("/models/{model_id}")
 def delete_model(model_id: int, request: Request,
-                 who: str = Depends(require_control)) -> dict:
+                 who: Principal = Depends(require(Capability.MODEL))) -> dict:
     """Remove a model, its forecasts and its scores.
 
     The counterpart to retirement, not a louder version of it. A training
@@ -581,7 +593,7 @@ async def upload_model(request: Request,
                            None, pattern="^(measured|modelled)$"),
                        period: int | None = None,
                        note: str | None = None,
-                       who: str = Depends(require_control)) -> dict:
+                       who: Principal = Depends(require(Capability.MODEL))) -> dict:
     """Quarantine an uploaded artifact and queue it for registration.
 
     The file arrives as the **raw request body**, not as multipart: a browser
@@ -658,7 +670,7 @@ async def upload_model(request: Request,
     os.replace(temporary_path, UPLOAD_DIR / sha)
 
     row = queues.add_upload(
-        request.app.state.db, by=who, filename=filename, sha256=sha,
+        request.app.state.db, by=who.name, filename=filename, sha256=sha,
         bytes=total, name=name, param=param, tx=tx, rx=rx, origin=origin,
         target_src=target_src, period=period, note=note)
 
@@ -671,7 +683,7 @@ async def upload_model(request: Request,
 
 @router.delete("/models/uploads/{upload_id}")
 def forget_upload(upload_id: int, request: Request,
-                  _: str = Depends(require_control)) -> dict:
+                  _: Principal = Depends(require(Capability.MODEL))) -> dict:
     """Drop a queued or refused upload, and its quarantined bytes with it."""
     from ..prediction import queues
 
@@ -697,7 +709,7 @@ def forget_upload(upload_id: int, request: Request,
 
 @router.post("/models/train")
 def queue_training(request: Request, spec: dict = Body(...),
-                   who: str = Depends(require_control)) -> dict:
+                   who: Principal = Depends(require(Capability.MODEL))) -> dict:
     """Queue a training run. The fit happens in the trainer, not here.
 
     Validated at the door rather than in the worker, because a job that is
@@ -716,7 +728,7 @@ def queue_training(request: Request, spec: dict = Body(...),
 
     row = queues.add_job(conn, param=plan["param"], tx=plan["tx"],
                          rx=plan["rx"], method=plan["method"],
-                         spec=plan["spec"], by=who)
+                         spec=plan["spec"], by=who.name)
     return {"ok": True, "job": row,
             "detail": (f"queued: {plan['estimator']} for {plan['param']} on "
                        f"{plan['tx']} -> {plan['rx']} at "
@@ -726,7 +738,7 @@ def queue_training(request: Request, spec: dict = Body(...),
 
 @router.delete("/models/jobs/{job_id}")
 def cancel_training(job_id: int, request: Request,
-                    _: str = Depends(require_control)) -> dict:
+                    _: Principal = Depends(require(Capability.MODEL))) -> dict:
     from ..prediction import queues
 
     try:
@@ -739,7 +751,7 @@ def cancel_training(job_id: int, request: Request,
 
 @router.post("/models/run")
 def queue_run(request: Request, spec: dict = Body(...),
-              who: str = Depends(require_control)) -> dict:
+              who: Principal = Depends(require(Capability.MODEL))) -> dict:
     """Ask for a forecast to be issued now, rather than at the next interval.
 
     **Control scope**, for the same reason promotion is: this writes rows that
@@ -785,7 +797,7 @@ def queue_run(request: Request, spec: dict = Body(...),
 
     row = queues.add_run(conn, param=param, tx=tx, rx=rx, method=method,
                          model_id=(int(model_id) if model_id is not None else None),
-                         by=who)
+                         by=who.name)
     return {"ok": True, "run": row,
             "detail": (f"queued: {subject} over {tx} -> {rx}. `infer` picks it "
                        f"up within a few seconds; nothing here loads a model.")}
@@ -793,7 +805,7 @@ def queue_run(request: Request, spec: dict = Body(...),
 
 @router.delete("/models/runs/{run_id}")
 def cancel_run(run_id: int, request: Request,
-               _: str = Depends(require_control)) -> dict:
+               _: Principal = Depends(require(Capability.MODEL))) -> dict:
     from ..prediction import queues
 
     try:
@@ -802,3 +814,114 @@ def cancel_run(run_id: int, request: Request,
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return {"ok": True, "cancelled": {"id": row["id"]},
             "detail": f"inference run {run_id} cancelled."}
+
+
+# --------------------------------------------------------------------------
+# Accounts
+# --------------------------------------------------------------------------
+#
+# Creating an account is the one write here that hands back a secret, and the
+# only moment that secret exists outside the holder's hands. It is not stored:
+# `db.create_principal` keeps a sha256 and returns the plaintext once. There is
+# no recovery endpoint by construction -- `rotate` is the answer to "I lost it",
+# and it is a different answer, because it also invalidates whatever was lost.
+#
+# `CONTROL_TOKEN` bootstraps this. It holds every capability, so the first
+# admin account is created with it and no default account is ever seeded. A
+# seeded account with a known name is a credential that ships in the image.
+
+@router.post("/principals", status_code=status.HTTP_201_CREATED)
+def create_principal(request: Request, spec: dict = Body(...),
+                     who: Principal = Depends(
+                         require(Capability.ACCOUNT))) -> dict:
+    """Add an account. **The token comes back once and is never stored.**"""
+    conn = request.app.state.db
+    name = (spec.get("name") or "").strip()
+    role = (spec.get("role") or "").strip().lower()
+    if not name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "an account needs a name")
+    if role not in auth.GRANTS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"unknown role {role!r}; expected one of {', '.join(auth.ROLES)}")
+
+    try:
+        row, token = db.create_principal(conn, name, role,
+                                         note=spec.get("note"), by=who.name)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"an account named {name!r} already exists") from exc
+
+    held = sorted(c.value for c in auth.GRANTS[role])
+    return {"ok": True,
+            "principal": {k: row[k] for k in
+                          ("id", "name", "role", "created_at", "created_by")},
+            "token": token,
+            "capabilities": held,
+            "detail": f"{name} is a {role}"
+                      + (f", holding {', '.join(held)}." if held else
+                         ", which is read-only.")
+                      + " Copy the token now -- it is stored only as a hash "
+                        "and cannot be shown again. Rotate it if it is lost."}
+
+
+@router.delete("/principals/{principal_id}")
+def disable_principal(principal_id: int, request: Request,
+                      who: Principal = Depends(
+                          require(Capability.ACCOUNT))) -> dict:
+    """Stop accepting this account's token. The row and its history stay.
+
+    Deleting the row would leave every `activated_by`, `muted_by` and
+    `requested_by` it wrote pointing at nobody, which is the opposite of what
+    an audit column is for -- the same reasoning that makes `registry.retire`
+    keep a model row.
+    """
+    row = db.disable_principal(request.app.state.db, principal_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no account {principal_id}")
+    return {"ok": True, "disabled": row,
+            "detail": f"{row['name']}'s token is no longer accepted. The "
+                      f"account is kept, so everything it did is still "
+                      f"attributable to it."}
+
+
+@router.post("/principals/{principal_id}/enable")
+def enable_principal(principal_id: int, request: Request,
+                     who: Principal = Depends(
+                         require(Capability.ACCOUNT))) -> dict:
+    """Accept this account's token again. The original token still works.
+
+    Deliberately not a re-issue: disabling is often precautionary, and forcing
+    a new token on every reinstatement would make the cautious act expensive
+    enough that nobody performs it. Use `rotate` when the token itself is the
+    problem.
+    """
+    row = db.enable_principal(request.app.state.db, principal_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no account {principal_id}")
+    return {"ok": True, "enabled": row,
+            "detail": f"{row['name']} may write again with the same token. "
+                      f"Rotate it instead if the token is what leaked."}
+
+
+@router.post("/principals/{principal_id}/rotate")
+def rotate_principal(principal_id: int, request: Request,
+                     who: Principal = Depends(
+                         require(Capability.ACCOUNT))) -> dict:
+    """Issue a new token and invalidate the old one, in one statement.
+
+    One statement is the point: there is never an instant in which both tokens
+    work, which is what rotation has to mean if it is the answer to a leak.
+    """
+    result = db.rotate_principal(request.app.state.db, principal_id)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no account {principal_id}")
+    row, token = result
+    return {"ok": True, "principal": row, "token": token,
+            "detail": f"{row['name']} has a new token; the previous one "
+                      f"stopped working the moment this was issued. Copy it "
+                      f"now -- it cannot be shown again."}

@@ -105,6 +105,70 @@
     } else if (n === 1) form = 'one';
     return forms[form] || forms.other || key;
   };
+
+  /* Who this browser is, and what it may do.
+
+     One copy, here, because four pages each carry their own `control()` and a
+     fifth divergent notion of identity is exactly how a button ends up enabled
+     on one page and disabled on another for the same person.
+
+     `ME` is a promise, resolved once per page load. Every caller awaits the
+     same one -- `/whoami` is cheap but it is still a round trip, and a page
+     with six guarded buttons should not make six of them.
+
+     **This is a courtesy, not a control.** Every endpoint checks for itself;
+     all this does is explain, before the click, what the server would say
+     after it. Nothing here is load-bearing for security and nothing here
+     should ever be the only thing standing between a student and the stop
+     button. */
+  const token = () => sessionStorage.getItem('tok') || '';
+
+  const ME = fetch('/whoami', token()
+      ? {headers: {'Authorization': 'Bearer ' + token()}} : undefined)
+    .then(r => r.json())
+    .catch(() => ({name: 'anonymous', role: 'anonymous', capabilities: [],
+                   source: 'none'}));
+
+  /* Disabled, not hidden -- the pattern the model buttons already follow. An
+     operator should see that a control exists and be told why it is out of
+     reach; a button that is simply absent teaches nothing and reads as a bug
+     when a colleague can see it. */
+  /* Role and capability names, looked up by live value.
+
+     Written out as literal `T()` calls rather than composed as
+     `T('auth.js.role_' + role)`, because a composed key is invisible to
+     `tests/test_i18n.py` -- it scans for literal keys and would let a missing
+     translation ship, to appear on screen as the bare key. The cost is this
+     table; the benefit is that a forgotten string fails a test instead of a
+     student's console. */
+  const ROLE_NAME = {
+    student: T('auth.js.role_student'),
+    teacher: T('auth.js.role_teacher'),
+    admin: T('auth.js.role_admin'),
+    anonymous: T('auth.js.role_anonymous'),
+  };
+  const CAP_NAME = {
+    model: T('auth.js.cap_model'),
+    promote: T('auth.js.cap_promote'),
+    archive: T('auth.js.cap_archive'),
+    station: T('auth.js.cap_station'),
+    account: T('auth.js.cap_account'),
+    agent: T('auth.js.cap_agent'),
+  };
+
+  async function gate(capability) {
+    const me = await ME;
+    if (me.capabilities.includes(capability)) return;
+    const why = me.source === 'none'
+      ? T('auth.js.need_token')
+      : T('auth.js.need_role', {role: ROLE_NAME[me.role] || me.role,
+                                capability: CAP_NAME[capability] || capability});
+    for (const el of document.querySelectorAll(
+             '[data-needs="' + capability + '"]')) {
+      el.disabled = true;
+      el.title = why;
+    }
+  }
 </script>
 </head>
 <body>

@@ -1077,6 +1077,57 @@ MESSAGES: dict[str, str] = {
     "console.delivered": "Delivered",
     "console.pending": "Pending",
 
+    # --- accounts and roles -------------------------------------------------
+    #
+    # Named `*.js.*` throughout, including the ones a template also prints:
+    # `i18n.js_catalog` selects on that middle segment, and the console builds
+    # role and capability names from live values. One set of keys used by both
+    # halves beats two sets that can disagree about what a teacher is called.
+    "auth.js.role_student": "student",
+    "auth.js.role_teacher": "teacher",
+    "auth.js.role_admin": "admin",
+    "auth.js.role_anonymous": "not signed in",
+    "auth.js.cap_model": "models",
+    "auth.js.cap_promote": "promotion",
+    "auth.js.cap_archive": "archives",
+    "auth.js.cap_station": "the station",
+    "auth.js.cap_account": "accounts",
+    "auth.js.cap_agent": "agent paths",
+    "auth.js.signed_in": "signed in as {name} ({role})",
+    "auth.js.signed_out": "not signed in — paste a token to act",
+    "auth.js.need_token": "Paste a token on the console to use this.",
+    "auth.js.need_role":
+        "You are a {role}, and this needs {capability}. Your token is fine; "
+        "the role is what is short. An admin can change it.",
+
+    "accounts.title": "Accounts",
+    "accounts.intro":
+        "Who may write. Reading stays open to everyone. A token is shown once "
+        "when the account is made and is stored only as a hash &mdash; if it "
+        "is lost, issue a new one rather than looking the old one up.",
+    "accounts.name": "name",
+    "accounts.note": "note (optional)",
+    "accounts.add": "Add account",
+    "accounts.col.name": "Name",
+    "accounts.col.role": "Role",
+    "accounts.col.holds": "May act on",
+    "accounts.col.last_seen": "Last used",
+    "accounts.js.reads_only": "reading only",
+    "accounts.js.never": "never",
+    "accounts.js.rotate": "New token",
+    "accounts.js.disable": "Disable",
+    "accounts.js.enable": "Enable",
+    "accounts.js.copy_now":
+        "{name}: copy this token now, it cannot be shown again —",
+    "accounts.js.needs_name": "An account needs a name.",
+    "accounts.js.copied": "Copied it",
+    "accounts.js.cancelled": "Cancelled — nothing was changed.",
+    "accounts.js.rotate_confirm":
+        "Issue a new token for {name}?\n\nThe current one stops working "
+        "immediately.",
+    "accounts.js.disable_confirm":
+        "Stop accepting {name}'s token?\n\nThe account is kept, so everything "
+        "it did stays attributable to it.",
     "console.token": "Control token",
     "console.token_note":
         "Held in this tab only (sessionStorage), never baked into the page. "

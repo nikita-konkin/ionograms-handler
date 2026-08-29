@@ -692,6 +692,150 @@ def delete_archive_orphans(conn: sqlite3.Connection, archive_id: int) -> int:
 
 
 # --------------------------------------------------------------------------
+# Accounts
+# --------------------------------------------------------------------------
+
+#: How stale `last_seen_at` may get before a request refreshes it. Not per
+#: request: the console is read-heavy and a write on every authenticated call
+#: would put SQLite in the way of every button. Five minutes answers "is anyone
+#: still using this account" and nothing finer is wanted.
+SEEN_REFRESH_S = 300
+
+#: Prefix on every issued token, so one found in a log, a paste buffer or a
+#: config file is recognisable as belonging to this service and can be grepped
+#: for. It is not a secret and carries no entropy of its own.
+TOKEN_PREFIX = "iono_"
+
+
+def token_digest(token: str) -> str:
+    """The form a token is stored and looked up in.
+
+    sha256, hex. See the `principal` table comment for why a fast hash is
+    correct for a high-entropy secret and a slow one would not be.
+    """
+    import hashlib
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def new_token() -> str:
+    """A fresh token. 32 bytes from `secrets`, url-safe, prefixed."""
+    import secrets
+    return TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def create_principal(conn: sqlite3.Connection, name: str, role: str, *,
+                     note: str | None = None,
+                     by: str | None = None) -> tuple[dict, str]:
+    """A new account. Returns ``(row, token)`` -- the token, once.
+
+    The plaintext is returned to the caller and never stored, so this is the
+    only moment it exists anywhere outside the holder's hands. `rotate` is the
+    remedy for having lost it; there is no recovery, by construction.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("an account needs a name")
+    token = new_token()
+    conn.execute(
+        "INSERT INTO principal (name, role, token_sha256, note, created_at,"
+        " created_by) VALUES (?,?,?,?,?,?)",
+        (name, role, token_digest(token), note, utcnow(), by))
+    conn.commit()
+    return one(conn, "SELECT * FROM principal WHERE name = ?", (name,)), token
+
+
+def principal_by_token(conn: sqlite3.Connection, token: str) -> dict | None:
+    """The active account holding this token, or None.
+
+    Looked up by an indexed exact match on the *hash*, so the comparison the
+    database performs is between digests and never between secrets -- there is
+    no prefix to time and nothing to learn from a miss.
+    """
+    if not token:
+        return None
+    return one(conn, "SELECT * FROM principal WHERE token_sha256 = ?"
+                     " AND disabled_at IS NULL", (token_digest(token),))
+
+
+def principals(conn: sqlite3.Connection) -> list[dict]:
+    """Every account, active first. Never carries a token or its digest."""
+    found = rows(conn, "SELECT id, name, role, note, created_at, created_by,"
+                       " disabled_at, last_seen_at FROM principal"
+                       " ORDER BY disabled_at IS NOT NULL, name")
+    return found
+
+
+def disable_principal(conn: sqlite3.Connection, principal_id: int) -> dict | None:
+    """Stop accepting this account's token, keeping its row and its history."""
+    row = one(conn, "SELECT * FROM principal WHERE id = ?", (principal_id,))
+    if row is None:
+        return None
+    if row["disabled_at"] is None:
+        conn.execute("UPDATE principal SET disabled_at = ? WHERE id = ?",
+                     (utcnow(), principal_id))
+        conn.commit()
+    return one(conn, "SELECT id, name, role, disabled_at FROM principal"
+                     " WHERE id = ?", (principal_id,))
+
+
+def enable_principal(conn: sqlite3.Connection, principal_id: int) -> dict | None:
+    """Undo `disable_principal`. The old token works again.
+
+    Deliberately *not* a re-issue: disabling is often precautionary, and
+    forcing a new token on every reinstatement would make the cautious act
+    expensive enough that nobody performs it.
+    """
+    row = one(conn, "SELECT * FROM principal WHERE id = ?", (principal_id,))
+    if row is None:
+        return None
+    conn.execute("UPDATE principal SET disabled_at = NULL WHERE id = ?",
+                 (principal_id,))
+    conn.commit()
+    return one(conn, "SELECT id, name, role, disabled_at FROM principal"
+                     " WHERE id = ?", (principal_id,))
+
+
+def rotate_principal(conn: sqlite3.Connection,
+                     principal_id: int) -> tuple[dict, str] | None:
+    """Issue a new token and invalidate the old one, in one statement.
+
+    One statement matters: there is never a window in which both tokens work,
+    which is what "rotate" has to mean if it is the answer to a leak.
+    """
+    row = one(conn, "SELECT * FROM principal WHERE id = ?", (principal_id,))
+    if row is None:
+        return None
+    token = new_token()
+    conn.execute("UPDATE principal SET token_sha256 = ? WHERE id = ?",
+                 (token_digest(token), principal_id))
+    conn.commit()
+    return one(conn, "SELECT id, name, role FROM principal WHERE id = ?",
+               (principal_id,)), token
+
+
+def touch_principal(conn: sqlite3.Connection, row: dict) -> None:
+    """Record that this account was used, at most every `SEEN_REFRESH_S`.
+
+    Compared as strings against a cutoff rather than parsed into datetimes:
+    `TIME_FORMAT` is fixed-width UTC with the `Z`, so lexical order is
+    chronological order, and the same trick is already how `PREVIEW_RETENTION`
+    is applied.
+    """
+    stale = (datetime.now(timezone.utc)
+             - timedelta(seconds=SEEN_REFRESH_S)).strftime(TIME_FORMAT)
+    last = row.get("last_seen_at")
+    if last and last > stale:
+        return
+    try:
+        conn.execute("UPDATE principal SET last_seen_at = ? WHERE id = ?",
+                     (utcnow(), row["id"]))
+        conn.commit()
+    except sqlite3.Error:                      # pragma: no cover - defensive
+        # A bookkeeping write must never turn a working request into a 500.
+        pass
+
+
+# --------------------------------------------------------------------------
 # Circuits the operator has ruled out
 # --------------------------------------------------------------------------
 

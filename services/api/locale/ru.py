@@ -1090,6 +1090,53 @@ MESSAGES: dict[str, str] = {
     "console.delivered": "Доставлена",
     "console.pending": "В очереди",
 
+    # --- accounts and roles -------------------------------------------------
+    "auth.js.role_student": "студент",
+    "auth.js.role_teacher": "преподаватель",
+    "auth.js.role_admin": "администратор",
+    "auth.js.role_anonymous": "не представился",
+    "auth.js.cap_model": "модели",
+    "auth.js.cap_promote": "ввод в работу",
+    "auth.js.cap_archive": "архивы",
+    "auth.js.cap_station": "станция",
+    "auth.js.cap_account": "учётные записи",
+    "auth.js.cap_agent": "пути агента",
+    "auth.js.signed_in": "вход как {name} ({role})",
+    "auth.js.signed_out": "токен не введён — вставьте его, чтобы действовать",
+    "auth.js.need_token":
+        "Вставьте токен на консоли, чтобы воспользоваться этим.",
+    "auth.js.need_role":
+        "Вы {role}, а здесь нужно: {capability}. Токен в порядке — не "
+        "хватает прав. Их может выдать администратор.",
+
+    "accounts.title": "Учётные записи",
+    "accounts.intro":
+        "Кто может изменять данные. Чтение открыто всем. Токен показывается "
+        "один раз при создании и хранится только в виде хеша &mdash; если он "
+        "потерян, выпустите новый, а не ищите старый.",
+    "accounts.name": "имя",
+    "accounts.note": "примечание (необязательно)",
+    "accounts.add": "Добавить",
+    "accounts.col.name": "Имя",
+    "accounts.col.role": "Роль",
+    "accounts.col.holds": "Может менять",
+    "accounts.col.last_seen": "Последний вход",
+    "accounts.js.reads_only": "только чтение",
+    "accounts.js.never": "никогда",
+    "accounts.js.rotate": "Новый токен",
+    "accounts.js.disable": "Отключить",
+    "accounts.js.enable": "Включить",
+    "accounts.js.copy_now":
+        "{name}: скопируйте токен сейчас, повторно он не покажется —",
+    "accounts.js.needs_name": "Учётной записи нужно имя.",
+    "accounts.js.copied": "Скопировал",
+    "accounts.js.cancelled": "Отменено — ничего не изменилось.",
+    "accounts.js.rotate_confirm":
+        "Выпустить новый токен для {name}?\n\nТекущий перестанет работать "
+        "немедленно.",
+    "accounts.js.disable_confirm":
+        "Перестать принимать токен {name}?\n\nЗапись сохранится, поэтому всё, "
+        "что она сделала, останется за ней.",
     "console.token": "Управляющий токен",
     "console.token_note":
         "Хранится только в этой вкладке (sessionStorage), никогда не "

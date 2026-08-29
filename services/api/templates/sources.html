@@ -169,7 +169,7 @@ const MATCH_SLOT_S = {{ match.slot_s|tojson }};
 const stationBox = document.getElementById('station');
 const station = () => stationBox ? stationBox.value : '';
 
-const token = () => sessionStorage.getItem('tok') || '';
+// `token()` comes from base.html now -- one definition, four pages.
 
 async function control(url, method, body) {
   const tok = token();

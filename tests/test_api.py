@@ -2353,7 +2353,10 @@ def test_an_epoch_opens_when_the_station_acknowledges_not_when_it_is_queued(clie
     live = client.get("/stations/SIM/schedule").json()
     assert live["mode"] == "scheduled"
     assert live["slots"][0]["transmitter"] == "NIC"
-    assert live["epoch"]["changed_by"] == "web"
+    # The authenticated principal, not the literal "web" this used to default
+    # to from the request body. `CONTROL_TOKEN` signs as `control` because it
+    # is a shared secret and naming a person would be a lie.
+    assert live["epoch"]["changed_by"] == "control"
 
 
 def test_the_epoch_opens_even_when_the_restart_failed(client):
@@ -2563,8 +2566,14 @@ def test_the_console_control_does_not_hinge_on_a_native_dialog(client):
     assert 'id="say-DOB"' in page, "each station needs somewhere to be answered"
     assert "confirm(" not in page
     # The refresh must stand down while a stop is armed, or it eats the
-    # question the way it used to cancel the dialog.
-    assert "if (!armed && !planning) location.reload()" in page
+    # question the way it used to cancel the dialog. Asserted on the guard's
+    # terms rather than its exact text: 2026-08-28 added two more, because a
+    # newly issued account token is shown once and can never be recovered, so
+    # a refresh that carried it off the screen would destroy it.
+    guard = re.search(r"if \(([^)]*)\) location\.reload\(\)", page)
+    assert guard, "the refresh must be guarded at all"
+    for held in ("!armed", "!planning", "!holdingToken", "!armedAccount"):
+        assert held in guard.group(1), f"the refresh can run past {held}"
     # And queued must not read as done: nothing happens on the station until
     # its agent pulls the row, which may be never.
     assert "pending until the station" in page

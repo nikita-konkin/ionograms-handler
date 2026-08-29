@@ -567,7 +567,13 @@ docker compose -f deploy/docker-compose.yml down -v       # delete it too
 ## What this rig is not
 
 - **No TLS.** Tokens cross the wire in clear. Fine on localhost or a tunnel;
-  not fine across a network you do not control.
+  not fine across a network you do not control. **Accounts do not change
+  this.** Per-user tokens make access revocable for one person and put a real
+  name in the audit columns; they are still bearer tokens in cleartext, and
+  anyone who can watch the wire can replay one. The tunnel above is still the
+  answer, and it is the reason accounts issue random tokens rather than taking
+  passwords: a leaked rig token is a rig token, while a leaked password is very
+  often the one its owner uses elsewhere.
 - **No migrations.** `schema.sql` is applied with `CREATE TABLE IF NOT EXISTS`.
   A schema change means deleting the volume.
 - **No parameter editing.** `control.py` implements validated `.ini` edits and

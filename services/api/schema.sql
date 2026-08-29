@@ -568,3 +568,48 @@ CREATE TABLE IF NOT EXISTS muted_circuit (
 -- two identical "any receiver" rules would both be accepted otherwise.
 CREATE UNIQUE INDEX IF NOT EXISTS muted_circuit_identity
     ON muted_circuit(tx, COALESCE(rx, ''));
+
+
+-- --------------------------------------------------------------------------
+-- Accounts
+-- --------------------------------------------------------------------------
+
+-- One row per person who may write. Reads stay open (see `auth.require_read`);
+-- this table gates the other half.
+--
+-- **Why per-user tokens rather than passwords.** There is no TLS on this
+-- surface -- deploy/README.md says so twice -- so whatever a browser sends
+-- crosses the wire in clear. A rig token that leaks is a rig token; a password
+-- that leaks is very often the same password the person uses elsewhere. A
+-- random per-account token is the smaller loss, is revocable for one person
+-- without disturbing anyone else, and needs no login page.
+--
+-- **Accounts are disabled, never deleted.** Eight columns elsewhere -- 
+-- `activated_by`, `uploaded_by`, `muted_by`, `requested_by` and the rest --
+-- record who did a thing, by name. Deleting the row would leave every one of
+-- those pointing at nobody, which is the opposite of what an audit column is
+-- for. `registry.retire` keeps a model row for the same reason.
+CREATE TABLE IF NOT EXISTS principal (
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    role          TEXT NOT NULL,          -- student | teacher | admin
+    -- sha256 of the token, hex. **A fast hash is the right one here**, which
+    -- looks like a shortcut and is not: the token is 32 bytes from `secrets`,
+    -- so there is no dictionary to run and no preimage to find. What makes a
+    -- slow KDF mandatory for passwords -- that people choose them out of a
+    -- small space -- is exactly what does not apply to a random secret. scrypt
+    -- would add milliseconds to every authenticated request and buy nothing.
+    token_sha256  TEXT NOT NULL UNIQUE,
+    note          TEXT,
+    created_at    TEXT NOT NULL,
+    created_by    TEXT,
+    -- NULL means active. Set, and the token stops being accepted.
+    disabled_at   TEXT,
+    -- Updated at most every few minutes, not per request: this is for spotting
+    -- accounts nobody uses any more, and a write on every call would turn a
+    -- read-heavy console into a writer.
+    last_seen_at  TEXT,
+    CHECK (role IN ('student', 'teacher', 'admin'))
+);
+
+CREATE INDEX IF NOT EXISTS principal_token ON principal(token_sha256);

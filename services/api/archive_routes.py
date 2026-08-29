@@ -21,7 +21,7 @@ from muf.extractors import ALL_METHODS, DEFAULT_METHODS
 
 from . import archives as archives_mod
 from . import db
-from .auth import require_control
+from .auth import Capability, Principal, require
 
 router = APIRouter(tags=["archives"])
 
@@ -143,7 +143,7 @@ def list_archives(request: Request) -> dict:
 
 @router.post("/archives")
 def add_archive(request: Request, payload: dict = Body(...),
-                _: str = Depends(require_control)) -> dict:
+                _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     root = request.app.state.archive_root
     fmt = (payload.get("format") or "").strip() or None
     if fmt is not None and fmt not in loader.FORMATS:
@@ -231,7 +231,7 @@ def add_archive(request: Request, payload: dict = Body(...),
 
 @router.post("/archives/{archive_id}/scan")
 def scan_archive(archive_id: int, request: Request,
-                 _: str = Depends(require_control)) -> dict:
+                 _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     row = _row(request, archive_id)
     started = archives_mod.scan_in_background(
         row, archive_root=request.app.state.archive_root)
@@ -249,7 +249,7 @@ def scan_archive(archive_id: int, request: Request,
 
 @router.post("/archives/{archive_id}/enabled")
 def set_enabled(archive_id: int, request: Request, payload: dict = Body(...),
-                _: str = Depends(require_control)) -> dict:
+                _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     row = _row(request, archive_id)
     enabled = bool(payload.get("enabled"))
     db.set_archive_enabled(request.app.state.db, archive_id, enabled)
@@ -259,7 +259,7 @@ def set_enabled(archive_id: int, request: Request, payload: dict = Body(...),
 
 @router.post("/archives/{archive_id}/methods")
 def set_methods(archive_id: int, request: Request, payload: dict = Body(...),
-                _: str = Depends(require_control)) -> dict:
+                _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     _row(request, archive_id)
     methods = _clean_methods(payload.get("methods"))
     db.set_archive_methods(request.app.state.db, archive_id, methods)
@@ -283,7 +283,7 @@ def _clean_format(value) -> str | None:
 
 @router.post("/archives/{archive_id}/format")
 def set_format(archive_id: int, request: Request, payload: dict = Body(...),
-               _: str = Depends(require_control)) -> dict:
+               _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     """Narrow or widen what this folder may contribute.
 
     Unlike the method list, this takes effect on the **next scan** as well as
@@ -322,7 +322,7 @@ def list_orphans(archive_id: int, request: Request) -> dict:
 
 @router.delete("/archives/{archive_id}/orphans")
 def delete_orphans(archive_id: int, request: Request,
-                   _: str = Depends(require_control)) -> dict:
+                   _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     """Remove exactly what the preview counted.
 
     The same query decides both, so what was shown is what goes. Their
@@ -353,7 +353,7 @@ def delete_orphans(archive_id: int, request: Request,
 
 @router.delete("/archives/{archive_id}")
 def delete_archive(archive_id: int, request: Request,
-                   _: str = Depends(require_control)) -> dict:
+                   _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     row = _row(request, archive_id)
     conn = request.app.state.db
     kept = next((a["soundings"] for a in db.archives(conn)
@@ -407,7 +407,7 @@ def circuit_holdings(tx: str, rx: str, request: Request) -> dict:
 
 @router.post("/circuits/mute")
 def mute_circuit(request: Request, spec: dict = Body(...),
-                 who: str = Depends(require_control)) -> dict:
+                 who: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     """Refuse this circuit at ingest from here on.
 
     `rx` omitted or `*` means every receiver, which is what a marker like
@@ -423,7 +423,7 @@ def mute_circuit(request: Request, spec: dict = Body(...),
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "a mute rule needs a transmitter")
     rx = _any(spec.get("rx"))
-    rule = db.mute_circuit(conn, tx, rx, note=spec.get("note"), by=who)
+    rule = db.mute_circuit(conn, tx, rx, note=spec.get("note"), by=who.name)
     holds = db.circuit_holdings(conn, tx, rx)
     scope = f"{tx} -> {rx}" if rx else f"{tx} -> any receiver"
     return {"ok": True, "muted": rule, "holds": holds,
@@ -436,7 +436,7 @@ def mute_circuit(request: Request, spec: dict = Body(...),
 
 @router.delete("/circuits/mute/{rule_id}")
 def unmute_circuit(rule_id: int, request: Request,
-                   _: str = Depends(require_control)) -> dict:
+                   _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     """Drop a mute rule. The next scan reads those files again."""
     row = db.unmute_circuit(request.app.state.db, rule_id)
     if row is None:
@@ -449,7 +449,7 @@ def unmute_circuit(rule_id: int, request: Request,
 
 @router.delete("/circuits/{tx}/{rx}")
 def delete_circuit(tx: str, rx: str, request: Request,
-                   _: str = Depends(require_control)) -> dict:
+                   _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     """Remove a circuit's soundings, with their extractions and references.
 
     **Refused unless the circuit is muted first**, for the reason

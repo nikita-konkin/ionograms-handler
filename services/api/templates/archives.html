@@ -123,14 +123,14 @@
           style="min-width:22rem">
         {{ a.last_scan_result or '' }}</td>
       <td style="white-space:nowrap">
-        <button onclick="scan({{ a.id }})">{{ t('archives.scan_now') }}</button>
+        <button data-needs="archive" onclick="scan({{ a.id }})">{{ t('archives.scan_now') }}</button>
         <button onclick="setEnabled({{ a.id }}, {{ 'false' if a.enabled else 'true' }})">
           {{ t('archives.disable') if a.enabled else t('archives.enable') }}</button>
         {# Single-quoted, and it has to be: `tojson` escapes `<`, `>`, `&` and `'`
            but deliberately not `"`, so a double-quoted handler ends at the first
            quote of the string and leaves the browser a syntax error. Same
            pattern as `sources.html`'s `data-row`. #}
-        <button onclick='remove({{ a.id }}, {{ a.name|tojson }})'>{{ t('archives.remove') }}</button>
+        <button data-needs="archive" onclick='remove({{ a.id }}, {{ a.name|tojson }})'>{{ t('archives.remove') }}</button>
       </td>
     </tr>
     {% endfor %}
@@ -179,10 +179,10 @@
              `"`, so a double-quoted handler carrying a station name would be
              truncated to a syntax error and the button would silently do
              nothing. `tests/test_web_handlers.py` enforces it. #}
-          <button onclick='dropCircuit(this, {{ c.tx|tojson }}, {{ (c.rx or "*")|tojson }})'>{{
+          <button data-needs="archive" onclick='dropCircuit(this, {{ c.tx|tojson }}, {{ (c.rx or "*")|tojson }})'>{{
             t('circuits.delete') }}</button>
           {%- else %}
-          <button onclick='muteCircuit({{ c.tx|tojson }}, {{ (c.rx or "*")|tojson }})'>{{
+          <button data-needs="archive" onclick='muteCircuit({{ c.tx|tojson }}, {{ (c.rx or "*")|tojson }})'>{{
             t('circuits.mute') }}</button>
           {%- endif %}
           <div class="note"></div></td>
@@ -284,7 +284,7 @@
 // Same contract as the console's start/stop buttons: the control token lives
 // in sessionStorage, put there on the console page, never baked into a page
 // that might be left open.
-const token = () => sessionStorage.getItem('tok') || '';
+// `token()` comes from base.html now -- one definition, four pages.
 
 async function control(url, method, body) {
   const tok = token();
@@ -658,5 +658,7 @@ async function dropCircuit(button, tx, rx) {
 
 {% for a in archives %}{% if a.format %}refreshOrphans({{ a.id }});{% endif %}{% endfor %}
 if (!document.querySelector('#cands table')) loadCandidates();
+
+gate('archive');
 </script>
 {% endblock %}

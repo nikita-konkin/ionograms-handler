@@ -21,7 +21,7 @@ from jinja2 import pass_context
 
 from muf.reference import indices
 
-from . import acquisition, db, i18n
+from . import acquisition, auth, db, i18n
 from . import net as net_mod
 from . import sao as sao_mod
 from . import series as series_mod
@@ -222,6 +222,10 @@ def console(request: Request):
         # host unreachable.
         "net": net_mod.current(),
         "sources": {s.key: s for s in indices.SOURCES},
+        # For the role chooser on the accounts panel. Rendered from `auth`
+        # rather than a literal list, so a fourth role appears in the form the
+        # moment it appears in the policy.
+        "roles": list(auth.ROLES),
     })
 
 

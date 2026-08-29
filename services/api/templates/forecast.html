@@ -39,7 +39,7 @@
          say so was a shell. #}
       <td style="white-space:nowrap">
         {% if row.model %}
-        <button onclick='runNow({{ row.param|tojson }}, {{ row.tx|tojson }},
+        <button data-needs="model" onclick='runNow({{ row.param|tojson }}, {{ row.tx|tojson }},
           {{ row.rx|tojson }}, {{ row.model.name|tojson }})'
           title="{{ t('forecast.run.title') }}">{{ t('forecast.run') }}</button>
         {% else %}
@@ -77,7 +77,7 @@
       <td class="note wrap" style="max-width:32rem">{{ r.detail or '' }}</td>
       <td style="white-space:nowrap">
         {% if r.state == 'queued' %}
-        <button onclick='cancelRun({{ r.id }})'>{{ t('forecast.train.cancel') }}</button>
+        <button data-needs="model" onclick='cancelRun({{ r.id }})'>{{ t('forecast.train.cancel') }}</button>
         {% endif %}</td>
     </tr>
     {% endfor %}
@@ -156,19 +156,19 @@
         <button disabled title="{{ t('forecast.activate.unbound_title') }}"
           >{{ t('forecast.activate') }}</button>
         {% elif m.active %}
-        <button onclick='retire({{ m.id }}, {{ m.name|tojson }})'>{{ t('forecast.retire') }}</button>
+        <button data-needs="promote" onclick='retire({{ m.id }}, {{ m.name|tojson }})'>{{ t('forecast.retire') }}</button>
         {% else %}
         {# Single-quoted: see the note in archives.html. `tojson` does not escape
            `"`, so a double-quoted handler carrying a model name is truncated to
            a syntax error and the button silently does nothing. #}
-        <button onclick='activate({{ m.id }}, {{ m.name|tojson }},
+        <button data-needs="promote" onclick='activate({{ m.id }}, {{ m.name|tojson }},
           {{ (m.tx ~ " -> " ~ m.rx)|tojson }}, {{ m.param|tojson }})'>{{ t('forecast.activate') }}</button>
         {% endif %}
         {# Deleting is the operator's call, so it is offered on every row --
            including the active one, where the api refuses it and says to
            retire first. A button that is simply absent teaches nothing; one
            that explains the order of operations does. #}
-        <button onclick='removeModel({{ m.id }}, {{ m.name|tojson }})'
+        <button data-needs="model" onclick='removeModel({{ m.id }}, {{ m.name|tojson }})'
           title="{{ t('forecast.delete_title') }}">{{ t('forecast.delete') }}</button>
       </td>
     </tr>
@@ -315,7 +315,7 @@
              placeholder="{{ t('forecast.add.name.placeholder') }}"></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
       <input type="text" id="up-note" size="26"></label>
-    <button type="submit" class="pill">{{ t('forecast.add.submit') }}</button>
+    <button type="submit" class="pill" data-needs="model">{{ t('forecast.add.submit') }}</button>
   </form>
 
   <h3 class="muted" style="font-size:.9rem">{{ t('forecast.add.queue') }}</h3>
@@ -340,7 +340,7 @@
          is the thing this console keeps refusing to ship. #}
       <td class="note wrap" style="max-width:34rem">{{ u.detail or '' }}</td>
       <td style="white-space:nowrap">
-        <button onclick='forget({{ u.id }}, {{ u.filename|tojson }})'
+        <button data-needs="model" onclick='forget({{ u.id }}, {{ u.filename|tojson }})'
           >{{ t('forecast.add.forget') }}</button></td>
     </tr>
     {% endfor %}
@@ -417,7 +417,7 @@
       <input type="number" id="tr-holdout" value="2" min="0.5" step="0.5" size="4"></label>
     <label class="muted" style="font-size:.85rem">{{ t('forecast.add.note') }}
       <input type="text" id="tr-note" size="26"></label>
-    <button type="submit" class="pill">{{ t('forecast.train.submit') }}</button>
+    <button type="submit" class="pill" data-needs="model">{{ t('forecast.train.submit') }}</button>
   </form>
   {% else %}
   <p class="note">{{ t('forecast.no_circuits') }}</p>
@@ -459,7 +459,7 @@
           <code>{{ j.worker }}</code></span>{% endif %}</td>
       <td style="white-space:nowrap">
         {% if j.state == 'queued' %}
-        <button onclick='cancelJob({{ j.id }})'>{{ t('forecast.train.cancel') }}</button>
+        <button data-needs="model" onclick='cancelJob({{ j.id }})'>{{ t('forecast.train.cancel') }}</button>
         {% endif %}</td>
     </tr>
     {% endfor %}
@@ -474,7 +474,7 @@
 // Same contract as the console's start/stop buttons and the archives page:
 // the control token lives in sessionStorage, put there on the console page,
 // never baked into a page that might be left open.
-const token = () => sessionStorage.getItem('tok') || '';
+// `token()` comes from base.html now -- one definition, four pages.
 
 async function control(url, method, body) {
   const tok = token();
@@ -700,5 +700,9 @@ async function cancelJob(id) {
   say(r.ok ? r.body.detail : r.detail, !r.ok, 'say-train');
   if (r.ok) setTimeout(() => location.reload(), 700);
 }
+
+// Explain, before the click, what the server would say after it. The server
+// checks regardless -- see `auth.require`.
+gate('model'); gate('promote');
 </script>
 {% endblock %}

@@ -99,7 +99,7 @@
      would be accepted. A renamed receiver is STALE for good otherwise, and a
      red that is always red is a red nobody reads. #}
   <p class="note">
-    <button onclick="forget('{{ s.name }}')">{{ t('console.forget') }}</button>
+    <button data-needs="station" onclick="forget('{{ s.name }}')">{{ t('console.forget') }}</button>
     {{ t('console.forget_note') }}
   </p>
   <div id="forgetSay-{{ s.name }}" class="note" style="margin-bottom:.6rem"></div>
@@ -278,7 +278,7 @@
           <option{% if m == a.mode %} selected{% endif %}>{{ m }}</option>
           {% endfor %}
         </select></label>
-      <button onclick="applyPlan('{{ s.name }}')">{{ t('console.apply') }}</button>
+      <button data-needs="station" onclick="applyPlan('{{ s.name }}')">{{ t('console.apply') }}</button>
       <span class="note">{{ t('console.queued_note') }}</span>
     </div>
 
@@ -382,7 +382,7 @@
                style="width:6.5rem"
                value="{% if s.band.configured %}{{ '%g'|format(s.band.configured.analysis_max_mhz) }}{% endif %}"
                oninput="bandChanged('{{ s.name }}')"> {{ t('unit.mhz') }}</label>
-      <button onclick="applyBand('{{ s.name }}')">{{ t('console.apply_band') }}</button>
+      <button data-needs="station" onclick="applyBand('{{ s.name }}')">{{ t('console.apply_band') }}</button>
     </div>
     <div style="margin-top:.4rem">
       <span class="note">{{ t('console.presets') }}</span>
@@ -397,9 +397,9 @@
   </div>
 
   <div style="margin-top:.8rem">
-    <button onclick="send('{{ s.name }}','start')">{{ t('console.start') }}</button>
-    <button onclick="send('{{ s.name }}','stop')">{{ t('console.stop') }}</button>
-    <button onclick="send('{{ s.name }}','restart')">{{ t('console.restart') }}</button>
+    <button data-needs="station" onclick="send('{{ s.name }}','start')">{{ t('console.start') }}</button>
+    <button data-needs="station" onclick="send('{{ s.name }}','stop')">{{ t('console.stop') }}</button>
+    <button data-needs="station" onclick="send('{{ s.name }}','restart')">{{ t('console.restart') }}</button>
     <span class="note">{{ t('console.queued_pull') }}</span>
     <div id="say-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
   </div>
@@ -432,9 +432,48 @@
 
 <div class="panel">
   <h2>{{ t('console.token') }}</h2>
-  <input id="tok" type="password" size="40" placeholder="CONTROL_TOKEN"
+  <input id="tok" type="password" size="40" placeholder="iono_…"
          oninput="sessionStorage.setItem('tok', this.value)">
-  <span class="note">{{ t('console.token_note') }}</span>
+  {# Says who the pasted token is, so a refusal later is never a surprise.
+     Filled from /whoami, which never 401s -- see the route. #}
+  <span id="whoami" class="note"></span>
+  <div class="note">{{ t('console.token_note') }}</div>
+</div>
+
+{# Accounts. Rendered for everyone and populated only for a holder of
+   `account`, rather than omitted: a teacher who can see that accounts exist
+   and that they cannot manage them has learned the shape of the system, which
+   is the same reason the model buttons are disabled rather than hidden. #}
+<div class="panel" id="accountsPanel" style="display:none">
+  <h2>{{ t('accounts.title') }}</h2>
+  <p class="note">{{ t('accounts.intro') }}</p>
+
+  <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center">
+    <input id="acc-name" size="18" placeholder="{{ t('accounts.name') }}">
+    <select id="acc-role">
+      {# Literal keys, for the reason spelled out beside ROLE_NAME in
+         base.html: a composed key is invisible to the i18n test. #}
+      {%- set ROLE_LABEL = {'student': t('auth.js.role_student'),
+                            'teacher': t('auth.js.role_teacher'),
+                            'admin': t('auth.js.role_admin')} %}
+      {% for role in roles %}<option value="{{ role }}">{{ ROLE_LABEL.get(role, role) }}</option>{% endfor %}
+    </select>
+    <input id="acc-note" size="24" placeholder="{{ t('accounts.note') }}">
+    <button onclick="addAccount()">{{ t('accounts.add') }}</button>
+  </div>
+
+  {# The token appears here once and is never retrievable again. Given its own
+     block, not a toast: it has to survive long enough to be copied. #}
+  <div id="acc-token" class="note" style="display:none; margin-top:.6rem"></div>
+  <div id="acc-say" class="note" style="margin-top:.45rem"></div>
+
+  <table style="margin-top:.6rem"><thead><tr>
+    <th>{{ t('accounts.col.name') }}</th>
+    <th>{{ t('accounts.col.role') }}</th>
+    <th>{{ t('accounts.col.holds') }}</th>
+    <th>{{ t('accounts.col.last_seen') }}</th>
+    <th></th>
+  </tr></thead><tbody id="acc-rows"></tbody></table>
 </div>
 
 <script>
@@ -818,6 +857,186 @@
   // cheaper in every sense than a websocket that must be reconnected. It
   // stands down while a stop is armed or a plan is being edited, so the
   // refresh can eat neither the question nor a half-made choice.
-  setInterval(() => { if (!armed && !planning) location.reload(); }, 15000);
+  setInterval(() => {
+    if (!armed && !planning && !holdingToken && !armedAccount) location.reload();
+  }, 15000);
+
+  // ------------------------------------------------------------------------
+  // Who you are, and the accounts panel
+  // ------------------------------------------------------------------------
+
+  async function showWhoami() {
+    const me = await ME;
+    const box = document.getElementById('whoami');
+    if (!box) return;
+    box.textContent = me.source === 'none'
+      ? T('auth.js.signed_out')
+      : T('auth.js.signed_in', {name: me.name,
+                                role: ROLE_NAME[me.role] || me.role});
+    if (me.capabilities.includes('account')) {
+      document.getElementById('accountsPanel').style.display = '';
+      loadAccounts();
+    }
+  }
+
+  // Its own fetch rather than `control()`: this one is a read, and the four
+  // page-local `control()` helpers all short-circuit when no token is set.
+  async function accounts(url, method, body) {
+    const tok = token();
+    if (!tok) return null;
+    const r = await fetch(url, {
+      method: method || 'GET',
+      headers: {'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + tok},
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const out = await r.json().catch(() => ({}));
+    return {ok: r.ok, status: r.status, body: out, detail: out.detail};
+  }
+
+  async function loadAccounts() {
+    const r = await accounts('/principals');
+    if (!r || !r.ok) return;
+    const rows = document.getElementById('acc-rows');
+    rows.innerHTML = '';
+    for (const p of r.body.principals) {
+      const held = (r.body.grants[p.role] || []);
+      const tr = document.createElement('tr');
+      if (p.disabled_at) tr.className = 'muted';
+      // textContent throughout: an account name is operator-supplied, and
+      // building this row with innerHTML would make naming an account
+      // `<img onerror=...>` a stored XSS against the next admin to look.
+      const cell = (text) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        return td;
+      };
+      tr.appendChild(cell(p.name));
+      tr.appendChild(cell(ROLE_NAME[p.role] || p.role));
+      tr.appendChild(cell(held.length
+                          ? held.map(c => CAP_NAME[c] || c).join(', ')
+                          : T('accounts.js.reads_only')));
+      tr.appendChild(cell(p.last_seen_at
+                          ? p.last_seen_at.slice(0, 16).replace('T', ' ')
+                          : T('accounts.js.never')));
+
+      const actions = document.createElement('td');
+      const button = (label, fn) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.onclick = fn;
+        actions.appendChild(b);
+      };
+      button(T('accounts.js.rotate'), () => rotate(p.id, p.name));
+      button(p.disabled_at ? T('accounts.js.enable') : T('accounts.js.disable'),
+             () => setEnabled(p.id, p.name, !!p.disabled_at));
+      tr.appendChild(actions);
+      rows.appendChild(tr);
+    }
+  }
+
+  // A token is shown once and can never be recovered, so this page's 15 s
+  // refresh must not carry it away before it has been read. `holdingToken`
+  // suspends the refresh exactly as an armed stop does, and the operator
+  // dismisses the block when they are done copying.
+  let holdingToken = false;
+
+  function showToken(name, tok) {
+    const box = document.getElementById('acc-token');
+    box.style.display = '';
+    box.textContent = '';
+    holdingToken = true;
+
+    const line = document.createElement('div');
+    line.textContent = T('accounts.js.copy_now', {name: name});
+    const code = document.createElement('code');
+    code.textContent = tok;
+    code.style.userSelect = 'all';
+    const done = document.createElement('button');
+    done.textContent = T('accounts.js.copied');
+    done.onclick = () => {
+      box.style.display = 'none';
+      box.textContent = '';
+      holdingToken = false;
+    };
+    box.appendChild(line);
+    box.appendChild(code);
+    box.appendChild(done);
+  }
+
+  // Arm-then-press-again, never a native browser dialog. One the browser
+  // suppresses is indistinguishable from a dead button, and this page's own
+  // refresh cancels one mid-read -- the failure that produced "I press STOP
+  // but nothing changes". `tests/test_api.py` greps this page to keep the
+  // native call out, comments included, which is why this note spells it out
+  // in prose rather than naming the function.
+  let armedAccount = null;
+
+  function armAccount(key, message, run) {
+    if (armedAccount === key) {
+      armedAccount = null;
+      clearTimeout(armedTimer);
+      run();
+      return true;
+    }
+    armedAccount = key;
+    write('acc-say', message);
+    clearTimeout(armedTimer);
+    armedTimer = setTimeout(() => {
+      armedAccount = null;
+      write('acc-say', T('accounts.js.cancelled'));
+    }, 30000);
+    return false;
+  }
+
+  async function addAccount() {
+    const name = document.getElementById('acc-name').value.trim();
+    const role = document.getElementById('acc-role').value;
+    const note = document.getElementById('acc-note').value.trim();
+    if (!name) { write('acc-say', T('accounts.js.needs_name'), true); return; }
+    const r = await accounts('/principals', 'POST',
+                             {name: name, role: role, note: note || null});
+    if (!r) { write('acc-say', T('common.js.no_token'), true); return; }
+    if (!r.ok) { write('acc-say', r.detail, true); return; }
+    document.getElementById('acc-name').value = '';
+    document.getElementById('acc-note').value = '';
+    write('acc-say', r.detail);
+    showToken(name, r.body.token);
+    loadAccounts();
+  }
+
+  function rotate(id, name) {
+    armAccount('rotate-' + id,
+               T('accounts.js.rotate_confirm', {name: name}), async () => {
+      const r = await accounts('/principals/' + id + '/rotate', 'POST');
+      if (!r || !r.ok) { write('acc-say', r ? r.detail : '', true); return; }
+      write('acc-say', r.detail);
+      showToken(name, r.body.token);
+      loadAccounts();
+    });
+  }
+
+  function setEnabled(id, name, enable) {
+    const act = async () => {
+      const r = enable
+        ? await accounts('/principals/' + id + '/enable', 'POST')
+        : await accounts('/principals/' + id, 'DELETE');
+      if (!r || !r.ok) { write('acc-say', r ? r.detail : '', true); return; }
+      write('acc-say', r.detail);
+      loadAccounts();
+    };
+    // Enabling is not destructive and needs no second press; disabling takes
+    // someone's access away and does.
+    if (enable) { act(); return; }
+    armAccount('disable-' + id,
+               T('accounts.js.disable_confirm', {name: name}), act);
+  }
+
+  showWhoami();
+
+  // The stop button first of all. Disabled, not hidden: an operator who can
+  // see it and is told why it is out of reach knows the system has a shape;
+  // a missing button reads as a bug.
+  gate('station');
 </script>
 {% endblock %}

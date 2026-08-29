@@ -17,9 +17,11 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (APIRouter, Depends, Header, HTTPException, Query,
+                     Request, status)
 from fastapi.responses import FileResponse, Response
 
+from . import auth
 from . import db
 from . import net as net_mod
 from . import sources as sources_mod
@@ -261,6 +263,40 @@ def inference_runs(request: Request, state: str | None = None,
 
     rows = queues.runs(request.app.state.db, state=state, limit=limit)
     return {"count": len(rows), "runs": rows}
+
+
+@router.get("/whoami")
+def whoami(request: Request,
+           authorization: str | None = Header(default=None)) -> dict:
+    """Who this token is, and what it may do.
+
+    Never 401s. An unrecognised token and no token at all both answer
+    `anonymous` with an empty capability list, because this is the endpoint the
+    console asks *before* it knows whether it has a good token -- an error here
+    would mean the page could not render its own signed-out state.
+
+    The console uses `capabilities` to disable controls the holder cannot use.
+    That is a courtesy, not a control: every endpoint checks for itself.
+    """
+    who = auth.identify(request, authorization)
+    return who.as_dict()
+
+
+@router.get("/principals")
+def list_principals(request: Request,
+                    _: auth.Principal = Depends(
+                        auth.require(auth.Capability.ACCOUNT))) -> dict:
+    """Every account. Requires ACCOUNT, unlike the other reads on this router.
+
+    Reads are otherwise open here, and this one is not: a roster of who has
+    access is a map of what to attack. It never carries a token or a digest --
+    `db.principals` selects columns explicitly so that a future column cannot
+    leak into it by being added to the table.
+    """
+    return {"principals": db.principals(request.app.state.db),
+            "roles": list(auth.ROLES),
+            "grants": {role: sorted(c.value for c in caps)
+                       for role, caps in auth.GRANTS.items()}}
 
 
 @router.get("/models/{model_id}/holdings")

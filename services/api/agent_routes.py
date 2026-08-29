@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from . import db
-from .auth import require_control
+from .auth import Capability, Principal, require
 
 router = APIRouter(tags=["agent"])
 
@@ -38,7 +38,7 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 @router.post("/stations/health")
 async def push_health(request: Request,
-                      _: str = Depends(require_control)) -> dict:
+                      _: Principal = Depends(require(Capability.AGENT))) -> dict:
     """Receive one health document.
 
     The station name comes from the document, not from the URL, because that
@@ -60,7 +60,7 @@ async def push_health(request: Request,
 
 @router.post("/stations/{station}/preview")
 async def push_preview(station: str, request: Request,
-                       _: str = Depends(require_control)) -> dict:
+                       _: Principal = Depends(require(Capability.AGENT))) -> dict:
     """Receive one thumbnail of the newest product from one transmitter.
 
     Its own endpoint rather than a field in the health document: that document
@@ -125,7 +125,7 @@ def _number(value: Any) -> float | None:
 
 @router.get("/stations/{station}/commands")
 def pull_commands(station: str, request: Request,
-                  _: str = Depends(require_control)) -> dict:
+                  _: Principal = Depends(require(Capability.AGENT))) -> dict:
     """Hand out pending work. An empty list is the normal answer."""
     pending = db.take_pending(request.app.state.db, station)
     return {"commands": [
@@ -135,7 +135,7 @@ def pull_commands(station: str, request: Request,
 
 @router.post("/stations/{station}/commands/{command_id}/ack")
 async def acknowledge(station: str, command_id: str, request: Request,
-                      _: str = Depends(require_control)) -> dict:
+                      _: Principal = Depends(require(Capability.AGENT))) -> dict:
     """Record what a command did.
 
     Accepted even for an unknown id. The agent has already acted by the time it

@@ -578,6 +578,74 @@ One surface across acquisition, extraction and forecasting — but **separate
 auth scopes**. Public read of soundings and forecasts must not share a scope
 with anything that can stop an acquisition.
 
+#### 4.3.1 Accounts and capabilities **[built 2026-08-28]**
+
+That began as two shared secrets and no identity, which is enough for one
+operator on `127.0.0.1` and not enough for a teaching setting. Students should
+browse, teachers should fit models, and only an admin should reach the stop
+button.
+
+**Per-user tokens, not passwords.** There is no TLS on this surface
+(`deploy/README.md`), so whatever a browser sends crosses the wire in clear. A
+rig token that leaks is a rig token; a password that leaks is very often the
+same password the person uses elsewhere. A random per-account token is the
+smaller loss, is revocable for one person without disturbing anyone else, and
+needs no login page. Stored as a sha256 — a *fast* hash, correctly: the token
+is 32 bytes from `secrets`, so there is no dictionary to run, and what makes a
+slow KDF mandatory for passwords is exactly what does not apply here.
+
+**Endpoints name a capability; `auth.GRANTS` says who holds it.** One map, one
+place, rather than a role test at each of twenty-nine handlers where nobody can
+read the policy as a whole.
+
+| | student | teacher | admin | `CONTROL_TOKEN` |
+|---|---|---|---|---|
+| read anything | ✓ | ✓ | ✓ | ✓ |
+| `model` — fit, run, upload, delete | | ✓ | ✓ | ✓ |
+| `promote` — make it the live forecast | | | ✓ | ✓ |
+| `archive` — register, scan, delete; mute circuits | | | ✓ | ✓ |
+| `station` — start, stop, reconfigure | | | ✓ | ✓ |
+| `account` — create and revoke | | | ✓ | ✓ |
+| `agent` — push health, pull commands | | | | ✓ |
+
+**Admin deliberately does not hold `agent`.** Those four paths are
+machine-to-machine: a person never posts a health report, and withholding it
+means a leaked admin token cannot forge telemetry to make a dead receiver look
+alive. `CONTROL_TOKEN` holds it because that is what the agent presents.
+
+**`CONTROL_TOKEN` still holds everything**, which is load-bearing three times
+over rather than compatibility slack: the station agent authenticates with it
+from a laptop where a redeploy is a manual errand; it is the bootstrap, so the
+first admin is created with it and no default account is ever seeded; and it is
+the way back in when the accounts table is wrong.
+
+Three refusals, deliberately distinct because they call for different actions —
+**503** no `CONTROL_TOKEN` configured at all, **401** nothing recognised
+presented, **403** recognised but the role is short. Collapsing the last two
+tells a student their token is wrong when it is perfectly good, and sends them
+to re-paste it forever.
+
+**What this bought.** Eight columns — `activated_by`, `uploaded_by`,
+`muted_by`, `requested_by`, `issued_by`, `verified_by`, `changed_by`,
+`created_by` — had been recording the constant `"control"` since they were
+added. Three of them were worse than constant: they read the operator's name
+out of the *request body*, so a caller could sign someone else's name to a stop
+command. The actor now comes from the token in every case.
+
+**Accounts are disabled, never deleted**, for the same reason `registry.retire`
+keeps a model row: removing it would leave every audit column it wrote pointing
+at nobody.
+
+**A named account reads too**, when `READ_TOKEN` closes reads. There is one
+`Authorization` header and a person has one token, so comparing it only against
+`READ_TOKEN` would have locked every account out of the whole console the day
+anyone closed reads — `/whoami` included, which the console asks before it can
+render its own signed-in state. A student who may write nothing may certainly
+look. Latent while `READ_TOKEN` is unset, which is every deployment so far.
+
+**None of this makes the surface internet-facing.** Named accounts do not add
+TLS, and the SSH tunnel in `deploy/README.md` is still the answer.
+
 ### 4.4 prediction **[built 2026-08-23]**
 
 Reads the tracked series, writes forecast rows, scores them against four
