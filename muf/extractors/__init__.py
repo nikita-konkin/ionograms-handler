@@ -71,11 +71,13 @@ def _registry() -> dict[str, Callable[..., MufResult]]:
     from .algorithmic import extract as algorithmic
     from .contour import extract as contour
     from .kmeans import extract as kmeans
+    from .viterbi import extract as viterbi
 
     reg: dict[str, Callable[..., MufResult]] = {
         "algo": algorithmic,
         "kmeans": kmeans,
         "contour": contour,
+        "dp": viterbi,
     }
 
     # TensorFlow is optional; importing it costs seconds and it is absent on
@@ -89,11 +91,15 @@ def _registry() -> dict[str, Callable[..., MufResult]]:
     return reg
 
 
-#: Estimators run when ``--methods`` is not given. The CNN is excluded: it is
-#: experimental and needs a model trained on this geometry (see cnn.py).
+#: Estimators run when ``--methods`` is not given. Two are excluded. The CNN
+#: needs a model trained on this geometry (see cnn.py). ``dp`` is new on
+#: 2026-08-30 and no stored result was produced with it, so making it a default
+#: would silently change what a re-run of an old archive means; it has to earn
+#: its way in against the others first. See
+#: ``docs/2026-08-30-segmentation-quality.md`` sec. 6a.
 DEFAULT_METHODS = ("algo", "kmeans", "contour")
 
-ALL_METHODS = ("algo", "kmeans", "contour", "cnn")
+ALL_METHODS = ("algo", "kmeans", "contour", "dp", "cnn")
 
 
 def canonical(name: str) -> str:

@@ -154,16 +154,69 @@ have been evidence of a different mechanism than the one diagnosed.
 
 ## 6. What to do next, in this order
 
-**a. Extract one continuous trace by dynamic programming** — ~1 week, no labels.
-*The highest-value item if §5 has not closed the gap.* Every current method
-decides cell-by-cell and hopes a run emerges. The physics says the trace is a
-single connected curve whose range varies smoothly with frequency, which is a
-shortest-path problem over the array with the existing 150 km/MHz slope limit as
-the transition cost. It produces a trace that **cannot fragment by
-construction**, it needs no training data, and it *replaces* the weakest stage
-rather than adding another one. This is what OIASA's maximum-contrast approach
-is doing in spirit; OIASA is the oblique/chirp-sounder state of the art and is
-unsupervised.
+**a. Extract one continuous trace by dynamic programming** — **built
+2026-08-30, and it does not yet beat the fixed bridge.**
+[muf/extractors/viterbi.py](muf/extractors/viterbi.py), registered as `dp`,
+**not** in `DEFAULT_METHODS`.
+
+Every other method decides cell-by-cell and hopes a run emerges. The physics
+says the trace is a single connected curve whose range varies smoothly with
+frequency, which is a shortest-path problem over the array with the existing
+150 km/MHz limit as the transition constraint. It cannot fragment by
+construction, so there is nothing for a bridge parameter to repair, and it
+needs no training data. This is OIASA's maximum-contrast approach in spirit.
+
+Two design corrections came out of building it, both worth keeping:
+
+- **The off-trace state had to go.** Modelling "not on the trace" as a state
+  the path enters and leaves reads as the more general model, and it is
+  strictly worse: rejoining resets the range, so the slope limit does not apply
+  across the gap. On a synthetic sounding, six bins of interference 500 km off
+  the trace and 200 bins above its end were returned as the MUF. The trace now
+  starts once and ends once — Kadane's rule carried along a path — and the same
+  interferer is ignored.
+- **The drift budget must come from the slope, not from
+  `pick._range_tolerance`.** That helper floors its allowance at
+  `RANGE_SLOPE_FLOOR_BINS`, which is correct for jitter between two independent
+  detections and wrong as a per-step budget for a path of hundreds of steps. It
+  allowed 10 km per step on a 20.5 kHz axis — **488 km/MHz against a stated
+  limit of 150** — enough to walk 650 km through pure noise and rejoin a
+  different feature.
+
+### Measured on the same 400 soundings
+
+```
+  algo     vs contour   MAE 0.119  bias -0.119  >1MHz  1.8%
+  algo     vs dp        MAE 0.122  bias -0.075  >1MHz  1.0%
+  contour  vs dp        MAE 0.078  bias +0.043  >1MHz  2.2%
+  dp       vs kmeans    MAE 0.197  bias +0.089  >1MHz  2.8%
+
+  vs (contour+kmeans)/2 -- NOT truth, and contour is inside it:
+    algo 0.107   contour 0.087   kmeans 0.087   dp 0.132
+  >1MHz at the terminator: algo 5.9%   contour 5.0%   dp 7.6%
+```
+
+`dp` agrees with `contour` more closely than any other pair in the table
+(0.078), which is the encouraging half. Against the only comparator that
+excludes both, it is worse than `algo`-with-the-fixes — 0.132 against 0.107 —
+and at the terminator, which is where the whole problem lives, it is the worst
+of the four at 7.6%.
+
+**So it is built and it is not adopted.** 10 ms per sounding, so cost is not
+the objection. The objection is that nothing here can adjudicate: every
+comparator available is made of the estimators being compared, and a
+comparator containing `contour` and `kmeans` cannot fairly rank a method
+against them. `dp` being simultaneously the closest to `contour` and the
+furthest from the consensus is the signature of a circular measurement, not a
+finding.
+
+**This is now the strongest argument for (b).** The next step for `dp` is not
+more tuning — it is a reference that is not one of the estimators. The
+hypothesis to test when there is one: that the unbounded gap crossing (which
+has no upper length, by design) reaches past the true trace end at the
+terminator, where the trace is weakest and interference is worst. That would
+show up as `dp` reading *high* against GIRO exactly where it reads high against
+the consensus now.
 
 **b. Score against GIRO instead of against each other** — **blocked upstream,
 not by us.** Nothing in §1–§5 can distinguish "the extractors agree" from "the
