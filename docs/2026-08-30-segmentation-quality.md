@@ -165,12 +165,47 @@ rather than adding another one. This is what OIASA's maximum-contrast approach
 is doing in spirit; OIASA is the oblique/chirp-sounder state of the art and is
 unsupervised.
 
-**b. Score against GIRO instead of against each other** — ~2 days, no labels.
-[muf/reference/giro.py](muf/reference/giro.py) already fetches real measurements
-from DIDBase and converts foF2/hmF2 to an oblique MUF. Nothing in §1–§5 can
-distinguish "the extractors agree" from "the extractors are right". This can,
-and it is already written — it needs wiring into the comparison, not building.
-Cheap enough that it could reasonably go first.
+**b. Score against GIRO instead of against each other** — **blocked upstream,
+not by us.** Nothing in §1–§5 can distinguish "the extractors agree" from "the
+extractors are right". This is the only thing in the project that can.
+
+It turns out to need neither building *nor* wiring. `compare.report(...,
+reference_models=["giro"])` already evaluates
+[muf/reference/giro.py](muf/reference/giro.py) against every method and adds it
+to the pairwise table, and `band_limited_by_reference` already flags soundings
+whose true MUF was above the sweep — the one error both extractors make
+together and neither can see. Driven with the network stubbed out it produces:
+
+```
+      a       b  n  rmse_mhz  mae_mhz  bias_mhz
+   algo contour  4    0.8155    0.800    -0.800
+   algo    giro  4    1.3224    1.306     1.306
+contour    giro  4    2.1086    2.106     2.106
+*giro*: RV149 Rostov-on-Don, 142 km from control point 45.99N 39.09E;
+        foF2 x secant law
+```
+
+**What is actually missing is DIDBase.** Checked 2026-08-30: every query to
+`https://lgdc.uml.edu/common/DIDBGetValues` returns an Apache Tomcat 404 —
+"the requested resource is not available" — including the example URLs the
+service's own documentation publishes. It is not a moved endpoint and not a
+malformed query: `/common/DIDBFastStationList` on the same host serves
+normally, so one servlet is undeployed while its neighbours run.
+`giro.uml.edu/didbase/scaled.php` answers GET with its query form but returns
+405 on POST, so Tomcat is serving it as a static file and the PHP layer is gone
+too.
+
+`giro.py` is therefore correct and there is nothing here to fix. **Retry the
+endpoint before doing anything else on this item.** If it answers, this becomes
+half a day of running the comparison — and it should then be done *before* (a),
+because it is what tells us whether (a) helped or merely moved the numbers.
+
+The one real gap was that none of this had ever been exercised: an outage at
+DIDBase and a broken integration both surfaced as one line in
+`reference_problems`, so they were indistinguishable.
+[tests/test_compare.py](tests/test_compare.py) now drives the whole path with
+`fetch` stubbed — the scoring case, the outage case, the missing-geometry case
+and the out-of-band case — so from here only the outage can be the cause.
 
 **c. A U-Net trained on agreement rather than hand labels** — weeks,
 label-bound. `cnn.py`'s docstring already describes the path: gated dB tile as

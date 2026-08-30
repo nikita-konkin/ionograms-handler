@@ -141,3 +141,103 @@ def test_markdown_table_handles_missing_values():
     table = compare._markdown_table(pd.DataFrame({"a": [1, np.nan], "b": ["x", "y"]}))
     assert table.count("\n") == 3      # header, rule, two rows
     assert "| a" in table
+
+
+# --- scoring against an external reference -----------------------------------
+#
+# The GIRO path is the only thing in the project that can distinguish "the
+# extractors agree" from "the extractors are right" (see
+# docs/2026-08-30-segmentation-quality.md sec. 6b). It was written but never
+# exercised end to end, so an outage at DIDBase and a broken integration looked
+# identical -- both surface as a line in `reference_problems`. These drive the
+# whole path with the network stubbed out, so only the outage can be the cause.
+
+def _geo_frame(algo, contour_values, freq_stop=32.5):
+    """A results frame carrying the path geometry `add_reference_models` needs."""
+    n = len(algo)
+    frame = _frame(algo, contour_values)
+    frame["freq_stop"] = [freq_stop] * n
+    frame["tx_lat"] = [35.18557] * n           # Nicosia
+    frame["tx_lon"] = [33.38228] * n
+    frame["rx_lat"] = [56.38] * n              # Yoshkar-Ola
+    frame["rx_lon"] = [47.53] * n
+    return frame
+
+
+#: A DIDBase reply shaped like the real one, covering the frame's timestamps.
+#: foF2 near 4 MHz over a 2600 km path lands the oblique MUF around 14-15 MHz.
+_DIDB_REPLY = (
+    "# GIRO tabulated ionospheric characteristics\n"
+    "#Time                     foF2   hmF2\n"
+    "2026-02-04T00:00:00.000Z   4.10   295.0\n"
+    "2026-02-04T00:05:00.000Z   4.15   297.0\n"
+    "2026-02-04T00:10:00.000Z   4.05   296.0\n"
+    "2026-02-04T00:15:00.000Z   4.20   298.0\n"
+)
+
+
+def test_giro_is_scored_as_a_method_not_just_fetched(monkeypatch):
+    """The reference has to reach the pairwise table, or it explains nothing."""
+    from muf.reference import giro
+
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _DIDB_REPLY)
+    frame = _geo_frame([14.0, 14.5, 14.2, 14.8], [15.0, 15.2, 15.1, 15.4])
+
+    text, summary, pairwise = compare.report(frame, reference_models=["giro"])
+
+    assert "muf_giro" in frame.columns or "giro" in text
+    pairs = {(row.a, row.b) for row in pairwise.itertuples()}
+    assert any("giro" in pair for pair in pairs), \
+        "giro was fetched but never compared against anything"
+    # Both extractors get scored against it, which is the entire point: it is
+    # the only comparison that is not circular.
+    assert {"algo", "contour"} <= {name for pair in pairs for name in pair}
+
+
+def test_a_giro_outage_is_reported_and_does_not_abort_the_run(monkeypatch):
+    """DIDBase goes down; the comparison must still produce its own results.
+
+    Observed 2026-08-30: the `DIDBGetValues` servlet returned Tomcat 404s for
+    every query while its neighbours on the same host served normally. That has
+    to degrade to a stated absence, never to a crash and never to silence.
+    """
+    from muf.reference import giro
+
+    def dead(*a, **k):
+        raise RuntimeError("DIDBase returned HTTP 404 for https://example/x")
+
+    monkeypatch.setattr(giro, "fetch", dead)
+    frame = _geo_frame([14.0, 14.5, 14.2, 14.8], [15.0, 15.2, 15.1, 15.4])
+
+    text, summary, pairwise = compare.report(frame, reference_models=["giro"])
+
+    assert "unavailable" in text and "404" in text
+    pairs = {(row.a, row.b) for row in pairwise.itertuples()}
+    assert ("algo", "contour") in pairs or ("contour", "algo") in pairs
+
+
+def test_geometry_missing_says_which_columns_and_how_to_get_them():
+    """The failure a user actually hits when comparing an older results table."""
+    frame = _frame([14.0, 14.5], [15.0, 15.2])       # no tx_lat/rx_lat
+
+    with pytest.raises(KeyError, match="muf run"):
+        compare.add_reference_models(frame, ["giro"])
+
+
+def test_a_reference_above_the_sweep_marks_the_soundings_as_lower_bounds(monkeypatch):
+    """The one thing agreement between extractors can never reveal.
+
+    Both extractors can only report what the sounder swept. When the true MUF
+    is above the top of the sweep they agree with each other and are both
+    wrong, and nothing internal to the pipeline can say so.
+    """
+    from muf.reference import giro
+
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _DIDB_REPLY)
+    # Sweep stops at 8 MHz; the reference puts the MUF near 14.
+    frame = _geo_frame([7.9, 7.9, 7.9, 7.9], [8.0, 8.0, 8.0, 8.0], freq_stop=8.0)
+
+    text, _, _ = compare.report(frame, reference_models=["giro"])
+
+    assert "Out-of-band soundings" in text
+    assert "lower bounds" in text
