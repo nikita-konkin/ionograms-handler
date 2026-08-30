@@ -44,6 +44,26 @@ DEFAULT_MIN_RUN = 5
 #: 20.5 kHz .lfs one.
 DEFAULT_MAX_RANGE_SLOPE = 150.0
 
+#: Frequency bins a run may skip over and still count as one run.
+#:
+#: A real trace fades. Requiring `min_run` bins with no gap at all treats a
+#: two-bin dropout as the end of the trace, and on this instrument that is the
+#: single largest source of disagreement between estimators: measured
+#: 2026-08-30 over 3421 soundings, `algo` and `contour` differ by more than
+#: 1 MHz on 11.1% of them, **every one** of those with `algo` reading lower, and
+#: the rate is 31.7% where the shorter run is <= 8 bins against 3.0% where it is
+#: longer. On the worst sounding `algo` detected trace out to 28.45 MHz and the
+#: picker returned 18.75, because nothing past that point could assemble five
+#: unbroken bins.
+#:
+#: Two, not more: three consecutive dead bins at 20.5 kHz is 60 kHz of silence,
+#: which is longer than any fade measured here and starts to admit two
+#: unrelated features as one run. The range-agreement test still applies across
+#: a bridge -- `split_on_range_jumps` scales its tolerance by the gap -- so
+#: bridging decides only whether bins may be *considered* together, never
+#: whether they agree.
+DEFAULT_BRIDGE = 2
+
 #: Floor on the per-step range tolerance, in range bins. Two bins of jitter is
 #: the peak-finding, not the ionosphere: without this the rule would reject a
 #: real trace on a fine frequency axis, where the allowed slope works out
@@ -70,18 +90,40 @@ class MufPick:
 NO_PICK = MufPick(np.nan, np.nan, 0, 0, np.nan, -1)
 
 
-def find_runs(presence: np.ndarray, min_run: int) -> list[tuple[int, int]]:
-    """Inclusive ``(start, stop)`` spans of at least ``min_run`` consecutive True."""
+def find_runs(presence: np.ndarray, min_run: int,
+              bridge: int = 0) -> list[tuple[int, int]]:
+    """Inclusive ``(start, stop)`` spans of at least ``min_run`` detected bins.
+
+    ``bridge`` gaps of up to that many undetected bins are carried through as
+    part of the run, because a real trace fades and an estimator that treats a
+    two-bin dropout as the end of the trace stops early -- see
+    :data:`DEFAULT_BRIDGE` for what that costs in practice.
+
+    A bridged run still has to satisfy ``min_run`` on its *detected* bins, not
+    on its total width. Counting the gap would let ``min_run=5`` be met by three
+    detections and two holes, which is the interference this rule exists to
+    reject rather than the fade it is being relaxed for.
+    """
     if presence.size == 0:
         return []
-    padded = np.concatenate(([False], presence.astype(bool), [False]))
+    presence = np.asarray(presence, dtype=bool)
+    padded = np.concatenate(([False], presence, [False]))
     edges = np.flatnonzero(padded[1:] != padded[:-1])
     starts, stops = edges[0::2], edges[1::2]        # stops are exclusive here
-    return [
-        (int(a), int(b - 1))
-        for a, b in zip(starts, stops)
-        if b - a >= min_run
-    ]
+    spans = [(int(a), int(b - 1)) for a, b in zip(starts, stops)]
+
+    if bridge > 0 and len(spans) > 1:
+        merged = [spans[0]]
+        for a, b in spans[1:]:
+            previous_a, previous_b = merged[-1]
+            if a - previous_b - 1 <= bridge:
+                merged[-1] = (previous_a, b)
+            else:
+                merged.append((a, b))
+        spans = merged
+
+    return [(a, b) for a, b in spans
+            if int(presence[a:b + 1].sum()) >= min_run]
 
 
 def echo_ranges(presence: np.ndarray, power_db: np.ndarray,
@@ -112,13 +154,25 @@ def split_on_range_jumps(runs, ranges: np.ndarray,
     out: list[tuple[int, int]] = []
     for a, b in runs:
         start = a
+        # The last bin that actually had an echo, and how far back it is. A run
+        # may now contain bridged bins with no range at all (`find_runs`), and
+        # treating those as a break would undo the bridge the moment the slope
+        # test is switched on -- the two rules would then disagree about what a
+        # run is. Instead the comparison reaches across the gap and the
+        # tolerance grows with it, which is what the slope limit means: km per
+        # MHz, so two bins of separation allow twice the movement.
+        last, since = ranges[a], 1
         for i in range(a + 1, b + 1):
-            previous, current = ranges[i - 1], ranges[i]
-            broken = not (np.isfinite(previous) and np.isfinite(current)) \
-                or abs(current - previous) > tolerance_km
+            current = ranges[i]
+            if not np.isfinite(current):
+                since += 1
+                continue
+            broken = (not np.isfinite(last)
+                      or abs(current - last) > tolerance_km * since)
             if broken:
                 out.append((start, i - 1))
                 start = i
+            last, since = current, 1
         out.append((start, b))
     return out
 
@@ -169,6 +223,7 @@ def pick_muf(
     percentile: float = 100.0,
     parabolic: bool = True,
     max_range_slope: float | None = None,
+    bridge: int = DEFAULT_BRIDGE,
 ) -> MufPick:
     """Pick the MUF from per-frequency trace presence.
 
@@ -186,6 +241,9 @@ def pick_muf(
         parabolic: interpolate the echo's range between bins. This recovers the
             sub-bin precision that zero-padding was previously used for, at no
             cost -- see ``calibrate.range_resolution_km``.
+        bridge: undetected frequency bins a run may skip over. 0 requires an
+            unbroken run, which is what every result before 2026-08-30 was
+            produced with. See :data:`DEFAULT_BRIDGE`.
         max_range_slope: steepest range-against-frequency slope a run may have,
             in km/MHz. ``None`` disables the test, which is the default and
             what every ``.lfs`` result to date was produced with.
@@ -206,7 +264,7 @@ def pick_muf(
         raise ValueError(f"presence {presence.shape} does not match freq {freq.shape}")
 
     n_detections = int(presence.sum())
-    runs = find_runs(presence, min_run)
+    runs = find_runs(presence, min_run, bridge)
 
     if (max_range_slope is not None and runs
             and power_db is not None and vrange is not None and len(vrange)):
@@ -216,12 +274,19 @@ def pick_muf(
         ranges = echo_ranges(presence, power_db, vrange)
         tolerance = _range_tolerance(freq, vrange, max_range_slope)
         runs = [(a, b) for a, b in split_on_range_jumps(runs, ranges, tolerance)
-                if b - a + 1 >= min_run]
+                if int(presence[a:b + 1].sum()) >= min_run]
 
     if not runs:
         return MufPick(np.nan, np.nan, n_detections, 0, np.nan, -1)
 
+    # Detected bins only, not whole spans. A bridged run spans bins where
+    # nothing was found, and those must never *be* the answer: a split landing
+    # inside a bridge leaves a span ending on a gap bin, and `percentile=100`
+    # would then report a MUF at a frequency that showed no trace at all.
+    # Every surviving run holds at least `min_run` detections, so this cannot
+    # empty out.
     qualifying = np.concatenate([np.arange(a, b + 1) for a, b in runs])
+    qualifying = qualifying[presence[qualifying]]
 
     if percentile >= 100.0:
         index = int(qualifying.max())
@@ -229,7 +294,10 @@ def pick_muf(
         index = int(round(float(np.percentile(qualifying, percentile))))
         index = int(qualifying[np.abs(qualifying - index).argmin()])
 
-    run_len = next((b - a + 1 for a, b in runs if a <= index <= b), 0)
+    # Detections, not width: a bridged run that reported its span would claim
+    # evidence for the bins it skipped, and `run_len` is read as a confidence.
+    run_len = next((int(presence[a:b + 1].sum())
+                    for a, b in runs if a <= index <= b), 0)
 
     vrange_km, snr_db = np.nan, np.nan
     if power_db is not None and vrange is not None and len(vrange):
