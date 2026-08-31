@@ -613,12 +613,14 @@ which is a known geometry with a known reference and only needs the CPU.
 
 ### What that leaves
 
-1. **Record El Arenosillo again**, even at low duty cycle. Pruhonice at 39 km
-   makes it the only circuit that can settle §6a honestly. The cost is CPU on a
-   host documented as having none spare (four cores, pipeline needs 4.4), so
-   this is a scheduling question for the station, not a code change. A few
-   soundings an hour at the terminator would be enough — the disagreement is
-   concentrated in six hours of the day.
+1. **Record a circuit that has a reference** — **Dourbes**, on the analysis
+   above: already configured, `offset_us` already established, Warsaw 397 km
+   from its control point. Needs its `freq_start` raised into the recorded band,
+   `freq_stop` toward 20 MHz, and `sounding_hrs = [18, 1]`. The cost is CPU on a
+   host with none spare (four cores, pipeline needs 4.4), so this is a
+   scheduling question for the station, not a code change.
+   **Deferred 2026-09-01** at the user's direction, along with the whole GIRO
+   route.
 2. **Hand-scale a small sample.** The doc has been treating labels as
    all-or-nothing against NOIRE-Net's sixteen thousand, and for *training* that
    is right. For *adjudicating* it is not: the question is whether `dp` or
@@ -627,7 +629,11 @@ which is a known geometry with a known reference and only needs the CPU.
    afternoon, not a project.
 3. **Accept the circularity and say so**, which is what §7 does.
 
-(2) is the cheapest thing that produces an answer without touching the station.
+**(2) is the active next step as of 2026-09-01**, GIRO and the digisonde work
+having been set aside. It is also the only one of the three that depends on
+nothing outside this repository: no station time, no network, no upstream
+service. What it produces is the thing every measurement so far has lacked —
+a verdict on `dp` against something that is not another extractor.
 
 **c. A U-Net trained on agreement rather than hand labels** — weeks,
 label-bound. `cnn.py`'s docstring already describes the path: gated dB tile as
