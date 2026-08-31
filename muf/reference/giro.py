@@ -35,7 +35,16 @@ from ..geometry import (DEFAULT_HMF2_KM, Point, great_circle_km, fof2_to_muf,
                         midpoint)
 from . import ReferenceSeries, as_index
 
-DIDB_URL = "https://lgdc.uml.edu/common/DIDBGetValues"
+#: DIDBase's tabulated-characteristics endpoint.
+#:
+#: Was ``/common/DIDBGetValues`` until some time before 2026-08-31, when that
+#: servlet was withdrawn -- it answers Tomcat 404 for every query, including
+#: the examples GIRO's own documentation still publishes, while its neighbours
+#: on the same host serve normally. The replacement is FastChar, and the query
+#: parameters are unchanged; the way to rediscover it if it moves again is to
+#: POST the public form at ``https://giro.uml.edu/didbase/scaled.php`` and read
+#: the ``Location`` header of the 302 it answers with.
+DIDB_URL = "https://lgdc.uml.edu/fastchar/getbest"
 TIMEOUT_S = 90
 DEFAULT_CACHE = Path.home() / ".cache" / "muf" / "giro"
 
@@ -84,7 +93,10 @@ def nearest_station(target: Point,
 def build_url(ursi: str, start: dt.datetime, stop: dt.datetime,
               path_km: float | None = None) -> str:
     """DIDBase query URL. Dates are ``YYYY/MM/DD HH:MM:SS``."""
-    chars = "foF2,hmF2,MUFD"
+    # `MUF(D)`, not `MUFD`: FastChar rejects the old spelling with
+    # "Unknown characteristic name" and then returns the other columns anyway,
+    # so getting this wrong costs the MUF column silently rather than loudly.
+    chars = "foF2,hmF2,MUF(D)"
     params = {
         "ursiCode": ursi,
         "charName": chars,
@@ -182,6 +194,47 @@ def parse(text: str) -> pd.DataFrame:
     return out.dropna(how="all")
 
 
+def _distance_matches(text: str, path_km: float, tolerance: float = 0.01) -> bool:
+    """Did the server scale MUF(D) to the path we asked about?"""
+    served = served_muf_distance_km(text)
+    return served is not None and abs(served - path_km) <= tolerance * path_km
+
+
+def server_status(text: str) -> str:
+    """The server's own ``# STATUS:`` line, or "" when it did not set one.
+
+    Worth surfacing rather than collapsing into "no data": it is what
+    distinguishes a station that is simply quiet in this window from one that
+    is not in DIDBase at all, and on 2026-08-31 it is what showed that RV149
+    was silent while the endpoint was fine.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") and "STATUS:" in stripped:
+            return stripped.split("STATUS:", 1)[1].strip()
+    return ""
+
+
+def served_muf_distance_km(text: str) -> float | None:
+    """The path length the server actually scaled ``MUF(D)`` to, if it says.
+
+    **FastChar ignores ``DMUF``.** Verified 2026-08-31: asked for 2611 km it
+    replies "Distance D for MUF calculations: 3000 km" and returns the values
+    for 3000. Taking that column at face value would report a MUF for a path
+    390 km longer than the real one, and nothing downstream could tell -- it is
+    a plausible number in the right units. So the column is only usable when
+    this agrees with the path being asked about.
+    """
+    for line in text.splitlines():
+        if "Distance D for MUF" in line:
+            for token in line.replace("km", " ").split():
+                try:
+                    return float(token)
+                except ValueError:
+                    continue
+    return None
+
+
 def predict(
     tx: Point,
     rx: Point,
@@ -222,15 +275,22 @@ def predict(
     url = build_url(ursi, start, stop, path_km)
 
     try:
-        measured = parse(fetch(url, cache_dir, offline))
+        text = fetch(url, cache_dir, offline)
     except RuntimeError as exc:
         return ReferenceSeries("giro", error=str(exc))
+    measured = parse(text)
 
     if measured.empty:
+        said = server_status(text)
         return ReferenceSeries(
             "giro",
-            error=(f"{ursi} ({station_name}) returned no scaled data for "
-                   f"{start:%Y-%m-%d %H:%M} to {stop:%H:%M} UTC"),
+            error=(f"{ursi} ({station_name}, {station_km:.0f} km from the "
+                   f"control point) returned no scaled data for "
+                   f"{start:%Y-%m-%d %H:%M} to {stop:%H:%M} UTC"
+                   + (f" -- {said}" if said else "")
+                   + ". Pass ursi= to try a different station; a silent "
+                     "station and an unreachable service look alike here "
+                     "otherwise."),
         )
 
     # Prefer converting foF2 ourselves: it uses the measured reflection height
@@ -245,12 +305,20 @@ def predict(
             index=measured.index,
         )
         how = "foF2 x secant law"
-    elif "mufd" in measured:
+    elif "mufd" in measured and _distance_matches(text, path_km):
         muf = measured["mufd"]
-        how = f"server MUFD at DMUF={path_km:.0f}"
+        how = f"server MUF(D) at {served_muf_distance_km(text):.0f} km"
+    elif "mufd" in measured:
+        served = served_muf_distance_km(text)
+        return ReferenceSeries(
+            "giro",
+            error=(f"{ursi} returned no foF2, and its MUF(D) column is scaled "
+                   f"to {served:.0f} km rather than this path's {path_km:.0f}. "
+                   f"Using it would report the MUF of a different circuit."),
+        )
     else:
         return ReferenceSeries(
-            "giro", error=f"{ursi} returned no foF2 or MUFD column"
+            "giro", error=f"{ursi} returned no foF2 or MUF(D) column"
         )
 
     muf = muf.dropna().sort_index()

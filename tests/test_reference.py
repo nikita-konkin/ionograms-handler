@@ -490,3 +490,106 @@ def test_the_stations_dob_receives_are_in_the_registry():
 
     for ursi in ("JR055", "RL052", "DB049", "TR169"):
         assert ursi in giro.STATIONS, ursi
+
+
+# --- giro: the 2026-08-31 endpoint move, and the DMUF trap it exposed --------
+
+#: A FastChar reply, shaped exactly as the live service returns one. The
+#: `CS` (autoscaling confidence) and duplicated `QD` columns are new against
+#: the old DIDBGetValues layout, and the header line is what `parse` keys on.
+_FASTCHAR = (
+    "# Global Ionospheric Radio Observatory (GIRO)\n"
+    "# Tabulated Rapid Access Ionospheric Characteristics, Version 1.1\n"
+    "# Location: GEO ( 38.0 N    23.5 E ), URSI-Code AT138, ATHENS\n"
+    "# Distance D for MUF calculations: 3000 km\n"
+    "#\n"
+    "# Time                    CS   foF2 QD   hmF2 QD MUF(D) QD\n"
+    "2026-08-26T00:00:00.000Z  50  3.955 //  276.4 // 14.030 //\n"
+    "2026-08-26T00:05:00.000Z  45  3.850 //  273.6 // 13.596 //\n"
+)
+
+
+def test_giro_queries_fastchar_not_the_withdrawn_servlet():
+    """`/common/DIDBGetValues` answers 404 for every query as of 2026-08-31."""
+    url = giro.build_url("AT138", dt.datetime(2026, 8, 26),
+                         dt.datetime(2026, 8, 26, 6), 2611.0)
+
+    assert "fastchar/getbest" in url
+    assert "DIDBGetValues" not in url
+    # `MUFD` is rejected by FastChar as an unknown characteristic, and it drops
+    # the column silently rather than failing the request.
+    assert "MUF%28D%29" in url or "MUF(D)" in url
+
+
+def test_giro_parses_the_fastchar_layout():
+    """CS and the duplicated QD columns must not displace the values."""
+    frame = giro.parse(_FASTCHAR)
+
+    assert len(frame) == 2
+    assert frame["fof2"].iloc[0] == pytest.approx(3.955)
+    assert frame["hmf2"].iloc[0] == pytest.approx(276.4)
+    assert frame["mufd"].iloc[0] == pytest.approx(14.030)
+
+
+def test_giro_reads_the_distance_the_server_actually_used():
+    assert giro.served_muf_distance_km(_FASTCHAR) == pytest.approx(3000.0)
+    assert giro.served_muf_distance_km("# nothing\n") is None
+
+
+def test_giro_refuses_a_muf_column_scaled_to_the_wrong_path(monkeypatch):
+    """The trap FastChar introduced, and the reason this is a hard error.
+
+    FastChar **ignores `DMUF`**: asked for 2611 km it answers 3000 and returns
+    the values for 3000. Those are plausible numbers in the right units for a
+    circuit 390 km longer than the real one, so taking them at face value
+    produces a reference that is wrong in a way nothing downstream can detect.
+    """
+    without_fof2 = _FASTCHAR.replace(
+        "# Time                    CS   foF2 QD   hmF2 QD MUF(D) QD",
+        "# Time                    CS MUF(D) QD")
+    without_fof2 = "\n".join(
+        line if line.startswith("#") else
+        "  ".join([line.split()[0], line.split()[1], line.split()[-2], "//"])
+        for line in without_fof2.splitlines())
+
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: without_fof2)
+    times = pd.date_range("2026-08-26 00:00", periods=2, freq="5min")
+
+    series = giro.predict(tx=CYPRUS, rx=YOSHKAR_OLA, times=times, ursi="AT138")
+
+    assert not series.ok
+    assert "3000" in series.error and "different circuit" in series.error
+
+
+def test_giro_prefers_its_own_conversion_over_the_served_muf(monkeypatch):
+    """foF2 x secant law uses the measured height and the *real* path length."""
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _FASTCHAR)
+    times = pd.date_range("2026-08-26 00:00", periods=2, freq="5min")
+
+    series = giro.predict(tx=CYPRUS, rx=YOSHKAR_OLA, times=times, ursi="AT138")
+
+    assert series.ok
+    assert "secant law" in series.source
+    # Not the served 3000 km column, which would have been 14.03.
+    assert series.muf.iloc[0] != pytest.approx(14.030, abs=0.01)
+
+
+def test_giro_says_what_the_server_said_when_there_is_no_data(monkeypatch):
+    """A silent station and an unreachable service must not look alike.
+
+    Observed 2026-08-31: RV149 Rostov is the only station within the 500 km
+    correlation limit of the Cyprus->Yoshkar-Ola control point, and it returns
+    this for every date tried. Without the server's own line, that reads
+    identically to the endpoint being wrong -- which it also was.
+    """
+    empty = ("# Location: GEO ( 47.2 N 39.6 E ), URSI-Code RV149, ROSTOV\n"
+             "# STATUS: ERROR (No measurement data could be found for "
+             "requested time)\n")
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: empty)
+    times = pd.date_range("2026-08-26 00:00", periods=2, freq="5min")
+
+    series = giro.predict(tx=CYPRUS, rx=YOSHKAR_OLA, times=times)
+
+    assert not series.ok
+    assert "No measurement data" in series.error
+    assert "RV149" in series.error and "ursi=" in series.error

@@ -218,47 +218,94 @@ terminator, where the trace is weakest and interference is worst. That would
 show up as `dp` reading *high* against GIRO exactly where it reads high against
 the consensus now.
 
-**b. Score against GIRO instead of against each other** — **blocked upstream,
-not by us.** Nothing in §1–§5 can distinguish "the extractors agree" from "the
-extractors are right". This is the only thing in the project that can.
+**b. Score against GIRO instead of against each other** — **the endpoint is
+fixed; the reference is still unavailable for this circuit, for a different
+reason.** Nothing in §1–§5 can distinguish "the extractors agree" from "the
+extractors are right", and this is the only thing in the project that can.
 
-It turns out to need neither building *nor* wiring. `compare.report(...,
-reference_models=["giro"])` already evaluates
-[muf/reference/giro.py](muf/reference/giro.py) against every method and adds it
-to the pairwise table, and `band_limited_by_reference` already flags soundings
-whose true MUF was above the sweep — the one error both extractors make
-together and neither can see. Driven with the network stubbed out it produces:
+Two separate faults were found on 2026-08-31, and only one of them was ours.
 
-```
-      a       b  n  rmse_mhz  mae_mhz  bias_mhz
-   algo contour  4    0.8155    0.800    -0.800
-   algo    giro  4    1.3224    1.306     1.306
-contour    giro  4    2.1086    2.106     2.106
-*giro*: RV149 Rostov-on-Don, 142 km from control point 45.99N 39.09E;
-        foF2 x secant law
-```
+**The endpoint had moved, and is now fixed.** `/common/DIDBGetValues` answers
+an Apache Tomcat 404 for every query, including the examples GIRO's own
+documentation still publishes, while `/common/DIDBFastStationList` on the same
+host serves normally. It has been replaced by **FastChar**:
+`https://lgdc.uml.edu/fastchar/getbest`, same query parameters.
 
-**What is actually missing is DIDBase.** Checked 2026-08-30: every query to
-`https://lgdc.uml.edu/common/DIDBGetValues` returns an Apache Tomcat 404 —
-"the requested resource is not available" — including the example URLs the
-service's own documentation publishes. It is not a moved endpoint and not a
-malformed query: `/common/DIDBFastStationList` on the same host serves
-normally, so one servlet is undeployed while its neighbours run.
-`giro.uml.edu/didbase/scaled.php` answers GET with its query form but returns
-405 on POST, so Tomcat is serving it as a static file and the PHP layer is gone
-too.
+The way to rediscover it if it moves again — worth writing down, because
+guessing did not work and searching found only stale references: POST the
+public form at `https://giro.uml.edu/didbase/scaled.php` with
+`location=<URSI>&date_start=…&date_end=…&DMUF=…&chosenchars[]=…` and read the
+`Location` header of the 302 it answers with. That is what named FastChar.
+(Route found via [knamlx/IonoAutoML](https://github.com/knamlx/IonoAutoML),
+which drives the same form.)
 
-`giro.py` is therefore correct and there is nothing here to fix. **Retry the
-endpoint before doing anything else on this item.** If it answers, this becomes
-half a day of running the comparison — and it should then be done *before* (a),
-because it is what tells us whether (a) helped or merely moved the numbers.
+Two format changes came with it:
 
-The one real gap was that none of this had ever been exercised: an outage at
-DIDBase and a broken integration both surfaced as one line in
-`reference_problems`, so they were indistinguishable.
-[tests/test_compare.py](tests/test_compare.py) now drives the whole path with
+- **`MUFD` is now `MUF(D)`.** The old spelling is rejected as "Unknown
+  characteristic name" — and the request still succeeds, returning the other
+  columns, so getting this wrong loses the MUF column silently.
+- **FastChar ignores `DMUF`.** Asked for 2611 km it replies "Distance D for
+  MUF calculations: 3000 km" and returns the values for 3000. Those are
+  plausible numbers in the right units for a circuit 390 km longer than the
+  real one, so the server-side MUF column is now a **correctness trap**:
+  nothing downstream could detect it. `predict()` now reads the distance the
+  server states and refuses the column unless it matches the path. Our own
+  foF2 × secant conversion was already preferred and is unaffected — it uses
+  the measured height and the real path length.
+
+`parse()` needed no change: FastChar adds a `CS` autoscaling-confidence column
+and duplicate `QD` columns, and keying on the header line absorbed both.
+
+**But the station this path needs is silent.** `MAX_STATION_DISTANCE_KM` is
+500 km because the F2 layer decorrelates over a few hundred. For the
+Cyprus → Yoshkar-Ola control point at 45.92N 38.95E:
+
+| station | km from control point | data for 2026-08-26 |
+|---|---:|---|
+| RV149 Rostov-on-Don | 153 | **none, at any date tried** |
+| MO155 Moscow | 1068 | none |
+| NI135 Nicosia | 1306 | 40 rows |
+| AT138 Athens | 1547 | 72 rows |
+| PQ052 Pruhonice | 1860 | 73 rows |
+| DB049 Dourbes | 2573 | 72 rows |
+
+RV149 is the **only** station inside the limit, and it returns "No measurement
+data could be found" for every date from 2024 to now. Every Russian station in
+the table behaves the same way; the European ones all publish normally. So this
+is a data-sharing boundary, not an outage, and no retry fixes it.
+
+Forced onto AT138 at 1547 km the module now works end to end — 25 of 25
+timestamps, 13.1–28.5 MHz, "foF2 × secant law". **That is a working pipeline
+against an invalid reference.** Athens is 3× past the distance at which the
+ionosphere stays correlated; scoring the terminator behaviour of a
+Cyprus→Yoshkar-Ola path against it would produce numbers, and they would not
+mean what the table said they meant.
+
+**What this costs.** §6a's `dp` cannot be adjudicated, and neither can the
+2026-08-30 fixes: the honest verdict on both stays "measured against a
+comparator built from the estimators being compared". Options, none free:
+
+1. **Find a live sounder near 46N 39E** outside GIRO. If one exists and
+   publishes, everything above is already built and waiting.
+2. **Score a different circuit.** The receiver hears digisondes obliquely
+   (`muf.io_digisonde`), and DB049, TR169 and EA036 all publish. A circuit
+   whose *control point* is near a live station could be scored properly, and
+   what is learned about the extractors there transfers — they are the same
+   code. The doc's own caveat that the rate is geometry-dependent (3.9% on
+   `cyprus1` against 11.1% here) is the limit on how far that transfers.
+3. **Accept the circularity and say so**, which is what §7 already does.
+
+Option 2 is the cheapest real answer and is what I would do next.
+
+The integration itself is pinned either way:
+[tests/test_compare.py](tests/test_compare.py) drives the scoring path with
 `fetch` stubbed — the scoring case, the outage case, the missing-geometry case
-and the out-of-band case — so from here only the outage can be the cause.
+and the out-of-band case — and
+[tests/test_reference.py](tests/test_reference.py) covers the FastChar layout,
+the `DMUF` refusal, and the server's own `STATUS` line reaching the error
+message. That last one matters: before it, a silent station and an unreachable
+service produced the same message, which is exactly why the endpoint move hid
+behind the station outage for a day.
 
 **c. A U-Net trained on agreement rather than hand labels** — weeks,
 label-bound. `cnn.py`'s docstring already describes the path: gated dB tile as
