@@ -345,7 +345,7 @@ Taking each circuit this receiver is capable of hearing and asking what sits at
 
 | circuit into Yoshkar-Ola | path | control point | nearest live station |
 |---|---:|---|---|
-| EA036 El Arenosillo | 4503 km | 49.93N 15.13E | **PQ052 Pruhonice, 39 km** |
+| EA036 El Arenosillo | 4503 km | two-hop, see below | PQ052 Pruhonice, 224 km |
 | DB049 Dourbes | 2890 km | 55.18N 24.41E | MZ152 Warsaw, 397 km |
 | RL052 Chilton | 3130 km | 56.37N 21.97E | MZ152 Warsaw, 467 km |
 | NI135 Nicosia *(the one we record)* | 2611 km | 45.92N 38.95E | none inside 500 km |
@@ -353,9 +353,10 @@ Taking each circuit this receiver is capable of hearing and asking what sits at
 | TR169 Tromsø | 2015 km | 63.66N 36.65E | none inside 500 km |
 | IR352 / NV355 (Siberia) | 3602 / 2230 km | — | none inside 500 km |
 
-**El Arenosillo → Yoshkar-Ola is the prize: Pruhonice is 39 km from its
-reflection point**, which is as close to a co-located reference as this project
-will ever get. Dourbes and Chilton are both usable at ~400 km.
+El Arenosillo, Dourbes and Chilton all have a live reference within the limit.
+(These distances were first measured to the *midpoint*; for the two-hop El
+Arenosillo path that is the wrong point, and the corrected figures are in the
+full survey below — where a better candidate than any of them turns up.)
 
 **And the archive contains none of them.** Every ionogram on disk is Nicosia
 (`NIC*`, 4533 files), Sodankylä (`SGO`, 1676 files over 2026-08-12..16) or the
@@ -366,6 +367,82 @@ recorder losing 43% of its samples.
 
 So the reference exists, the code to use it now works, and the one circuit that
 would make it valid is the one we stopped recording to keep the radio alive.
+
+### Every oblique circuit into Yoshkar-Ola, and what could reference it
+
+**Correction first.** The 39 km figure above was measured to the *midpoint*, and
+El Arenosillo at 4503 km is a **two-hop** path — past `MAX_SINGLE_HOP_KM`, so
+the midpoint is a place the signal never touches. Its real control points sit
+~1250 km either side of it, and Pruhonice is **224 km** from the nearer one.
+Still a good reference, comfortably inside the 500 km limit; not the co-located
+one claimed. `giro.predict` used `midpoint()` unconditionally and converted at
+the whole path length, and both are fixed — see below.
+
+Surveyed all 129 GIRO stations as oblique transmitters into Yoshkar-Ola, using
+`geometry.control_points` and taking the nearest station that **actually
+published** on 2026-08-26. **42 of 129 stations publish**; 38 circuits have a
+live reference within 500 km of a control point.
+
+**The practical shortlist** — European, single-hop or two, plausibly receivable:
+
+| TX | transmitter | path | hops | reference | km | rows/day |
+|---|---|---:|---:|---|---:|---:|
+| **EB040** | **Roquetes, Spain** | **3772 km** | **1** | **MZ152 Warsaw** | **151** | 79 |
+| EA036 | El Arenosillo | 4503 km | 2 | PQ052 Pruhonice | 224 | 277 |
+| DB049 | Dourbes | 2890 km | 1 | MZ152 Warsaw | 397 | 79 |
+| RL052 | Chilton | 3130 km | 1 | MZ152 Warsaw | 467 | 79 |
+| RO041 / RM041 | Rome | 2966 / 2974 km | 1 | MZ152 Warsaw | 476 / 478 | 79 |
+| FF051 | Fairford | 3173 km | 1 | MZ152 Warsaw | 486 | 79 |
+| SMJ67 | Sondrestrom | 4752 km | 2 | TR169 Tromsø | 92 | 375 |
+| NQJ61 | Narssarssuaq | 4922 km | 2 | TR169 Tromsø | 394 | 375 |
+| THJ76 | Thule | 4572 km | 2 | TR169 Tromsø | 467 | 375 |
+
+**EB040 Roquetes is the best candidate on the whole list**, and beats El
+Arenosillo on both axes that matter: **single hop** — one control point, no
+`D/n` division, the cleanest physics available — and the **closest reference at
+151 km**. Warsaw's cadence is coarser than Pruhonice's (79 rows a day against
+277, roughly 18-minute against 5-minute), which costs alignment precision but
+not validity; `_to_times` already matches by nearest neighbour within 20
+minutes.
+
+The remaining 29 circuits are transatlantic — Alpena, Austin, Boulder, Belem,
+Tucumán and so on, 7800–13900 km at three or four hops. Several have excellent
+reference geometry on paper (Alpena's control point is 79 km from Tromsø) and
+none is a serious proposition: at four hops the MUF is set by the worst of four
+control points and we would be measuring one of them.
+
+**Circuits with no usable reference at all**, including everything currently
+recorded:
+
+| circuit | path | nearest station to a control point | |
+|---|---:|---|---|
+| **NI135 Nicosia** *(4533 files on disk)* | 2611 km | RV149 Rostov, 155 km | silent |
+| **SGO Sodankylä** *(1676 files, 12–16 Aug)* | 1625 km | LD160 St Petersburg, 510 km | silent |
+| AT138 Athens | 2706 km | RV149 Rostov | silent |
+| PQ052 Pruhonice | 2280 km | MA155 Moscow | silent |
+| MZ152 Warsaw | 1765 km | MA155 Moscow | silent |
+| IR352 Irkutsk | 3596 km | NV355 Novosibirsk | silent |
+| NO369 Norilsk | 2432 km | SH266 Salekhard | silent |
+
+The shape of it: **the closer a transmitter is to Yoshkar-Ola, the more surely
+its control point lands in the silent region.** Every circuit under 2800 km
+fails for that reason. The usable ones are usable precisely because they are
+long enough to reflect over Poland, Czechia or northern Scandinavia instead.
+
+### What to record
+
+**EB040 Roquetes**, if the station can spare it. Single hop, 151 km reference,
+and at 3772 km it is a comparable geometry to the 2611 km Nicosia circuit the
+extractors were tuned on — so what is learned about the terminator there has
+the best chance of transferring. Dourbes at 2890 km is the closest match in
+path length and costs 397 km of reference distance.
+
+Both are digisonde receptions of the kind switched off on 2026-08-12 by patch
+0007 ([2026-08-11-recorder-packet-loss.md](2026-08-11-recorder-packet-loss.md))
+to stop the recorder losing 43% of its samples, on a host with four cores and a
+4.4-core pipeline. This is a scheduling decision for the station, not a code
+change — and a few soundings an hour between 18 and 01 UTC would be enough,
+since the disagreement is concentrated in those six hours.
 
 ### What that leaves
 

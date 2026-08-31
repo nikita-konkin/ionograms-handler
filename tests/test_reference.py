@@ -593,3 +593,72 @@ def test_giro_says_what_the_server_said_when_there_is_no_data(monkeypatch):
     assert not series.ok
     assert "No measurement data" in series.error
     assert "RV149" in series.error and "ursi=" in series.error
+
+
+def test_giro_uses_both_control_points_of_a_multi_hop_path():
+    """`midpoint` names a place a two-hop signal never touches.
+
+    El Arenosillo -> Yoshkar-Ola is 4503 km, so it reflects twice, and its two
+    real control points sit ~1250 km either side of the midpoint. Pruhonice is
+    39 km from that midpoint and 224 km from the nearest real one: still a
+    usable reference, but the midpoint figure flatters it almost six-fold.
+    Reporting the wrong one would claim a co-located reference we do not have.
+    """
+    from muf.geometry import control_points, great_circle_km, midpoint
+
+    ea = Point(37.10, -6.70)
+    controls = control_points(ea, YOSHKAR_OLA)
+    assert len(controls) == 2, "4503 km must be a two-hop path"
+
+    pruhonice = Point(*giro.STATIONS["PQ052"][1:])
+    to_real = min(great_circle_km(p, pruhonice) for p in controls)
+    to_mid = great_circle_km(midpoint(ea, YOSHKAR_OLA), pruhonice)
+
+    assert to_mid < 50 < to_real, "the midpoint is the flattering one here"
+    assert to_real <= giro.MAX_STATION_DISTANCE_KM, "still a usable reference"
+
+
+def test_giro_converts_per_hop_not_per_path(monkeypatch):
+    """A multi-hop path must be converted at D/n, per `hop_count`.
+
+    Passing the whole distance describes a ray that cannot exist: the
+    geometric factor peaks at 3840 km and falls away past it, because beyond
+    that the reflection would have to happen below the horizon. Which
+    *direction* the error runs depends on where the path sits relative to that
+    peak -- at 4503 km the whole-path figure is too high, at 8000 km too low --
+    so the test pins the conversion, not the sign.
+    """
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _FASTCHAR)
+    times = pd.date_range("2026-08-26 00:00", periods=2, freq="5min")
+    ea = Point(37.10, -6.70)
+
+    series = giro.predict(tx=ea, rx=YOSHKAR_OLA, times=times, ursi="PQ052")
+    assert series.ok
+    assert "2 hops" in series.source
+
+    from muf.geometry import fof2_to_muf, great_circle_km
+    path = great_circle_km(ea, YOSHKAR_OLA)
+    assert series.muf.iloc[0] == pytest.approx(
+        fof2_to_muf(3.955, path / 2, 276.4), rel=1e-6)
+    assert series.muf.iloc[0] != pytest.approx(
+        fof2_to_muf(3.955, path, 276.4), rel=1e-3)
+
+    # The case `hop_count`'s docstring cites, where whole-path understates by
+    # about a fifth -- the failure that reads as the instrument over-picking.
+    whole = fof2_to_muf(4.0, 8000.0, 300.0)
+    per_hop = fof2_to_muf(4.0, 4000.0, 300.0)
+    assert per_hop / whole == pytest.approx(1.27, abs=0.05)
+
+
+def test_giro_single_hop_behaviour_is_unchanged(monkeypatch):
+    """The circuit actually recorded is 2611 km, and must be untouched."""
+    monkeypatch.setattr(giro, "fetch", lambda *a, **k: _FASTCHAR)
+    times = pd.date_range("2026-08-26 00:00", periods=2, freq="5min")
+
+    series = giro.predict(tx=CYPRUS, rx=YOSHKAR_OLA, times=times, ursi="AT138")
+
+    assert series.ok
+    assert "hops" not in series.source
+    from muf.geometry import fof2_to_muf, great_circle_km
+    expected = fof2_to_muf(3.955, great_circle_km(CYPRUS, YOSHKAR_OLA), 276.4)
+    assert series.muf.iloc[0] == pytest.approx(expected, rel=1e-6)

@@ -31,8 +31,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..geometry import (DEFAULT_HMF2_KM, Point, great_circle_km, fof2_to_muf,
-                        midpoint)
+from ..geometry import (DEFAULT_HMF2_KM, Point, control_points,
+                        fof2_to_muf, great_circle_km, hop_count, midpoint)
 from . import ReferenceSeries, as_index
 
 #: DIDBase's tabulated-characteristics endpoint.
@@ -252,15 +252,32 @@ def predict(
         return ReferenceSeries("giro", error="no timestamps given")
 
     path_km = great_circle_km(tx, rx)
-    control = midpoint(tx, rx)
+
+    # `control_points`, not `midpoint`. Past `MAX_SINGLE_HOP_KM` the path
+    # reflects more than once and a midpoint names a place the signal never
+    # touches -- for a 4503 km circuit the two real control points sit about
+    # 1250 km either side of it. Single-hop paths get one point and this is
+    # exactly what it was before.
+    controls = control_points(tx, rx)
+    hops = hop_count(path_km)
 
     if ursi is None:
-        found = nearest_station(control, max_km)
+        # Nearest station to *any* control point. A multi-hop path is limited
+        # by its worst one and we have a measurement at neither unless a
+        # station happens to sit near one, so the honest thing is to use the
+        # one we can actually see and say which.
+        found, control = None, controls[0]
+        for point in controls:
+            candidate = nearest_station(point, max_km)
+            if candidate is not None and (found is None
+                                          or candidate[2] < found[2]):
+                found, control = candidate, point
         if found is None:
+            where = " / ".join(str(point) for point in controls)
             return ReferenceSeries(
                 "giro",
                 error=(f"no known station within {max_km:.0f} km of the control "
-                       f"point {control}. Add one from "
+                       f"point{'' if hops == 1 else 's'} {where}. Add one from "
                        f"https://lgdc.uml.edu/common/DIDBStationList to "
                        f"giro.STATIONS, or pass ursi=."),
             )
@@ -268,7 +285,13 @@ def predict(
     else:
         entry = STATIONS.get(ursi)
         station_name = entry[0] if entry else ursi
-        station_km = great_circle_km(control, Point(entry[1], entry[2])) if entry else float("nan")
+        if entry:
+            here = Point(entry[1], entry[2])
+            station_km, control = min(
+                ((great_circle_km(point, here), point) for point in controls),
+                key=lambda pair: pair[0])
+        else:
+            station_km, control = float("nan"), controls[0]
 
     start = index.min().to_pydatetime() - dt.timedelta(minutes=30)
     stop = index.max().to_pydatetime() + dt.timedelta(minutes=30)
@@ -299,12 +322,18 @@ def predict(
         heights = (measured["hmf2"] if use_measured_height and "hmf2" in measured
                    else pd.Series(DEFAULT_HMF2_KM, index=measured.index))
         heights = heights.fillna(DEFAULT_HMF2_KM)
+        # Per hop, not per path. `hop_count` documents why passing the whole
+        # distance is not merely less accurate but describes a ray that cannot
+        # exist: the geometric factor peaks at 3840 km and falls away after,
+        # so an 8000 km path evaluated whole understates the MUF by a fifth.
         muf = pd.Series(
-            [fof2_to_muf(f, path_km, h) if np.isfinite(f) else np.nan
+            [fof2_to_muf(f, path_km / hops, h) if np.isfinite(f) else np.nan
              for f, h in zip(measured["fof2"], heights)],
             index=measured.index,
         )
-        how = "foF2 x secant law"
+        how = ("foF2 x secant law" if hops == 1
+               else f"foF2 x secant law over {hops} hops of "
+                    f"{path_km / hops:.0f} km")
     elif "mufd" in measured and _distance_matches(text, path_km):
         muf = measured["mufd"]
         how = f"server MUF(D) at {served_muf_distance_km(text):.0f} km"
@@ -329,7 +358,9 @@ def predict(
         muf=resampled,
         detail=measured,
         source=(f"{ursi} {station_name}, {station_km:.0f} km from control point "
-                f"{control}; {how}"),
+                f"{control}"
+                + ("" if hops == 1 else f" (1 of {hops})")
+                + f"; {how}"),
     )
 
 
