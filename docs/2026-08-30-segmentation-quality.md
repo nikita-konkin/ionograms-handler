@@ -307,6 +307,84 @@ message. That last one matters: before it, a silent station and an unreachable
 service produced the same message, which is exactly why the endpoint move hid
 behind the station outage for a day.
 
+### Is there a digisonde near the Cyprus–Yoshkar-Ola midpoint? (2026-08-31)
+
+**Yes, and it is silent.** Checked against the *full* GIRO list — all 129
+stations from `DIDBFastStationList`, not the 14 `giro.STATIONS` carries.
+
+RV149 Rostov-on-Don sits **155 km** from the control point at 45.92N 38.95E,
+which is well inside the 500 km correlation limit and about as well placed as
+could be asked for. It returns "No measurement data could be found" for every
+date tried from 2024 to now. The next nearest station in all of GIRO is Moscow
+at **1068 km** — seven times further, and also silent.
+
+The pattern is geographic, not incidental:
+
+| | km from control point | data |
+|---|---:|---|
+| RV149 Rostov | 155 | silent |
+| MO155 / MA155 Moscow | 1068 / 1070 | silent |
+| MO156 Elektrougli | 1095 | silent |
+| NI135 Nicosia | 1306 | **40 rows** |
+| MZ152 Warsaw | 1471 | **24 rows** |
+| AT138 Athens | 1547 | **72 rows** |
+| OL246 Olsztyn | 1579 | silent |
+| KL154 Kaliningrad | 1629 | silent |
+| LD160 St Petersburg | 1657 | silent |
+| SO148 Sopron | 1698 | **68 rows** |
+
+Every Russian station is silent; the European ones publish normally. **Yoshkar-
+Ola sits deep inside the silent region**, so this is not a matter of picking a
+different station — every circuit *terminating* there has its control point in
+or beside that region. No retry and no station list fixes it.
+
+### The circuits that would work, and why we cannot use them
+
+Taking each circuit this receiver is capable of hearing and asking what sits at
+*its* control point:
+
+| circuit into Yoshkar-Ola | path | control point | nearest live station |
+|---|---:|---|---|
+| EA036 El Arenosillo | 4503 km | 49.93N 15.13E | **PQ052 Pruhonice, 39 km** |
+| DB049 Dourbes | 2890 km | 55.18N 24.41E | MZ152 Warsaw, 397 km |
+| RL052 Chilton | 3130 km | 56.37N 21.97E | MZ152 Warsaw, 467 km |
+| NI135 Nicosia *(the one we record)* | 2611 km | 45.92N 38.95E | none inside 500 km |
+| SGO Sodankylä *(recorded 12–16 Aug)* | 1625 km | 62.26N 38.98E | none inside 500 km |
+| TR169 Tromsø | 2015 km | 63.66N 36.65E | none inside 500 km |
+| IR352 / NV355 (Siberia) | 3602 / 2230 km | — | none inside 500 km |
+
+**El Arenosillo → Yoshkar-Ola is the prize: Pruhonice is 39 km from its
+reflection point**, which is as close to a co-located reference as this project
+will ever get. Dourbes and Chilton are both usable at ~400 km.
+
+**And the archive contains none of them.** Every ionogram on disk is Nicosia
+(`NIC*`, 4533 files), Sodankylä (`SGO`, 1676 files over 2026-08-12..16) or the
+v2 `unkown` marker (1223 files). The digisonde receptions were switched off on
+2026-08-12 — see [2026-08-11-recorder-packet-loss.md](2026-08-11-recorder-packet-loss.md),
+patch 0007, "Stop receiving the digisondes", ~2.7 of four cores — to stop the
+recorder losing 43% of its samples.
+
+So the reference exists, the code to use it now works, and the one circuit that
+would make it valid is the one we stopped recording to keep the radio alive.
+
+### What that leaves
+
+1. **Record El Arenosillo again**, even at low duty cycle. Pruhonice at 39 km
+   makes it the only circuit that can settle §6a honestly. The cost is CPU on a
+   host documented as having none spare (four cores, pipeline needs 4.4), so
+   this is a scheduling question for the station, not a code change. A few
+   soundings an hour at the terminator would be enough — the disagreement is
+   concentrated in six hours of the day.
+2. **Hand-scale a small sample.** The doc has been treating labels as
+   all-or-nothing against NOIRE-Net's sixteen thousand, and for *training* that
+   is right. For *adjudicating* it is not: the question is whether `dp` or
+   `algo` reads the terminator correctly, the disagreement is one-directional,
+   and fifty scaled ionograms between 18 and 01 UTC would settle it. That is an
+   afternoon, not a project.
+3. **Accept the circularity and say so**, which is what §7 does.
+
+(2) is the cheapest thing that produces an answer without touching the station.
+
 **c. A U-Net trained on agreement rather than hand labels** — weeks,
 label-bound. `cnn.py`'s docstring already describes the path: gated dB tile as
 input, agreement of the other estimators as the target mask. That trainer was
