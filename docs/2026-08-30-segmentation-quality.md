@@ -524,6 +524,93 @@ fraction of the five-receiver load patch 0007 removed — but it is a fraction o
 a load that was measured to break the recorder, so it wants watching with
 `drop-watch` from the first hour.
 
+### Oblique sounders: cheap to receive, hard to locate
+
+First, a correction to the premise. **The band does not rule digisondes out for
+MUF.** `center_freq = 19.5e6` at 25 MS/s records 7.0–32.0 MHz, so a digisonde
+sweep loses its bottom 1–7 MHz — and that is the LOF end, not the MUF end. MUF
+on every circuit here sits well above 7 MHz. What the band costs is the low-
+frequency leg and the `limited_` bookkeeping; what actually stops digisondes is
+the CPU (patch 0007) and the stale `freq_start` values. Worth being exact about,
+because "we cannot use digisondes" and "we would lose the bottom of the trace"
+lead to different decisions.
+
+Oblique chirp sounders are the better route anyway, and for a structural
+reason: **they cost no additional process.**
+
+| | digisonde | oblique chirp |
+|---|---|---|
+| per transmitter | one `receive_digisonde.py` process | none — `detect_chirps` already scans the band |
+| CPU of adding one | the thing patch 0007 removed | zero |
+| timing setup | `offset_us` found by trying, on station | detector solves the chirp itself |
+| band tracking | **stale**: all sections still start at 1–2 MHz | **correct**: `min_freq`/`max_freq` = 7/32 MHz |
+| range window | — | ±3999 km *relative to expected arrival*, so path length is not a gate |
+
+A real file confirms the chirp path tracked the band move that the digisonde
+sections missed: `lfm_ionogram-NIC3-…` spans **7.05–31.80 MHz** over 496 bins,
+with `rmin/rmax = ±3999` km.
+
+So the problems are not reception. They are these:
+
+**1. `serendipitous = false`.** Only the four transmitters named in
+`sounder_timings` (NIC1–NIC4) are kept. Anything else crossing the band is
+detected and dropped.
+
+**2. Three chirp rates.** `chirp_rates = [100e3, 125e3, 500.0084e3]`. A sounder
+running any other rate is invisible, and `max_simultaneous_detections = 5`
+caps how many can be tracked at once.
+
+**3. The real blocker — an anonymous chirp cannot be scored at all.**
+Not "scored badly": scored *at all*. A transmitter name resolves to
+coordinates, coordinates give `path_km`, and `path_km` gives the M-factor that
+every GIRO foF2 must be divided by — the reasoning
+[tools/relabel_station.py](../tools/relabel_station.py) opens with. Without a
+transmitter position there is no path length, so there is no conversion from
+foF2 to an oblique MUF, so there is nothing to compare against. The reference
+route dies at the first step. This is also why the archive's unidentified files
+carry implied ranges of 2638, 2823, 16504, 16728, 23214 and 124194 km: with an
+unknown transmitter `t0` is unknown and the range zero is arbitrary, which the
+loader says outright — *differences are correct; the zero is not*.
+
+### The identification is tractable, and it needs no station time
+
+`sounder_timings` identifies a transmitter by three numbers — chirp rate,
+repetition period, and start offset within the period. Every stored detection
+carries `rate` and `t0`, and **`t0` is in the filename**, so this is analysable
+from a directory listing without opening a file.
+
+Run over the 1223 files under the `unkown` marker (2026-08-04..12):
+
+```
+rep = 300 s, 5 s bins        commonest interval between detections
+  chirpt   0-  5 s : 177       5 s  x252      (multi-channel, same sounding)
+  chirpt 230-235 s :  85     300 s  x165      <- rep = 300
+  chirpt 235-240 s : 144     295 s  x113
+  chirpt 240-245 s : 294     245 s  x39
+  chirpt 245-250 s : 198     240 s  x36
+```
+
+The 230–250 s block is **NIC1/NIC2/NIC3**, whose configured `chirpt` values are
+235, 240 and 245 with `rep: 300`. So most of these are the Nicosia transmitters
+recorded before their `sounder_timings` entries existed — the `unkown` files run
+2026-08-04..12 and the `NIC` names begin on 08-12. Not new circuits, just
+un-named old ones.
+
+**The 177 detections at `chirpt ≈ 0–5 s` match none of NIC's four slots.** That
+is either a fifth Nicosia transmitter or a different sounder, and it is the only
+lead in the archive toward a circuit we do not already have. Worth an hour:
+group those detections, check whether their implied ranges are mutually
+consistent (they will not be against the wrong `t0`, but they should be
+consistent *with each other*), and see whether a rate/rep/chirpt of
+100 kHz/300 s/~0 s matches any catalogued sounder.
+
+**What this route cannot do** is choose its geometry. A digisonde can be picked
+from a list to put its control point where a GIRO station is; a serendipitous
+chirp is wherever it happens to be, and the odds of one landing over Poland or
+Czechia are not ours to set. So this is worth doing because it is free and might
+turn something up — not as a substitute for [Dourbes](#so-record-dourbes-not-roquetes),
+which is a known geometry with a known reference and only needs the CPU.
+
 ### What that leaves
 
 1. **Record El Arenosillo again**, even at low duty cycle. Pruhonice at 39 km
