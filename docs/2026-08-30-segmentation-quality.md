@@ -444,6 +444,86 @@ to stop the recorder losing 43% of its samples, on a host with four cores and a
 change — and a few soundings an hour between 18 and 01 UTC would be enough,
 since the disagreement is concentrated in those six hours.
 
+### Can the receiver hear Roquetes today? No — and checking found a stale band
+
+Read from the station's clone of `chirpsounder2` beside this repo
+(`my_station.ini`, last modified 2026-08-23, at `cd67b313`). **This is a local
+copy, not the live station** — confirm against DOB before acting on it.
+
+**1. Roquetes is not configured.** `receive_digisonde.py:68` selects
+`[digisonde-<name>]` by sounder name, so several transmitters are supported,
+one process each. Configured today:
+
+| section | transmitter | interval | configured sweep |
+|---|---|---:|---|
+| `[digisonde]` | Ramfjordmoen (Tromsø) | 450 s | 1–18 MHz |
+| `[digisonde-Dourbes]` | DB049 | 900 s | 1–12 MHz |
+| `[digisonde-Chilton]` | Chilton | 600 s | 1–15 MHz |
+| `[digisonde-Juliusruh]` | Juliusruh | 300 s | 1.01–14 MHz, `sounding_hrs = [5.5,18]` |
+| `[digisonde-Thule]` | THJ76 | 450 s | 2.025–20 MHz |
+
+No Roquetes. Adding one is a config section, not code.
+
+**2. The digisonde receivers are switched off.** None of the eight systemd
+units is a digisonde receiver, and `required_processes` in `[config]` does not
+list `receive_digisonde.py`. This is patch 0007.
+
+**3. Turning them back on is the thing that caused the sample loss.** Patch
+0007 measured it directly, restoring *only* the receivers: **872,081 dropped
+samples in 900 s (~969/s), load 10.40** on a four-core host. That is the whole
+of the 43% loss, and it is why this is a station scheduling decision rather
+than a config edit.
+
+**4. Found while checking: every digisonde section predates the band move.**
+Patch 0012 moved the receive window, and patch 0015 made the recorder take its
+LO from the ini. With `center_freq = 19.5e6` at 25 MS/s the recorded band is
+**7.0–32.0 MHz**. Every section above starts at 1–2 MHz, so the bottom of each
+configured sweep is now outside the recorded band — Dourbes' 1–12 MHz survives
+only as 7–12 MHz. Those sections were written for the old 0–25 MHz band and
+were never revisited. Nothing warns about it: the digisonde config never goes
+through `chirp_config`, so nothing validates it (see
+[chirpsounder2-config.md](chirpsounder2-config.md), "two configuration
+surfaces").
+
+This also caps the measurement at the top. Dourbes' `freq_stop = 12 MHz` on a
+2890 km path will read as band-limited whenever the true MUF is above it, which
+is most of the day — `freq_stop` wants raising toward 20 MHz, which the
+7–32 MHz band now allows.
+
+### So record Dourbes, not Roquetes
+
+Reversing the recommendation above, on what the receiver actually has:
+
+| | Roquetes EB040 | Dourbes DB049 |
+|---|---|---|
+| config section | **must be written** | **already exists** |
+| `offset_us` | unknown, must be found empirically | 7300, already established |
+| path | 3772 km, **1 hop** | 2890 km, 1 hop |
+| reference | Warsaw, 151 km | Warsaw, 397 km |
+| reference cadence | 79 rows/day | 79 rows/day |
+| own GIRO feed | 273 rows/day | 230 rows/day |
+
+Roquetes still has the better geometry — the reference sits 151 km from its
+control point against Dourbes' 397 km, and both are single-hop. But `offset_us`
+is per-transmitter (7300 for Dourbes, 3900 Chilton, 2000 Juliusruh, 8066 Thule)
+and has to be found by trying, which is an on-station iteration nobody can do
+from here. Dourbes is already aligned. **Take the 397 km reference that works
+over the 151 km one that needs commissioning**, and keep Roquetes as the
+follow-up if Dourbes proves the method.
+
+The edit, if the station can spare the CPU:
+
+    [digisonde-Dourbes]
+    freq_start = 7000000        # was 1000000, below the recorded band since 0012
+    freq_stop  = 20000000       # was 12000000, truncates the MUF most of the day
+    sounding_hrs = [18, 1]      # terminator only -- where the disagreement is
+
+`sounding_hrs` is already supported and already used by Juliusruh, so the
+terminator-only run needs no code. One receiver for seven hours a day is a
+fraction of the five-receiver load patch 0007 removed — but it is a fraction of
+a load that was measured to break the recorder, so it wants watching with
+`drop-watch` from the first hour.
+
 ### What that leaves
 
 1. **Record El Arenosillo again**, even at low duty cycle. Pruhonice at 39 km
