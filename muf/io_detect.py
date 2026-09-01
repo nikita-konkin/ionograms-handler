@@ -68,7 +68,26 @@ DEFAULT_CYCLE_S = 300.0
 #: much tighter figure for grouping *solutions*, and is set by what the phase
 #: actually does: 0.5 ms of scatter within a slot at DOB, 0.19 ms/hour of
 #: drift. 5 ms is ten sigma and still only 1500 km of range.
+#:
+#: This is the tolerance for two arrivals *in the same slot*, which is what it
+#: was measured for.
 PHASE_TOLERANCE_S = 5e-3
+
+#: How far apart two *slot medians* may be and still be one transmitter.
+#:
+#: Tighter than :data:`PHASE_TOLERANCE_S` because it compares a different
+#: quantity. Ten sigma of a single arrival is the right allowance for one
+#: detection; a slot's median is far steadier than that, and the spread that
+#: actually matters is between the slots of one transmitter -- 0.32 ms across
+#: Nicosia's four 100 kHz/s slots, measured over 18-28 Aug 2026. 2 ms is about
+#: six times that.
+#:
+#: Measured on the same window: at 5 ms the cross-slot step merges an emitter
+#: at 11.8 ms into one at 9.5 ms; at 1 ms the answer is unchanged from 2 ms; at
+#: 3 ms the two merge again. So 2 ms sits in the middle of the range that
+#: works, not at its edge -- but it is a threshold on one archive, and that is
+#: worth remembering before trusting it on another receiver.
+SLOT_PHASE_TOLERANCE_S = 2e-3
 
 
 def _fraction(value: float) -> float:
@@ -534,16 +553,64 @@ def _times_rates_snrs(items: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarr
             np.asarray(snrs, dtype=np.float64))
 
 
+def _link_on_phase(phase: np.ndarray, tolerance_s: float) -> list[list[int]]:
+    """Indices of ``phase`` grouped by single linkage, wrapping 0/1.
+
+    The wrap matters: a transmitter 30 km away with a receiver 1 ms slow lands
+    half its arrivals at 0.9999 and half at 0.0001, and without joining the
+    ends those are two emitters at an impossible range.
+    """
+    order = np.argsort(phase)
+    groups: list[list[int]] = []
+    current: list[int] = []
+    for idx in order:
+        if current and phase[idx] - phase[current[-1]] > tolerance_s:
+            groups.append(current)
+            current = []
+        current.append(int(idx))
+    if current:
+        groups.append(current)
+    if (len(groups) > 1
+            and (phase[groups[0][0]] + 1.0 - phase[groups[-1][-1]]) <= tolerance_s):
+        groups[0] = groups[-1] + groups[0]
+        groups.pop()
+    return groups
+
+
 def census(items: Iterable,
            cycle_s: float = DEFAULT_CYCLE_S,
            tolerance_s: float = PHASE_TOLERANCE_S,
-           min_count: int = 3) -> list[Emitter]:
+           min_count: int = 3,
+           slot_tolerance_s: float = SLOT_PHASE_TOLERANCE_S) -> list[Emitter]:
     """Group detections or timing solutions into transmitters.
 
-    Grouped by chirp rate, then by arrival phase within ``tolerance_s``. The
-    phase does the work: two soundings from one transmitter arrive at the same
-    fraction of a second whatever their schedule, and two transmitters at
-    different ranges separate even when they share a slot.
+    Grouped by chirp rate, then in two stages on arrival phase -- **within a
+    slot first, and only then across slots**. The phase does the work either
+    way: two soundings from one transmitter arrive at the same fraction of a
+    second whatever their schedule, and two transmitters at different ranges
+    separate even when they share a slot.
+
+    The two stages exist because linking raw arrivals directly does not
+    survive a busy band. Single linkage joins anything whose neighbours are
+    closer than the tolerance, so a dense population chains end to end: over
+    18-28 Aug 2026 at Yoshkar-Ola, 9,822 solutions at 100 kHz/s formed one
+    group holding twelve slots and 8.5 ms of phase scatter -- four or more
+    transmitters reported as one, with a slot list no operator could safely
+    identify. Lowering the tolerance did not help. From 5 ms down to 1 ms the
+    same 8,640 arrivals stayed welded, because four scattered slots lay across
+    the gaps and bridged them.
+
+    Collapsing each slot to one point first is what breaks the chain: a slot
+    contributes a single median rather than hundreds of arrivals, so the gaps
+    between transmitters are real gaps. Stage one keeps
+    :data:`PHASE_TOLERANCE_S` -- it is comparing individual arrivals, which is
+    what that figure was measured for, and it is what separates two
+    transmitters sharing one second. Stage two compares medians and uses the
+    tighter :data:`SLOT_PHASE_TOLERANCE_S`.
+
+    The property this buys is worth stating plainly: **every emitter returned
+    now has an internally consistent arrival phase.** That was not true before,
+    and it is what makes the slot list on a census row safe to act on.
 
     ``min_count`` exists because a search-mode tree is mostly noise. At DOB
     928 raw detections contained six repeating emitters and roughly forty
@@ -558,29 +625,31 @@ def census(items: Iterable,
     if not items:
         return []
     times, rates, snrs = _times_rates_snrs(items)
+    cycle = int(cycle_s) if cycle_s else 1
 
     emitters: list[Emitter] = []
     for rate in sorted(set(rates.tolist())):
         on_rate = rates == rate
         t_rate, snr_rate = times[on_rate], snrs[on_rate]
-
-        # Cluster on phase, wrapping the 0/1 boundary so an emitter sitting on
-        # it stays one emitter.
         phase = t_rate % 1.0
-        order = np.argsort(phase)
-        groups: list[list[int]] = []
-        current: list[int] = []
-        for idx in order:
-            if current and phase[idx] - phase[current[-1]] > tolerance_s:
-                groups.append(current)
-                current = []
-            current.append(int(idx))
-        if current:
-            groups.append(current)
-        if (len(groups) > 1
-                and (phase[groups[0][0]] + 1.0 - phase[groups[-1][-1]]) <= tolerance_s):
-            groups[0] = groups[-1] + groups[0]
-            groups.pop()
+
+        # Stage one: within each slot. A slot is one schedule entry, so this
+        # is where "two transmitters share a second" is settled -- and it is
+        # settled on individual arrivals, at the tolerance measured for them.
+        atoms: list[np.ndarray] = []
+        slot_of = np.round(t_rate % cycle_s).astype(np.int64) % cycle
+        for second in np.unique(slot_of):
+            members = np.flatnonzero(slot_of == second)
+            for atom in _link_on_phase(phase[members], tolerance_s):
+                atoms.append(members[np.asarray(atom, dtype=np.int64)])
+
+        # Stage two: across slots, on one median per atom. Same linkage, but
+        # now over a handful of points instead of thousands, which is the
+        # whole difference.
+        centres = np.array([float(np.median(_unwrap(phase[a]))) % 1.0
+                            for a in atoms])
+        groups = [np.concatenate([atoms[i] for i in g]).tolist()
+                  for g in _link_on_phase(centres, slot_tolerance_s)]
 
         for group in groups:
             if len(group) < min_count:

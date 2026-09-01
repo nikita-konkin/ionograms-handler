@@ -154,6 +154,93 @@ def test_census_drops_one_off_false_alarms(make_detection_h5, tmp_path):
     assert len(io_detect.census(sols, min_count=1)) == 2
 
 
+# The failure the two-stage grouping exists for. Single linkage joins anything
+# whose neighbours are closer than the tolerance, so on a busy band a dense
+# population chains end to end: over 18-28 Aug 2026 at Yoshkar-Ola, 9,714
+# solutions at 100 kHz/s came back as ONE emitter holding 31 slots with 7.6 ms
+# of phase scatter. Lowering the tolerance did not help -- from 5 ms down to
+# 1 ms the same arrivals stayed welded, because a few scattered slots lay
+# across the gaps and bridged them.
+
+def test_a_smeared_slot_no_longer_welds_two_transmitters(make_detection_h5,
+                                                         tmp_path):
+    """A slot with a wide spread must not bridge the gap between two others.
+
+    Two transmitters 2400 km apart in range: 8 ms of phase, further apart than
+    the 5 ms that separates individual arrivals, so on their own they resolve.
+    A third slot then sits at the *same* range as the first but smeared by
+    2 ms, which is what a slot carrying interference looks like. Its arrivals
+    reach most of the way to the second transmitter, and linking raw arrivals
+    walks up the smear and out the other side, reporting all three as one.
+
+    Collapsing the slot to a single median is what stops it: the smear is
+    centred on the transmitter it belongs with, so it joins that one and
+    cannot reach the other.
+    """
+    tree = tmp_path / "smeared"
+    make_detection_h5("par", cycles=60, transmit_seconds=(100,),
+                      distance_km=2000.0, jitter_s=3e-4, into=tree, seed=1)
+    make_detection_h5("par", cycles=60, transmit_seconds=(200,),
+                      distance_km=4400.0, jitter_s=3e-4, into=tree, seed=2)
+    make_detection_h5("par", cycles=60, transmit_seconds=(250,),
+                      distance_km=2000.0, jitter_s=2e-3, into=tree, seed=3)
+
+    sols = io_detect.load_timings(tree)
+
+    # What the old single-stage rule did with exactly this input, kept here so
+    # the test states the defect rather than only the cure: one emitter.
+    welded = io_detect._link_on_phase(
+        np.array([s.t0 % 1.0 for s in sols]), io_detect.PHASE_TOLERANCE_S)
+    assert len(welded) == 1, "the fixture no longer reproduces the bridging"
+
+    emitters = io_detect.census(sols)
+    homes = {s: e for e in emitters for s in e.observed_seconds}
+    assert homes[100] is not homes[200], "the smear welded them into one"
+    assert homes[250] is homes[100], "the smear belongs with its own range"
+    assert homes[200].count == 60
+
+
+def test_every_emitter_has_a_consistent_arrival_phase(make_detection_h5,
+                                                      tmp_path):
+    """The invariant the two stages buy, and the one worth guarding.
+
+    A census row's slot list is what an operator identifies a transmitter by,
+    so every slot in a row has to actually agree about where the signal came
+    from. Before the slots were grouped first this did not hold: the worst row
+    on the real archive carried 7.6 ms of scatter, ten times what one
+    transmitter shows.
+    """
+    tree = tmp_path / "mixed"
+    for i, (second, km) in enumerate(((100, 1500.0), (150, 2400.0),
+                                      (200, 3300.0), (250, 4200.0))):
+        make_detection_h5("par", cycles=20, transmit_seconds=(second,),
+                          distance_km=km, jitter_s=8e-4, into=tree, seed=i)
+
+    emitters = io_detect.census(io_detect.load_timings(tree))
+    assert len(emitters) == 4, "four ranges, four transmitters"
+    for e in emitters:
+        assert e.fraction_sd_s <= io_detect.SLOT_PHASE_TOLERANCE_S, (
+            f"{e.observed_seconds} disagree about the arrival phase")
+
+
+def test_slots_of_one_transmitter_still_come_back_as_one_emitter(
+        make_detection_h5):
+    """The other direction: grouping by slot must not shatter a schedule.
+
+    Nicosia is heard on five slots of a 300 s cycle at one range. All five
+    share a phase, so the second stage has to put them back together -- a
+    census that reported five transmitters would be as useless as one that
+    reported them all as a single row with everything else.
+    """
+    root = make_detection_h5("par", cycles=10,
+                             transmit_seconds=(0, 235, 240, 245, 280),
+                             distance_km=3436.0, jitter_s=3e-4, seed=7)
+    emitters = io_detect.census(io_detect.load_timings(root))
+    assert len(emitters) == 1
+    assert emitters[0].observed_seconds == (0, 235, 240, 245, 280)
+    assert emitters[0].count == 50
+
+
 def test_census_accepts_raw_detections_too(make_detection_h5):
     root = make_detection_h5("chirp", cycles=5, transmit_seconds=CYPRUS_SLOTS)
     emitters = io_detect.census(io_detect.load_detections(root))
