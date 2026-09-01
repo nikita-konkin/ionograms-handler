@@ -155,7 +155,7 @@ have been evidence of a different mechanism than the one diagnosed.
 ## 6. What to do next, in this order
 
 **a. Extract one continuous trace by dynamic programming** — **built
-2026-08-30, and it does not yet beat the fixed bridge.**
+2026-08-30; adjudicated by eye 2026-09-01 and beaten by `algo`, 32-17.**
 [muf/extractors/viterbi.py](muf/extractors/viterbi.py), registered as `dp`,
 **not** in `DEFAULT_METHODS`.
 
@@ -217,6 +217,88 @@ has no upper length, by design) reaches past the true trace end at the
 terminator, where the trace is weakest and interference is worst. That would
 show up as `dp` reading *high* against GIRO exactly where it reads high against
 the consensus now.
+
+### Adjudicated by eye, blinded — `algo` wins, and the §6a hypothesis holds (2026-09-01)
+
+50 soundings, sampled from the terminator hours where the two estimators
+disagreed by at least 0.5 MHz, rendered as anonymous **A**/**B** markers with
+the assignment coin-flipped per sounding and held only in `manifest.csv`.
+[tools/adjudicate.py](tools/adjudicate.py); 25 rows carried `algo` as **A**.
+
+```
+50 judged, 49 picked a marker, 1 said neither
+  algo  preferred on  32 of 49  (65%)
+  dp    preferred on  17 of 49  (35%)
+  two-sided exact binomial p = 0.044
+```
+
+**This is the first non-circular measurement in the whole document.** Every
+number in §5 and in the table above is one estimator scored against another.
+The eye is not, and it says `algo`.
+
+**But read where the win comes from before spending it.**
+
+```
+  gap 0.5-1.0 MHz   n=20   algo 16   dp  4   p = 0.012
+  gap 1.0-2.0 MHz   n=11   algo  6   dp  5   p = 1.000
+  gap > 2.0 MHz     n=18   algo 10   dp  8   p = 0.815
+```
+
+The whole result lives in the band where the two barely disagree. On the
+soundings this exercise was built to settle — where the estimators differ by
+more than 2 MHz, and a wrong MUF actually costs something — the verdict is a
+coin flip. **The question §6a asked is still open.** What was answered is a
+smaller one.
+
+**The direction inverts between the bands, and that is the finding.** Below
+1 MHz `dp` reads *higher* on 15 of 20 (median +0.55 MHz) and is rejected. Above
+2 MHz it reads *lower* on 16 of 18, and there the eye cannot separate them.
+
+So §6a's stated hypothesis — that the unbounded gap crossing reaches past the
+true trace end — is **confirmed, by the eye rather than by GIRO**. It just
+turns out to be a small over-reach rather than a dramatic one.
+
+Two candidate mechanisms were checked against the 12 soundings showing the
+signature, and the obvious one is wrong:
+
+- **Not unlit bins, and it cannot be.** `dp` builds `present` from path
+  occupancy, so it marks fade bins present and the `qualifying` filter added to
+  `pick_muf` in §5 is inert for it — which looks like it should let `dp` report
+  a MUF where nothing was detected. On all 12 it terminates on a bin above
+  threshold, and that is forced rather than lucky: `best = gain + max(reachable,
+  0)`, so a below-threshold cell has negative `gain` and scores *below* its own
+  best predecessor. The global argmax can never land on one. The guard `dp`
+  bypasses is one it does not need — but only while the scoring keeps that
+  shape, so the invariant is now pinned by a test rather than left to be
+  rediscovered.
+- **Marginal trace, not absent trace.** The disputed tail is 10–19 frequency
+  bins long and **70% lit against 88% in the body**, and half the terminating
+  bins sit within 1.5 dB of the 43 dB threshold. `dp` follows the trace into
+  where it is fading; `algo` needs `min_run` consecutive detections and stops
+  earlier. Both are defensible readings of the same pixels, and the eye
+  preferred the earlier stop 16 times in 20.
+
+**Caveat that limits how far this generalises.** The reviewer sees two markers
+on a plot, not the truth. A marker sitting in a visibly dimmer region *looks*
+wrong whether or not it is, so this measures "which stop a scaler endorses",
+which is the operational definition ionospheric scaling has always used — and
+still not the same as the true MUF.
+
+**Consequences.**
+
+1. `dp` is **not** adopted, `DEFAULT_METHODS` is unchanged, and no stored
+   result needs recomputing. This is the same conclusion as before, now
+   resting on something that is not made of the estimators.
+2. **The useful follow-up is 40 more soundings drawn only from the >2 MHz
+   band**, where n=18 answered nothing. The harness already does this; it needs
+   a minimum gap of 2.0 rather than 0.5. Below 1 MHz the argument is nearly
+   moot operationally — half a megahertz rarely changes a frequency choice —
+   so further sampling there would buy significance about something that does
+   not matter.
+3. Sounding `020` is worth reading: both markers were rejected. One case is not
+   a rate, but it is the only sounding so far where the eye says the whole
+   approach missed.
+
 
 **b. Score against GIRO instead of against each other** — **the endpoint is
 fixed; the reference is still unavailable for this circuit, for a different

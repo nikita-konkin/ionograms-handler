@@ -195,6 +195,35 @@ def test_extract_satisfies_the_mufresult_contract(synthetic_dp):
     assert result.mask.sum() == result.presence.sum()
 
 
+def test_the_trace_can_never_end_on_a_bin_that_was_not_lit():
+    """Why `extract` may hand the picker its raw path as a presence array.
+
+    `pick_muf` reports the MUF at the highest qualifying frequency, and
+    `pick.qualifying` keeps that off an unlit bin by filtering on `presence`.
+    This module's path is present on the bins it crosses through a fade, so
+    that guard is inert here -- a `dp` MUF is protected instead by the shape of
+    the score: `best = gain + max(reachable, 0)`, and a below-threshold cell has
+    negative `gain`, so it always scores *below* its own best predecessor. The
+    global argmax cannot land on one.
+
+    That is a property of the scoring, not of the data, and a future change to
+    it -- clamping `gain` at zero, adding a continuity bonus -- would break the
+    invariant silently and let a crossed fade become the answer. Hence a test
+    rather than a comment. Checked here on a trace whose top end is a long fade,
+    which is the case that would expose it.
+    """
+    ranges, lit = _flat(100, 700, holes=[(660, 700)])   # dies into a fade
+    db = _array(ranges, lit)
+    present, chosen = viterbi.trace(db, FREQ, VRANGE)
+    found = np.flatnonzero(present)
+
+    assert found.size
+    top = found.max()
+    assert db[top, chosen[top]] >= viterbi.DEFAULT_THRESHOLD_DB, \
+        "the trace ended on a bin where nothing was detected"
+    assert top == 659, "the trace ran past its last detection"
+
+
 def test_it_is_in_the_registry_but_not_in_the_defaults():
     """Stored results were all produced without it; a default would change
     what re-running an old archive means."""
