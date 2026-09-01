@@ -171,3 +171,87 @@ def test_neither_is_recorded_rather_than_forced_into_a_choice(tmp_path, capsys):
     assert "against the 1 hand-scaled MUFs" in printed
     assert "algo  MAE 6.500" in printed        # |9.0 - 15.5|
     assert "dp    MAE 6.500" in printed        # |22.0 - 15.5|
+
+
+class _Pick:
+    """Enough of a `MufResult` for `select`."""
+
+    def __init__(self, muf):
+        self.ok, self.muf_mhz = True, muf
+
+
+def _fake_archive(monkeypatch, soundings):
+    """`select` driven off a made-up archive: {name: (algo_mhz, dp_mhz)}."""
+    import datetime as dt
+    from pathlib import Path as P
+
+    def files(root):
+        for i, name in enumerate(soundings):
+            yield P("/arch") / name, dt.datetime(2026, 8, 17, 20, i, tzinfo=dt.UTC), "NIC1"
+
+    monkeypatch.setattr(adjudicate, "_archive_files", files)
+    monkeypatch.setattr(adjudicate.loader, "load", lambda p: p)
+    monkeypatch.setattr(adjudicate.algorithmic, "extract",
+                        lambda ion: _Pick(soundings[P(ion).name][0]))
+    monkeypatch.setattr(adjudicate.viterbi, "extract",
+                        lambda ion: _Pick(soundings[P(ion).name][1]))
+
+
+def _select(out, **kw):
+    class Args:
+        pass
+    args = Args()
+    args.archive, args.out, args.n = "/arch", str(out), 10
+    args.limit, args.tx, args.seed = 100, None, 0
+    args.min_gap, args.exclude = adjudicate.MIN_DISAGREEMENT_MHZ, None
+    for k, v in kw.items():
+        setattr(args, k, v)
+    adjudicate.select(args)
+    with open(out / "manifest.csv", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+def test_min_gap_aims_a_round_at_a_band(tmp_path, monkeypatch):
+    """The first round's significance sat entirely below 1 MHz, where the
+    difference barely matters. Targeting the wide-disagreement band is the
+    whole point of a second round."""
+    soundings = {"a.h5": (12.0, 12.6),      # 0.6 -- wide enough by default
+                 "b.h5": (12.0, 15.0),      # 3.0
+                 "c.h5": (12.0, 12.2),      # 0.2 -- below every threshold
+                 "d.h5": (20.0, 17.5)}      # 2.5, and dp reads *low*
+    _fake_archive(monkeypatch, soundings)
+
+    loose = _select(tmp_path / "loose")
+    assert {r["gap_mhz"] for r in loose} == {"0.6", "3.0", "2.5"}
+
+    tight = _select(tmp_path / "tight", min_gap=2.0)
+    assert {r["gap_mhz"] for r in tight} == {"3.0", "2.5"}
+
+
+def test_an_earlier_rounds_soundings_are_not_drawn_again(tmp_path, monkeypatch):
+    """Two verdicts on one ionogram are not two independent samples.
+
+    A fresh `--seed` reshuffles the archive but excludes nothing, so pooling
+    rounds without this would silently double-count -- and the reviewer may
+    well remember the sounding, which makes the second verdict worse than
+    merely redundant.
+    """
+    soundings = {"a.h5": (12.0, 15.0), "b.h5": (12.0, 16.0), "c.h5": (12.0, 17.0)}
+    _fake_archive(monkeypatch, soundings)
+
+    first = tmp_path / "r1"
+    round_one = _select(first, n=2)
+    assert len(round_one) == 2
+
+    round_two = _select(tmp_path / "r2", seed=99, exclude=[str(first)])
+    assert {r["path"] for r in round_one}.isdisjoint({r["path"] for r in round_two})
+    assert len(round_two) == 1, "only one sounding was left to draw"
+
+
+def test_the_second_round_renumbers_from_zero(tmp_path, monkeypatch):
+    """Ids are per-directory, so `score` cannot silently read one round's
+    verdicts against another's manifest."""
+    soundings = {f"{c}.h5": (12.0, 15.0) for c in "abcd"}
+    _fake_archive(monkeypatch, soundings)
+    rows = _select(tmp_path / "r1", n=3)
+    assert [r["id"] for r in rows] == ["000", "001", "002"]

@@ -64,6 +64,13 @@ TERMINATOR_HOURS = tuple(range(18, 24)) + (0, 1)
 
 #: Below this the two are picking the same feature and there is nothing to
 #: judge -- a marker pair a person cannot separate is a wasted sounding.
+#:
+#: A floor, not the interesting threshold. The first 50-sounding round
+#: (2026-09-01) split cleanly by how far apart the estimators were: `algo` won
+#: 16-4 below 1 MHz and 10-8 above 2 MHz. All of the significance sat in the
+#: band where the answer barely matters operationally, so `--min-gap` exists to
+#: aim a round at the band that does. See
+#: `docs/2026-08-30-segmentation-quality.md` sec. 6a.
 MIN_DISAGREEMENT_MHZ = 0.5
 
 #: `tx` is the first segment and cannot contain a hyphen; the receiver can and
@@ -95,14 +102,26 @@ def select(args) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rng = random.Random(args.seed)
+    min_gap = args.min_gap
+
+    # Soundings already judged in an earlier round. Re-drawing one would pool a
+    # verdict with itself: the reviewer may remember the sounding, and even if
+    # not, two verdicts on one ionogram are not two independent samples. A new
+    # `--seed` reshuffles but does not exclude, so this has to be explicit.
+    seen = set()
+    for prior in args.exclude or []:
+        with open(Path(prior) / "manifest.csv", encoding="utf-8") as fh:
+            seen.update(row["path"] for row in csv.DictReader(fh))
 
     candidates = [(p, w, tx) for p, w, tx in _archive_files(Path(args.archive))
                   if w.hour in TERMINATOR_HOURS
-                  and (args.tx is None or tx.startswith(args.tx))]
+                  and (args.tx is None or tx.startswith(args.tx))
+                  and str(p) not in seen]
     rng.shuffle(candidates)
     print(f"{len(candidates)} soundings in hours "
-          f"{TERMINATOR_HOURS[0]}-{TERMINATOR_HOURS[-1]} UTC; "
-          f"reading until {args.n} disagree by >= {MIN_DISAGREEMENT_MHZ} MHz")
+          f"{TERMINATOR_HOURS[0]}-{TERMINATOR_HOURS[-1]} UTC"
+          + (f" ({len(seen)} already judged, excluded)" if seen else "")
+          + f"; reading until {args.n} disagree by >= {min_gap} MHz")
 
     rows, looked = [], 0
     for path, when, tx in candidates:
@@ -117,7 +136,7 @@ def select(args) -> int:
         d = viterbi.extract(ion)
         if not (a.ok and d.ok):
             continue
-        if abs(a.muf_mhz - d.muf_mhz) < MIN_DISAGREEMENT_MHZ:
+        if abs(a.muf_mhz - d.muf_mhz) < min_gap:
             continue
         # Coin flip per sounding: which estimator is drawn as `A`.
         a_is_algo = rng.random() < 0.5
@@ -136,7 +155,7 @@ def select(args) -> int:
             print(f"  {len(rows)} kept of {looked} read", flush=True)
 
     if not rows:
-        print("nothing selected -- widen --limit or lower MIN_DISAGREEMENT_MHZ")
+        print("nothing selected -- widen --limit or lower --min-gap")
         return 1
 
     manifest = out / "manifest.csv"
@@ -306,6 +325,12 @@ def main(argv=None) -> int:
                    help="stop after reading this many, for slow archives")
     s.add_argument("--tx", default=None, help="only this transmitter prefix")
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--min-gap", type=float, default=MIN_DISAGREEMENT_MHZ,
+                   help="only soundings where the two differ by at least this "
+                        "many MHz (default %(default)s)")
+    s.add_argument("--exclude", action="append", metavar="DIR",
+                   help="an earlier --out directory whose soundings must not "
+                        "be drawn again; repeatable")
     s.set_defaults(func=select)
 
     r = sub.add_parser("render", help="draw the blinded images")
