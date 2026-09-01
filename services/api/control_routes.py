@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -292,6 +293,31 @@ def save_transmitter(station: str, request: Request,
                 status.HTTP_400_BAD_REQUEST,
                 f"timings entry {entry} has no usable `rep`; the cycle is what "
                 f"places the slot on a clock") from None
+        # Checked here rather than left to the reader, because the rate is now
+        # typed by hand as well as read off a census row. `_entry_floats`
+        # answers `None` for an unparseable rate and the slot is then dropped
+        # from the panel in silence -- the schedule would look saved and the
+        # station would not be listening for it.
+        try:
+            rate = float(entry["chirp-rate"])
+            if not math.isfinite(rate) or rate <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"timings entry {entry} has no usable `chirp-rate`; it must be "
+                f"a positive number of Hz per second (50 kHz/s is 50000)"
+                ) from None
+        try:
+            chirpt = float(entry["chirpt"])
+            if not math.isfinite(chirpt) or chirpt < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"timings entry {entry} has no usable `chirpt`; it is the "
+                f"second within the cycle at which this receiver hears the "
+                f"sweep start") from None
 
     record = db.save_transmitter(
         request.app.state.db, station, code, timings,

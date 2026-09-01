@@ -2093,6 +2093,77 @@ def test_an_identification_round_trips_with_its_evidence(client):
     assert listed[0]["verified_at"]
 
 
+# A source can also be entered by hand, with no census row behind it. The
+# endpoint always allowed it; until 2026-08-30 only the form did not, so an
+# operator could not schedule a transmitter this receiver had not yet heard --
+# one off air, one whose detections were all rejected as interference, or a
+# circuit being set up before its first sweep.
+
+def test_a_source_entered_by_hand_needs_no_census_row(client):
+    r = _identify(client, code="CYP", name="Cyprus", evidence={"manual": True},
+                  timings=[{"chirp-rate": 50e3, "rep": 300.0, "chirpt": 210.0}])
+    assert r.status_code == 200
+
+    listed = client.get("/stations/SIM/transmitters").json()["transmitters"]
+    entry = [t for t in listed if t["code"] == "CYP"][0]["timings"][0]
+    # Stored verbatim: the schedule the station holds is these numbers, and a
+    # rate silently rounded or a slot folded here would put it on air at the
+    # wrong second.
+    assert entry["chirp-rate"] == 50e3
+    assert (entry["rep"], entry["chirpt"]) == (300.0, 210.0)
+
+
+def test_a_hand_entered_source_places_on_a_clock(client):
+    """The point of storing it -- it has to reach the scheduler as a slot."""
+    from services.api import acquisition
+
+    _identify(client, code="CYP",
+              timings=[{"chirp-rate": 50e3, "rep": 300.0, "chirpt": 210.0}])
+    listed = client.get("/stations/SIM/transmitters").json()["transmitters"]
+    entry = [t for t in listed if t["code"] == "CYP"][0]["timings"][0]
+
+    # 210 s into a 300 s cycle, so a sweep that began 5 s ago is in progress.
+    slot = acquisition.place(entry, now=215.0, span_mhz=24.8)
+    assert slot is not None
+    assert slot.chirpt_s == 210.0 and slot.rep_s == 300.0
+    assert slot.in_progress, "50 kHz/s over 24.8 MHz is a 496 s sweep"
+
+
+@pytest.mark.parametrize("rate", ["fifty", None, 0, -100.0])
+def test_an_unusable_chirp_rate_is_refused_rather_than_dropped(client, rate):
+    """`_entry_floats` answers None for a rate it cannot read, and the slot
+    then vanishes from the panel in silence -- the schedule would look saved
+    while the station listened for nothing. Now typed by hand, so it is
+    checked at the door."""
+    r = _identify(client, timings=[{"chirp-rate": rate, "rep": 300.0,
+                                    "chirpt": 210.0}])
+    assert r.status_code == 400
+    assert "chirp-rate" in r.json()["detail"]
+
+
+def test_a_not_a_number_rate_is_refused_even_though_json_has_no_nan(client):
+    """`json.loads` accepts the bare `NaN` literal even though the standard has
+    no such token, so it reaches the endpoint from a hand-rolled body -- and
+    `float("nan")` passes every comparison it is put to. Sent as raw content
+    because the test client's *encoder* refuses it, which is exactly why this
+    could not be caught by the parametrised case above."""
+    r = client.post(
+        "/stations/SIM/transmitters",
+        headers={**CTL, "content-type": "application/json"},
+        content='{"code": "CYP", "timings": [{"chirp-rate": NaN, '
+                '"rep": 300.0, "chirpt": 210.0}]}')
+    assert r.status_code == 400
+    assert "chirp-rate" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("chirpt", ["soon", None, -1.0])
+def test_an_unusable_slot_second_is_refused(client, chirpt):
+    r = _identify(client, timings=[{"chirp-rate": 50e3, "rep": 300.0,
+                                    "chirpt": chirpt}])
+    assert r.status_code == 400
+    assert "chirpt" in r.json()["detail"]
+
+
 def test_the_two_missing_keys_are_filled_in_from_the_record(client):
     """Not from the caller. They are the record's identity, in the ini's words.
 

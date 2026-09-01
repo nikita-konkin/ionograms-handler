@@ -146,9 +146,40 @@
              placeholder="{{ t('sources.note_placeholder') }}"></label>
   </p>
   <p>
-    <button class="pill" id="save">{{ t('sources.save') }}</button>
+    <button class="pill" id="save" data-needs="station">{{ t('sources.save') }}</button>
     <button class="pill" id="cancel">{{ t('sources.cancel') }}</button>
     <span id="save-result" class="note"></span>
+  </p>
+</div>
+
+<div class="panel" id="manual-panel">
+  <h2>{{ t('sources.manual_panel') }}</h2>
+  <p class="note">{{ t('sources.manual_note') }}</p>
+
+  <p>
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.code') }}
+      <input id="m-code" size="12" placeholder="NIC"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.txname') }}
+      <input id="m-txname" size="24" placeholder="Nicosia"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.rate') }}
+      <input id="m-rate" size="8" placeholder="50"></label>
+  </p>
+  <p class="note">{{ t('sources.name_rule') }}</p>
+
+  <p>
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.slots') }}
+      <input id="m-slots" size="30" placeholder="210:300"></label>
+  </p>
+  <p class="note">{{ t('sources.manual_slots_note') }}</p>
+
+  <p>
+    <label class="muted" style="font-size:.85rem">{{ t('sources.field.note') }}
+      <input id="m-note" size="60"
+             placeholder="{{ t('sources.manual_note_placeholder') }}"></label>
+  </p>
+  <p>
+    <button class="pill" id="m-save" data-needs="station">{{ t('sources.manual_save') }}</button>
+    <span id="m-result" class="note"></span>
   </p>
 </div>
 
@@ -290,6 +321,75 @@ if (save) save.addEventListener('click', async () => {
   out.textContent = '';
 });
 
+// --- adding a source by hand ---------------------------------------------
+//
+// The census can only offer what this receiver has already heard, and that is
+// not always what needs scheduling: a transmitter that is off air today, one
+// whose detections were all rejected as interference, or a circuit being set
+// up before its first sweep arrives. The endpoint has always accepted an
+// arbitrary `sounder_timings` entry -- only the form insisted on a row to
+// start from.
+//
+// Slots are written the way the console reads them back, `second:cycle`, so
+// "210:300" is the 210th second of a 300 s cycle. Several are comma separated.
+// A bare number is refused rather than assumed: the cycle is what places a
+// slot on a clock, and guessing it wrong puts the station on air at the wrong
+// second with nothing to say it happened.
+function parseSlots(text) {
+  const out = [];
+  for (const token of text.split(',')) {
+    const piece = token.trim();
+    if (!piece) continue;
+    const parts = piece.split(':');
+    if (parts.length !== 2)
+      throw new Error(T('sources.js.slot_shape', {slot: piece}));
+    const chirpt = Number(parts[0].trim());
+    const rep = Number(parts[1].trim());
+    if (!isFinite(chirpt) || chirpt < 0 || !isFinite(rep) || rep <= 0)
+      throw new Error(T('sources.js.slot_shape', {slot: piece}));
+    out.push({chirpt: chirpt, rep: rep});
+  }
+  if (!out.length) throw new Error(T('sources.js.slot_required'));
+  return out;
+}
+
+const manualSave = document.getElementById('m-save');
+if (manualSave) manualSave.addEventListener('click', async () => {
+  const out = document.getElementById('m-result');
+  const code = document.getElementById('m-code').value.trim();
+  if (!code) { out.textContent = T('sources.js.code_required'); return; }
+
+  const khz = Number(document.getElementById('m-rate').value.trim());
+  if (!isFinite(khz) || khz <= 0) {
+    out.textContent = T('sources.js.rate_required'); return;
+  }
+  let slots;
+  try {
+    slots = parseSlots(document.getElementById('m-slots').value);
+  } catch (err) { out.textContent = err.message; return; }
+
+  out.textContent = T('sources.js.saving');
+  const r = await control(`/stations/${station()}/transmitters`, 'POST', {
+    code: code,
+    name: document.getElementById('m-txname').value.trim() || null,
+    note: document.getElementById('m-note').value.trim() || null,
+    // Nothing was measured, and the record should not imply otherwise. What
+    // travels with it is that a person asserted it.
+    evidence: {manual: true},
+    // kHz/s in the field because that is how every other surface prints a
+    // chirp rate; Hz/s on the wire because that is what the station reads.
+    timings: slots.map(e => ({'chirp-rate': khz * 1000,
+                              rep: e.rep, chirpt: e.chirpt})),
+  });
+  if (!r.ok) { out.textContent = T('sources.js.refused', {detail: r.detail}); return; }
+  const record = r.body.transmitter;
+  const kept = (VERIFIED[station()] || []).filter(t => t.code !== record.code);
+  VERIFIED[station()] = [...kept, record].sort(
+    (a, b) => a.code.localeCompare(b.code));
+  renderVerified();
+  out.textContent = r.body.warning || T('sources.js.saved', {code: record.code});
+});
+
 // --- the verified list -----------------------------------------------------
 //
 // The list, not the schedule made from it: ticking transmitters and applying
@@ -357,5 +457,6 @@ function markClaims() {
 if (stationBox) stationBox.addEventListener('change', renderVerified);
 
 renderVerified();
+gate('station');
 </script>
 {% endblock %}

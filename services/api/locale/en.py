@@ -859,6 +859,22 @@ MESSAGES: dict[str, str] = {
     "sources.note_placeholder": "How you know -- what settled it",
     "sources.save": "Save transmitter",
     "sources.cancel": "Cancel",
+    "sources.manual_panel": "Add a source by hand",
+    "sources.manual_note":
+        "The census can only offer what this receiver has already heard. Use "
+        "this for a transmitter that is off air today, one whose detections "
+        "were all rejected as interference, or a circuit being set up before "
+        "its first sweep arrives.",
+    "sources.field.rate": "Rate (kHz/s)",
+    "sources.field.slots": "Slots",
+    "sources.manual_slots_note":
+        "Written second:cycle, the way the console reads them back &mdash; "
+        "<code>210:300</code> is the 210th second of a 300 s cycle. Separate "
+        "several with commas. The second is as <em>received</em>: the "
+        "transmit second plus the one-way travel time plus this receiver's "
+        "epoch offset.",
+    "sources.manual_note_placeholder": "Where these numbers came from",
+    "sources.manual_save": "Add transmitter",
     "sources.verified": "Verified transmitters",
     "sources.verified_note":
         "Identified once, kept with the census row that settled it. These are "
@@ -1213,6 +1229,12 @@ MESSAGES: dict[str, str] = {
     "series.axis.hmf2": "hmF2 (km)",
 
     # -- sources, browser side --------------------------------------------
+    "sources.js.slot_shape":
+        "{slot} is not a slot. Write it as second:cycle, for example 210:300.",
+    "sources.js.slot_required": "At least one slot is required.",
+    "sources.js.rate_required":
+        "A chirp rate in kHz/s is required, for example 50.",
+    "sources.js.saved": "Added {code}.",
     "sources.js.code_required": "A code is required.",
     "sources.js.tick_a_slot": "Tick at least one slot.",
     "sources.js.saving": "Saving...",
