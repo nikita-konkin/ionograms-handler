@@ -255,3 +255,31 @@ def test_the_second_round_renumbers_from_zero(tmp_path, monkeypatch):
     _fake_archive(monkeypatch, soundings)
     rows = _select(tmp_path / "r1", n=3)
     assert [r["id"] for r in rows] == ["000", "001", "002"]
+
+
+def test_the_ab_assignment_is_balanced_not_merely_unbiased(tmp_path, monkeypatch):
+    """Independent coin flips are unbiased per row but not balanced overall.
+
+    A round that lands 16/24 gives any position preference the reviewer has --
+    round 1 leaned to `B`, 28 of 49 -- a route to masquerade as a result about
+    the estimators. Un-blinding corrects for the assignment, not for that
+    interaction, so the assignment is fixed rather than sampled.
+    """
+    soundings = {f"{i:03d}.h5": (12.0, 15.0 + i) for i in range(40)}
+    _fake_archive(monkeypatch, soundings)
+    rows = _select(tmp_path / "r", n=40)
+
+    assert len(rows) == 40
+    assert sum(r["A"] == "algo" for r in rows) == 20
+    assert all({r["A"], r["B"]} == {"algo", "dp"} for r in rows)
+    # Balanced, not sorted: the order must still be unpredictable to the reader.
+    assert len({r["A"] for r in rows[:8]}) == 2
+
+
+def test_an_odd_sample_splits_as_evenly_as_it_can(tmp_path, monkeypatch):
+    soundings = {f"{i:03d}.h5": (12.0, 15.0 + i) for i in range(7)}
+    _fake_archive(monkeypatch, soundings)
+    rows = _select(tmp_path / "r", n=7)
+
+    assert len(rows) == 7
+    assert sum(r["A"] == "algo" for r in rows) in (3, 4)

@@ -295,9 +295,37 @@ still not the same as the true MUF.
    moot operationally — half a megahertz rarely changes a frequency choice —
    so further sampling there would buy significance about something that does
    not matter.
-3. Sounding `020` is worth reading: both markers were rejected. One case is not
-   a rate, but it is the only sounding so far where the eye says the whole
-   approach missed.
+3. Sounding `020` — the one where both markers were rejected — turns out to
+   show a failure mode neither estimator has any defence against, and it is
+   worth stating separately.
+
+**A flat line is not a trace, and nothing says so.** NIC3 at 2026-08-20 23:39,
+the sounding the eye rejected outright:
+
+```
+  freq       lit cells   range of those cells
+  13-14 MHz      342     median +2772 km   iqr +2758..+2794
+  14-19 MHz       67     median +2642 km   iqr +2642..+2644   <- flat to 2 km
+  30-31 MHz      385     median -3172 km   iqr -3364..-2398
+```
+
+The main trace runs to about 14 MHz around 2772 km, spread over some 36 km of
+range as a real trace is. Above it sits a razor-thin line at 2642 km, constant
+to within 2 km across **five megahertz**, and then an unrelated blob at 30 MHz
+on the negative-range side that both estimators correctly ignore.
+
+A real oblique trace must curve upward approaching the MUF; a delay that does
+not change at all over 5 MHz is a fixed-delay artefact, not ionospheric. But
+the 150 km/MHz limit in `pick` and in `dp` bounds only how *fast* range may
+change — **zero slope satisfies every slope constraint there is**, so both
+estimators are free to walk along the artefact, and `algo`'s presence array
+does exactly that, reaching 17.95 MHz. Neither estimator encodes the one thing
+that would rule it out.
+
+This is a different failure from the one §5 fixed and from the one §6a's
+`dp` was built for, and it is not addressed by either. Whether it is common
+enough to matter is unmeasured — it is one sounding. Worth counting flat tails
+across the archive before designing anything against it.
 
 
 **b. Score against GIRO instead of against each other** — **the endpoint is

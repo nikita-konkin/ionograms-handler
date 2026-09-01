@@ -138,8 +138,6 @@ def select(args) -> int:
             continue
         if abs(a.muf_mhz - d.muf_mhz) < min_gap:
             continue
-        # Coin flip per sounding: which estimator is drawn as `A`.
-        a_is_algo = rng.random() < 0.5
         rows.append({
             "id": f"{len(rows):03d}",
             "path": str(path),
@@ -148,8 +146,6 @@ def select(args) -> int:
             "algo_mhz": round(a.muf_mhz, 3),
             "dp_mhz": round(d.muf_mhz, 3),
             "gap_mhz": round(abs(a.muf_mhz - d.muf_mhz), 3),
-            "A": "algo" if a_is_algo else "dp",
-            "B": "dp" if a_is_algo else "algo",
         })
         if len(rows) % 10 == 0:
             print(f"  {len(rows)} kept of {looked} read", flush=True)
@@ -157,6 +153,19 @@ def select(args) -> int:
     if not rows:
         print("nothing selected -- widen --limit or lower --min-gap")
         return 1
+
+    # Which estimator is drawn as `A`, balanced by construction rather than by
+    # independent coin flips. The flips are unbiased per row but their *total*
+    # is not fixed, and a round that lands 16/24 hands any position preference
+    # the reviewer has -- round 1 leaned to `B`, 28 of 49 -- a way to show up as
+    # a result about the estimators. Un-blinding through the manifest corrects
+    # for the assignment but not for that interaction. A shuffled balanced list
+    # costs nothing and removes it before the data exists, which is the only
+    # point at which it can be removed.
+    assignment = ["algo", "dp"] * (len(rows) // 2) + ["algo"] * (len(rows) % 2)
+    rng.shuffle(assignment)
+    for row, first in zip(rows, assignment):
+        row["A"], row["B"] = first, "dp" if first == "algo" else "algo"
 
     manifest = out / "manifest.csv"
     with open(manifest, "w", newline="", encoding="utf-8") as fh:
