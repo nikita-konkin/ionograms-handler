@@ -299,8 +299,8 @@ still not the same as the true MUF.
    show a failure mode neither estimator has any defence against, and it is
    worth stating separately.
 
-**A flat line is not a trace, and nothing says so.** NIC3 at 2026-08-20 23:39,
-the sounding the eye rejected outright:
+**A flat line looked like an artefact, and the archive says it is the trace.**
+NIC3 at 2026-08-20 23:39, the sounding the eye rejected outright:
 
 ```
   freq       lit cells   range of those cells
@@ -309,23 +309,58 @@ the sounding the eye rejected outright:
   30-31 MHz      385     median -3172 km   iqr -3364..-2398
 ```
 
-The main trace runs to about 14 MHz around 2772 km, spread over some 36 km of
-range as a real trace is. Above it sits a razor-thin line at 2642 km, constant
-to within 2 km across **five megahertz**, and then an unrelated blob at 30 MHz
-on the negative-range side that both estimators correctly ignore.
+A line constant to within one 2 km range bin across five megahertz reads as a
+fixed delay — a correlation reference or direct leakage — because a trace
+approaching its junction frequency must curve. Three more soundings showed the
+same feature, twice running from 13 MHz to 25 while the curved segments stopped
+by 16, with both estimators reporting a MUF on the flat one. That would have
+made a large share of the archive's MUFs measurements of the instrument.
 
-A real oblique trace must curve upward approaching the MUF; a delay that does
-not change at all over 5 MHz is a fixed-delay artefact, not ionospheric. But
-the 150 km/MHz limit in `pick` and in `dp` bounds only how *fast* range may
-change — **zero slope satisfies every slope constraint there is**, so both
-estimators are free to walk along the artefact, and `algo`'s presence array
-does exactly that, reaching 17.95 MHz. Neither estimator encodes the one thing
-that would rule it out.
+**It is not. The survey refutes it**, and the refutation is worth more than the
+hypothesis was. [tools/flat_tails.py](tools/flat_tails.py) over all 7,432
+soundings, 5,388 with detections:
 
-This is a different failure from the one §5 fixed and from the one §6a's
-`dp` was built for, and it is not addressed by either. Whether it is common
-enough to matter is unmeasured — it is one sounding. Worth counting flat tails
-across the archive before designing anything against it.
+```
+  a flat feature >= 1 MHz:                     2948 of 5388  (54.7%)
+  median flat span 2.75 MHz, longest 12.70
+  median range +2702 km, iqr +2654..+2720
+
+  median range by hour (NIC0-3, absolute axis):
+    night 21-01 UTC  +2646 km        midday 09-12 UTC  +2725 km
+```
+
+**A fixed delay does not breathe with the ionosphere.** The flat feature's range
+moves ~80 km on a smooth diurnal cycle, rising through dawn, peaking at midday,
+falling through dusk, and it does so identically for NIC0/1/2/3. No cable, no
+oscillator, and no correlation reference does that; 80 km is 0.27 ms.
+
+And on 300 sampled soundings it has a companion. Looking at *every* lit cell
+across the flat feature's own frequency band — not the one-range-per-frequency
+profile the segmenter uses — **77% carry a second ray, sitting +86 km above in
+range (iqr +58..+132), above rather than below on 89%**. A flat branch at the
+shorter group path with a second branch above it is the ordinary two-ray
+structure of an oblique ionogram. These are low-ray legs.
+
+So the estimators walking along them are following the trace, which is what they
+should do, and they do not stop at the end of the flat part either: where
+`algo`'s MUF sits on a flat feature, it reads a median **1.25 MHz above** that
+feature's top, continuing up the nose. Only 1.2% stop more than 0.5 MHz short.
+
+**What this changes.** Sounding `020` is not an artefact case. Its flat 2642 km
+branch is the real low ray, running to 16.95 MHz, and both estimators reported
+13.95 and 14.85 — so the eye's "neither" almost certainly means *both read low*,
+which is §1–§5's finding again rather than a new failure mode. The zero-slope
+gap in the 150 km/MHz limit is still real as a matter of code — nothing forbids
+a horizontal path — but the archive gives no evidence it is being exploited, and
+a curvature requirement built against this would have rejected half the traces
+in it.
+
+**One methodological note, because it nearly produced a finding.** The first
+version of the coexistence test asked whether flat and curved segments overlap
+in frequency and got 0% on 300 of 300 — which looked decisive and was an
+artefact of the measurement: `range_profile` keeps one range per frequency, so
+two segments cannot share a frequency by construction. The 77% above comes from
+re-asking it against the raw threshold mask.
 
 
 **b. Score against GIRO instead of against each other** — **the endpoint is
