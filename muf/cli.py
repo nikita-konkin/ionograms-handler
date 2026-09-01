@@ -734,9 +734,11 @@ def cmd_detect(args) -> int:
             # ringbuffer tree and rotated away.
             records = io_detect.load_cdetections(target)
             kind = "consolidated detection"
-        emitters = io_detect.census(records, cycle_s=args.cycle,
-                                    tolerance_s=args.tolerance_ms / 1e3,
-                                    min_count=args.min_count)
+        emitters = io_detect.census(
+            records, cycle_s=args.cycle,
+            tolerance_s=args.tolerance_ms / 1e3,
+            min_count=args.min_count,
+            slot_tolerance_s=args.slot_tolerance_ms / 1e3)
 
         print(f"{target}")
         print(f"  {len(records)} {kind}(s), {len(emitters)} repeating emitter(s)"
@@ -1054,14 +1056,19 @@ def build_parser() -> argparse.ArgumentParser:
                      help="schedule cycle in seconds (default: %(default)s)")
     det.add_argument("--tolerance-ms", type=float,
                      default=io_detect.PHASE_TOLERANCE_S * 1e3,
-                     help="how close in arrival phase two sightings must be to "
-                          "count as one transmitter, in ms (default: "
-                          "%(default)s). The default is deliberately loose so "
-                          "a whole schedule lands in one row; tighten it to "
-                          "~1 to separate transmitters that share a chirp rate "
-                          "but sit at different ranges. A group whose sd is a "
-                          "large fraction of this value is several emitters, "
-                          "not one")
+                     help="how close in arrival phase two sightings *in the "
+                          "same slot* must be to count as one transmitter, in "
+                          "ms (default: %(default)s). This is what separates "
+                          "two transmitters sharing a second; slots are joined "
+                          "to each other by --slot-tolerance-ms")
+    det.add_argument("--slot-tolerance-ms", type=float,
+                     default=io_detect.SLOT_PHASE_TOLERANCE_S * 1e3,
+                     help="how close two slots' median arrival phases must be "
+                          "to be the same transmitter, in ms (default: "
+                          "%(default)s). Tighter than --tolerance-ms because a "
+                          "median is steadier than one arrival. Raising it "
+                          "merges transmitters at similar ranges; lowering it "
+                          "splits a schedule whose slots disagree")
     det.add_argument("--min-count", type=int, default=3,
                      help="how many sightings make an emitter, rather than a "
                           "false alarm (default: %(default)s)")
