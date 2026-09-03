@@ -74,6 +74,17 @@ RECURRENCE = pd.Timedelta(days=27)
 #: Diurnal harmonics fitted by the `harmonic` baseline, plus the zenith term.
 HARMONICS = 2
 
+#: Resamples behind every confidence interval here. Four thousand puts the
+#: Monte-Carlo error on a 95% bound well under the second decimal of a
+#: megahertz, which is the precision anything reads these to.
+BOOTSTRAP_RESAMPLES = 4000
+
+#: Below this many shared instants a comparison is not reported at all. Two
+#: forecasts agreeing or disagreeing over a handful of picks says nothing, and
+#: an interval computed from it would be wide enough to be meaningless while
+#: still looking like a measurement.
+MIN_COMPARISON_PAIRS = 30
+
 #: A forecast and a pick are the same instant if they are within this of each
 #: other. Half the model grid: any wider and two grid points compete for one
 #: pick, any narrower and the sub-second jitter on a sounding instant
@@ -200,6 +211,130 @@ def summarise(pairs: Pairs, param: str) -> dict:
         "n_censored": int(pairs.censored.sum()),
         "mae_censored": (_finite(error[pairs.censored].mean())
                          if pairs.censored.any() else None),
+    }
+
+
+def diurnal(pairs: Pairs, param: str) -> list[dict]:
+    """The error of :func:`summarise`, split by hour of day.
+
+    One MAE over a diurnal series averages two different regimes. The sunlit
+    hours are high, slowly varying and easy; the hours either side of the
+    nightly minimum are steep, and they are where a model told the time only
+    by a raw ``hour`` column goes wrong. A model 0.4 MHz out by day and 2 MHz
+    out at night reports the same 0.8 MHz as one that is uniformly mediocre,
+    and only one of those two has a fixable cause. This is what tells them
+    apart.
+
+    Hours are UTC, matching every other stamp in the database. Local solar
+    time is a property of the path rather than of the model, so the console
+    converts for display instead of this storing two clocks.
+
+    Bias is kept alongside MAE because at night they say different things: a
+    large MAE with a bias to match is a model sitting *above* the trough it
+    cannot reach, which is the signature of a predictor that has no term for
+    where in the cycle it is.
+    """
+    error = absolute_error(pairs, param)
+    residual = pairs.predicted - pairs.observed
+    free = ~pairs.censored
+    hours = np.asarray(pairs.valid_at.hour)
+
+    out = []
+    for hour in range(24):
+        here = (hours == hour) & free
+        if not here.any():
+            continue
+        out.append({
+            "hour": hour,
+            "n": int(here.sum()),
+            "mae": round(float(error[here].mean()), 4),
+            "bias": round(float(residual[here].mean()), 4),
+        })
+    return out
+
+
+def compare(model: Pairs, baseline: Pairs, param: str,
+            resamples: int = BOOTSTRAP_RESAMPLES) -> dict | None:
+    """Is one forecast actually better than another, or does it just look it?
+
+    **Paired, over the instants the two share.** Comparing two independently
+    computed MAEs throws away the thing that makes this measurable: both
+    forecasts faced the same ionosphere at the same minute, so the difficulty
+    of the hour is common to both and cancels in the difference. An unpaired
+    comparison has to see through that difficulty; a paired one does not, and
+    on a few hundred picks that is the difference between a usable answer and
+    an error bar wider than every effect being compared.
+
+    Two numbers come back, because the two questions get asked separately:
+
+    * **absolute** -- ``delta``, the mean of (model error - baseline error) in
+      MHz. Negative means the model is better. Its interval is what says
+      whether "beats persistence" is a finding or a coin flip.
+    * **relative** -- ``skill``, ``1 - mae_model / mae_baseline``, as a
+      fraction. This is what makes two runs on *different* holdout windows
+      comparable at all: on 2026-08-27 a voting model went from 1.10 to 1.58
+      MHz between two runs and read as a large regression, while persistence
+      over the same two windows went from 1.07 to 1.47 -- most of the change
+      was the ionosphere, not the model, and only the ratio said so.
+
+    ``distinguishable`` is the whole point of the function: it is False
+    whenever the interval on ``delta`` contains zero, and a caller that reports
+    "beats" or "loses to" without consulting it is asserting a difference the
+    data does not carry.
+
+    Censoring follows :func:`absolute_error`, so a band-edge bound costs
+    neither forecast anything it should not.
+    """
+    if not len(model) or not len(baseline):
+        return None
+
+    shared = model.valid_at.intersection(baseline.valid_at)
+    if len(shared) < MIN_COMPARISON_PAIRS:
+        return None
+
+    def errors(pairs: Pairs) -> np.ndarray:
+        where = pairs.valid_at.get_indexer(shared)
+        return absolute_error(pairs, param)[where]
+
+    ours, theirs = errors(model), errors(baseline)
+    keep = np.isfinite(ours) & np.isfinite(theirs)
+    ours, theirs = ours[keep], theirs[keep]
+    if len(ours) < MIN_COMPARISON_PAIRS:
+        return None
+
+    rng = np.random.default_rng(0)          # a table that changes on reload is
+    n = len(ours)                           # a table nobody can quote
+    draws = rng.integers(0, n, size=(int(resamples), n))
+    ours_boot = ours[draws].mean(axis=1)
+    theirs_boot = theirs[draws].mean(axis=1)
+
+    delta_lo, delta_hi = np.percentile(ours_boot - theirs_boot, [2.5, 97.5])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        skill_boot = 1.0 - ours_boot / theirs_boot
+    skill_boot = skill_boot[np.isfinite(skill_boot)]
+    skill_lo, skill_hi = ((np.percentile(skill_boot, [2.5, 97.5]))
+                          if len(skill_boot) else (float("nan"),) * 2)
+
+    mae_ours, mae_theirs = float(ours.mean()), float(theirs.mean())
+
+    def _round(value):
+        value = float(value)
+        return None if math.isnan(value) else round(value, 4)
+
+    return {
+        "n": int(n),
+        "mae": _round(mae_ours),
+        "baseline_mae": _round(mae_theirs),
+        "delta": _round(mae_ours - mae_theirs),
+        "delta_lo": _round(delta_lo),
+        "delta_hi": _round(delta_hi),
+        "skill": _round(1.0 - mae_ours / mae_theirs) if mae_theirs else None,
+        "skill_lo": _round(skill_lo),
+        "skill_hi": _round(skill_hi),
+        # The interval straddling zero is the *default* reading on a few
+        # hundred picks, not the exception.
+        "distinguishable": bool(delta_lo > 0 or delta_hi < 0),
+        "resamples": int(resamples),
     }
 
 
@@ -397,6 +532,12 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
             "kind": "baseline" if row["subject"].startswith("baseline:") else "model",
             "name": row["subject"].split(":", 1)[1],
             "origin": "", "state": "", "mae": {}, "n": {}, "detail": {},
+            # The relative number per horizon, when the scoring pass recorded
+            # one. Absolute MAE alone cannot be read across weeks: a quiet
+            # week and a disturbed one give different megahertz from one
+            # model, and only the ratio to a baseline that saw the same days
+            # separates the model from the ionosphere.
+            "skill": {}, "sure": {},
         })
         model = known.get(row["subject"])
         if model is not None:
@@ -408,6 +549,11 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
         entry["n"][str(row["horizon_s"])] = row["n"]
         if row["detail"]:
             entry["detail"][str(row["horizon_s"])] = row["detail"]
+            versus = (row["detail"] or {}).get("vs_persistence")
+            if versus:
+                entry["skill"][str(row["horizon_s"])] = versus.get("skill")
+                entry["sure"][str(row["horizon_s"])] = versus.get(
+                    "distinguishable")
     order = {"model": 0, "baseline": 1}
     return sorted(folded.values(),
                   key=lambda e: (order[e["kind"]],
@@ -440,9 +586,18 @@ def drift(board: list[dict]) -> list[dict]:
         if not beaten:
             continue
         name, best = min(beaten, key=lambda pair: pair[1])
+        # Whether the gap is one the pairs can actually support. Only known
+        # against persistence, which is the baseline the scoring pass runs a
+        # paired comparison against; `None` for the others means "not
+        # measured", which is a different thing from "not significant" and the
+        # console must not draw them the same way.
+        sure = (active["sure"].get(horizon)
+                if name == "persistence" else None)
         crossed.append({"horizon_s": int(horizon), "model": active["name"],
                         "model_mae": mae, "baseline": name,
                         "baseline_mae": best,
+                        "skill": active["skill"].get(horizon),
+                        "distinguishable": sure,
                         "n": active["n"].get(horizon, 0)})
     return sorted(crossed, key=lambda entry: entry["horizon_s"])
 
@@ -493,10 +648,32 @@ def score_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
         group = group.drop_duplicates(subset="valid_at", keep="last")
         series = pd.Series(group["value"].to_numpy(dtype=float),
                            index=pd.DatetimeIndex(group["valid_at"])).sort_index()
-        result = summarise(pair(series, observed), model["param"])
+        pairs = pair(series, observed)
+        result = summarise(pairs, model["param"])
+
+        # The relative number, beside the absolute one and over the same
+        # instants. A live MAE alone cannot be read across weeks: a quiet week
+        # and a disturbed one produce different megahertz from the same model,
+        # and only the ratio to a baseline that saw the same days says which.
+        versus = None
+        try:
+            reference = baseline_series(conn, "persistence", model["param"],
+                                        tx, rx, observed,
+                                        pd.DatetimeIndex(series.index),
+                                        int(horizon),
+                                        _naive(since))
+            if not reference.empty:
+                versus = compare(pairs, pair(reference, observed),
+                                 model["param"])
+        except ScoringError:
+            versus = None
+
         store(conn, f"model:{model['id']}", model["param"], tx, rx,
-              int(horizon), result, window)
-        by_horizon[str(int(horizon))] = result
+              int(horizon), result, window,
+              detail={"vs_persistence": versus} if versus else None)
+        by_horizon[str(int(horizon))] = {**result,
+                                         **({"vs_persistence": versus}
+                                            if versus else {})}
 
     registry.set_metrics(conn, model["id"], {
         "scored_at": db.utcnow(), "method": method,

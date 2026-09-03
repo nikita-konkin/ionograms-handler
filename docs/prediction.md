@@ -250,6 +250,99 @@ rule changes it changes for the model and its competitors together.
 by log ratio.
 
 
+#### 3.4.1 "Beats persistence" is a claim about a difference
+
+Until 2026-08-28 the console said `beats persistence (1.07)` or `loses to
+persistence (1.47)` on the strength of comparing two MAEs. On a one-day
+holdout that is a coin flip with a decimal point, and the service was
+reporting it as a result.
+
+`scoring.compare` fixes it with a **paired** bootstrap over the instants the
+two forecasts share. Pairing is what makes the question answerable at all:
+both forecasts faced the same ionosphere at the same minute, so the difficulty
+of the hour is common to both and cancels in the difference. An unpaired
+comparison has to see through that difficulty; on a few hundred picks it
+cannot.
+
+Two numbers come back, and they answer different questions:
+
+* **absolute** — `delta`, the mean of (model error − baseline error) in MHz,
+  with a 95% interval. Negative is better.
+* **relative** — `skill`, `1 − MAE/baseline`, with its own interval. This is
+  what makes two runs on *different* holdout windows comparable.
+
+`distinguishable` is False whenever the interval on `delta` contains zero, and
+`train.describe`, the leaderboard and the drift banner all consult it before
+saying "beats" or "overtaken". On a short window it is usually False, and
+saying so is the honest report.
+
+**Why the relative number is not a nicety.** On 2026-08-27 a `voting` model on
+NIC3 → Yoshkar-Ola read 1.10 MHz one day and 1.58 the next, and looked like a
+large regression. Persistence — which involves no model at all — moved 1.07 to
+1.47 over the same two windows. Of the model's +43.6% change, **+37.4% was the
+ionosphere**; the part attributable to the recipe was about 4.5%, against a
+noise band of roughly ±13% at 140 pairs. Raw MAE across different holdout
+windows is not a comparison, and the ratio is the only thing on that page that
+was.
+
+Bootstrapping the same rig's holdout directly: 287 pairs, MAE 1.641,
+**95% CI 1.489 .. 1.796**. A width of 0.307 MHz, against a 20-column vs
+7-column difference of 0.074 and a model-vs-persistence gap of 0.109. Every
+effect anyone was tuning against sat inside the error bar.
+**[measured 2026-08-27]**
+
+The interval is seeded (`default_rng(0)`): a table whose numbers move on
+reload is a table nobody can quote.
+
+##### Persistence does not cover the holdout, and the gap is not random
+
+Persistence at a 24 h lead needs an observation 24 h before the instant it is
+predicting. Where the archive has a gap, it has no opinion. On the
+NIC3 -> Yoshkar-Ola holdout of 2026-08-28 it covered **126 of 287** instants --
+under half -- and the model's MAE over those 126 was **2.02**, against a **1.64**
+headline over all 287. The model is systematically worse exactly where
+persistence can speak, which is the well-sampled stretches; its headline is
+flattered by the instants after a gap, where nothing is there to contradict it.
+
+So the two numbers are not two views of one thing, and any line that prints
+them side by side has to say which set each came from. The first version of
+`train.describe` did not, and emitted
+
+> holdout MAE 1.64 MHz over 287 pairs, **loses to persistence (1.75) by 0.28 MHz**
+
+where subtracting the two printed figures gives the model winning by 0.11 while
+the verdict in the same sentence says it lost by 0.28. Both halves were true of
+their own populations. `describe`, `/ui/model/<id>` and the leaderboard tooltip
+now each quote a pair count next to every MAE, and the paired verdict takes
+*both* its MAEs from `compare`. **[caught 2026-08-28]**
+
+#### 3.4.2 What the controlled A/B actually said
+
+Two `xgboost` fits, same circuit, same 24 h lead, same two-day holdout, same
+287 pairs, same diurnal terms -- only the feature recipe differing:
+
+| recipe | columns | holdout MAE | paired vs persistence (126) | skill | 95% CI on delta |
+|---|---|---|---|---|---|
+| muf parity | 20 | 1.641 | 2.024 v 1.748 | -15.8% | +0.053 .. +0.503 |
+| thin (48-window, mean/std, no decomposition) | 7 | 1.567 | 1.765 v 1.748 | -1.0% | -0.190 .. +0.229 |
+
+Read it carefully, because the two rows do not say the same *kind* of thing:
+
+* The **parity** recipe is distinguishably **worse than persistence**. Its
+  interval excludes zero. Twenty columns bought a model that a one-line
+  baseline beats, and the error bar is narrow enough to say so.
+* The **thin** recipe is **not distinguishable from persistence** either way.
+  That is not a win; it is the honest ceiling of what seven columns and 884
+  rows support here.
+* The two recipes are **not distinguishable from each other**. Their intervals
+  overlap heavily, and no paired model-vs-model bootstrap was run. "Thin beats
+  parity" is not a claim this table licenses -- only "parity loses to
+  persistence and thin does not" is.
+
+That is still the first decisive thing the comparison has produced, and it
+matches what the feature table had been hinting since the `yearly_*` trap:
+column count is a cost, not a hedge. **[measured 2026-08-28]**
+
 ### 3.5 `store` — the hash is the address
 
 `artifacts.sha256` has said since it was written that *"a models volume is
@@ -379,6 +472,297 @@ So the meta-learner sees out-of-fold predictions from members fitted partly on
 later data. The leakage is confined to the blend: the whole stack is fitted on
 rows before the cut and scored after it, so the reported number stays honest. A
 stack that wins by a suspiciously wide margin is the case to look at first.
+
+#### 3.6.2 Where the error is, not just how big
+
+A holdout MAE is one number averaged over every hour of the day, and a MUF
+series is not one regime. The sunlit hours are high, slowly varying and easy;
+the hours either side of the nightly minimum are steep and are where this
+service's models keep going wrong. A model 0.4 MHz out by day and 2 MHz out at
+night reports the same 0.8 MHz as one that is uniformly mediocre — and only one
+of those has a cause worth chasing.
+
+So every run also writes `metrics.diurnal`, which is `scoring.diurnal`: per hour
+of UTC day, the pair count, the MAE and the **bias**. Bias earns its place at
+night, where a large error with a bias to match is a model sitting *above* a
+trough it cannot reach — the signature of a predictor with no term for where in
+the diurnal cycle it is.
+
+It is computed twice, on the holdout and on the rows the model was fitted on,
+and **the pair is the diagnostic**:
+
+| night error on the fit | night error on the holdout | reading |
+|---|---|---|
+| large | large | the columns cannot express the nightly minimum. More archive will not help — see §3.6.3 |
+| small | large | it learned a night that has since moved, or the holdout is too short to contain one |
+| small | small | the night is fine; look elsewhere |
+
+`train.describe` prints the worst hour when it exceeds 1.5× the headline MAE, so
+it lands in the job row on the console without anyone opening the metrics JSON,
+and **`/ui/model/<id>` draws both** — reachable from the model name in the
+models table and from `see the fit →` on a finished training job.
+
+**The learning curve is a separate question and answers a smaller one.** Only
+the booster has one: Ridge has a closed form and Huber converges to one, so
+"learning loss" is a quantity that does not exist for them, and the metrics say
+so by omitting the key rather than storing an empty curve. Where xgboost is
+involved — alone or as a committee member — `metrics.learning` carries per-round
+train and validation MAE over the same inner chronological split the voting
+weights use, thinned to 50 points with the last round always kept, plus
+`best_round`. Still falling together at the end means under-trained; a
+validation curve that turns up while training keeps falling means memorising.
+
+#### 3.6.2.1 What it found on the rig, first time out
+
+**[measured 2026-08-27]**, OrbStack, `NIC3 → Yoshkar-Ola`, 1330 soundings over
+2026-08-16 .. 08-26 ingested from `ionozond_data2`, `xgboost` at a 24 h lead
+with the cyclical block, 881 training rows and a 2-day holdout. Headline: MAE
+1.56 MHz, beating persistence at 1.75. The plots said considerably more than
+that number did.
+
+**Error by hour** has two peaks, not one: 3.80 MHz at 03 UTC and 3.35 at 21,
+against 0.6–1.3 through the middle of the day. At 03 the bias is −3.80 and at
+21 it is +3.35 — *equal in magnitude to the MAE at both*, which means the model
+is wrong in the same direction every single time there. That is a systematic
+offset, not scatter.
+
+And the training-row line stays at 0.3–1.5 MHz across all 24 hours, including
+those two. So by the table above this is the **second** row, not the first: the
+columns can express those hours perfectly well on rows the model has seen, and
+it does not generalise them. That is a different fault from the feature poverty
+of §3.6.3 and it points somewhere else first.
+
+**The learning curve says where.** Training loss falls to 0.58 MHz by round 400
+while validation bottoms at 1.65 at **round 68** and then drifts back up to
+1.70. Three hundred and thirty of the four hundred rounds are pure
+memorisation. `_estimator`'s `n_estimators=400` is roughly six times what this
+much archive supports, and early stopping on the inner split — which the probe
+already computes the number for — is the obvious next change.
+
+Neither of those conclusions is available from "MAE 1.56, beats persistence".
+
+Two things to know about the curve. It comes from a **probe** booster fitted on
+the inner split and thrown away — the shipped model has seen every training row,
+because a model fitted on less than its training data is not the model the run
+is supposed to deliver, and the cost is one extra fit. And it is **blind to the
+night**: it is one number per round, averaged over every hour. A model that fits
+the day and misses the trough has a perfectly healthy learning curve. That is
+what `metrics.diurnal` is for.
+
+#### 3.6.3 The feature table, and why the night is where it fails
+
+Until 2026-08-27 a console-trained model was given **three columns**:
+`muf_lag_288`, `muf_rolling_48_mean_lag_288`, `muf_rolling_48_std_lag_288`.
+All three are the MUF 24 h ago, smoothed two ways.
+
+The imports it shares a leaderboard with carry **eighteen**. Read straight off
+a registered artifact:
+
+```
+muf_lag_288
+muf_trend_lag_288  muf_seasonal_lag_288  muf_residual_lag_288
+muf_rolling_{12,48,288}_{mean,std,min,max}_lag_288      (12 columns)
+hour  minute
+```
+
+which is exactly what `muf` builds on its vertical path —
+`create_rolling_features_fnc(df_total, 'muf', windows=[12, 48, 288],
+stats=['mean', 'std', 'min', 'max'])` and
+`create_residual_trend_seasonal_features_fnc(df_total, 'muf',
+model='additive', period=288)` in `data_handler/muf_data_handler.py`, with
+`use_rolling_features` and `use_residual_trend_seasonal_features` both true in
+`config_enum.py`.
+
+Nothing chose the three. They were the smallest recipe that ran, and they made
+every model trained here a thinner thing than the import it is meant to
+replace. `DEFAULT_WINDOWS`, `DEFAULT_STATS` and the new `DEFAULT_COMPONENTS`
+now match `muf` column for column.
+
+**And there was no time predictor at all.** `vet` defaults `time` to the empty
+tuple and the console form had no control for it, so **the model had no way to
+know what hour it was** — it could only reproduce the shape of 24 h ago. That
+is a persistence forecast with smoothing, and it fails in a specific,
+predictable place: the nightly minimum, where the day-to-day spread is largest
+in proportion to the value. When tonight's trough is deeper than last night's,
+the curve sits above it. That is the shape in every "it does not fit at night"
+report against this service.
+
+`TIME_PREDICTORS` does carry the source project's seven calendar columns, and
+they are **not the fix**:
+
+* `hour` and `minute` are integers with a cliff in them. 23:55 and 00:00 are
+  five minutes apart and 23 units apart. A tree can split around it; the two
+  linear members of every committee cannot, and a straight line in `hour`
+  cannot describe a diurnal cycle at all.
+* `dayofweek` is noise. The ionosphere has no weekly cycle, and seven arbitrary
+  categories are seven chances to overfit.
+* `month`, `quarter`, `weekofyear` and `dayofyear` are four collinear spellings
+  of one seasonal term, and over any training window this instrument has yet
+  produced three of them are **constant** — a column with no variance in
+  training and a new value in production.
+
+So the second block of `TIME_PREDICTORS` was added: `daily_sin`, `daily_cos`,
+`daily_sin2`, `daily_cos2` over the *fraction of the day* (not the integer
+hour — a 24-step staircase is still a staircase), and `yearly_sin`/`yearly_cos`
+for the seasonal term. They are index-only, so `parse` recovers them and
+`infer` rebuilds them with no further plumbing. The console form ticks them by
+default; `vet` still defaults to none, so the API contract is unchanged for a
+programmatic caller.
+
+**Measured on a synthetic series whose trough depth wanders day to day** — 16
+days, 3-day holdout, `huber`, which is the failure mode this is aimed at, *not*
+a prediction of what the station will do:
+
+| recipe | features | MAE | night MAE | night bias |
+|---|---|---|---|---|
+| no time columns | 3 | 0.730 | 0.964 | −0.00 |
+| `hour` + `minute` | 5 | 0.730 | 0.964 | −0.00 |
+| `daily_*` (4 terms) | 7 | 0.667 | 0.811 | −0.66 |
+| full cyclical | 9 | 0.679 | 0.775 | −0.53 |
+| `daily_*` + 288-sample window | 9 | **0.628** | **0.735** | −0.53 |
+
+The second row is the point: adding `hour` and `minute` to a linear model
+changes the answer by **nothing at all**, to three decimal places. The diurnal
+block cuts the night error by about a fifth, and adding a 288-sample (24 h)
+rolling window on top — which gives the model yesterday's overall level and
+spread rather than only its last four hours — takes roughly a quarter off both
+numbers. The night stops being the worst hour of the day in every case.
+
+Rows three and four already said what the rig later proved: adding the two
+seasonal columns to the four diurnal ones made the headline MAE **worse**
+(0.667 to 0.679) over a fixture only sixteen days long. It read as noise at
+the time. It was not.
+
+**The seasonal pair was in the default block for one afternoon, and this table
+is what caught it.** `yearly_sin`/`yearly_cos` move through about 1% of their
+range over a week of training rows — day 229 to day 236 — so they are very
+nearly constant, and a nearly-constant column is the most dangerous thing you
+can hand a regression: it cannot help, and it will absorb weight as a second
+intercept. Fitted over seven days on the rig they took **31%** of an xgboost
+model's gain and **60%** of a Huber model's coefficient mass. In production
+day-of-year keeps moving, those columns drift into values never seen in
+training, and the weight parked on them goes with it.
+
+So `DIURNAL` (the four `daily_*` terms) is what the console ticks, and
+`SEASONAL` stays available to a caller with months of archive to justify it.
+Removing the pair moved the worst hour from 3.80 to 3.27 MHz and the booster's
+best round from 68 to 95, with the headline MAE unchanged at 1.57.
+**[measured 2026-08-27]**
+
+#### What the parity recipe measured on the rig
+
+**[measured 2026-08-27]**, `NIC3 → Yoshkar-Ola`, `xgboost` at a 24 h lead, same
+holdout both times. Reported as it came out, not as it was hoped:
+
+| recipe | columns | train rows | MAE | night 02–04 | best round |
+|---|---|---|---|---|---|
+| 3 lagged + `daily_*` | 7 | 884 | **1.57** | 2.73 | 95/400 |
+| muf parity + `daily_*` | 20 | 777 | 1.64 | **2.69** | 313/400 |
+
+The headline is slightly *worse* and the night marginally better. Two things
+are confounded in that and both are worth naming: the 288-sample window and the
+decomposition each need a day of history before the first row can be built, so
+the parity recipe trains on **107 fewer rows** on an archive only ten days
+long; and twenty columns on 777 rows is a thinner per-column budget. Huber over
+the same twenty columns is worse still — 2.15 MHz, losing to persistence, which
+is what a linear model on 777 rows and 20 columns looks like.
+
+What the features table says, though, is that the new columns are carrying the
+model:
+
+| column | share |
+|---|---|
+| `muf_rolling_288_max_lag_288` | 10.5% |
+| `muf_rolling_288_min_lag_288` | 8.1% |
+| `daily_cos` | 7.6% |
+| `muf_rolling_288_mean_lag_288` | 5.3% |
+| … | |
+| `muf_lag_288` | 2.5% (last) |
+
+The day-scale window columns take the largest gain shares and the raw lag is
+*last*. **Both of those readings are wrong**, and the permutation column beside
+them is what says so.
+
+Gain is model-internal and these columns are near-duplicates of one series —
+`muf_lag_288` correlates at **0.967** with `muf_rolling_12_mean_lag_288` and at
+0.94–0.96 with the other two 1-hour columns — so credit is split among
+interchangeable columns roughly arbitrarily. Shuffling asks the other question,
+and the two disagree flatly:
+
+| column | share (gain) | permuted Δ MAE |
+|---|---|---|
+| `muf_seasonal_lag_288` | 5.0% | **+0.695** |
+| `daily_cos` | 7.6% | **+0.614** |
+| `muf_rolling_12_max_lag_288` | 6.4% | +0.328 |
+| `muf_lag_288` | 2.5% *(last by gain)* | **+0.308** |
+| … | | |
+| `muf_rolling_288_min_lag_288` | 8.1% | −0.004 |
+| `muf_rolling_288_mean_lag_288` | 5.3% | −0.020 |
+| `muf_rolling_288_max_lag_288` | **10.5%** *(first by gain)* | **−0.022** |
+
+**[measured 2026-08-27]**, baseline 1.641 MHz, 5 shuffles of 287 holdout rows.
+
+Read the two ends of that. The column the booster leans on hardest,
+`muf_rolling_288_max_lag_288`, contributes *nothing* to holdout error —
+shuffling it makes the fit very slightly better. The whole 288-window block is
+at or below zero. Meanwhile the seasonal component of the decomposition, at 5%
+of the gain, is the single most load-bearing column in the model, and the raw
+lag — dead last by gain — is fourth by permutation, exactly as the collinearity
+predicted.
+
+So the earlier reading here, that the day-scale columns were carrying weight
+the three-column recipe had nowhere to put, was **wrong**. They carry *gain*
+and not *skill*. What the parity recipe actually bought on this archive is the
+decomposition, and `muf`'s `use_residual_trend_seasonal_features` is the flag
+that mattered — not `windows=[12, 48, 288]`.
+
+That is an argument for trimming, not for reverting: the 288 block is dead
+weight on ten days of archive and may not be on ninety, and nothing here is
+worth acting on from one circuit and one holdout. It is written down so the
+next run has something to disagree with.
+
+A note on what the two columns are, since they are easy to conflate. **Share**,
+for a booster, is `feature_importances_` — gain-based and **already summing to
+1**, so the normalisation is a no-op and the share *is* the importance. For a
+linear member it is `abs(coef_)` renormalised: a coefficient magnitude on
+standardised inputs, not an importance in the sklearn sense, which is why the
+basis is recorded per member rather than both being called the same thing.
+**Permuted Δ MAE** is `train._permutation_importance`: shuffle one column on
+the uncensored holdout, average over `PERMUTATION_REPEATS` shuffles, and report
+how much worse the MAE got, in megahertz. It measures effect on error rather
+than internal weight, it is the same quantity for every estimator so a
+committee gets one comparable number instead of three incomparable ones, and it
+can be negative — reported as it came out rather than clamped, because
+"shuffling this helped" is information.
+
+Neither is a SHAP value, and neither solves collinearity: with two
+near-identical columns the model leans on whichever survives the shuffle, so
+both can look unimportant. They sit side by side because where they disagree,
+the disagreement is the finding.
+
+Two things the cyclical block does not do. It does not remove the bias, it
+flips its sign:
+the corrected models sit slightly *below* the trough instead of above it. And
+it is still a model of one series' own past. The physical variable that governs
+the nightly minimum is the solar zenith angle at the path's control point, and
+this repo already computes it — `muf.reference.chapman.solar_zenith_cos`, used
+by `scoring.harmonic_design` for the `harmonic` baseline. Feeding it to a
+*model* rather than to a baseline is the next step and a larger one: `build`
+takes a series and nothing else, so the circuit's control point has to reach it
+through the recipe and be stored in the artifact contract, or `infer` cannot
+rebuild the column.
+
+**A refusal that is really a stale worker says so.** `queue_training` vets
+before it inserts, so a row in `train_job` was accepted by *some* api. If the
+worker's own `vet` then refuses the same spec, the request was never the
+problem — the two builds disagree, and `trainer.settle` separates that failure
+from a genuine one and names the build that refused it. `api` and `watch` are
+watchtower-labelled and update themselves; `trainer`, `registrar` and `infer`
+are not and stay on whatever image created them, which makes "updated api
+offers a thing, months-old worker rejects it" the normal failure mode of this
+deployment. It happened on 2026-08-26 with `voting`/`stacking` and again on
+2026-08-27 with the cyclical time columns — both times the message described
+the running code perfectly and gave no hint that the running code was stale.
 
 Refusals state the arithmetic: how many grid points the circuit has, how many a
 lag-*N* model with a *W*-sample window needs before it can build one row, and
@@ -526,7 +910,71 @@ On the plot a candidate is **dotted and named for the model**; the operational
 forecast is **dashed and named for the parameter**. They are not the same claim,
 so they are not the same line.
 
-### 4.6.1 The shaded span: what the model was fitted on
+### 4.5.1 `/ui/model/<id>` — why this one is wrong
+
+The model name in the models table is a link, and a finished training job
+carries `see the fit →`. Both land on one model's own page: its contract (every
+feature column by name and by weight, not a count — "three columns and none of
+them knows what hour it is" and "two of these are constant and carry a third of
+the weight" were both real, and a count says neither), its holdout numbers
+beside persistence, the features table below, and the two plots from §3.6.2.
+
+It is a separate page rather than a section of `/ui/forecast` because the two
+answer different questions. That page is a table and answers "what is live,
+across every circuit"; this is two plots and answers "why is this one wrong at
+02 UTC". Folding the second into the first would make an operator scroll past a
+diagnostic for a model they did not ask about.
+
+#### The features table
+
+Every column the model was fitted on, **in contract order** — the order it
+resolves its inputs by, not an order of importance. Reordering by weight would
+invite comparing two models' rows position by position when the positions mean
+different things.
+
+Each row decodes the name (`legacy_features.describe_feature`, the per-name
+half of `parse`, which labels an unparseable column rather than raising — a
+model with one odd column should still render its other seventeen), says what
+it was built from, and gives the lead **both ways**: in hours and, in brackets,
+as the count of grid samples the model actually counts. Those are the two
+things most often confused here, and 288 samples is a day only on a five-minute
+grid.
+
+The last columns are **how much of the fitted model's weight sits on each**,
+recorded by `train._influence` at fit time. It has to be recorded there: the
+api serves this page and deliberately cannot deserialise an artifact — that is
+what `capability` is for — so without it the console could only ever list
+names. Two sources, both normalised to shares of one so they sit in the same
+column: absolute `coef_` for a linear model, comparable across columns
+*because* `_estimator` standardises the inputs, and `feature_importances_` for
+a booster, already normalised.
+
+This is **not** the question `_voting_weights` refuses to answer with
+coefficient mass, and the distinction is worth keeping straight. Ranking
+*columns within* one fitted model is exactly what a scaled coefficient is for.
+Ranking *models against each other* by the size of their coefficients measures
+scale rather than skill. Same numbers, different question, opposite verdict.
+
+A committee gets one column per member rather than a blend: an average of a
+booster's gain and a linear model's coefficient is a number with no units, and
+two members disagreeing about which column matters is a fact worth seeing. On
+the rig they disagree considerably — Huber puts 42.7% on `daily_cos` and 0.9%
+on `muf_lag_288`; Ridge puts 23.9% on the rolling mean and 8.0% on the lag.
+**[measured 2026-08-27]**
+
+Bars are drawn against the largest share in their own column, not against
+100%. Nine columns cannot each hold much of the weight, so an absolute scale
+draws nine near-identical stubs. The number beside each bar stays absolute.
+
+Read scope, like everything under `/ui`. Promotion stays on the forecast page
+behind the control token.
+
+A model with no recorded diagnostics — a legacy import, or anything fitted by
+an estimator with no rounds — gets a sentence saying which of those it is,
+never an empty axis. An empty axis reads as "the model learned nothing", and
+for Ridge that is simply false.
+
+### 4.6.1 The grey stretch: what the model was fitted on
 
 A lagged model run over a finished archive predicts instants that have already
 happened — `infer` calls that a backtest and labels it. Where those instants
@@ -535,18 +983,26 @@ at all: it is the model reciting rows it has already seen, and it will look
 superb. Read as a forecast, that is the single most flattering mistake this
 page can invite.
 
-So the plot shades the fitted window as ground beneath the traces, labelled
-`fitted here · <model>`. The span comes from `model_registry.trained_from` /
-`trained_to`, which `train.run` records as the first and last instant of the
-rows it actually fitted. **Judge a curve only where the ground is clear.**
+So the forecast curve is **drawn in two colours**: grey over the hours the model
+was fitted on, the parameter's own hue past them. The split comes from
+`model_registry.trained_from` / `trained_to`, which `train.run` records as the
+first and last instant of the rows it actually fitted. **Judge a model only
+where its curve is coloured.**
 
-A legacy import shows **no band**. It was fitted somewhere else and the window
-was never recorded — which is a different statement from "trained on nothing",
-and is why the null check is on the stamps rather than on the model. The band
-is drawn and explained only when something on the page carries a real span, and
-it is withdrawn with the forecast family when that is switched off: a grey
-stripe over the measurements with nothing left to explain it is worse than no
-band at all.
+It was a shaded rectangle behind every trace until 2026-08-27, and that was
+wrong three ways: it read as a leftover zoom selection, it dimmed the
+measurements it had nothing to say about, and with two models on one axis it
+could not show which of them the hours belonged to. Recital is a property of
+*one curve*, so it is now drawn on that curve — which also means it withdraws
+with its own trace and needs no separate bookkeeping to stay consistent.
+
+The boundary point belongs to **both** segments. Without it the line breaks at
+exactly the instant worth seeing continuously, where recital stops and
+prediction starts.
+
+A legacy import is **coloured throughout**. It was fitted somewhere else and the
+window was never recorded — which is a different statement from "trained on
+nothing", and is why the null check is on the stamps rather than on the model.
 
 ---
 

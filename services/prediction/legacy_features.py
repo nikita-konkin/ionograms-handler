@@ -36,10 +36,33 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-#: Time predictors, which are built from the index and are *not* lagged. The
-#: set matches the vertical branch of the source project's
+
+def _day_fraction(idx: pd.DatetimeIndex) -> np.ndarray:
+    """Position within the UTC day, in [0, 1). The same quantity
+    ``scoring.harmonic_design`` fits its diurnal terms over, so the two agree
+    about what "time of day" means rather than each having its own idea."""
+    return ((idx.hour * 3600 + idx.minute * 60 + idx.second)
+            / 86400.0).to_numpy(dtype=float)
+
+
+#: Time predictors, which are built from the index and are *not* lagged.
+#:
+#: The first block matches the vertical branch of the source project's
 #: ``create_time_predictors_fnc``; the horizontal branch adds calendar columns
-#: that none of the vertical-format artifacts use.
+#: that none of the vertical-format artifacts use. **``hour`` and ``minute``
+#: are integers with a cliff in them**: 23 and 0 are adjacent instants and
+#: maximally distant numbers. A tree can split its way around that; the linear
+#: members cannot, and a straight line in ``hour`` cannot describe a diurnal
+#: cycle at all. They are kept because saved artifacts name them and this
+#: module's job is to rebuild what a model asks for.
+#:
+#: The second block is the fix, and it is what a new recipe should ask for.
+#: ``daily_*`` are the first and second harmonics of the *fraction of the day*,
+#: not of the integer hour -- a 24-step staircase would still be a staircase --
+#: and they are continuous across midnight. ``yearly_*`` do the same for the
+#: seasonal term that ``month``, ``quarter``, ``weekofyear`` and ``dayofyear``
+#: currently spell four collinear ways, three of which are constant over any
+#: training window this instrument has yet produced.
 TIME_PREDICTORS = {
     "hour":       lambda idx: idx.hour,
     "minute":     lambda idx: idx.minute,
@@ -48,7 +71,41 @@ TIME_PREDICTORS = {
     "month":      lambda idx: idx.month,
     "dayofyear":  lambda idx: idx.dayofyear,
     "weekofyear": lambda idx: idx.isocalendar().week.astype(int),
+
+    "daily_sin":  lambda idx: np.sin(2 * np.pi * _day_fraction(idx)),
+    "daily_cos":  lambda idx: np.cos(2 * np.pi * _day_fraction(idx)),
+    "daily_sin2": lambda idx: np.sin(4 * np.pi * _day_fraction(idx)),
+    "daily_cos2": lambda idx: np.cos(4 * np.pi * _day_fraction(idx)),
+    "yearly_sin": lambda idx: np.sin(2 * np.pi * (idx.dayofyear - 1) / 365.25),
+    "yearly_cos": lambda idx: np.cos(2 * np.pi * (idx.dayofyear - 1) / 365.25),
 }
+
+#: The diurnal terms, as a recipe can ask for them in one word. Not a default:
+#: a saved artifact names its own columns and gets exactly those, and changing
+#: what an existing recipe means is how a model quietly stops being the model
+#: that was scored.
+DIURNAL = ("daily_sin", "daily_cos", "daily_sin2", "daily_cos2")
+
+#: The seasonal pair, kept apart from the diurnal one because **it needs
+#: months of archive and the diurnal terms need a day**.
+#:
+#: Over a week of training rows these two move through about 1% of their range
+#: -- day 229 to day 236 of the year -- so they are very nearly constant, and
+#: a nearly-constant column is the most dangerous thing you can hand a
+#: regression. It cannot help in training and it will happily absorb weight as
+#: a second intercept, which is exactly what happened the first time they were
+#: offered by default: on 2026-08-27, fitted over seven days, `yearly_cos` and
+#: `yearly_sin` together took **31%** of an xgboost model's gain and **60%** of
+#: a Huber model's coefficient mass. In production day-of-year keeps moving,
+#: those columns drift into values never seen in training, and the weight
+#: parked on them goes with it.
+#:
+#: The console's own feature table is what surfaced this, which is the whole
+#: argument for printing per-column weights rather than a feature count.
+SEASONAL = ("yearly_sin", "yearly_cos")
+
+#: Both, for a recipe fitted over enough archive to earn the seasonal pair.
+CYCLICAL = DIURNAL + SEASONAL
 
 #: Decomposition period when the contract does not say, which it never does.
 DEFAULT_DECOMPOSITION_PERIOD = 288
@@ -168,6 +225,40 @@ def parse(features: Iterable[str],
         period=period, period_assumed=assumed,
         features=features,
     )
+
+
+def describe_feature(name: str) -> dict:
+    """One column name, taken apart. The reading half of :func:`parse`.
+
+    `parse` needs the whole ordered set to recover a recipe and refuses
+    anything it cannot rebuild, which is right for a contract and useless for
+    a table: a console wants to say what *this* column is without judging
+    whether the set as a whole is runnable. So this answers per name, and an
+    unparseable one comes back as ``kind: "unknown"`` rather than raising --
+    a model with an odd column should still render its other seventeen.
+    """
+    if name in TIME_PREDICTORS:
+        return {"name": name, "kind": "cyclical" if name in CYCLICAL else "time",
+                "alias": None, "lag": None, "window": None,
+                "stat": None, "component": None}
+
+    match = FEATURE_RE.match(name)
+    if not match:
+        return {"name": name, "kind": "unknown", "alias": None, "lag": None,
+                "window": None, "stat": None, "component": None}
+
+    if match["window"]:
+        kind = "rolling"
+    elif match["component"]:
+        kind = "component"
+    else:
+        kind = "raw"
+    return {
+        "name": name, "kind": kind, "alias": match["alias"],
+        "lag": int(match["lag"]),
+        "window": int(match["window"]) if match["window"] else None,
+        "stat": match["stat"], "component": match["component"],
+    }
 
 
 def _decompose(series: pd.Series, period: int) -> pd.DataFrame:
