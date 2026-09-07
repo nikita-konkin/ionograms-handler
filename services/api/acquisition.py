@@ -23,6 +23,7 @@ has landed for six hours is exactly the failure worth seeing on one screen.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -205,6 +206,65 @@ def _entry_floats(entry: dict) -> tuple[float, float, float] | None:
     # further down; an entry that cannot be placed on a clock is dropped rather
     # than shown at an invented time.
     return (rate, rep, chirpt) if rep > 0 else None
+
+
+def overlapping_slots(timings, span_mhz: float | None) -> list[str]:
+    """Slots of one transmitter that cannot both be sounded, before the fact.
+
+    :meth:`Acquisition.contended` answers the same question against a clock,
+    which means it can only answer it once the damage is being done -- the
+    operator sees ``RANK N OVERSUBSCRIBED`` at the moment one of two slots is
+    already being skipped. This is the static form, so the schedule can be
+    refused an overlap at the point it is composed.
+
+    All entries here belong to **one** transmitter, and
+    :func:`sounder_timings` gives one MPI rank per transmitter, so they share a
+    process. A rank sounds one chirp at a time: it takes the slot with the
+    shortest wait and is busy for the whole sweep, so a second slot arriving
+    inside that window is skipped for that cycle, silently, at whatever
+    fraction of the intended rate that works out to.
+
+    Two slots need not share a ``rep`` to collide. Starts recur at
+    ``chirpt + k*rep``, so the separations available to a pair are
+    ``(c1 - c2) + k*gcd(rep1, rep2)`` -- the greatest common divisor is the
+    real cycle of the encounter, and on it the two are ``min(d, g - d)`` apart
+    at their closest. Equal ``rep`` is just the case ``g == rep``.
+
+    Returns one sentence per offending pair, or an empty list. **Empty when
+    ``span_mhz`` is unknown**, matching :func:`sweep_seconds`: the sweep length
+    is measured off this receiver's own products and never declared in the
+    schedule, so a server that has seen no product from this station says
+    nothing rather than guessing a sweep and refusing a legal pair.
+    """
+    entries = [(i, _entry_floats(e)) for i, e in enumerate(timings or [])]
+    usable = [(i, v) for i, v in entries if v is not None]
+    found: list[str] = []
+
+    for a in range(len(usable)):
+        for b in range(a + 1, len(usable)):
+            (_, (rate1, rep1, c1)) = usable[a]
+            (_, (rate2, rep2, c2)) = usable[b]
+            sweep1 = sweep_seconds(rate1, span_mhz)
+            sweep2 = sweep_seconds(rate2, span_mhz)
+            if sweep1 is None or sweep2 is None:
+                continue
+            # Integer milliseconds so `gcd` is exact; `rep` is a human-chosen
+            # round number of seconds, so nothing is lost rounding here.
+            g_ms = math.gcd(int(round(rep1 * 1000)), int(round(rep2 * 1000)))
+            if g_ms <= 0:
+                continue
+            d_ms = int(round((c1 - c2) * 1000)) % g_ms
+            apart = min(d_ms, g_ms - d_ms) / 1000.0
+            sweep = max(sweep1, sweep2)
+            if apart < sweep:
+                found.append(
+                    f"slots {c1:g}s and {c2:g}s come {apart:.0f}s apart but a "
+                    f"sweep takes {sweep:.0f}s at {rate1 / 1e3:g} kHz/s over "
+                    f"{span_mhz:.2f} MHz, so one of them is skipped every "
+                    f"cycle without anything saying so. Give this slot its own "
+                    f"transmitter code -- one rank each -- or move it more "
+                    f"than {sweep:.0f}s from the other.")
+    return found
 
 
 def place(entry: dict, now: float, *, rank: int = 0,

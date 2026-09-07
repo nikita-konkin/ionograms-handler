@@ -328,6 +328,23 @@ def save_transmitter(station: str, request: Request,
         verified_by=who.name,
         note=payload.get("note"))
     response = {"ok": True, "station": station, "transmitter": record}
+    warnings: list[str] = []
+
+    # Slots that cannot both be sounded, said now rather than discovered later.
+    # `sounder_timings` gives one MPI rank per transmitter, so every slot saved
+    # here shares one process; two of them closer than a sweep means the second
+    # is skipped every cycle, silently. The console shows that as RANK N
+    # OVERSUBSCRIBED, but only once it is already happening and only while a
+    # sweep is in progress -- by then the operator has been missing soundings
+    # for however long it took them to look.
+    #
+    # A warning and not a refusal, for the same reason the registry check below
+    # is: the band is measured off this station's own products, so a receiver
+    # this server has seen nothing from yet cannot be told its schedule is
+    # wrong. `overlapping_slots` returns nothing in that case.
+    overlaps = acquisition.overlapping_slots(
+        timings, acquisition.observed_span_mhz(request.app.state.db, station))
+    warnings.extend(overlaps)
 
     # A code `muf/stations.py` cannot resolve is saved, not refused: a newly
     # heard emitter has to be nameable before anyone knows where it is, and
@@ -341,13 +358,19 @@ def save_transmitter(station: str, request: Request,
     # sentence the operator sees, on a sounding page, with nothing connecting
     # it to the name they typed. It happened on 2026-08-16 with NIC1 and NIC3.
     if default_registry().station(code) is None:
-        response["warning"] = (
+        warnings.append(
             f"Saved, but {code!r} is not in the station registry, so products "
             f"from it will have no transmitter coordinates: no path length, no "
             f"M-factor, a full-span range gate, and IRI will report a foF2 at "
             f"nanS nanW. Either reuse the code of a site already known, or add "
             f"{code!r} to muf/stations.py -- as an alias if this is another "
             f"slot of an emitter already there.")
+
+    # One string, because `sources.html` renders `body.warning` as text. Joined
+    # rather than truncated: an overlapping slot and an unknown code are
+    # different faults and fixing one does not fix the other.
+    if warnings:
+        response["warning"] = " ".join(warnings)
     return response
 
 

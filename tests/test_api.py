@@ -3885,3 +3885,65 @@ def test_the_circuit_list_counts_what_hangs_off_each_one(client, api_db,
     found = {(c["tx"], c["rx"]): c for c in client.get("/circuits").json()["circuits"]}
     assert found[("unkown", "rx")]["soundings"] == 1
     assert found[("unkown", "rx")]["muted"] is False
+
+
+def test_overlapping_slots_are_saved_with_a_warning_naming_the_remedy(client,
+                                                                      monkeypatch):
+    """The fault this endpoint could not see until it was already costing
+    soundings.
+
+    `sounder_timings` gives one MPI rank per transmitter, so both slots below
+    share a process; a rank is busy for a whole sweep, so the second is skipped
+    every cycle and nothing says so. The console reports it as RANK N
+    OVERSUBSCRIBED, but only while a sweep is in progress and only after the
+    schedule is live -- by which time the operator has been quietly losing one
+    slot in two. Observed on Yoshkar-Ola 2026-09-07 with NIC4 at 280s and 291s.
+
+    Saved rather than refused, matching the registry check: the band is
+    measured off this station's own products, so the server's ability to judge
+    depends on what it happens to have seen.
+    """
+    from services.api import acquisition
+    # A measured band, which this fixture's station has no products for.
+    monkeypatch.setattr(acquisition, "observed_span_mhz",
+                        lambda conn, station, **kw: 24.80)
+
+    body = _identify(client, code="NIC", timings=[
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 280.0},
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 291.0}]).json()
+
+    assert body["ok"] is True                      # saved
+    assert "11s apart" in body["warning"]
+    assert "248s" in body["warning"]
+    assert "own transmitter code" in body["warning"]
+
+
+def test_a_station_with_no_measured_band_is_not_told_its_schedule_is_wrong(
+        client, monkeypatch):
+    """`overlapping_slots` needs a sweep length, and the sweep length is
+    measured off products. No products, no claim."""
+    from services.api import acquisition
+    monkeypatch.setattr(acquisition, "observed_span_mhz",
+                        lambda conn, station, **kw: None)
+
+    body = _identify(client, code="NIC", timings=[
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 280.0},
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 291.0}]).json()
+
+    assert body["ok"] is True
+    assert "apart" not in body.get("warning", "")
+
+
+def test_both_faults_are_reported_together(client, monkeypatch):
+    """An overlapping slot and an unresolvable code are different problems and
+    fixing one does not fix the other, so neither hides the other."""
+    from services.api import acquisition
+    monkeypatch.setattr(acquisition, "observed_span_mhz",
+                        lambda conn, station, **kw: 24.80)
+
+    body = _identify(client, code="TGO7", timings=[
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 280.0},
+        {"chirp-rate": 100e3, "rep": 300.0, "chirpt": 291.0}]).json()
+
+    assert "11s apart" in body["warning"]
+    assert "nanS nanW" in body["warning"]

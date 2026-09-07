@@ -256,3 +256,76 @@ def test_every_fault_is_reported_not_just_the_first():
         [{"rep": 300.0, "chirpt": 1.0, "id": 9, "transmit_name": ""}],
     ])
     assert len(faults) >= 2
+
+
+# --- static overlap detection ------------------------------------------------
+#
+# `Acquisition.contended` answers this against a clock and so can only answer
+# it once a sounding is already being lost. These cover the form that runs when
+# the schedule is composed, which is the only time the operator can still act.
+
+def test_two_slots_closer_than_a_sweep_cannot_both_be_sounded():
+    """The case that prompted this: NIC4 given a second slot 11 s from its
+    first, on a 100 kHz/s circuit into a 24.8 MHz receiver.
+
+    One transmitter is one MPI rank and a rank sounds one chirp at a time, so
+    the second slot is skipped every cycle -- silently, which is what makes it
+    worth refusing at the point it is typed.
+    """
+    entry = lambda c: {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
+    found = acquisition.overlapping_slots([entry(280), entry(291)], 24.80)
+
+    assert len(found) == 1
+    assert "11s apart" in found[0]
+    assert "248s" in found[0]                  # 24.8 MHz / 100 kHz/s
+    assert "own transmitter code" in found[0]  # the remedy, named
+
+
+def test_the_separation_is_circular_not_arithmetic():
+    """Slots 0 and 280 of a 300 s cycle are 20 s apart, not 280.
+
+    The cycle wraps, so the naive difference is the wrong quantity and would
+    call this pair legal -- which is exactly the pair a 248 s sweep collides.
+    """
+    entry = lambda c: {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
+    found = acquisition.overlapping_slots([entry(0), entry(280)], 24.80)
+
+    assert len(found) == 1 and "20s apart" in found[0]
+
+
+def test_slots_further_apart_than_a_sweep_are_left_alone():
+    """A faster chirp fits more slots in a cycle, and must not be refused."""
+    entry = lambda c: {"chirp-rate": 500000.0, "rep": 300.0, "chirpt": c}
+    # 24.8 MHz at 500 kHz/s is a 50 s sweep; 60 s spacing clears it.
+    assert acquisition.overlapping_slots(
+        [entry(54), entry(114), entry(174)], 24.80) == []
+
+
+def test_differing_reps_collide_on_their_gcd():
+    """Two slots need not share a `rep` to meet.
+
+    Starts recur at `chirpt + k*rep`, so the separations a pair can take are
+    `(c1 - c2) + k*gcd(rep1, rep2)`. A 60 s and a 300 s entry therefore meet on
+    a 60 s cycle, and 20 s of separation is 20 s however large the reps are.
+    """
+    found = acquisition.overlapping_slots(
+        [{"chirp-rate": 100000.0, "rep": 60.0, "chirpt": 10.0},
+         {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": 30.0}], 24.80)
+
+    assert len(found) == 1 and "20s apart" in found[0]
+
+
+def test_an_unmeasured_band_says_nothing_rather_than_guessing():
+    """Same rule as `sweep_seconds`. The sweep length comes off this station's
+    own products; without one, a legal schedule must not be refused."""
+    entry = lambda c: {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
+    assert acquisition.overlapping_slots([entry(280), entry(291)], None) == []
+    assert acquisition.overlapping_slots([entry(280), entry(291)], 0) == []
+
+
+def test_unparseable_and_lone_entries_do_not_raise():
+    entry = {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": 280.0}
+    assert acquisition.overlapping_slots([entry], 24.80) == []
+    assert acquisition.overlapping_slots([], 24.80) == []
+    assert acquisition.overlapping_slots(
+        [entry, {"chirp-rate": "nonsense", "rep": 300, "chirpt": 5}], 24.80) == []
