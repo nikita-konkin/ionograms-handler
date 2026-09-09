@@ -1781,3 +1781,164 @@ def test_an_unmounted_share_is_unknown_rather_than_healthy(monkeypatch, station,
 
     assert metric.ok is None
     assert "unmounted" in metric.detail
+
+
+# --- the staging path, checked on the station rather than in the repo --------
+
+def test_the_staging_path_is_checked_against_the_running_units(monkeypatch,
+                                                               station):
+    """The half `test_one_output_dir_is_written_in_three_places` cannot do.
+
+    That test compares the repo's copies of the path to each other and says so
+    itself: the authority is `output_dir` in `my_station.ini`, which lives on
+    the station, so it "cannot check the truth". This can, because it reads
+    the value systemd resolved for the unit that is actually running.
+    """
+    monkeypatch.setattr(health, "_unit_environment",
+                        lambda unit: {"ARCHIVE_LOCAL": str(station.chirp_config.parent)})
+
+    metric = health.archive_paths_agree(replace(station, job_units=JOBS))
+
+    assert metric.ok is True
+    assert str(station.chirp_config.parent) in metric.detail
+
+
+def test_a_job_staging_from_somewhere_else_is_red(monkeypatch, station):
+    """The eleven-day outage, made visible.
+
+    Two places said one thing and the third said `/media/.../DATA3`, a volume
+    the station had stopped writing to. Every symptom pointed elsewhere and
+    `chirp-archive-sync` mirrored an empty tree and exited 0.
+    """
+    stale = "/media/ionouser/DATA3/ionozond_data2"
+    monkeypatch.setattr(health, "_unit_environment",
+                        lambda unit: {"ARCHIVE_LOCAL": stale})
+
+    metric = health.archive_paths_agree(replace(station, job_units=JOBS))
+
+    assert metric.ok is False
+    assert stale in metric.detail
+    assert str(station.chirp_config.parent) in metric.detail
+    # The consequence, not just the disagreement: this is what makes an
+    # operator act on it rather than note it.
+    assert "reclaimed by nothing" in metric.detail
+
+
+def test_a_staging_path_that_cannot_be_read_is_unknown_not_drift(monkeypatch,
+                                                                 station):
+    """A gap in observation is not evidence of a fault -- the rule the whole
+    report is built on, and the one that keeps this check switched on."""
+    monkeypatch.setattr(health, "_run",
+                        lambda args, **kw: (127, "systemctl: not found"))
+
+    metric = health.archive_paths_agree(replace(station, job_units=JOBS))
+
+    assert metric.ok is None
+    assert health.HealthReport("TST", 0.0, [metric]).healthy
+
+
+def test_the_ini_wins_over_the_config_when_both_name_a_folder(station, tmp_path):
+    """`set_config` edits the ini, so on any station the api has configured it
+    is the live value -- and `StationConfig.output_dir` is documented as the
+    fallback, not the authority."""
+    assert health.effective_output_dir(station) == str(tmp_path)
+    assert station.output_dir != tmp_path
+
+
+# --- a storage folder the archive jobs will actually carry -------------------
+
+def test_a_storage_folder_outside_the_archive_jobs_is_refused(monkeypatch,
+                                                              station, tmp_path):
+    """Outside ARCHIVE_LOCAL is copied by nothing and reclaimed by nothing.
+
+    The mirror never deletes -- deliberately -- so the prune is the only thing
+    that frees the staging volume. An orphaned `output_dir` does not merely
+    stop reaching the server; it fills the disk acquisition is running on,
+    while every unit stays active.
+    """
+    monkeypatch.setattr(health, "archive_local", lambda config: tmp_path / "data")
+    orphan = tmp_path / "elsewhere"
+
+    with pytest.raises(control.ControlError, match="reclaimed by nothing"):
+        control.apply_config(station, {"output_dir": str(orphan)})
+
+
+def test_a_subfolder_of_the_staging_root_is_accepted(monkeypatch, station,
+                                                     tmp_path):
+    """`rsync -r` and `prune` both recurse, so a subfolder needs no unit edit.
+
+    That is the whole reason this is safe to expose to a web form: the
+    operator can move the storage folder without a session onto the station,
+    and the jobs carry it regardless.
+    """
+    monkeypatch.setattr(health, "archive_local", lambda config: tmp_path / "data")
+
+    result = control.apply_config(station,
+                                  {"output_dir": str(tmp_path / "data" / "2026-09")})
+
+    assert result.ok
+    assert result.journal["changes"]["output_dir"]["to"].endswith("2026-09")
+
+
+def test_unreadable_units_do_not_block_a_storage_change(monkeypatch, station,
+                                                        tmp_path):
+    """`archive_local` is None when the units cannot be read, and that means
+    "do not check" rather than "no root".
+
+    Refusing every change on a station without systemctl would disable this
+    exactly where the operator has no other way in, which is the case it was
+    added for.
+    """
+    monkeypatch.setattr(health, "archive_local", lambda config: None)
+
+    result = control.apply_config(station, {"output_dir": str(tmp_path / "anywhere")})
+
+    assert result.ok
+
+
+def test_the_metrics_follow_the_ini_when_the_config_names_another_folder(tmp_path):
+    """The cause behind three symptoms that all point somewhere else.
+
+    `set_config` edits the ini, so the moment a storage folder is changed from
+    the console, `agent.json` holds a stale copy of the old one. Measuring the
+    config field instead of the ini is what produced DOB's eleven-day report:
+    `newest_product_age_s` answering for an empty directory while the recorder
+    was producing normally into the other one.
+
+    `archive_paths_agree` now names that disagreement; this is the other half,
+    so the metrics keep telling the truth while it is being fixed.
+    """
+    live, stale = tmp_path / "live", tmp_path / "stale"
+    live.mkdir()
+    stale.mkdir()
+    ini = tmp_path / "my_station.ini"
+    ini.write_text('[config]\noutput_dir = "%s"\n' % live.as_posix(),
+                   encoding="utf-8")
+    product = live / "lfm_ionogram-DOB-000.h5"
+    product.write_bytes(b"")
+    os.utime(product, (time.time() - 60, time.time() - 60))
+
+    config = StationConfig(station="TST", chirp_config=ini,
+                           output_dir=stale, ringbuffer_dir=tmp_path)
+
+    assert health.product_root(config) == live
+    # Reading `stale` instead would be "no products at all", ok False, for a
+    # station that is producing -- which is the bug this pins.
+    metric = health.newest_product_age(config)
+    assert metric.ok is True, metric.detail
+    assert metric.value < 300
+
+
+def test_the_config_field_is_still_the_fallback_when_the_ini_is_silent(tmp_path):
+    """An ini that names no output_dir leaves `agent.json` in charge, which is
+    the precedence `StationConfig.output_dir` documents. A station running an
+    older ini must not suddenly start measuring nothing."""
+    data = tmp_path / "data"
+    data.mkdir()
+    ini = tmp_path / "my_station.ini"
+    ini.write_text("[config]\nsample_rate = 25e6\n", encoding="utf-8")
+
+    config = StationConfig(station="TST", chirp_config=ini,
+                           output_dir=data, ringbuffer_dir=tmp_path)
+
+    assert health.product_root(config) == data

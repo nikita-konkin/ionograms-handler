@@ -154,7 +154,7 @@ def run_once(config: StationConfig, *, opener: Callable | None = None,
         # recorder for CPU, so walking it twice to answer two questions about
         # the same set of filenames would be paying that cost for nothing.
         try:
-            root = Path(config.output_dir)
+            root = health.product_root(config)
             scan = health.scan_products(root) if root.is_dir() else ({}, None)
         except OSError as exc:
             result.errors.append(f"scan: {type(exc).__name__}: {exc}")

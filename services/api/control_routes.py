@@ -85,7 +85,14 @@ QUEUEABLE = ("start", "stop", "restart", "set_config")
 #: the deployed recorder has no ``--center-freq`` (patch 0014). A station on an
 #: older binary rejects the command rather than tuning nowhere, so this does
 #: not have to wait on every station being rebuilt.
-WEB_EDITABLE = ("mode", "sounder_timings", "set_band")
+#: ``output_dir`` is here because the operator does not always have a way onto
+#: the station -- it is reached over AnyDesk, and "change the storage folder"
+#: should not require that session. Safe to expose only because the agent
+#: refuses a path outside the folder the archive jobs copy from: `rsync -r` and
+#: `prune` recurse, so a subfolder needs no unit edit, and anything outside is
+#: copied by nothing and reclaimed by nothing. Moving the staging root itself
+#: is still a change made on the station.
+WEB_EDITABLE = ("mode", "sounder_timings", "set_band", "output_dir")
 
 
 @router.post("/stations/{station}/commands")
@@ -170,6 +177,20 @@ def _vet_config(params: dict) -> dict:
                     f"composed from identified transmitters "
                     f"(POST /stations/{{id}}/schedule) rather than straight "
                     f"from the emitter census.")
+    # What this side can actually check. The station's filesystem is not
+    # visible from here, so the parent-exists and inside-ARCHIVE_LOCAL checks
+    # belong to the agent and stay there; this only catches the shape, while
+    # the operator is still looking at the screen.
+    if "output_dir" in changes:
+        raw = str(changes["output_dir"]).strip().strip('"')
+        if not raw.startswith("/"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "output_dir must be an absolute path on the station. The "
+                "agent checks the rest when it applies the change: that the "
+                "parent exists, and that it sits inside the folder the "
+                "archive jobs copy from.")
+
     return {"changes": changes}
 
 

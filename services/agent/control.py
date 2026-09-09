@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import health
 from .config import StationConfig
 
 
@@ -625,8 +626,21 @@ def _launcher_ranks(path: str | Path | None) -> int | None:
     return None
 
 
+def _within(child, root) -> bool:
+    """Is ``child`` at or below ``root``.
+
+    Normalised string comparison rather than ``Path.is_relative_to``: the
+    station runs this agent on the 3.8 interpreter in ``.venv38`` -- see
+    ``chirp-archive-prune.service`` -- and that method arrived in 3.9.
+    """
+    child_s = os.path.normpath(os.path.expanduser(str(child)))
+    root_s = os.path.normpath(os.path.expanduser(str(root)))
+    return child_s == root_s or child_s.startswith(root_s.rstrip(os.sep) + os.sep)
+
+
 def _validate(parser: configparser.ConfigParser, changes: dict,
-              launcher: str | Path | None = None) -> None:
+              launcher: str | Path | None = None,
+              staging_root: Path | None = None) -> None:
     """Refuse combinations that record nothing while looking healthy."""
     def value_of(key, section, option):
         if key in changes:
@@ -704,6 +718,29 @@ def _validate(parser: configparser.ConfigParser, changes: dict,
             raise ControlError(
                 f"{target}: parent directory does not exist. Acquisition would "
                 f"start, report healthy, and write nowhere.")
+        # And inside the folder the archive jobs copy from. `rsync -r` and
+        # `prune` both walk ARCHIVE_LOCAL recursively and key files by their
+        # path relative to it, so a *subfolder* is carried to the NAS and
+        # reclaimed afterwards with no unit edit at all -- which is what makes
+        # this safe to expose to a web form. A folder outside it is carried by
+        # nothing and reclaimed by nothing, and since the mirror never deletes,
+        # the prune is the only thing that frees this volume: an orphaned
+        # output_dir does not merely stop reaching the server, it fills the
+        # disk acquisition is running on.
+        #
+        # `staging_root` is None when the units could not be read, and that
+        # means "do not check" rather than "no root": refusing every change on
+        # a station without systemctl would make this unusable exactly where
+        # the operator has no other way in.
+        if staging_root is not None and not _within(target, staging_root):
+            raise ControlError(
+                f"{target} is outside {staging_root}, which is the "
+                f"ARCHIVE_LOCAL the archive jobs are running with. Products "
+                f"written there would be copied by nothing and reclaimed by "
+                f"nothing, and the staging volume would fill while every unit "
+                f"stayed active. Choose a folder inside {staging_root}, or "
+                f"change ARCHIVE_LOCAL in chirp-archive-sync.service and "
+                f"chirp-archive-prune.service on the station first.")
 
     if "save_raw_voltage" in changes:
         if str(changes["save_raw_voltage"]).lower() not in ("true", "false"):
@@ -762,7 +799,8 @@ def apply_config(config: StationConfig, changes: dict, *,
                 f"choose from {sorted(set(MODES))}")
         normalized["mode"] = MODES[raw]
 
-    _validate(parser, normalized, launcher=getattr(config, "launcher", None))
+    _validate(parser, normalized, launcher=getattr(config, "launcher", None),
+              staging_root=health.archive_local(config))
 
     before = {}
     locations = {key: EDITABLE[key] for key in normalized}

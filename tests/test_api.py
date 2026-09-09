@@ -196,12 +196,44 @@ def test_the_web_queues_process_verbs_and_the_mode_edit_only(client):
 
 
 def test_settings_outside_the_web_list_are_refused(client):
-    """`output_dir` decides where a week of data lands and a typo is
-    unrecoverable from here. The agent would accept it; the web does not."""
+    """The allow-list is still an allow-list.
+
+    `output_dir` used to be the example here, on the grounds that a typo was
+    unrecoverable from the web. It is web-editable as of 2026-09-09, because
+    the operator does not always have a session onto the station, and because
+    the agent now refuses a path outside the folder the archive jobs copy
+    from -- so a typo lands somewhere still copied and still pruned, rather
+    than somewhere nothing is looking. These two remain off the list: both
+    need a considered decision and neither is worth a form field.
+    """
+    for name in ("max_range_extent", "save_raw_voltage"):
+        r = client.post("/stations/SIM/commands", headers=CTL, json={
+            "name": "set_config", "params": {"changes": {name: "1"}}})
+        assert r.status_code == 400, name
+        assert name in r.json()["detail"]
+
+
+def test_a_relative_storage_path_is_refused_before_it_is_queued(client):
+    """The one thing this side can check without the station's filesystem.
+
+    Everything else about `output_dir` -- that the parent exists, that it sits
+    inside ARCHIVE_LOCAL -- needs to be answered on the station and is the
+    agent's, so this checks the shape only and says where the rest happens.
+    """
     r = client.post("/stations/SIM/commands", headers=CTL, json={
-        "name": "set_config", "params": {"changes": {"output_dir": "/tmp/x"}}})
+        "name": "set_config", "params": {"changes": {"output_dir": "data/x"}}})
     assert r.status_code == 400
-    assert "output_dir" in r.json()["detail"]
+    assert "absolute path" in r.json()["detail"]
+
+
+def test_a_storage_path_is_queued_for_the_agent_to_vet(client):
+    """Accepted here, checked there. The api cannot see the station's disks,
+    so it queues an absolute path and the agent refuses it on arrival if it is
+    outside the folder the archive jobs copy from."""
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config",
+        "params": {"changes": {"output_dir": "/home/ionouser/ionozond_data2/2026-09"}}})
+    assert r.status_code == 200
 
 
 def test_leaving_search_mode_without_a_schedule_is_refused(client):
@@ -280,6 +312,40 @@ def test_the_console_shows_why_a_command_failed(client):
 
     page = client.get("/ui").text
     assert why in page, "the agent's reason never reached the page"
+
+
+def _with_storage(client, value, ok, detail=""):
+    body = report()
+    body["metrics"].append({"name": "archive_paths_agree", "value": value,
+                            "ok": ok, "detail": detail})
+    client.post("/stations/health", json=body, headers=CTL)
+    return client.get("/ui").text
+
+
+def test_the_console_offers_the_storage_folder_the_station_reported(client):
+    """Prefilled from the station, not from anything this server believes.
+
+    The operator does not always have a session onto the acquisition laptop --
+    it is reached over AnyDesk -- so "move the storage folder" has to be doable
+    from here or it waits for that session.
+    """
+    page = _with_storage(client, "/home/ionouser/ionozond_data2", True)
+
+    assert "/home/ionouser/ionozond_data2" in page
+    assert "storagePath-SIM" in page
+
+
+def test_a_station_in_storage_drift_shows_it_and_prefills_nothing(client):
+    """Offering one of two disagreeing paths as the current value would invite
+    an apply on a guess. The disagreement is what needs reading first."""
+    detail = ("the staging folder is named 2 different ways: output_dir -> /a; "
+              "chirp-archive-sync.service ARCHIVE_LOCAL -> /b. Products "
+              "written where the archive jobs are not looking are copied by "
+              "nothing and reclaimed by nothing.")
+    page = _with_storage(client, None, False, detail)
+
+    assert "reclaimed by nothing" in page
+    assert "storagePath-SIM" not in page
 
 
 def test_acking_an_unknown_command_is_accepted(client):

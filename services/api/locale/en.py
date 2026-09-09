@@ -1073,6 +1073,13 @@ MESSAGES: dict[str, str] = {
         "Configured and observed agree to within {tolerance} MHz. The small "
         "shortfall is expected: <code>calc_ionograms.py</code> selects stored "
         "bins with strict inequalities, so both edge bins are dropped.",
+    "console.storage": "Storage folder",
+    "console.apply_storage": "Move storage",
+    "console.storage_hint":
+        "Must be inside the folder the archive jobs copy from \u2014 they "
+        "recurse, so a subfolder is carried to the NAS and reclaimed "
+        "afterwards with no change on the station. Anywhere else is copied by "
+        "nothing and reclaimed by nothing, and the agent refuses it.",
     "console.band_start": "Band start",
     "console.analyse_from": "Analyse from",
     "console.apply_band": "Apply band",
@@ -1307,6 +1314,7 @@ MESSAGES: dict[str, str] = {
         "effective on restart.",
     "console.js.enter_band": "Enter a band start to see what would be sent.",
     "console.js.enter_band_first": "Enter a band start first.",
+    "console.js.enter_storage_first": "Enter a storage folder first.",
     "console.js.no_sample_rate":
         "This station has not reported its sample rate, so the passband cannot "
         "be shown here. The agent still checks it before applying anything.",
@@ -1324,6 +1332,13 @@ MESSAGES: dict[str, str] = {
         "\u2014 soundings will be lost, as they are today",
     "console.js.sweep_ok": "{code}: {sweep} s sweep of its {rep} s cycle",
     "console.js.band_sending": "Sending \u2026",
+    "console.js.storage_sending": "Sending \u2026",
+    "console.js.storage_queued":
+        "Storage folder queued as {id} \u2014 the station applies it on its "
+        "next pull and it takes effect when acquisition restarts, so press "
+        "restart after it is collected. Products already staged stay where "
+        "they are; the archive jobs carry both folders until the old one is "
+        "empty.",
     "console.js.band_queued":
         "Band queued as {id} \u2014 the station applies it on its next pull "
         "and it takes effect when acquisition restarts, so press restart after "

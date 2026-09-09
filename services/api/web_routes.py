@@ -169,6 +169,29 @@ def _band(metrics: list[dict], acq) -> dict:
             "tolerance_mhz": BAND_TOLERANCE_MHZ}
 
 
+
+def _storage(metrics: list[dict]) -> dict:
+    """Where products are staged, and whether everything agrees about it.
+
+    `archive_paths_agree` has already done the work: its value is the path
+    when the ini and every archive unit name the same one, and ``None`` when
+    they do not.
+
+    **A station already in drift gets no prefilled field.** Offering one of two
+    disagreeing paths as the current value would invite the operator to press
+    apply on a guess, and the disagreement is the thing they need to see first.
+    """
+    found = next((m for m in metrics if m["name"] == "archive_paths_agree"), None)
+    if found is None:
+        return {"known": False, "path": "", "drift": "",
+                "why_not": "this station has not reported where it stages "
+                           "products; the agent may be older than this field"}
+    path = found.get("value") or ""
+    return {"known": bool(path), "path": path,
+            "drift": found.get("detail", "") if found.get("ok") is False else "",
+            "why_not": "" if path else found.get("detail", "")}
+
+
 @router.get("/ui")
 def console(request: Request):
     conn = request.app.state.db
@@ -189,6 +212,9 @@ def console(request: Request):
             # Configured band beside observed band. See `_band`: two sources
             # that cannot agree by accident, which is the point.
             "band": _band(shown_metrics, acq),
+            # Where those products land, and whether the archive jobs
+            # agree about it. See `_storage`.
+            "storage": _storage(shown_metrics),
             "commands": [_command(c) for c in db.recent_commands(conn, station, 8)],
             # What it is sounding this minute, which is the question the unit
             # states cannot answer: every process can be active while the

@@ -19,7 +19,9 @@ them pages you for the wrong thing.
 
 from __future__ import annotations
 
+import configparser
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -366,6 +368,126 @@ def archive_remote_free(config: StationConfig) -> list[Metric]:
     return out
 
 
+def _norm(raw) -> str:
+    """A path from a unit file or an ini, in a form two of them can be compared.
+
+    Empty stays empty rather than becoming ``"."``: an unset variable means
+    "no answer", and `os.path.normpath("")` would turn that into a real path
+    that could then be reported as disagreeing with something.
+    """
+    text = str(raw).strip().strip('"').strip("'").strip()
+    return os.path.normpath(os.path.expanduser(text)) if text else ""
+
+
+def effective_output_dir(config: StationConfig) -> str:
+    """Where acquisition actually writes: the ini when it says, else the config.
+
+    The precedence `StationConfig.output_dir` documents -- read from
+    ``chirp_config`` when present, this being the fallback -- made explicit,
+    because the answer to "is the staging path consistent" depends entirely on
+    which of the two is the live one. `set_config` edits the ini, so on any
+    station the api has ever configured, the ini is the live one.
+    """
+    parser = configparser.ConfigParser()
+    try:
+        if parser.read(Path(config.chirp_config)):
+            found = _norm(parser.get("config", "output_dir", fallback=""))
+            if found:
+                return found
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        pass
+    return _norm(str(config.output_dir))
+
+
+
+def product_root(config: StationConfig) -> Path:
+    """Where products actually are, for anything that goes looking for them.
+
+    :func:`effective_output_dir` as a path, and the thing every collector below
+    measures rather than the config's own ``output_dir`` field. Those two are
+    the same on a station whose ini and agent.json agree, and when they do not,
+    the ini wins because that is the file acquisition reads.
+
+    This is the difference between the three symptoms of a drifted path and
+    their cause. `test_one_output_dir_is_written_in_three_places` lists them:
+    ``newest_product_age_s`` answering "no such directory" for a recorder that
+    is producing normally, the preview finding nothing to encode, and the
+    mirror reporting success over an empty tree. All three are this function
+    reading one folder while the recorder writes to another.
+    """
+    return Path(effective_output_dir(config))
+
+def archive_local(config: StationConfig) -> Path | None:
+    """The staging folder the copy jobs are running with, or ``None``.
+
+    Read out of the running units for the same reason as
+    :func:`_unit_environment`: the installed unit and the repo's copy are
+    allowed to disagree, and have.
+
+    ``None`` is "no answer, do not check" -- no job units, no systemctl, or no
+    ``ARCHIVE_LOCAL`` in any of them. A caller must not read it as a mismatch:
+    a guard that fires when it cannot see is one that gets switched off.
+    """
+    for unit in config.job_units:
+        found = _norm(_unit_environment(unit).get("ARCHIVE_LOCAL", ""))
+        if found:
+            return Path(found)
+    return None
+
+
+def archive_paths_agree(config: StationConfig) -> Metric:
+    """One staging path, or the reason products are about to pile up unseen.
+
+    `chirp-archive-sync.service` states the requirement itself -- *"Keep this
+    identical to `output_dir` in agent.json and to ARCHIVE_LOCAL in
+    chirp-archive-prune.service: three places, one path"* -- and until now
+    nothing checked it. The same class of drift went unnoticed for four days
+    on DOB, which is why `_unit_environment` reads the running unit at all.
+
+    **Drift here is not a stale document, it is a full disk.** The mirror
+    never deletes, deliberately, so the prune is the only thing that reclaims
+    the staging volume. A folder the jobs do not know about is copied by
+    nothing and reclaimed by nothing: it does not merely stop reaching the
+    server, it fills the disk acquisition is running on, while every unit
+    stays ``active`` and every other metric stays green.
+
+    Compares the *effective* ``output_dir`` -- see
+    :func:`effective_output_dir` -- against every job unit's
+    ``ARCHIVE_LOCAL``, and the units against each other.
+    """
+    name = "archive_paths_agree"
+    sources: dict = {}
+
+    def note(path: str, who: str) -> None:
+        if path:
+            sources.setdefault(path, []).append(who)
+
+    note(effective_output_dir(config), "output_dir")
+    for unit in config.job_units:
+        note(_norm(_unit_environment(unit).get("ARCHIVE_LOCAL", "")),
+             f"{unit} ARCHIVE_LOCAL")
+
+    total = sum(len(who) for who in sources.values())
+    if total < 2:
+        return Metric.unknown(
+            name, "fewer than two staging paths could be read, so there is "
+                  "nothing to compare -- systemctl missing, or no job unit "
+                  "sets ARCHIVE_LOCAL")
+    if len(sources) == 1:
+        agreed = next(iter(sources))
+        return Metric(name, agreed, ok=True,
+                      detail=f"{total} sources name {agreed}")
+
+    where = "; ".join(f"{' + '.join(who)} -> {path}"
+                      for path, who in sorted(sources.items()))
+    return Metric(name, None, ok=False,
+                  detail=f"the staging folder is named {len(sources)} "
+                         f"different ways: {where}. Products written where "
+                         f"the archive jobs are not looking are copied by "
+                         f"nothing and reclaimed by nothing, and the staging "
+                         f"volume fills while every unit stays active.")
+
+
 def newest_product_age(config: StationConfig, scan=None) -> Metric:
     """Age of the newest sounding. Soundings stopping is not the same as a
     process dying, and this is the metric that separates them.
@@ -395,7 +517,7 @@ def newest_product_age(config: StationConfig, scan=None) -> Metric:
     ``scan`` is a :func:`scan_products` result the caller already has, so a
     pass that also builds previews walks the archive once rather than twice.
     """
-    root = Path(config.output_dir)
+    root = product_root(config)
     if not root.is_dir():
         return Metric.unknown("newest_product_age_s", f"{root}: no such directory")
 
@@ -439,7 +561,7 @@ def disk_free(config: StationConfig) -> list[Metric]:
     """
     out = []
     for name, path, warn in (
-        ("disk_free_fraction", Path(config.output_dir), DISK_WARN_FRACTION),
+        ("disk_free_fraction", product_root(config), DISK_WARN_FRACTION),
         ("ringbuffer_free_fraction", Path(config.ringbuffer_dir),
          1.0 - RINGBUFFER_WARN_FRACTION),
     ):
@@ -646,7 +768,7 @@ def system_clock(config: StationConfig) -> Metric:
     # hardcoded date: those files were stamped by a clock that ran later.
     newest = None
     try:
-        root = Path(config.output_dir)
+        root = product_root(config)
         if root.is_dir():
             for path in root.rglob("*.h5"):
                 mtime = path.stat().st_mtime
@@ -662,7 +784,7 @@ def system_clock(config: StationConfig) -> Metric:
     # function that is about *this* host.
     note = ""
     if newest is not None and now < newest - 60.0:
-        fstype = _fstype_of(Path(config.output_dir))
+        fstype = _fstype_of(product_root(config))
         if fstype in REMOTE_FSTYPES:
             # Deliberately not an instruction. A skew that is already fixed
             # persists in the stamps of files written before the fix, and it
@@ -718,7 +840,7 @@ def epoch_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric
     except Exception as exc:
         return Metric.unknown("epoch_offset_s", f"muf unavailable: {exc}")
 
-    root = Path(config.output_dir)
+    root = product_root(config)
     if not root.is_dir():
         return Metric.unknown("epoch_offset_s", f"{root}: no such directory")
 
@@ -851,6 +973,7 @@ def collect(config: StationConfig | None = None, *,
     metrics.append(newest_product_age(config, scan))
     metrics.extend(disk_free(config))
     metrics.extend(archive_remote_free(config))
+    metrics.append(archive_paths_agree(config))
     metrics.append(sample_rate(config))
     metrics.extend(band(config))
     metrics.append(uptime_s())

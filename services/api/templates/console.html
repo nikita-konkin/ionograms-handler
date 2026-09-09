@@ -397,6 +397,26 @@
   </div>
 
   <div style="margin-top:.8rem">
+    <div class="muted" style="font-size:.85rem">{{ t('console.storage') }}</div>
+    {% if s.storage.drift %}
+    <p class="note bad" style="margin-top:.45rem">{{ s.storage.drift }}</p>
+    {% endif %}
+    {% if s.storage.known %}
+    <div style="margin-top:.45rem; display:flex; gap:.6rem; align-items:baseline;
+                flex-wrap:wrap">
+      <input id="storagePath-{{ s.name }}" type="text" size="42"
+             style="min-width:20rem" value="{{ s.storage.path }}">
+      <button data-needs="station"
+              onclick="applyStorage('{{ s.name }}')">{{ t('console.apply_storage') }}</button>
+    </div>
+    <p class="note">{{ t('console.storage_hint') }}</p>
+    <div id="storageSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
+    {% else %}
+    <p class="note" style="margin-top:.45rem">{{ s.storage.why_not }}</p>
+    {% endif %}
+  </div>
+
+  <div style="margin-top:.8rem">
     <button data-needs="station" onclick="send('{{ s.name }}','start')">{{ t('console.start') }}</button>
     <button data-needs="station" onclick="send('{{ s.name }}','stop')">{{ t('console.stop') }}</button>
     <button data-needs="station" onclick="send('{{ s.name }}','restart')">{{ t('console.restart') }}</button>
@@ -493,6 +513,8 @@
 
   const say = (station, text, bad) => write('say-' + station, text, bad);
   const planSay = (station, text, bad) => write('planSay-' + station, text, bad);
+  const storageSay = (station, text, bad) =>
+    write('storageSay-' + station, text, bad);
   const bandSay = (station, text, bad) => write('bandSay-' + station, text, bad);
   const forgetSay = (station, text, bad) => write('forgetSay-' + station, text, bad);
 
@@ -506,6 +528,8 @@
       planSay(key.slice(9), sessionStorage.getItem(key));
     } else if (key.startsWith('saidBand-')) {
       bandSay(key.slice(9), sessionStorage.getItem(key));
+    } else if (key.startsWith('saidStore-')) {
+      storageSay(key.slice(10), sessionStorage.getItem(key));
     } else {
       continue;
     }
@@ -718,7 +742,8 @@
     where(station, message);
     sessionStorage.setItem(
       (where === planSay ? 'saidPlan-'
-       : where === bandSay ? 'saidBand-' : 'said-') + station, message);
+       : where === bandSay ? 'saidBand-'
+       : where === storageSay ? 'saidStore-' : 'said-') + station, message);
     setTimeout(() => location.reload(), 900);
   }
 
@@ -846,6 +871,34 @@
     planning = null;
     clearTimeout(planningTimer);
     queued(station, bandSay, T('console.js.band_queued',
+      {id: (r.body.id || '').slice(0, 8)}));
+  }
+
+  // --- where products are staged -------------------------------------------
+
+  // Only the shape is checked here. Whether the folder's parent exists, and
+  // whether it sits inside the ARCHIVE_LOCAL the archive jobs copy from, are
+  // questions about the station's own disks and are answered by the agent --
+  // which refuses the command rather than applying it. Saying so in the
+  // refusal is better than pretending to know here.
+  async function applyStorage(station) {
+    const box = document.getElementById('storagePath-' + station);
+    const path = (box ? box.value : '').trim();
+    if (!path) {
+      storageSay(station, T('console.js.enter_storage_first'), true);
+      return;
+    }
+    storageSay(station, T('console.js.storage_sending'));
+    const r = await control('/stations/' + encodeURIComponent(station)
+                            + '/commands',
+                            {name: 'set_config', issued_by: 'web',
+                             params: {changes: {output_dir: path}}});
+    if (!r.ok) {
+      storageSay(station, r.needsToken ? r.detail
+                 : T('console.js.refused', {detail: r.detail}), true);
+      return;
+    }
+    queued(station, storageSay, T('console.js.storage_queued',
       {id: (r.body.id || '').slice(0, 8)}));
   }
 
