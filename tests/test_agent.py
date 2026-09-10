@@ -1611,17 +1611,24 @@ JOBS = ("chirp-archive-sync.service",)
 
 
 def _fake_show(monkeypatch, table: dict):
-    """`systemctl show <unit> --property=X --value` answering from a table.
+    """`systemctl show <unit> --property=X` answering from a table.
 
     Keyed `(unit, property)`. A property the table does not mention comes back
-    empty, which is what systemd does for one that is unset.
+    as `X=`, which is what systemd prints for one that is unset.
+
+    Emits the `Property=value` form rather than a bare value, because that is
+    what `systemctl show` actually prints and what every version has printed.
+    `--value` is systemd 230 and later, and the station this agent runs on
+    does not have it.
     """
     def run(args, **kw):
         if args[:2] != ["systemctl", "show"]:
             return 0, ""
+        assert "--value" not in args, (
+            "--value is systemd 230+; the station answers `unknown option`")
         unit = args[2]
         prop = next(a for a in args if a.startswith("--property=")).split("=", 1)[1]
-        return 0, table.get((unit, prop), "")
+        return 0, f"{prop}={table.get((unit, prop), '')}"
     monkeypatch.setattr(health, "_run", run)
 
 
@@ -1942,3 +1949,47 @@ def test_the_config_field_is_still_the_fallback_when_the_ini_is_silent(tmp_path)
                            output_dir=data, ringbuffer_dir=tmp_path)
 
     assert health.product_root(config) == data
+
+
+def test_an_older_systemd_without_value_still_reports(monkeypatch, station):
+    """systemd 229 answers `unknown option --value`, and it is on the station.
+
+    The failure this pins is not the missing metric. `_run` returns the error
+    *text*, which is non-empty, so a caller testing `if not result` walks past
+    it and reports the error string as the property's value: both archive jobs
+    red, with a garbage Result, on a station whose jobs were running fine.
+
+    Reproduced from the real message, Russian locale and all -- that is how it
+    arrives on this host.
+    """
+    table = {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "Environment"):
+            "ARCHIVE_LOCAL=%s ARCHIVE_REMOTE=/mnt/ionozond_16tb/x"
+            % station.chirp_config.parent,
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    }
+
+    def old_systemd(args, **kw):
+        if "--value" in args:
+            return 1, "systemctl: неизвестный ключ «--value»"
+        if args[:2] != ["systemctl", "show"]:
+            return 0, ""
+        unit = args[2]
+        prop = next(a for a in args if a.startswith("--property=")).split("=", 1)[1]
+        return 0, "%s=%s" % (prop, table.get((unit, prop), ""))
+
+    monkeypatch.setattr(health, "_run", old_systemd)
+    metrics = {m.name: m
+               for m in health.job_states(replace(station, job_units=JOBS))}
+
+    job = metrics["job:chirp-archive-sync.service"]
+    assert job.ok is True, job.detail
+    assert job.value == "success"
+    assert "--value" not in str(job.value) + job.detail
+    assert metrics["timer:chirp-archive-sync.timer"].ok is True
+
+    # And the reader the drift detector is built on.
+    assert health.archive_local(replace(station, job_units=JOBS)) \
+        == station.chirp_config.parent

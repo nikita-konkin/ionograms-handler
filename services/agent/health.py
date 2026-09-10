@@ -200,6 +200,32 @@ def unit_states(config: StationConfig) -> list[Metric]:
     return out
 
 
+def _show(unit: str, prop: str) -> tuple[int, str]:
+    """One ``systemctl show`` property, on any systemd this station may have.
+
+    Deliberately **not** ``--value``, which arrived in systemd 230 (2016).
+    The HP ZBook answers ``unknown option --value``, and the consequence was
+    worse than a metric going missing: :func:`_run` hands back the error text,
+    which is *non-empty*, so a caller testing ``if not result`` sails straight
+    past the failure and reports the error string as the property's value.
+    Both archive jobs then read red, with a garbage ``Result``, on a station
+    whose jobs were running perfectly -- the "false reds" failure the station
+    config was written to avoid.
+
+    The default ``Property=value`` output predates ``--value`` by years and is
+    what every version prints, so ask for that and drop the prefix. A
+    non-zero exit returns no value at all rather than its own error text,
+    which is what makes the callers' ``not result`` check mean what it says.
+    """
+    code, text = _run(["systemctl", "show", unit, f"--property={prop}"])
+    if code != 0:
+        return code, ""
+    head, sep, value = text.partition("=")
+    if not sep or head.strip() != prop:
+        return 1, ""
+    return 0, value.strip()
+
+
 def _unit_environment(unit: str) -> dict[str, str]:
     """``Environment=`` of a unit, as systemd resolved it.
 
@@ -210,8 +236,7 @@ def _unit_environment(unit: str) -> dict[str, str]:
     station named a path the station had not written to since 22 August.
     Whatever the console reports here is what rsync will actually use.
     """
-    code, text = _run(["systemctl", "show", unit, "--property=Environment",
-                       "--value"])
+    code, text = _show(unit, "Environment")
     if code != 0 or not text:
         return {}
     found = {}
@@ -259,16 +284,16 @@ def job_states(config: StationConfig) -> list[Metric]:
     """
     out: list[Metric] = []
     for unit in config.job_units:
-        code, result = _run(["systemctl", "show", unit,
-                             "--property=Result", "--value"])
-        if code == 127 or not result:
-            out.append(Metric.unknown(f"job:{unit}", result or "no systemctl"))
+        code, result = _show(unit, "Result")
+        if code != 0 or not result:
+            out.append(Metric.unknown(
+                f"job:{unit}",
+                "systemctl could not be asked" if code == 127
+                else "systemctl reported no Result for this unit"))
             continue
 
-        _, status = _run(["systemctl", "show", unit,
-                          "--property=ExecMainStatus", "--value"])
-        _, when = _run(["systemctl", "show", unit,
-                        "--property=ExecMainExitTimestamp", "--value"])
+        _, status = _show(unit, "ExecMainStatus")
+        _, when = _show(unit, "ExecMainExitTimestamp")
 
         env = _unit_environment(unit)
         remote = env.get("ARCHIVE_REMOTE", "")
@@ -291,13 +316,14 @@ def job_states(config: StationConfig) -> list[Metric]:
 def _timer_metric(unit: str) -> Metric:
     """The timer behind a job unit, by systemd's own naming convention."""
     timer = unit.rsplit(".", 1)[0] + ".timer"
-    code, state = _run(["systemctl", "show", timer,
-                        "--property=ActiveState", "--value"])
-    if code == 127 or not state or state == "unknown":
-        return Metric.unknown(f"timer:{timer}", state or "no systemctl")
+    code, state = _show(timer, "ActiveState")
+    if code != 0 or not state or state == "unknown":
+        return Metric.unknown(
+            f"timer:{timer}",
+            "systemctl could not be asked" if code == 127
+            else state or "systemctl reported no ActiveState for this timer")
 
-    _, last = _run(["systemctl", "show", timer,
-                    "--property=LastTriggerUSec", "--value"])
+    _, last = _show(timer, "LastTriggerUSec")
     age = _age_of(last)
 
     if state != "active":
