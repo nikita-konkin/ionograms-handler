@@ -26,7 +26,7 @@ After=network-online.target
 Wants=network-online.target
 # Nothing to do if the share is not mounted, and rsync would otherwise
 # cheerfully fill the local disk's mountpoint directory instead.
-ConditionPathIsMountPoint=/mnt/ionozond_16tb
+ConditionPathIsMountPoint=/mnt/ionozond_5tb
 
 [Service]
 Type=oneshot
@@ -40,11 +40,12 @@ IOSchedulingClass=idle
 # Staging is on the boot SSD, not DATA3. DATA3 is a USB-attached NTFS volume
 # served by a `mount.ntfs` FUSE daemon that was measured at 8.2% CPU on a host
 # that could not spare it -- writing products there costs the recorder samples.
-# The trade is 256 GB of headroom instead of 928 GB, which is why the prune job
-# beside this one exists. Keep this identical to `output_dir` in agent.json and
-# to ARCHIVE_LOCAL in chirp-archive-prune.service: three places, one path.
+# The trade is a 31 GB root partition instead of 928 GB, which is why the
+# prune job beside this one exists. Keep this identical to `output_dir` in
+# agent.json and to ARCHIVE_LOCAL in chirp-archive-prune.service: three
+# places, one path.
 Environment=ARCHIVE_LOCAL=/home/ionouser/ionozond_data2
-Environment=ARCHIVE_REMOTE=/mnt/ionozond_16tb/ionozond_data2
+Environment=ARCHIVE_REMOTE=/mnt/ionozond_5tb/ionozond_data2
 
 # Trailing slash on the source: copy the *contents*, not the directory itself.
 # --partial-dir keeps interrupted transfers out of the destination tree, so a

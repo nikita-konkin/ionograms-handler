@@ -207,7 +207,7 @@ Copying unit files starts nothing. This whole section is safe with the station
 acquiring, and it is where parse errors get caught while there is still margin.
 
 ```bash
-sudo cp /home/ionouser/ionograms-handler/services/agent/systemd/*.service /home/ionouser/ionograms-handler/services/agent/systemd/*.target /home/ionouser/ionograms-handler/services/agent/systemd/*.timer /etc/systemd/system/
+sudo cp /home/ionouser/ionograms-handler/services/agent/systemd/*.service /home/ionouser/ionograms-handler/services/agent/systemd/*.target /home/ionouser/ionograms-handler/services/agent/systemd/*.timer /home/ionouser/ionograms-handler/services/agent/systemd/*.mount /etc/systemd/system/
 ```
 
 ```bash

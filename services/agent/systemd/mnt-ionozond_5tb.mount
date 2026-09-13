@@ -1,0 +1,36 @@
+# Mounts the working ionogram archive from the IONOSTORAGE NAS.
+#
+# This is where chirp-archive-sync.service writes from 2026-09-14. The 16 TB
+# share it replaced was 91.5% full with 1.4 TB left; this one is 19% full with
+# 4.8 TB. The old data does not move -- 15.9 TB does not fit in 5.8 TB -- so
+# the archive is split by date from that day on, and any consumer that wants
+# the whole record needs both shares. On the api that is ARCHIVE_HOST_PATH_2
+# in deploy/docker-compose.yml, which exists for exactly this.
+#
+# A unit for this share was first written 2026-08-26 and failed within the
+# minute, every time, for 2 weeks 3 days without anyone noticing -- it names
+# nothing that another unit depends on, so nothing went red. It carried
+# `sec=ntlmssp` copied from the tec_data mount (different NAS, different
+# domain) and no `domain=`, but neither was the fault: the host had no
+# `cifs-utils`, so `credentials=` was discarded unread. See the header of
+# mnt-ionozond_16tb.mount for why that failure is so hard to read, and for
+# why `vers=1.0` and the absent `sec=` are deliberate here too.
+#
+# The filename must match the mount point: `/mnt/ionozond_5tb` ->
+# `mnt-ionozond_5tb.mount`.
+
+[Unit]
+Description=ionozond_5tb on the IONOSTORAGE NAS
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//10.10.65.102/ionozond_5tb
+Where=/mnt/ionozond_5tb
+Type=cifs
+Options=credentials=/etc/cifs-ionostorage.cred,vers=1.0,cache=strict,uid=1000,gid=1000,forceuid,forcegid,_netdev
+# 30 s was not enough on a first attempt against this NAS.
+TimeoutSec=60
+
+[Install]
+WantedBy=multi-user.target

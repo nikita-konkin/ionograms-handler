@@ -1,0 +1,45 @@
+# Mounts the historical ionogram archive from the IONOSTORAGE NAS.
+#
+# Written 2026-09-14, after finding that this share had **no unit and no fstab
+# line at all** -- it had been mounted by hand, from the command line, and
+# would not have survived a reboot. That matters more than it sounds: both
+# archive jobs guard on ConditionPathIsMountPoint, and a condition that fails
+# is not an error. The jobs would have gone quiet, stayed green, and let the
+# 31 GB staging partition fill while every unit reported success.
+#
+# The filename is not free: systemd derives it from the mount point, so
+# `/mnt/ionozond_16tb` must be `mnt-ionozond_16tb.mount` and nothing else.
+#
+# `credentials=` is read by /sbin/mount.cifs, NOT by the kernel. On a host
+# without the `cifs-utils` package `mount -t cifs` falls through to the raw
+# syscall, the option is silently discarded, and the mount fails with
+# `CIFS VFS: No username specified` -- or, if a username is supplied
+# separately, with an empty-password NT_STATUS_LOGON_FAILURE that looks
+# exactly like a wrong password. This station ran without cifs-utils until
+# 2026-09-14. Check for /sbin/mount.cifs before believing any other diagnosis.
+#
+# `vers=1.0` is not a preference. The server is Samba 4.10.18 and supports
+# SMB3 perfectly well, but is configured NT1-only, and SMB2/3 mounts fail.
+# That single setting is the whole 6.3 ms-per-directory-entry archive scan
+# cost recorded in BACKLOG sec. 25; if it is ever changed on the NAS, raise
+# this to 3.0 here and in mnt-ionozond_5tb.mount.
+#
+# No `sec=` on purpose. The sibling tec_data mount pins sec=ntlmssp, but that
+# is a different NAS in a different domain; against IONOSTORAGE the working
+# mount specifies none and lets the client negotiate.
+
+[Unit]
+Description=ionozond_16tb on the IONOSTORAGE NAS
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//10.10.65.102/ionozond_16tb
+Where=/mnt/ionozond_16tb
+Type=cifs
+Options=credentials=/etc/cifs-ionostorage.cred,vers=1.0,cache=strict,uid=1000,gid=1000,forceuid,forcegid,_netdev
+# 30 s was not enough on a first attempt against this NAS at 91.5% full.
+TimeoutSec=60
+
+[Install]
+WantedBy=multi-user.target
