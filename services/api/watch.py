@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
                               archive_root=archive_root, jobs=args.jobs,
                               batch=args.batch, min_age_s=args.min_age,
                               dry_run=args.dry_run, quiet=args.quiet)
-        except Exception as exc:                        # noqa: BLE001
+        except Exception as exc:
             # A pass that raises must not kill a resident watcher -- the usual
             # causes (a locked database, a half-written file, a sync that
             # removed a directory mid-scan) all clear by themselves.

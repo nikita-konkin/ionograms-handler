@@ -128,7 +128,7 @@ def hosts() -> list[tuple[str, str, tuple[str, ...]]]:
     """
     seen: dict[str, tuple[str, list[str]]] = {}
     for source in indices.SOURCES:
-        url, keys = seen.setdefault(source.host, (source.url, []))
+        _url, keys = seen.setdefault(source.host, (source.url, []))
         keys.append(source.key)
     return [(host, url, tuple(keys)) for host, (url, keys) in seen.items()]
 
@@ -169,7 +169,7 @@ def probe(url: str, *, timeout: float = TIMEOUT_S) -> tuple[bool, float, str]:
     except (TimeoutError, socket.timeout):
         return False, (time.perf_counter() - started) * 1000, \
             f"no answer within {timeout:.0f}s"
-    except Exception as exc:                                  # noqa: BLE001
+    except Exception as exc:
         # A connectivity indicator that can itself take the page down would be
         # worse than no indicator, so the net is cast wide on purpose.
         return False, (time.perf_counter() - started) * 1000, \
@@ -259,7 +259,7 @@ def refresh(**kwargs) -> Reachability:
     global _LAST
     try:
         got = check(**kwargs)
-    except Exception as exc:                                  # noqa: BLE001
+    except Exception as exc:
         got = Reachability("unknown", f"reachability check failed: {exc!r}",
                            checked_at=time.time())
     with _LOCK:

@@ -146,6 +146,13 @@ def run(ion: Ionogram, methods=DEFAULT_METHODS, **kwargs) -> dict[str, MufResult
 
 
 __all__ = [
-    "MufResult", "Extractor", "get", "available", "run", "canonical",
-    "DEFAULT_METHODS", "ALL_METHODS", "ALIASES",
+    "ALIASES",
+    "ALL_METHODS",
+    "DEFAULT_METHODS",
+    "Extractor",
+    "MufResult",
+    "available",
+    "canonical",
+    "get",
+    "run",
 ]

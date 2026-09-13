@@ -274,7 +274,7 @@ class Registry(Mapping):
         return sorted({s.code: s for s in self._by_code.values()}.values(),
                       key=lambda s: s.code.lower())
 
-    def merged_with(self, other: "Registry | Iterable[Station]") -> "Registry":
+    def merged_with(self, other: Registry | Iterable[Station]) -> Registry:
         """A new registry where ``other`` wins every collision.
 
         Collisions are the point: a station's own config is more authoritative

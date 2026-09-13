@@ -56,7 +56,10 @@ def cluster(
     fit_sample: int = DEFAULT_FIT_SAMPLE,
     random_state: int = DEFAULT_RANDOM_STATE,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Label every cell of ``db``. Returns ``(labels [n_freq, n_range], centroids [k])``."""
+    """Label every cell of ``db``.
+
+    Returns ``(labels [n_freq, n_range], centroids [k])``.
+    """
     values = db.reshape(-1, 1).astype(np.float64)
 
     if 0 < fit_sample < len(values):

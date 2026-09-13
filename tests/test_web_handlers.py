@@ -130,6 +130,6 @@ def test_a_name_with_a_quote_in_it_reaches_the_handler_intact(client, page):
 def test_the_check_would_have_caught_the_original_bug():
     """The guard is only worth having if it fails on the shape that shipped."""
     broken = '<button onclick="pick("2026-08-19")">use</button>'
-    (tag, name, value), = handlers_of(broken)
+    (_tag, _name, value), = handlers_of(broken)
     assert value == "pick("
     assert not value.rstrip(";").endswith(")")

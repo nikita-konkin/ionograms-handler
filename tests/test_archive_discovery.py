@@ -23,8 +23,7 @@ from services.api.archives import PROBE_DAYS
 
 # The api-backed tests below reuse `test_archives`'s client, archive root
 # and helpers rather than standing up a second copy of the same fixtures.
-from tests.test_archives import (  # noqa: F401
-    _add, _candidates, archive_root, client)
+from tests.test_archives import _add, _candidates, archive_root, client  # noqa: F401
 
 
 def sounding(path: Path, name: str) -> Path:

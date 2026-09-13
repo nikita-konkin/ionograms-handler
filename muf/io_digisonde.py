@@ -57,8 +57,7 @@ import numpy as np
 
 from . import calibrate
 from .calibrate import Calibration
-from .io_chirp import snr_to_power
-from .io_chirp import open_h5
+from .io_chirp import open_h5, snr_to_power
 from .spectro import Ionogram
 
 #: Speed of light in km/s, as ``receive_digisonde.py`` uses it
@@ -219,8 +218,8 @@ def read_header(path: str | Path,
         # product stores the axis, not the settings that produced it.
         cf=float(np.median(freqs_hz)) if freqs_hz.size else float("nan"),
         dur=float(freqs_hz.size) * freq_step_hz / SAMPLE_RATE_HZ,
-        rmin=int(round(float(absolute_km.min()))) if absolute_km.size else 0,
-        rmax=int(round(float(absolute_km.max()))) if absolute_km.size else 0,
+        rmin=round(float(absolute_km.min())) if absolute_km.size else 0,
+        rmax=round(float(absolute_km.max())) if absolute_km.size else 0,
         n_pol=int(snr_shape[0]) if len(snr_shape) == 3 else 1,
     )
 

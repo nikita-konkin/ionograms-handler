@@ -25,8 +25,16 @@ import pandas as pd
 import pytest
 
 from services.api import db
-from services.prediction import (artifacts, dataset, legacy_features, queues,
-                                 registry, store, train, trainer)
+from services.prediction import (
+    artifacts,
+    dataset,
+    legacy_features,
+    queues,
+    registry,
+    store,
+    train,
+    trainer,
+)
 
 pytest.importorskip("joblib")
 pytest.importorskip("sklearn.linear_model")
@@ -295,7 +303,7 @@ def test_the_artifact_records_the_columns_it_was_fitted_on(conn):
     seed(conn, days=8)
     model = train.run(conn, plan())["model"]
 
-    estimator, contract = artifacts.load(model["artifact"])
+    _estimator, contract = artifacts.load(model["artifact"])
     assert list(contract.features) == model["features"]
     assert contract.capability == "slim", "a linear model needs no training image"
     recovered = legacy_features.parse(contract.features, assumed=False)
@@ -479,7 +487,7 @@ def test_a_committee_registers_exactly_like_a_single_estimator(conn, kind):
     # `feature_names_in_` from the frame they were fitted on, so a committee
     # is as recoverable as the single estimators inside it -- but it is
     # recoverable through a different code path, and that is worth pinning.
-    estimator, contract = artifacts.load(model["artifact"])
+    _estimator, contract = artifacts.load(model["artifact"])
     assert list(contract.features) == model["features"]
     assert legacy_features.parse(contract.features, assumed=False) is not None
 

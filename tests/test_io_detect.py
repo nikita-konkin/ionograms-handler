@@ -317,7 +317,7 @@ def test_impossible_range_warns(make_detection_h5):
 
 def test_naming_the_wrong_transmitter_raises(make_detection_h5):
     root = make_detection_h5("par", cycles=5, transmit_seconds=(235,))
-    with pytest.raises(ValueError, match="does not|lands within"):
+    with pytest.raises(ValueError, match=r"does not|lands within"):
         io_detect.solve_epoch_offset(
             io_detect.load_timings(root), 100e3, transmit_seconds=(17, 42),
             distance_km=CYPRUS_KM, reference="not this one", window_s=0.5)

@@ -107,7 +107,8 @@ def test_lfs_soundings_follow_the_registry_too(make_lfs):
     `signal-chain.md` records moves from 2588.4 km to 2587.8 km with it.
     """
     rng = np.random.default_rng(0)
-    iq = (rng.normal(size=8192 * 4) + 1j * rng.normal(size=8192 * 4)).astype("complex64")
+    iq = (rng.normal(size=8192 * 4)
+          + 1j * rng.normal(size=8192 * 4)).astype("complex64")
     path = make_lfs(iq, name="c.lfs", tx_name="cyprus1")
 
     header = loader.read_header(path)
@@ -118,7 +119,8 @@ def test_lfs_soundings_follow_the_registry_too(make_lfs):
     # And an explicit empty table still means "no table", not "the default
     # one" -- the distinction `resolve_stations` exists to keep.
     verbatim = loader.read_header(path, stations={})
-    assert (verbatim.tx_latitude, verbatim.tx_longitude) == stations.CYPRUS1_LFS_COORDINATES
+    assert (verbatim.tx_latitude,
+            verbatim.tx_longitude) == stations.CYPRUS1_LFS_COORDINATES
     assert verbatim.from_registry == ()
 
 

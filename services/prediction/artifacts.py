@@ -165,7 +165,7 @@ def _framework_of(estimator: Any) -> str:
         return "xgboost"
     if module.startswith("sklearn"):
         return "sklearn"
-    if module.startswith("keras") or module.startswith("tensorflow"):
+    if module.startswith(("keras", "tensorflow")):
         return "keras"
     return module.split(".", 1)[0] or "unknown"
 

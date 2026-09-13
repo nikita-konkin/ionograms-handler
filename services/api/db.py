@@ -241,7 +241,8 @@ def metrics_for(conn: sqlite3.Connection, report_id: int) -> list[dict]:
 
 def stations(conn: sqlite3.Connection) -> list[str]:
     """Every station that has ever reported, plus any that has a command."""
-    seen = {r["station"] for r in rows(conn, "SELECT DISTINCT station FROM health_report")}
+    seen = {r["station"] for r
+            in rows(conn, "SELECT DISTINCT station FROM health_report")}
     seen |= {r["station"] for r in rows(conn, "SELECT DISTINCT station FROM command")}
     return sorted(seen)
 
@@ -759,10 +760,9 @@ def principal_by_token(conn: sqlite3.Connection, token: str) -> dict | None:
 
 def principals(conn: sqlite3.Connection) -> list[dict]:
     """Every account, active first. Never carries a token or its digest."""
-    found = rows(conn, "SELECT id, name, role, note, created_at, created_by,"
+    return rows(conn, "SELECT id, name, role, note, created_at, created_by,"
                        " disabled_at, last_seen_at FROM principal"
                        " ORDER BY disabled_at IS NOT NULL, name")
-    return found
 
 
 def disable_principal(conn: sqlite3.Connection, principal_id: int) -> dict | None:

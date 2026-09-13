@@ -9,15 +9,25 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import (__version__, calibrate, compare, extractors, interference,
-               io_detect, pipeline, render, spectro, track)
+from . import (
+    __version__,
+    calibrate,
+    compare,
+    extractors,
+    interference,
+    io_detect,
+    loader,
+    pipeline,
+    render,
+    spectro,
+    track,
+)
+from . import stations as _stations
 from .export import saoxml
 from .extractors import ALL_METHODS, DEFAULT_METHODS
-from .reference import ALL_REFERENCES
-from . import loader, stations as _stations
 from .loader import find_soundings, read_header
 from .pipeline import Options
-
+from .reference import ALL_REFERENCES
 
 #: Sentinel for ``--gate auto``. Not a range, so it cannot be confused with
 #: one, and it survives being carried through `Options.gate_km` untouched.
@@ -383,7 +393,8 @@ def cmd_compare(args) -> int:
         try:
             start, stop = span.split("..")
         except ValueError:
-            raise SystemExit(f"--exclude wants 'START..STOP', got {span!r}")
+            raise SystemExit(
+                f"--exclude wants 'START..STOP', got {span!r}") from None
         exclude.append((start, stop))
 
     models = None
@@ -780,8 +791,8 @@ def cmd_detect(args) -> int:
         print()
         print(f"  {offset}")
         if abs(offset.seconds) > 0.5:
-            print(f"  NOTE: past half a second, so every received second above "
-                  f"is a whole second early or late.")
+            print("  NOTE: past half a second, so every received second above "
+                  "is a whole second early or late.")
         print(f"  {'rate':>9} {'transmitted at':>26} {'n':>5} {'range km':>10}")
         for e in emitters:
             tx = ",".join(str(s) for s in e.transmit_seconds(offset.seconds))
@@ -944,7 +955,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # track
     trk = sub.add_parser("track",
-                         help="track MUF or LOF through time: fill gaps, reject outliers")
+                         help="track MUF or LOF through time: fill gaps, "
+                              "reject outliers")
     trk.add_argument("table", type=Path, nargs="+",
                      help="results table(s) from `run`, or a directory of them")
     trk.add_argument("--param", default="muf",

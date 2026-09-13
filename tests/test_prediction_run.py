@@ -23,7 +23,7 @@ pytest.importorskip("joblib")
 pytest.importorskip("sklearn.linear_model")
 pytest.importorskip("statsmodels")
 
-from test_prediction_train import RX, TX, seed  # noqa: E402
+from test_prediction_train import RX, TX, seed
 
 AUTH = {"Authorization": "Bearer ctl"}
 

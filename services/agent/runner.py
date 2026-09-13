@@ -17,7 +17,6 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
 from . import client, control, health, logs, preview

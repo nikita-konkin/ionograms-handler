@@ -57,8 +57,8 @@ def add_upload(conn: sqlite3.Connection, *, by: str | None = None,
         if fields.get(required) in (None, ""):
             raise QueueError(f"an upload needs {required}")
 
-    columns = list(fields) + ["state", "uploaded_at", "uploaded_by"]
-    values = list(fields.values()) + [PENDING, db.utcnow(), by]
+    columns = [*list(fields), "state", "uploaded_at", "uploaded_by"]
+    values = [*list(fields.values()), PENDING, db.utcnow(), by]
     cursor = conn.execute(
         f"INSERT INTO model_upload ({','.join(columns)}) "
         f"VALUES ({','.join('?' * len(columns))})", tuple(values))
@@ -79,7 +79,7 @@ def uploads(conn: sqlite3.Connection, state: str | None = None,
         sql += " WHERE state = ?"
         params = (state,)
     sql += " ORDER BY id DESC LIMIT ?"
-    return db.rows(conn, sql, params + (int(limit),))
+    return db.rows(conn, sql, (*params, int(limit)))
 
 
 def pending_uploads(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
@@ -160,7 +160,7 @@ def jobs(conn: sqlite3.Connection, state: str | None = None,
         sql += " WHERE state = ?"
         params = (state,)
     sql += " ORDER BY id DESC LIMIT ?"
-    return [_decode_job(r) for r in db.rows(conn, sql, params + (int(limit),))]
+    return [_decode_job(r) for r in db.rows(conn, sql, (*params, int(limit)))]
 
 
 #: Tables `_claim` may touch. The table name is interpolated into SQL -- it is
@@ -284,7 +284,7 @@ def runs(conn: sqlite3.Connection, state: str | None = None,
         sql += " WHERE state = ?"
         params = (state,)
     sql += " ORDER BY id DESC LIMIT ?"
-    return db.rows(conn, sql, params + (int(limit),))
+    return db.rows(conn, sql, (*params, int(limit)))
 
 
 def pending_run(conn: sqlite3.Connection) -> dict | None:

@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from conftest import synth_iq
 
 from muf import extractors, lof, spectro
 from muf.export import saoxml
-
-from conftest import synth_iq
 
 WINDOW = 512
 N_FREQ = 200

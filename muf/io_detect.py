@@ -52,8 +52,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from .io_chirp import C_M_S, MAX_VIRTUAL_RANGE_KM, _scalar
-from .io_chirp import open_h5
+from .io_chirp import C_M_S, MAX_VIRTUAL_RANGE_KM, _scalar, open_h5
 from .paths import dedupe_paths
 
 #: Default schedule cycle. Chirp transmitters repeat on a human-chosen round
@@ -222,7 +221,7 @@ class Emitter:
         """
         cycle = int(self.cycle_s)
         return tuple(sorted({
-            int(round(s - epoch_offset_s)) % cycle for s in self.observed_seconds
+            round(s - epoch_offset_s) % cycle for s in self.observed_seconds
         }))
 
     def delay_s(self, epoch_offset_s: float = 0.0) -> float:
@@ -410,9 +409,11 @@ def read_timing(path: str | Path) -> TimingSolution:
                 f"{path}: not a chirpsounder2 timing file, missing "
                 f"{sorted(missing)}; found {sorted(fh.keys())}"
             )
-        t0s = np.asarray(fh["t0s"][()], dtype=np.float64) if "t0s" in fh else np.empty(0)
+        t0s = (np.asarray(fh["t0s"][()], dtype=np.float64)
+               if "t0s" in fh else np.empty(0))
         f0s = np.asarray(fh["f0"][()], dtype=np.float64) if "f0" in fh else np.empty(0)
-        snrs = np.asarray(fh["snrs"][()], dtype=np.float64) if "snrs" in fh else np.empty(0)
+        snrs = (np.asarray(fh["snrs"][()], dtype=np.float64)
+                if "snrs" in fh else np.empty(0))
         return TimingSolution(
             path=path,
             channel=_decode(fh["channel"][()]) if "channel" in fh else "",
@@ -547,7 +548,8 @@ def _times_rates_snrs(items: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarr
             rates.append(item.rate)
             snrs.append(float(np.median(item.snrs)) if item.snrs.size else float("nan"))
         else:
-            raise TypeError(f"census wants Detection or TimingSolution, got {type(item)}")
+            raise TypeError(
+                f"census wants Detection or TimingSolution, got {type(item)}")
     return (np.asarray(times, dtype=np.float64),
             np.asarray(rates, dtype=np.float64),
             np.asarray(snrs, dtype=np.float64))
@@ -656,7 +658,7 @@ def census(items: Iterable,
                 continue
             member_times = t_rate[group]
             fractions = _unwrap(member_times % 1.0)
-            slots = sorted({int(round(float(t) % cycle_s)) % int(cycle_s)
+            slots = sorted({round(float(t) % cycle_s) % int(cycle_s)
                             for t in member_times})
             emitters.append(Emitter(
                 rate=float(rate),

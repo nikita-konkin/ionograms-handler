@@ -60,9 +60,9 @@ def test_h5py_is_handed_bytes_not_a_path(product, monkeypatch):
 
 def test_the_buffered_read_returns_the_same_arrays(product, monkeypatch):
     with io_chirp.open_h5(product) as fh:
-        buffered = {k: np.asarray(fh[k][()]) for k in fh.keys()}
+        buffered = {k: np.asarray(fh[k][()]) for k in fh}
     with h5py.File(product, "r") as fh:                   # HDF5's own path I/O
-        direct = {k: np.asarray(fh[k][()]) for k in fh.keys()}
+        direct = {k: np.asarray(fh[k][()]) for k in fh}
 
     assert buffered.keys() == direct.keys()
     for key in direct:
@@ -118,9 +118,8 @@ def test_a_dead_mount_surfaces_as_the_real_oserror(product, monkeypatch):
         raise OSError(errno.EIO, "Input/output error", str(product))
 
     monkeypatch.setattr(io_chirp, "open", refuse, raising=False)
-    with pytest.raises(OSError) as caught:
-        with io_chirp.open_h5(product):
-            pass
+    with pytest.raises(OSError) as caught, io_chirp.open_h5(product):
+        pass
     assert caught.value.errno == errno.EIO
 
 

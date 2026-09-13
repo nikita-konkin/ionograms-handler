@@ -97,17 +97,17 @@ def import_artifact(path: Path, *, param: str, name: str | None = None,
     if target_src is None:
         target_src = "modelled" if origin == "legacy" else "measured"
 
-    fields = dict(
-        name=name or path.stem, param=param, tx=tx, rx=rx, origin=origin,
-        framework=contract.framework, loader=contract.loader,
-        capability=contract.capability,
-        artifact=str(path), sha256=artifacts.sha256(path),
-        features=list(names), target_alias=recipe.alias,
-        feature_recipe=recipe.as_dict(), env=contract.env,
-        golden_input=row, golden_output=output,
-        target_src=target_src, note=note,
-        trained_from=trained_from, trained_to=trained_to,
-    )
+    fields = {
+        "name": name or path.stem, "param": param, "tx": tx, "rx": rx, "origin": origin,
+        "framework": contract.framework, "loader": contract.loader,
+        "capability": contract.capability,
+        "artifact": str(path), "sha256": artifacts.sha256(path),
+        "features": list(names), "target_alias": recipe.alias,
+        "feature_recipe": recipe.as_dict(), "env": contract.env,
+        "golden_input": row, "golden_output": output,
+        "target_src": target_src, "note": note,
+        "trained_from": trained_from, "trained_to": trained_to,
+    }
 
     owned = conn is not None
     if owned:

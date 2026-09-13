@@ -127,7 +127,6 @@ from pathlib import Path
 
 import numpy as np
 
-from . import calibrate
 from .calibrate import Calibration
 from .paths import dedupe_paths
 from .spectro import NOISE_COEF, Ionogram
@@ -413,7 +412,8 @@ def _absolute_ranges(ranges_m: np.ndarray, t0: float, offset_applied: bool,
     offset_km = (t0 - math.floor(t0)) * C_M_S / 1e3
     if tx_name == UNIDENTIFIED_TX:
         return ranges_km, (
-            f"transmitter is v2's {UNIDENTIFIED_TX!r} marker, so the {offset_km:.0f} km "
+            f"transmitter is v2's {UNIDENTIFIED_TX!r} marker, so the "
+            f"{offset_km:.0f} km "
             f"implied by t0 rests on a timing solution nothing has cross-checked"
         )
     if offset_km > MAX_VIRTUAL_RANGE_KM:
@@ -586,8 +586,8 @@ def read_header(path: str | Path,
         dec=1,
         cf=freq_lo + sr / 2.0,
         dur=(freq_hi - freq_lo) / rate,
-        rmin=int(math.floor(float(ranges_km.min()))),
-        rmax=int(math.ceil(float(ranges_km.max()))),
+        rmin=math.floor(float(ranges_km.min())),
+        rmax=math.ceil(float(ranges_km.max())),
         noise_floor_median=float(np.nanmedian(noise_floor)),
         range_offset_applied=offset_applied,
         range_start_m=range_start,
@@ -640,10 +640,7 @@ def _build_calibration(header: ChirpHeader,
     step = float(np.median(np.abs(np.diff(vrange_km)))) if vrange_km.size > 1 else 1.0
     half_span = chirp_half_span_km(header.rate, header.sample_rate)
 
-    if freqs_mhz.size > 1:
-        freq_step = float(np.median(np.diff(freqs_mhz)))
-    else:
-        freq_step = 0.0
+    freq_step = float(np.median(np.diff(freqs_mhz))) if freqs_mhz.size > 1 else 0.0
     # Bin *edges*, to match calibrate.build, where freq labels are bin centres
     # and freq_stop is the upper edge of the last bin.
     freq_start = float(freqs_mhz[0]) - freq_step / 2.0
@@ -652,8 +649,9 @@ def _build_calibration(header: ChirpHeader,
     # Where the stored slice sits on the full FFT axis. Exact when v2 did not
     # add its sub-second range offset; approximate when it did, since that
     # shifts the axis off the fftfreq grid.
-    n_range_full = max(int(round(2 * half_span / step)), vrange_km.size) if step > 0 else vrange_km.size
-    i_lo = max(0, int(round((half_span - float(vrange_km[0])) / step))) if step > 0 else 0
+    n_range_full = (max(round(2 * half_span / step), vrange_km.size)
+                    if step > 0 else vrange_km.size)
+    i_lo = max(0, round((half_span - float(vrange_km[0])) / step)) if step > 0 else 0
     i_hi = i_lo + vrange_km.size - 1
 
     return Calibration(
@@ -782,7 +780,7 @@ def reprocess(path: str | Path,
         raise ValueError(f"{path}: cannot recover the frequency step from "
                          f"{stored_freqs.size} stored frequencies")
     sr = header.sample_rate
-    step = int(round((float(np.median(np.diff(stored_freqs))) / header.rate) * sr))
+    step = round((float(np.median(np.diff(stored_freqs))) / header.rate) * sr)
 
     spec = v2_spectrogram(np.conj(z), window=window, step=step)
 
@@ -812,7 +810,8 @@ def reprocess(path: str | Path,
         lo, hi = max(lo, want_lo), min(hi, want_hi)
         keep = (vrange_km >= lo) & (vrange_km <= hi)
         if not keep.any():
-            raise ValueError(f"{path}: gate {want_lo:.0f}-{want_hi:.0f} km keeps no bin")
+            raise ValueError(
+                f"{path}: gate {want_lo:.0f}-{want_hi:.0f} km keeps no bin")
         vrange_km, power = vrange_km[keep], power[:, keep]
 
     if SNR_OFFSET_DB:

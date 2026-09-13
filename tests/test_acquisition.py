@@ -272,7 +272,8 @@ def test_two_slots_closer_than_a_sweep_cannot_both_be_sounded():
     the second slot is skipped every cycle -- silently, which is what makes it
     worth refusing at the point it is typed.
     """
-    entry = lambda c: {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
+    def entry(c):
+        return {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
     found = acquisition.overlapping_slots([entry(280), entry(291)], 24.80)
 
     assert len(found) == 1
@@ -287,7 +288,8 @@ def test_the_separation_is_circular_not_arithmetic():
     The cycle wraps, so the naive difference is the wrong quantity and would
     call this pair legal -- which is exactly the pair a 248 s sweep collides.
     """
-    entry = lambda c: {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
+    def entry(c):
+        return {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
     found = acquisition.overlapping_slots([entry(0), entry(280)], 24.80)
 
     assert len(found) == 1 and "20s apart" in found[0]
@@ -295,7 +297,8 @@ def test_the_separation_is_circular_not_arithmetic():
 
 def test_slots_further_apart_than_a_sweep_are_left_alone():
     """A faster chirp fits more slots in a cycle, and must not be refused."""
-    entry = lambda c: {"chirp-rate": 500000.0, "rep": 300.0, "chirpt": c}
+    def entry(c):
+        return {"chirp-rate": 500000.0, "rep": 300.0, "chirpt": c}
     # 24.8 MHz at 500 kHz/s is a 50 s sweep; 60 s spacing clears it.
     assert acquisition.overlapping_slots(
         [entry(54), entry(114), entry(174)], 24.80) == []
@@ -318,7 +321,8 @@ def test_differing_reps_collide_on_their_gcd():
 def test_an_unmeasured_band_says_nothing_rather_than_guessing():
     """Same rule as `sweep_seconds`. The sweep length comes off this station's
     own products; without one, a legal schedule must not be refused."""
-    entry = lambda c: {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
+    def entry(c):
+        return {"chirp-rate": 100000.0, "rep": 300.0, "chirpt": c}
     assert acquisition.overlapping_slots([entry(280), entry(291)], None) == []
     assert acquisition.overlapping_slots([entry(280), entry(291)], 0) == []
 

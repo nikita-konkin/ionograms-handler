@@ -280,7 +280,7 @@ def test_extract_points_without_a_mask(real_file):
     result = extractors.get("algo")(ion)
     result.mask = None
 
-    freq, vrange, weight = trace.extract_points(ion, result)
+    freq, _vrange, _weight = trace.extract_points(ion, result)
     assert len(freq) == int(result.presence.sum())
 
 

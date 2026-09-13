@@ -53,8 +53,8 @@ import numpy as np
 # thing you are diagnosing is the repo copy.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from muf import calibrate, spectro          # noqa: E402
-from muf.io_lfs import HEADER_SIZE, read_header   # noqa: E402
+from muf import calibrate, spectro
+from muf.io_lfs import HEADER_SIZE, read_header
 
 #: The threshold every estimator shares, on the dB scale `to_db` produces.
 #: 30 dB is where median equalization puts the noise floor, so this is a 13 dB
@@ -212,10 +212,13 @@ def verdict(scans: list[Scan], reference_km: float, ref_source: str) -> list[str
     displaced = [s for s in detected if not s.in_gate]
     truncated = [s for s in scans if not s.sweep_complete]
 
-    out.append(f"  trace found anywhere on the axis : {len(detected):5d}  ({len(detected)/n:.0%})")
+    out.append(f"  trace found anywhere on the axis : {len(detected):5d}  "
+               f"({len(detected)/n:.0%})")
     out.append(f"  no coherent trace at all        : {silent:5d}  ({silent/n:.0%})")
-    out.append(f"  found, but outside the gate     : {len(displaced):5d}  ({len(displaced)/n:.0%})")
-    out.append(f"  recording truncated             : {len(truncated):5d}  ({len(truncated)/n:.0%})")
+    out.append(f"  found, but outside the gate     : {len(displaced):5d}  "
+               f"({len(displaced)/n:.0%})")
+    out.append(f"  recording truncated             : {len(truncated):5d}  "
+               f"({len(truncated)/n:.0%})")
     out.append("")
 
     found = False
@@ -223,10 +226,12 @@ def verdict(scans: list[Scan], reference_km: float, ref_source: str) -> list[str
     if displaced and len(displaced) / max(1, len(detected)) >= PATTERN_FRACTION:
         found = True
         offs = np.array([s.offset_km for s in displaced])
-        med, spread = float(np.median(offs)), float(np.percentile(offs, 90) - np.percentile(offs, 10))
+        med = float(np.median(offs))
+        spread = float(np.percentile(offs, 90) - np.percentile(offs, 10))
         ms = timing_error_ms(med, displaced[0].div_coef)
         out.append("TIMING -- the echo is on the axis but outside the gate.")
-        out.append(f"  median displacement {med:+.0f} km  (10-90 spread {spread:.0f} km)")
+        out.append(f"  median displacement {med:+.0f} km  "
+                   f"(10-90 spread {spread:.0f} km)")
         out.append(f"  implies an acquisition timing error of {ms:+.1f} ms")
         if spread <= FIXED_OFFSET_SPREAD_KM:
             out.append("  The displacement is consistent, so this reads as a fixed")
@@ -241,7 +246,8 @@ def verdict(scans: list[Scan], reference_km: float, ref_source: str) -> list[str
         hi = max(s.peak_range_km for s in displaced)
         pad = max(200.0, 0.1 * (hi - lo))
         out.append("  Either way the recordings are salvageable: widen the gate")
-        out.append(f"  (`muf run --gate {lo - pad:.0f},{hi + pad:.0f}`) and re-extract.")
+        out.append(
+            f"  (`muf run --gate {lo - pad:.0f},{hi + pad:.0f}`) and re-extract.")
         out.append("")
 
     if silent / n >= 0.5:
@@ -315,10 +321,10 @@ def _style(ax) -> None:
 def plot(scans: list[Scan], reference_km: float, out_png: Path) -> None:
     import matplotlib
     matplotlib.use("Agg")
+    from datetime import datetime as _dt
+
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
-
-    from datetime import datetime as _dt
 
     # date2num rather than datetime64: the timestamps carry a UTC offset, which
     # numpy deprecated, and float dates index cleanly under a boolean mask.

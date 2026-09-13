@@ -139,7 +139,7 @@ def trace(
                   if np.size(vrange) > 1 else 0.0)
     freq_step = (float(np.median(np.abs(np.diff(freq))))
                  if np.size(freq) > 1 else 0.0)
-    width = (max(1, int(round(max_range_slope * freq_step / range_step)))
+    width = (max(1, round(max_range_slope * freq_step / range_step))
              if range_step else 1)
 
     # Every cell scores what it is worth *relative to not being on the trace*.

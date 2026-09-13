@@ -22,7 +22,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from services.api import db
 from services.prediction import artifacts, queues, registrar, registry, store
 
 joblib = pytest.importorskip("joblib")
@@ -180,7 +179,8 @@ def test_the_api_never_unpickles(rig):
             elif isinstance(node, ast.ImportFrom):
                 module = (node.module or "").split(".")
                 if module and module[0] in UNPICKLERS:
-                    offenders.append(f"{_where(path, node)}: imports from {node.module}")
+                    offenders.append(
+                        f"{_where(path, node)}: imports from {node.module}")
                 if module and module[-1] == "artifacts":
                     for alias in node.names:
                         if alias.name in LOADERS:
@@ -189,7 +189,8 @@ def test_the_api_never_unpickles(rig):
             elif isinstance(node, ast.Attribute) and node.attr in LOADERS:
                 base = node.value
                 if isinstance(base, ast.Name) and base.id in UNPICKLERS | {"artifacts"}:
-                    offenders.append(f"{_where(path, node)}: calls {base.id}.{node.attr}")
+                    offenders.append(
+                        f"{_where(path, node)}: calls {base.id}.{node.attr}")
     assert not offenders, (
         "the api must not be able to load a model artifact; the registrar is "
         "what opens uploaded files:\n" + "\n".join(offenders))

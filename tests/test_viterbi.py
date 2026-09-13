@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from conftest import snapped_range, synth_iq
 
 from muf import spectro
 from muf.extractors import viterbi
 from muf.spectro import NOISE_FLOOR_DB
-
-from conftest import snapped_range, synth_iq
 
 FREQ = np.arange(2.0, 30.0, 0.0205)         # a .lfs-like frequency axis
 VRANGE = np.arange(0.0, 1000.0, 5.0)

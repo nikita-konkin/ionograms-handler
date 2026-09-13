@@ -9,7 +9,6 @@ about the archive that no synthetic fixture would have caught.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -148,7 +147,7 @@ def test_the_real_archive_artifact_is_self_describing():
     on, and because the day it stops being true the importer must fail loudly
     rather than invent a feature order.
     """
-    estimator, contract = artifacts.load(REAL_ARTIFACT)
+    _estimator, contract = artifacts.load(REAL_ARTIFACT)
     assert contract.framework == "sklearn"
     assert contract.n_features == len(contract.features)
     assert contract.features, "the artifact must name its own inputs"

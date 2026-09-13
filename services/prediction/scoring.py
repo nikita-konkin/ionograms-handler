@@ -56,6 +56,7 @@ import pandas as pd
 
 from muf.geometry import Point, control_points
 from muf.reference import chapman
+
 from ..api import db
 from . import dataset, registry
 
@@ -800,11 +801,13 @@ def describe(result: dict) -> str:
     where = f"{result.get('tx')}->{result.get('rx')}"
     name = result.get("name") or result["subject"]
     if not result.get("scored"):
-        return f"  {where} [{result.get('param','?')}] {name}: {result.get('detail','nothing')}"
+        return (f"  {where} [{result.get('param','?')}] {name}: "
+                f"{result.get('detail','nothing')}")
     if "mae" in result and isinstance(result["mae"], dict):
         by = ", ".join(f"{int(h)//3600}h {v}" for h, v in sorted(
             result["mae"].items(), key=lambda kv: int(kv[0])) if v is not None)
-        return f"  {where} [{result['param']}] {name}: {result['scored']} pairs, MAE {by}"
+        return (f"  {where} [{result['param']}] {name}: "
+                f"{result['scored']} pairs, MAE {by}")
     lead = int(result.get("horizon_s", 0)) // 3600
     return (f"  {where} [{result['param']}] {name}: {result['scored']} pairs, "
             f"MAE {result.get('mae')} at {lead}h")
@@ -817,7 +820,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--param", default="muf",
                         help="comma separated: muf,lof (default: %(default)s)")
     parser.add_argument("--method", default="contour",
-                        help="which estimator's picks are the truth (default: %(default)s)")
+                        help="which estimator's picks are the truth "
+                             "(default: %(default)s)")
     parser.add_argument("--tx", default=None)
     parser.add_argument("--rx", default=None)
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)

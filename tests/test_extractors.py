@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from conftest import snapped_range, synth_iq
 
 from muf import extractors, spectro
 from muf.pick import find_runs, pick_muf
-
-from conftest import snapped_range, synth_iq
 
 # Small enough to keep tests quick; large enough that the picker's continuity
 # rule has room to work.

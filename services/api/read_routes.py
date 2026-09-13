@@ -17,12 +17,10 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import (APIRouter, Depends, Header, HTTPException, Query,
-                     Request, status)
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response
 
-from . import auth
-from . import db
+from . import auth, db
 from . import net as net_mod
 from . import sources as sources_mod
 from .auth import require_read
@@ -678,7 +676,8 @@ def _render(path: Path, *, gate, trace, muf, dpi, bare: bool = False) -> bytes:
     results = extractors.run(ion) if muf else None
     segments = reconstruction = None
     if trace and results:
-        from muf import geometry, trace as trace_module
+        from muf import geometry
+        from muf import trace as trace_module
 
         best = next((r for r in results.values() if r.ok), None)
         if best is not None:

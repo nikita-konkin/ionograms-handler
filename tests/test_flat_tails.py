@@ -42,7 +42,7 @@ def _blank():
 
 def _draw(db, f_lo, f_hi, r_start, r_end):
     """Light one cell per frequency bin, range ramping linearly."""
-    sel = np.flatnonzero((FREQ >= f_lo) & (FREQ <= f_hi))
+    sel = np.flatnonzero((f_lo <= FREQ) & (f_hi >= FREQ))
     for r, f in zip(np.linspace(r_start, r_end, sel.size), sel):
         db[f, int(np.argmin(np.abs(VRANGE - r)))] = ECHO
     return db

@@ -527,7 +527,7 @@ def datasets(root: Path, *, max_depth: int = DISCOVERY_DEPTH) -> list[Path]:
         # ever opened, so getting the order wrong spends the whole budget on
         # the oldest folders. See `daydir.newest`.
         days = daydir.newest(children)
-        if (days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS])
+        if ((days and any(loader.has_soundings(day) for day in days[:PROBE_DAYS]))
                 or loader.has_soundings(path, recursive=False)):
             found.append(path)
 
@@ -562,7 +562,7 @@ def candidates(conn, archive_root, *, limit: int = 60) -> list[dict]:
     of the whole archive.
     """
     primary = Path(archive_root)
-    every = [primary] + [p for p in roots()[1:]]
+    every = [primary, *list(roots()[1:])]
     registered = {row["relpath"]: row for row in db.archives(conn)}
     out = []
     for root in every:
@@ -728,9 +728,9 @@ def _start_candidate_refresh(archive_root, limit: int, db_path=None,
             conn = watch.connect(db_path)
             found = candidates(conn, archive_root, limit=limit)
             with _CAND_LOCK:
-                if _CAND_GEN == started_at_gen:
+                if started_at_gen == _CAND_GEN:
                     _CAND[str(archive_root)] = (time.time(), found)
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:
             warnings.warn(f"candidate survey failed: {exc!r}", stacklevel=2)
         finally:
             if conn is not None:
@@ -772,7 +772,7 @@ def method_availability() -> dict[str, dict]:
                 from muf.extractors import cnn as cnn_mod
 
                 cnn_mod.find_model()
-            except Exception as exc:                          # noqa: BLE001
+            except Exception as exc:
                 out[name] = {"usable": False,
                              "why": str(exc).split(".")[0] or type(exc).__name__}
                 continue
@@ -965,7 +965,7 @@ def scan(row: dict, *, archive_root, db_path=None, **kw) -> bool:
                                db_path=db_path, **kw)
             _set_status(finished_at=time.time(), ok=True,
                         result=watch.describe(result))
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             _set_status(finished_at=time.time(), ok=False, error=message,
                         result=f"failed -- {message}")
@@ -1034,7 +1034,7 @@ def start_periodic(app, *, interval_s: float | None = None):
                     scan_all(conn, archive_root=app.state.archive_root)
                 finally:
                     conn.close()
-            except Exception as exc:                          # noqa: BLE001
+            except Exception as exc:
                 # A pass that raises must not kill the loop. The usual causes
                 # -- a locked database, a share that went away -- all clear on
                 # their own, and the next pass finds the same work waiting.

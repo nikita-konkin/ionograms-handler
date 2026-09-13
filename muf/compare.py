@@ -168,9 +168,12 @@ def summarise_methods(
             "coverage_pct": round(100 * values.notna().mean(), 1),
             "n_band_limited": limited,
             "n_errors": errors,
-            "muf_min": round(float(values.min()), 2) if values.notna().any() else np.nan,
-            "muf_median": round(float(values.median()), 2) if values.notna().any() else np.nan,
-            "muf_max": round(float(values.max()), 2) if values.notna().any() else np.nan,
+            "muf_min": (round(float(values.min()), 2)
+                        if values.notna().any() else np.nan),
+            "muf_median": (round(float(values.median()), 2)
+                           if values.notna().any() else np.nan),
+            "muf_max": (round(float(values.max()), 2)
+                        if values.notna().any() else np.nan),
             "median_run": (round(float(frame[f"run_{name}"].median()), 1)
                            if f"run_{name}" in frame else np.nan),
         })
@@ -322,7 +325,7 @@ def report(
 
     if reference is not None:
         frame["muf_" + reference_name] = align_reference(frame, reference)
-        methods = methods + [reference_name]
+        methods = [*methods, reference_name]
 
     summary = summarise_methods(frame, methods, drop_limited)
     pairwise = compare_methods(frame, methods, drop_limited)
@@ -364,7 +367,8 @@ def report(
         over = band_limited_by_reference(frame, name)
         if not over.any():
             continue
-        hours = sorted({int(h) for h in pd.to_datetime(frame["datetime"])[over].dt.hour})
+        hours = sorted({int(h) for h
+                        in pd.to_datetime(frame["datetime"])[over].dt.hour})
         own = int(sum(flag(frame, f"limited_{m}").sum() for m in methods_in(frame)))
         lines += [
             "## Out-of-band soundings",

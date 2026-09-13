@@ -109,4 +109,4 @@ def as_index(times) -> pd.DatetimeIndex:
     return index.tz_localize(None)
 
 
-__all__ = ["ReferenceSeries", "get", "run", "as_index", "ALL_REFERENCES"]
+__all__ = ["ALL_REFERENCES", "ReferenceSeries", "as_index", "get", "run"]

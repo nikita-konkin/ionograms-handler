@@ -41,7 +41,7 @@ def test_override_beats_the_extension(tmp_path):
 
 
 def test_an_unknown_extension_names_what_it_expected(tmp_path):
-    with pytest.raises(FormatError, match="no reader for .dat"):
+    with pytest.raises(FormatError, match=r"no reader for \.dat"):
         loader.format_of(tmp_path / "a.dat")
     with pytest.raises(FormatError, match="no extension"):
         loader.format_of(tmp_path / "recording")

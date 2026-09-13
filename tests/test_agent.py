@@ -8,6 +8,7 @@ kill, and a config edit must never land half-written.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import json
 import os
@@ -671,7 +672,8 @@ def test_only_allowed_config_keys(station):
 
 def test_mode_names_map_to_the_flag(station):
     control.apply_config(station, {"mode": "search"})
-    assert control.read_config(station.chirp_config).get("lfm", "serendipitous") == "true"
+    assert control.read_config(station.chirp_config).get(
+        "lfm", "serendipitous") == "true"
 
 
 def test_scheduled_mode_without_a_schedule_is_refused(station):
@@ -752,7 +754,7 @@ def test_the_config_is_never_left_half_written(station, monkeypatch):
         control.apply_config(station, {"max_range_extent": "1"}, backup=False)
 
     assert Path(station.chirp_config).read_text(encoding="utf-8") == original
-    leftovers = [p for p in Path(station.chirp_config).parent.glob("*.tmp")]
+    leftovers = list(Path(station.chirp_config).parent.glob("*.tmp"))
     assert not leftovers, "temporary file was not cleaned up"
 
 
@@ -1483,9 +1485,9 @@ def test_min_freq_binds_only_with_manual_freq_extent():
 
 
 @pytest.mark.parametrize("kw,expect", [
-    (dict(band_start_mhz=-1.0), "below zero"),
-    (dict(band_start_mhz=7.5, analysis_min_mhz=-0.1), "below zero"),
-    (dict(band_start_mhz=7.5, analysis_min_mhz=20.0, analysis_max_mhz=10.0),
+    ({"band_start_mhz": -1.0}, "below zero"),
+    ({"band_start_mhz": 7.5, "analysis_min_mhz": -0.1}, "below zero"),
+    ({"band_start_mhz": 7.5, "analysis_min_mhz": 20.0, "analysis_max_mhz": 10.0},
      "not above"),
 ])
 def test_the_arithmetic_refusals(kw, expect):
@@ -1802,7 +1804,8 @@ def test_the_staging_path_is_checked_against_the_running_units(monkeypatch,
     the value systemd resolved for the unit that is actually running.
     """
     monkeypatch.setattr(health, "_unit_environment",
-                        lambda unit: {"ARCHIVE_LOCAL": str(station.chirp_config.parent)})
+                        lambda unit: {
+                            "ARCHIVE_LOCAL": str(station.chirp_config.parent)})
 
     metric = health.archive_paths_agree(replace(station, job_units=JOBS))
 
@@ -1993,3 +1996,36 @@ def test_an_older_systemd_without_value_still_reports(monkeypatch, station):
     # And the reader the drift detector is built on.
     assert health.archive_local(replace(station, job_units=JOBS)) \
         == station.chirp_config.parent
+
+
+def test_the_agent_stays_within_python_38():
+    """The station runs this on the `.venv38` beside chirpsounder2.
+
+    `deploy/README.md` promises it: "The agent is Python 3.8-clean, so the
+    station's `.venv38` runs it unmodified." Nothing enforced that, and the
+    ways to break it are quiet and plausible -- a linter suggesting
+    `collections.abc.Callable` (not subscriptable before 3.9), `zip(strict=)`
+    (3.10), `Path.is_relative_to` (3.9), a match statement. Every one of them
+    passes CI here on 3.12 and fails on the laptop, where the traceback is an
+    AnyDesk session and an acquisition outage rather than a red tick.
+
+    `ruff`'s `target-version = "py38"` covers the linter's own suggestions;
+    this covers everything that arrives by any other route. Syntax only --
+    `ast` cannot know whether a method existed in 3.8 -- so the interpreter
+    version in `pyproject.toml` is doing the other half of the job.
+    """
+    root = Path(__file__).resolve().parent.parent / "services" / "agent"
+    modules = sorted(root.rglob("*.py"))
+    assert modules, f"{root}: no agent modules found -- has the tree moved?"
+
+    broken = []
+    for path in modules:
+        try:
+            ast.parse(path.read_text(encoding="utf-8"),
+                      filename=str(path), feature_version=(3, 8))
+        except SyntaxError as exc:
+            broken.append(f"{path.relative_to(root.parent.parent)}:"
+                          f"{exc.lineno}: {exc.msg}")
+    assert not broken, (
+        "these use syntax the station's interpreter does not have:\n  "
+        + "\n  ".join(broken))

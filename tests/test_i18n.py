@@ -23,11 +23,11 @@ from pathlib import Path
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient          # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 from services.api import auth, db, i18n, main, net  # noqa: E402
-from services.api import series as series_mod       # noqa: E402
-from services.api.locale import en, ru              # noqa: E402
+from services.api import series as series_mod  # noqa: E402
+from services.api.locale import en, ru  # noqa: E402
 
 
 @pytest.fixture
@@ -131,9 +131,11 @@ def test_no_message_is_left_as_its_english_self_by_accident():
     allowed set rather than banning the case."""
     same = {key for key, text in ru.MESSAGES.items()
             if text == en.MESSAGES.get(key)}
-    assert same <= DELIBERATELY_SAME, f"looks untranslated: {sorted(same - DELIBERATELY_SAME)}"
+    assert same <= DELIBERATELY_SAME, \
+        f"looks untranslated: {sorted(same - DELIBERATELY_SAME)}"
     stale = DELIBERATELY_SAME - same
-    assert not stale, f"translated after all -- drop from the allowlist: {sorted(stale)}"
+    assert not stale, \
+        f"translated after all -- drop from the allowlist: {sorted(stale)}"
 
 
 def test_a_translation_only_adds_placeholders_the_template_already_passes():

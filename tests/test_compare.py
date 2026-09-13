@@ -118,7 +118,9 @@ def test_reads_legacy_reference_format(tmp_path):
 
 def test_reads_normal_csv_reference(tmp_path):
     path = tmp_path / "ref.csv"
-    path.write_text("datetime,muf\n2026-02-04 00:00:00,11.5\n2026-02-04 00:05:00,11.6\n")
+    path.write_text("datetime,muf\n"
+                    "2026-02-04 00:00:00,11.5\n"
+                    "2026-02-04 00:05:00,11.6\n")
 
     series = compare.read_reference(path)
     assert len(series) == 2
@@ -183,7 +185,7 @@ def test_giro_is_scored_as_a_method_not_just_fetched(monkeypatch):
     monkeypatch.setattr(giro, "fetch", lambda *a, **k: _DIDB_REPLY)
     frame = _geo_frame([14.0, 14.5, 14.2, 14.8], [15.0, 15.2, 15.1, 15.4])
 
-    text, summary, pairwise = compare.report(frame, reference_models=["giro"])
+    text, _summary, pairwise = compare.report(frame, reference_models=["giro"])
 
     assert "muf_giro" in frame.columns or "giro" in text
     pairs = {(row.a, row.b) for row in pairwise.itertuples()}
@@ -209,7 +211,7 @@ def test_a_giro_outage_is_reported_and_does_not_abort_the_run(monkeypatch):
     monkeypatch.setattr(giro, "fetch", dead)
     frame = _geo_frame([14.0, 14.5, 14.2, 14.8], [15.0, 15.2, 15.1, 15.4])
 
-    text, summary, pairwise = compare.report(frame, reference_models=["giro"])
+    text, _summary, pairwise = compare.report(frame, reference_models=["giro"])
 
     assert "unavailable" in text and "404" in text
     pairs = {(row.a, row.b) for row in pairwise.itertuples()}

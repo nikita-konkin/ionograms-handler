@@ -7,9 +7,8 @@ party's uptime.
 
 from __future__ import annotations
 
-import json
-
 import datetime as dt
+import json
 
 import numpy as np
 import pandas as pd
@@ -116,7 +115,7 @@ def test_nearest_station_to_the_control_point():
 
     found = giro.nearest_station(midpoint(CYPRUS, YOSHKAR_OLA))
     assert found is not None
-    ursi, name, km = found
+    ursi, _name, km = found
     assert ursi == "RV149"
     assert km < 200
 

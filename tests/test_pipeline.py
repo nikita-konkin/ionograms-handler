@@ -8,11 +8,10 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import synth_iq
 
 from muf import pipeline
 from muf.pipeline import Options
-
-from conftest import synth_iq
 
 WINDOW = 512
 N_FREQ = 200
@@ -235,7 +234,7 @@ def test_workers_are_pinned_to_one_math_thread(monkeypatch):
     with pipeline._pinned_threads():
         inside = {name: os.environ.get(name) for name in pipeline._THREAD_VARS}
 
-    assert inside == {name: "1" for name in pipeline._THREAD_VARS}
+    assert inside == dict.fromkeys(pipeline._THREAD_VARS, "1")
 
 
 def test_a_count_the_operator_set_is_left_alone(monkeypatch):

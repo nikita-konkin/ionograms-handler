@@ -73,7 +73,8 @@ def _duration(seconds, lang: str = i18n.DEFAULT) -> str:
     if value < 5400:
         return f"{sign}{int(value) // 60}{minute}{int(value) % 60:02d}{sec}"
     if value < 172800:
-        return f"{sign}{int(value) // 3600}{hour}{(int(value) % 3600) // 60:02d}{minute}"
+        return (f"{sign}{int(value) // 3600}{hour}"
+                f"{(int(value) % 3600) // 60:02d}{minute}")
     return f"{sign}{value / 86400:.1f}{day}"
 
 
@@ -569,8 +570,7 @@ def forecast_page(request: Request, param: str | None = None,
     is not comparable with MAE on a 700 km one -- so there is no "all circuits"
     view to mistake for one.
     """
-    from ..prediction import (dataset, legacy_features, queues, registry,
-                              scoring, train)
+    from ..prediction import dataset, legacy_features, queues, registry, scoring, train
 
     conn = request.app.state.db
     models = registry.models(conn)
@@ -913,7 +913,7 @@ def sounding(request: Request, sounding_id: int, gate: str = "auto",
         try:
             scaling = sao_mod.build(_product_path(request, row), gate=gate)
             frame = sao_mod.plot_data(scaling, method)
-        except Exception as exc:                                  # noqa: BLE001
+        except Exception as exc:
             # A missing file, an unreadable product, a detector that threw.
             # Named on the page: the rest of it -- the row, the neighbours,
             # the stored extractions -- is still worth reading, and a page

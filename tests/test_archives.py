@@ -23,9 +23,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from conftest import synth_iq                            # noqa: E402
-from services.api import archives as archives_mod        # noqa: E402
-from services.api import auth, db, main                  # noqa: E402
+from conftest import synth_iq
+
+from services.api import archives as archives_mod
+from services.api import auth, db, main
 
 CTL = {"Authorization": "Bearer ctl"}
 

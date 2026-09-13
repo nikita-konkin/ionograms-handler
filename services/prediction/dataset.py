@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from muf import track as track_mod
+
 from ..api import db
 
 #: Grid the forecasting models were built around: five minutes, 288 a day.
@@ -82,7 +83,8 @@ def observations(conn: sqlite3.Connection, param: str, tx: str, rx: str,
                  end: str | None = None) -> pd.DataFrame:
     """Raw picks for one circuit, parameter and estimator, ascending."""
     if param not in PARAMS:
-        raise ValueError(f"unknown parameter {param!r}; expected one of {sorted(PARAMS)}")
+        raise ValueError(
+            f"unknown parameter {param!r}; expected one of {sorted(PARAMS)}")
     columns = PARAMS[param]
 
     sql = [

@@ -80,7 +80,7 @@ def survey(path, old="DOB", new="Yoshkar-Ola"):
 
 
 def run(path, argv):
-    return relabel.main(["--db", str(path)] + argv)
+    return relabel.main(["--db", str(path), *argv])
 
 
 def rows(path, sql, params=()):
@@ -141,7 +141,9 @@ def test_a_sounding_with_no_transmitter_coordinates_keeps_a_null_path(database):
     assert plan.no_tx_coords == 1
 
     run(database, ["--from", "DOB", "--to", "Yoshkar-Ola", "--apply"])
-    assert rows(database, "SELECT path_km FROM sounding WHERE id = 1")[0]["path_km"] is None
+    assert rows(
+        database,
+        "SELECT path_km FROM sounding WHERE id = 1")[0]["path_km"] is None
 
 
 def test_hop_count_follows_the_new_path_length(database):
@@ -160,9 +162,13 @@ def test_hop_count_follows_the_new_path_length(database):
     assert plan.hop_changes == 1
 
     run(database, ["--from", "DOB", "--to", "Yoshkar-Ola", "--apply"])
-    assert rows(database, "SELECT hops FROM extraction WHERE sounding_id = 1")[0]["hops"] == 2
+    assert rows(
+        database,
+        "SELECT hops FROM extraction WHERE sounding_id = 1")[0]["hops"] == 2
     # The circuits that did not change keep the hop count they were given.
-    assert rows(database, "SELECT hops FROM extraction WHERE sounding_id = 2")[0]["hops"] == 1
+    assert rows(
+        database,
+        "SELECT hops FROM extraction WHERE sounding_id = 2")[0]["hops"] == 1
 
 
 def test_measurements_are_not_touched(database):
@@ -200,8 +206,10 @@ def test_an_undelivered_command_is_left_behind_by_default(database):
     assert [c[0] for c in plan.undelivered] == ["cmd-queued"]
 
     run(database, ["--from", "DOB", "--to", "Yoshkar-Ola", "--apply"])
-    stations = {r["id"]: r["station"] for r in rows(database, "SELECT id, station FROM command")}
-    assert stations["cmd-queued"] == "DOB", "an undeliverable command stays undeliverable"
+    stations = {r["id"]: r["station"] for r
+                in rows(database, "SELECT id, station FROM command")}
+    assert stations["cmd-queued"] == "DOB", \
+        "an undeliverable command stays undeliverable"
     assert stations["cmd-done"] == "Yoshkar-Ola", "history moves with the station"
 
 
@@ -214,7 +222,8 @@ def test_release_pending_is_what_hands_it_over(database):
 
     run(database, ["--from", "DOB", "--to", "Yoshkar-Ola", "--apply",
                    "--release-pending"])
-    stations = {r["id"]: r["station"] for r in rows(database, "SELECT id, station FROM command")}
+    stations = {r["id"]: r["station"] for r
+                in rows(database, "SELECT id, station FROM command")}
     assert stations["cmd-queued"] == "Yoshkar-Ola"
 
 
@@ -237,7 +246,8 @@ def test_a_transmitter_collision_blocks_the_whole_rename(database):
 
     with pytest.raises(SystemExit, match="on-conflict"):
         run(database, ["--from", "DOB", "--to", "Yoshkar-Ola", "--apply"])
-    assert rows(database, "SELECT COUNT(*) c FROM sounding WHERE rx = 'DOB'")[0]["c"] == 3
+    assert rows(
+        database, "SELECT COUNT(*) c FROM sounding WHERE rx = 'DOB'")[0]["c"] == 3
 
 
 def test_keep_old_drops_only_the_rows_that_actually_collide(database):
@@ -284,7 +294,8 @@ def test_keep_new_drops_the_old_stations_duplicate(database):
 def test_a_dry_run_writes_nothing(database):
     """The default, because the first run of this is always exploratory."""
     assert run(database, ["--from", "DOB", "--to", "Yoshkar-Ola"]) == 0
-    assert rows(database, "SELECT COUNT(*) c FROM sounding WHERE rx = 'DOB'")[0]["c"] == 3
+    assert rows(
+        database, "SELECT COUNT(*) c FROM sounding WHERE rx = 'DOB'")[0]["c"] == 3
     assert rows(database, "SELECT rx_lat FROM sounding")[0]["rx_lat"] == DOMBAS[0]
 
 
@@ -322,7 +333,8 @@ def test_modelled_values_survive_unless_asked_for(database):
 
 def test_a_name_nothing_carries_is_a_no_op(database):
     assert run(database, ["--from", "SGO", "--to", "Yoshkar-Ola", "--apply"]) == 0
-    assert rows(database, "SELECT COUNT(*) c FROM sounding WHERE rx = 'DOB'")[0]["c"] == 3
+    assert rows(
+        database, "SELECT COUNT(*) c FROM sounding WHERE rx = 'DOB'")[0]["c"] == 3
 
 
 def test_the_files_still_carrying_the_old_name_are_counted(database):

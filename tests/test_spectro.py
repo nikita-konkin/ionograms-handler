@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from conftest import snapped_range, synth_iq
 
 from muf import spectro
 from muf.io_lfs import read_header
-
-from conftest import snapped_range, synth_iq
 
 WINDOW = 512
 N_FREQ = 40

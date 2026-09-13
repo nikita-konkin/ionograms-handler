@@ -165,8 +165,6 @@ def seed_sounding(conn):
 def sick_file(monkeypatch):
     """Every `is_file` on the archive fails, as it does on a dead mount."""
     def go(number: int):
-        real = Path.is_file
-
         def is_file(self):
             raise OSError(number, "the mount is not answering")
 

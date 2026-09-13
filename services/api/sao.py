@@ -40,7 +40,7 @@ CACHE_SIZE = 24
 METHODS = ("algo", "kmeans", "contour")
 
 _LOCK = threading.Lock()
-_CACHE: OrderedDict[tuple, "Scaling"] = OrderedDict()
+_CACHE: OrderedDict[tuple, Scaling] = OrderedDict()
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,7 @@ def _iri_for(ion) -> dict:
     def first(frame, column):
         try:
             return float(frame[column].iloc[0])
-        except Exception:                                     # noqa: BLE001
+        except Exception:
             return None
 
     return {

@@ -415,7 +415,7 @@ def _sao_panel(ax, record) -> None:
                + (f" {item.letter}" if item.letter else ""))
         (modelled if item.modelled else measured).append(row)
 
-    rows = measured + ([""] + modelled if modelled and measured else modelled)
+    rows = measured + (["", *modelled] if modelled and measured else modelled)
     if not rows:
         # An empty CharacteristicList is a real outcome, not a missing panel.
         rows = ["(nothing scaled)"]
@@ -627,7 +627,8 @@ def plot_track(
 
     if "rejected" in track_frame:
         rejected = track_frame["rejected"].to_numpy(dtype=bool)
-        if rejected.any() and raw_frame is not None and f"{param}_{method}" in raw_frame:
+        if (rejected.any() and raw_frame is not None
+                and f"{param}_{method}" in raw_frame):
             raw = pd.to_numeric(raw_frame[f"{param}_{method}"], errors="coerce")
             ax.plot(times[rejected], raw.to_numpy()[rejected], "x", markersize=7,
                     color="#333333", label="rejected")

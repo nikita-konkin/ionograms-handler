@@ -15,8 +15,13 @@ import warnings
 
 import numpy as np
 import pytest
-from conftest import (ECHO_RANGE_KM, ECHO_T0, chirp_range_gates_m,
-                      chirp_range_offset_km, chirp_stored_mask)
+from conftest import (
+    ECHO_RANGE_KM,
+    ECHO_T0,
+    chirp_range_gates_m,
+    chirp_range_offset_km,
+    chirp_stored_mask,
+)
 
 from muf import calibrate, io_chirp
 from muf.spectro import NOISE_COEF, NOISE_FLOOR_DB, to_db
@@ -357,9 +362,9 @@ def test_wider_gate_warns_and_does_not_double_gate(make_chirp_h5):
 
 def test_non_overlapping_gate_raises(make_chirp_h5):
     path = make_chirp_h5(make_power(), keep=slice(600, 800))
-    with pytest.warns(UserWarning):
-        with pytest.raises(ValueError, match="does not overlap"):
-            io_chirp.load(path, gate_km=(50_000.0, 60_000.0))
+    with pytest.warns(UserWarning), \
+            pytest.raises(ValueError, match="does not overlap"):
+        io_chirp.load(path, gate_km=(50_000.0, 60_000.0))
 
 
 # --- provenance and failure modes --------------------------------------------

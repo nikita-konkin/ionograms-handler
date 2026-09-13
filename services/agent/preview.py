@@ -359,7 +359,7 @@ def _crop(db, vrange_km) -> tuple[int, int, bool]:
     if n < 4 or span <= MAX_SPAN_KM:
         return 0, n, False
 
-    keep = max(int(round(n * MAX_SPAN_KM / span)), 2)
+    keep = max(round(n * MAX_SPAN_KM / span), 2)
     centre = int(np.argmax(db.max(axis=0)))
     lo = min(max(centre - keep // 2, 0), n - keep)
     return lo, lo + keep, True

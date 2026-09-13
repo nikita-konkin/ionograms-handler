@@ -1,6 +1,7 @@
 """Rebuilding the exact feature vector a saved model was fitted on.
 
-A model artifact names its columns and nothing else. ``MUF(3000)F2_rolling_48_std_lag_288``
+A model artifact names its columns and nothing else.
+``MUF(3000)F2_rolling_48_std_lag_288``
 says there is a 48-sample rolling standard deviation, lagged 288 samples, of a
 column called ``MUF(3000)F2`` -- so the *recipe* is recoverable from the
 contract, one regex over the names, and this module rebuilds it from whatever
@@ -324,7 +325,7 @@ def build(series: pd.Series, recipe: Recipe, *, alias: str) -> pd.DataFrame:
     if recipe.raw:
         parts[f"{alias}_lag_{recipe.lag}"] = series
 
-    for component in recipe.components:
+    for _component in recipe.components:
         decomposed = _decompose(series, recipe.period)
         for name in recipe.components:
             parts[f"{alias}_{name}_lag_{recipe.lag}"] = decomposed[name]

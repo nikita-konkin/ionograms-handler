@@ -45,7 +45,7 @@ class Command:
     params: dict[str, Any]
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Command":
+    def from_dict(cls, data: dict) -> Command:
         return cls(id=str(data.get("id", "")),
                    name=str(data.get("name", "")),
                    params=dict(data.get("params", {})))

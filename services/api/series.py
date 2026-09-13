@@ -59,8 +59,7 @@ import statistics
 import threading
 from collections import OrderedDict
 
-from muf.geometry import (DEFAULT_HMF2_KM, Point, describe_path, hop_count,
-                          muf_to_fof2)
+from muf.geometry import DEFAULT_HMF2_KM, Point, describe_path, hop_count, muf_to_fof2
 
 #: Whether the page draws a model beside the measurements. ``SERIES_MODEL=0``
 #: turns it off.
@@ -94,7 +93,7 @@ MAX_MODEL_DAYS = 31
 CACHE_SIZE = 8
 
 _LOCK = threading.Lock()
-_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_CACHE: OrderedDict[tuple, dict] = OrderedDict()
 
 
 def circuit_name(row) -> str:
@@ -208,7 +207,7 @@ def _model(tx: Point, rx: Point, stamps: list[str]) -> dict:
         rows = [i for i, when in enumerate(index) if when.normalize() == day]
         try:
             got = iri.predict(tx, rx, index[rows])
-        except Exception as exc:                                  # noqa: BLE001
+        except Exception as exc:
             failures.append(f"{day.date()}: {type(exc).__name__}: {exc}")
             continue
         if got.error:
@@ -318,7 +317,7 @@ def frame(rows, *, model: str = "iri", forecasts: dict | None = None) -> dict:
     """
     wanted = model == "iri" and MODEL
 
-    by_circuit: "OrderedDict[str, list]" = OrderedDict()
+    by_circuit: OrderedDict[str, list] = OrderedDict()
     for row in rows:
         by_circuit.setdefault(circuit_name(row), []).append(row)
 

@@ -89,7 +89,7 @@ def segment(
 ) -> np.ndarray:
     """Binary trace mask, in image orientation ``[n_range, n_freq]``."""
     # cv2 wants rows=y. Frequency is the x axis here, matching the source.
-    binary = ((db.T >= threshold_db) * 255).astype(np.uint8)
+    binary = ((threshold_db <= db.T) * 255).astype(np.uint8)
     if open_iterations:
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, OPEN_KERNEL,
                                   iterations=open_iterations)

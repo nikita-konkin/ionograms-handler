@@ -20,7 +20,7 @@ import pytest
 
 fastapi = pytest.importorskip("fastapi")
 
-from services.api import auth, db                  # noqa: E402
+from services.api import auth, db  # noqa: E402
 
 CTL = {"Authorization": "Bearer ctl"}
 
@@ -237,7 +237,7 @@ def test_a_disabled_account_is_refused_and_can_be_reinstated(client, api_db):
 
 def test_disabling_keeps_the_row_so_its_history_stays_attributable(client,
                                                                    api_db):
-    token = account(client, "vera", "teacher")
+    account(client, "vera", "teacher")
     row = db.one(api_db, "SELECT id FROM principal WHERE name = 'vera'")
     client.delete(f"/principals/{row['id']}", headers=CTL)
 

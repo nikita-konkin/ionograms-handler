@@ -139,7 +139,7 @@ def _day_directories(root: Path, max_days: int) -> list[Path]:
 #: Values are ``(identity, records)``, where identity is the ``stat`` taken
 #: when the file was read -- kept only for the retry path below, and never
 #: consulted on a hit, so a warm census performs no ``stat`` calls either.
-_MEMO: "OrderedDict[str, tuple]" = OrderedDict()
+_MEMO: OrderedDict[str, tuple] = OrderedDict()
 
 #: Entries kept, oldest evicted first. A day is ~1500 detection files and each
 #: entry holds a handful of floats, so this covers a fortnight of archive in a
@@ -174,7 +174,7 @@ def _start_refresh(work) -> bool:
         global _REFRESHING
         try:
             work()
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:
             warnings.warn(f"census refresh failed: {exc!r}", stacklevel=2)
         finally:
             with _REFRESH_LOCK:
@@ -508,8 +508,7 @@ def census(archive_root: str | os.PathLike, *,
     # there last time refers to the same recording. Stat-ing 1846 files to
     # prove that would cost a round trip each on the archive this is slow on,
     # which is most of what we are trying to avoid.
-    fingerprint = params + (
-        tuple(sorted(str(p) for paths, *_ in scans for p in paths)),)
+    fingerprint = (*params, tuple(sorted(str(p) for paths, *_ in scans for p in paths)))
 
     with _CENSUS_LOCK:
         # The names matching is only proof that nothing changed if every file
@@ -594,7 +593,7 @@ def warm(archive_root, *, max_days: int = DEFAULT_MAX_DAYS,
     """
     try:
         return census(archive_root, max_days=max_days, min_count=min_count)
-    except Exception as exc:                                  # noqa: BLE001
+    except Exception as exc:
         warnings.warn(f"census warm-up failed: {exc!r}", stacklevel=2)
         return None
 

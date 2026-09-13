@@ -307,7 +307,8 @@ def cache_state(cache_dir: Path | None = None) -> dict[str, float | None]:
 
 
 def _parse_silso_daily(text: str) -> dict[dt.date, float]:
-    """``year;month;day;decimal_year;SN;stdev;n_obs;definitive``, semicolon-separated."""
+    """``year;month;day;decimal_year;SN;stdev;n_obs;definitive``,
+    semicolon-separated."""
     out: dict[dt.date, float] = {}
     for line in text.splitlines():
         parts = line.split(";")

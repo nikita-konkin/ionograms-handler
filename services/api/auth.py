@@ -93,7 +93,7 @@ class Principal:
     record who acted just names the parameter and writes ``who.name``.
     """
 
-    __slots__ = ("name", "role", "capabilities", "source", "id")
+    __slots__ = ("capabilities", "id", "name", "role", "source")
 
     def __init__(self, name: str, role: str,
                  capabilities: frozenset[Capability], source: str,

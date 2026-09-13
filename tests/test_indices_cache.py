@@ -238,7 +238,6 @@ def test_a_failed_write_leaves_no_partial_behind(cache, monkeypatch):
     """A stray `.partial` would be indistinguishable from a real cache file to
     anyone reading the directory."""
     serve(monkeypatch, body=GOOD)
-    real_write = Path.write_text
 
     def refuse_replace(self, target):
         raise PermissionError(13, "Permission denied")

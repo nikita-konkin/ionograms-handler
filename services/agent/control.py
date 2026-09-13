@@ -120,7 +120,8 @@ def systemctl(verb: str, target: str, *, timeout: float = 120.0,
             "A station whose acquisition is run by a script must be controlled "
             "the same way it is started.")
 
-    if runner is None and os.environ.get(FAKE_SYSTEMCTL_ENV, "").strip() not in ("", "0"):
+    if (runner is None and os.environ.get(
+            FAKE_SYSTEMCTL_ENV, "").strip() not in ("", "0")):
         runner = _fake_runner
     runner = runner or subprocess.run
     args = ["systemctl", verb, target]
@@ -742,9 +743,10 @@ def _validate(parser: configparser.ConfigParser, changes: dict,
                 f"change ARCHIVE_LOCAL in chirp-archive-sync.service and "
                 f"chirp-archive-prune.service on the station first.")
 
-    if "save_raw_voltage" in changes:
-        if str(changes["save_raw_voltage"]).lower() not in ("true", "false"):
-            raise ControlError("save_raw_voltage must be true or false")
+    if ("save_raw_voltage" in changes
+            and str(changes["save_raw_voltage"]).lower()
+            not in ("true", "false")):
+        raise ControlError("save_raw_voltage must be true or false")
 
 
 def _atomic_write(path: Path, parser: configparser.ConfigParser) -> None:
@@ -865,7 +867,8 @@ def apply_config(config: StationConfig, changes: dict, *,
                          journal=journal)
 
 
-def apply_and_restart(config: StationConfig, changes: dict, **kw) -> list[CommandResult]:
+def apply_and_restart(config: StationConfig, changes: dict,
+                      **kw) -> list[CommandResult]:
     """The whole sequence, so a half-applied change cannot exist.
 
     Stop, write, start -- rather than restart-after-write -- because the

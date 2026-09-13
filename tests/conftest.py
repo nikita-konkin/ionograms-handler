@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from muf.io_lfs import HEADER_SIZE, _LAYOUT
+from muf.io_lfs import _LAYOUT, HEADER_SIZE
 
 #: Where the operational recordings live, when they are on this machine.
 #: Recordings are large and get moved between drives, so the location is
@@ -44,15 +44,15 @@ REAL_CHIRP_DATA = Path(
 
 #: Parameters of the real instrument, so synthetic files behave like it. Taken
 #: from cyprus1_20260204_000010.lfs.
-INSTRUMENT = dict(
-    cf=20_000_000,
-    sample_rate=25_000_000,
-    dec=625,
-    dur=250,
-    rate=100_000,
-    rmin=0,
-    rmax=5000,
-)
+INSTRUMENT = {
+    "cf": 20_000_000,
+    "sample_rate": 25_000_000,
+    "dec": 625,
+    "dur": 250,
+    "rate": 100_000,
+    "rmin": 0,
+    "rmax": 5000,
+}
 
 
 def make_header_bytes(**overrides) -> bytes:

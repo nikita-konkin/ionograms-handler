@@ -108,7 +108,7 @@ class Ionogram:
             f"{self.cal.gate_km[0]:.0f}-{self.cal.gate_km[1]:.0f} km)"
         )
 
-    def regated(self, lo_km: float, hi_km: float) -> "Ionogram":
+    def regated(self, lo_km: float, hi_km: float) -> Ionogram:
         """A copy narrowed to ``lo_km..hi_km``, without re-reading the file.
 
         Only ever narrows. A gate wider than the one already applied cannot
@@ -168,7 +168,9 @@ def compute(
 
     n_freq = len(iq) // window
     if n_freq == 0:
-        raise ValueError(f"{path}: {len(iq)} samples is shorter than one {window}-sample window")
+        raise ValueError(
+            f"{path}: {len(iq)} samples is shorter than one "
+            f"{window}-sample window")
 
     cal = calibrate.build(
         header, n_freq=n_freq, window=window,

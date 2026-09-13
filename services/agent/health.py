@@ -148,7 +148,7 @@ class Metric:
     detail: str = ""
 
     @classmethod
-    def unknown(cls, name: str, why: str) -> "Metric":
+    def unknown(cls, name: str, why: str) -> Metric:
         return cls(name=name, value=None, ok=None, detail=why)
 
 
@@ -650,7 +650,6 @@ def band(config: StationConfig) -> list[Metric]:
     """
     import configparser
 
-    from . import control
 
     out: list[Metric] = []
     path = Path(config.chirp_config)
@@ -700,7 +699,7 @@ def _recorder_metric(config: StationConfig) -> Metric:
 def uptime_s() -> Metric:
     """Seconds since boot, for the startup grace period."""
     try:
-        with open("/proc/uptime", "r", encoding="ascii") as fh:
+        with open("/proc/uptime", encoding="ascii") as fh:
             return Metric("uptime_s", round(float(fh.read().split()[0]), 1), ok=True)
     except Exception as exc:
         return Metric.unknown("uptime_s", f"{type(exc).__name__}: {exc}")

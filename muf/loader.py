@@ -32,8 +32,8 @@ import warnings
 from pathlib import Path
 from typing import Mapping
 
-from . import io_chirp, spectro, stations as _stations
-from . import io_digisonde
+from . import io_chirp, io_digisonde, spectro
+from . import stations as _stations
 from .io_lfs import find_lfs
 from .io_lfs import read_header as _read_lfs_header
 from .paths import dedupe_paths

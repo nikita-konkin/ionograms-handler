@@ -195,11 +195,14 @@ def track(
         dt = hours[i + 1]
         transition = np.array([[1.0, dt], [0.0, 1.0]])
         try:
-            gain = filtered_covs[i] @ transition.T @ np.linalg.inv(predicted_covs[i + 1])
+            gain = (filtered_covs[i] @ transition.T
+                    @ np.linalg.inv(predicted_covs[i + 1]))
         except np.linalg.LinAlgError:        # singular: leave the filtered value
             continue
         smoothed_states[i] += gain @ (smoothed_states[i + 1] - predicted_states[i + 1])
-        smoothed_covs[i] += gain @ (smoothed_covs[i + 1] - predicted_covs[i + 1]) @ gain.T
+        smoothed_covs[i] += (gain
+                             @ (smoothed_covs[i + 1] - predicted_covs[i + 1])
+                             @ gain.T)
 
     measured = np.isfinite(values) & ~rejected
     frame = pd.DataFrame({
@@ -239,7 +242,8 @@ def track_results(
     from .pipeline import _first_method
 
     if param not in PARAMS:
-        raise ValueError(f"unknown parameter {param!r}; expected one of {sorted(PARAMS)}")
+        raise ValueError(
+            f"unknown parameter {param!r}; expected one of {sorted(PARAMS)}")
     censor = PARAMS[param]["censor"]
 
     method = method or _first_method(frame)

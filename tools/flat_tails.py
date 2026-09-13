@@ -44,8 +44,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from muf import loader                                    # noqa: E402
-from muf.extractors import algorithmic, viterbi           # noqa: E402
+from muf import loader
+from muf.extractors import algorithmic, viterbi
 
 _spec = importlib.util.spec_from_file_location(
     "adjudicate", Path(__file__).resolve().parent / "adjudicate.py")
@@ -101,11 +101,11 @@ def segments(ion):
     if len(cur) >= MIN_SEGMENT_BINS:
         out.append(cur)
 
-    return [dict(bins=np.array(c),
-                 f_lo=float(ion.freq[c[0]]), f_hi=float(ion.freq[c[-1]]),
-                 span=float(ion.freq[c[-1]] - ion.freq[c[0]]),
-                 r_med=float(np.median(rng[c])),
-                 spread=float(np.ptp(rng[c]))) for c in out]
+    return [{"bins": np.array(c),
+                 "f_lo": float(ion.freq[c[0]]), "f_hi": float(ion.freq[c[-1]]),
+                 "span": float(ion.freq[c[-1]] - ion.freq[c[0]]),
+                 "r_med": float(np.median(rng[c])),
+                 "spread": float(np.ptp(rng[c]))} for c in out]
 
 
 def _flatness(seg):
@@ -126,18 +126,18 @@ def survey_one(path):
     longest = max(flat, key=lambda s: s["span"]) if flat else None
     top_curved = max((s["f_hi"] for s in curved), default=float("nan"))
 
-    row = dict(
-        n_seg=len(segs), n_flat=len(flat),
-        flat_span=round(longest["span"], 3) if longest else 0.0,
-        flat_range=round(longest["r_med"], 1) if longest else "",
-        flat_f_hi=round(longest["f_hi"], 3) if longest else "",
-        flat_km_per_mhz=round(_flatness(longest), 2) if longest else "",
-        top_curved_mhz=round(top_curved, 3) if curved else "",
-        algo_mhz=round(a.muf_mhz, 3) if a.ok else "",
-        dp_mhz=round(d.muf_mhz, 3) if d.ok else "",
-        algo_range=round(a.vrange_km, 1) if a.ok else "",
-        dp_range=round(d.vrange_km, 1) if d.ok else "",
-    )
+    row = {
+        "n_seg": len(segs), "n_flat": len(flat),
+        "flat_span": round(longest["span"], 3) if longest else 0.0,
+        "flat_range": round(longest["r_med"], 1) if longest else "",
+        "flat_f_hi": round(longest["f_hi"], 3) if longest else "",
+        "flat_km_per_mhz": round(_flatness(longest), 2) if longest else "",
+        "top_curved_mhz": round(top_curved, 3) if curved else "",
+        "algo_mhz": round(a.muf_mhz, 3) if a.ok else "",
+        "dp_mhz": round(d.muf_mhz, 3) if d.ok else "",
+        "algo_range": round(a.vrange_km, 1) if a.ok else "",
+        "dp_range": round(d.vrange_km, 1) if d.ok else "",
+    }
     # Did an estimator land on the flat feature? Judged by range, not by
     # frequency: the flat line and the real trace are separated in range by
     # more than the tolerance, which is what makes this answerable at all.

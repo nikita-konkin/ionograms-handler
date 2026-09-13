@@ -54,13 +54,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from muf import loader                                    # noqa: E402
-from muf.extractors import algorithmic, viterbi           # noqa: E402
+from muf import loader
+from muf.extractors import algorithmic, viterbi
 
 #: Hours where the two estimators disagree, from the 2026-08-30 survey: the
 #: rate peaks at 30.7% at 20 UTC and bottoms at 1.4% at 15 UTC. Sampling the
 #: quiet hours would spend a person's afternoon confirming agreement.
-TERMINATOR_HOURS = tuple(range(18, 24)) + (0, 1)
+TERMINATOR_HOURS = (*tuple(range(18, 24)), 0, 1)
 
 #: Below this the two are picking the same feature and there is nothing to
 #: judge -- a marker pair a person cannot separate is a wasted sounding.
@@ -231,7 +231,7 @@ def render(args) -> int:
             pad = max(400.0, 0.35 * (rows_lit.max() - rows_lit.min()))
             ax.set_ylim(rows_lit.min() - pad, rows_lit.max() + pad)
 
-        low, high = ax.get_ylim()
+        _low, high = ax.get_ylim()
         for label, mhz in marks.items():
             ax.axvline(mhz, color="white", lw=1.8, alpha=0.95)
             # Inside the axes, not above them: at axes fraction 1.005 these

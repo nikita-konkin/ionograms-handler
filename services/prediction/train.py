@@ -55,8 +55,7 @@ import numpy as np
 import pandas as pd
 
 from ..api import db
-from . import (artifacts, dataset, importer, legacy_features, registry,
-               scoring, store)
+from . import artifacts, dataset, importer, legacy_features, registry, scoring, store
 
 #: What may be fitted. `huber` first because it is what the archive's models
 #: are and because a MUF series has outliers -- a mistracked trace is a real
@@ -241,7 +240,8 @@ def _subset(value, allowed: tuple[str, ...], field: str,
     chosen = [str(v) for v in value]
     unknown = [v for v in chosen if v not in allowed]
     if unknown:
-        raise TrainError(f"unknown {field}: {unknown}; expected some of {list(allowed)}")
+        raise TrainError(
+            f"unknown {field}: {unknown}; expected some of {list(allowed)}")
     return tuple(v for v in allowed if v in chosen)
 
 
@@ -298,7 +298,7 @@ def vet(spec: dict) -> dict:
             hours = float(spec["lead_h"])
         except (TypeError, ValueError) as exc:
             raise TrainError("lead_h must be a number of hours") from exc
-        lag = int(round(hours * 3600 / step_s))
+        lag = round(hours * 3600 / step_s)
         if lag < 1:
             raise TrainError(
                 f"a lead of {hours:g} h is under one {step_s} s sample. The "
@@ -335,7 +335,8 @@ def vet(spec: dict) -> dict:
     raw = bool(spec.get("raw", True))
 
     if windows and not stats:
-        raise TrainError("rolling windows were asked for but no stats to take over them")
+        raise TrainError(
+            "rolling windows were asked for but no stats to take over them")
     if stats and not windows:
         raise TrainError("rolling stats were asked for but no window to take them over")
     if not (raw or components or windows):
@@ -420,7 +421,8 @@ def assemble(conn, plan: dict) -> dict:
 
     recipe = recipe_for(plan)
     largest_window = max(plan["windows"], default=0)
-    needed = plan["lag"] + max(largest_window, plan["period"] if plan["components"] else 0)
+    needed = plan["lag"] + max(
+        largest_window, plan["period"] if plan["components"] else 0)
     if len(series.frame) < max(dataset.MIN_SAMPLES, needed):
         raise TrainError(
             f"{tx} -> {rx} has {len(series.frame)} grid points "
@@ -543,7 +545,7 @@ def _voting_weights(members: list, frame, y) -> tuple[list[float], dict]:
     equal = [1.0 / len(members)] * len(members)
 
     total_rows = len(frame)
-    cut = int(round(total_rows * (1.0 - INNER_VALIDATION_FRACTION)))
+    cut = round(total_rows * (1.0 - INNER_VALIDATION_FRACTION))
     if cut < MIN_INNER_VALIDATION_ROWS or total_rows - cut < MIN_INNER_VALIDATION_ROWS:
         return equal, {
             "basis": "equal",
@@ -611,8 +613,11 @@ def _ensemble(name: str, member_names: list, frame, y) -> tuple:
     that holdout, the win is real; if it wins by a suspiciously wide margin,
     this paragraph is the first place to look.
     """
-    from sklearn.ensemble import (RandomForestRegressor, StackingRegressor,
-                                  VotingRegressor)
+    from sklearn.ensemble import (
+        RandomForestRegressor,
+        StackingRegressor,
+        VotingRegressor,
+    )
 
     members = [(member, _estimator(member)) for member in member_names]
 
@@ -758,7 +763,7 @@ def _permutation_importance(estimator, frame, y) -> dict | None:
         "basis": "permutation-mae",
         "baseline_mae": round(base, 4),
         "repeats": PERMUTATION_REPEATS,
-        "n_rows": int(len(frame)),
+        "n_rows": len(frame),
         "delta": delta,
     }
 
@@ -794,7 +799,7 @@ def _learning_curve(frame, y) -> dict | None:
     curve. That is what :func:`scoring.diurnal` is for.
     """
     total = len(frame)
-    cut = int(round(total * (1.0 - INNER_VALIDATION_FRACTION)))
+    cut = round(total * (1.0 - INNER_VALIDATION_FRACTION))
     if cut < MIN_INNER_VALIDATION_ROWS or total - cut < MIN_INNER_VALIDATION_ROWS:
         return None
 
@@ -817,7 +822,7 @@ def _learning_curve(frame, y) -> dict | None:
     # Thinned for storage, with the last round always kept: 400 rounds is a
     # readable curve at 50 points and four times the JSON at 400.
     step = max(1, len(valid) // CURVE_POINTS)
-    keep = sorted(set(list(range(0, len(valid), step)) + [len(valid) - 1]))
+    keep = sorted({*range(0, len(valid), step), len(valid) - 1})
     best = int(np.argmin(valid))
 
     return {
@@ -969,7 +974,8 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
             registry.RegistryError) as exc:
         if not _already_registered(conn, digest):
             store.unlink(digest)
-        raise TrainError(f"the model fitted but could not be registered: {exc}") from exc
+        raise TrainError(
+            f"the model fitted but could not be registered: {exc}") from exc
 
     registry.set_metrics(conn, model["id"], {"holdout": {
         "horizon_s": horizon_s,
@@ -1003,7 +1009,7 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
 
 def _persistence(conn, plan: dict, observed: pd.DataFrame,
                  at: pd.DatetimeIndex, horizon_s: int,
-                 cut: pd.Timestamp) -> "scoring.Pairs | None":
+                 cut: pd.Timestamp) -> scoring.Pairs | None:
     """Persistence over the same holdout, so the number has something to beat.
 
     Returns the *pairs*, not a summary, because the caller needs both: a

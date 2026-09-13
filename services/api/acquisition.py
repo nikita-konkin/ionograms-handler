@@ -170,7 +170,7 @@ class Slot:
         return _iso(self.ends_at) if self.ends_at else None
 
     def as_dict(self) -> dict:
-        out = {k: v for k, v in self.__dict__.items()}
+        out = dict(self.__dict__.items())
         out["label"] = self.label
         out["next_start_utc"] = self.next_start_utc
         out["ends_at_utc"] = self.ends_at_utc
@@ -250,10 +250,10 @@ def overlapping_slots(timings, span_mhz: float | None) -> list[str]:
                 continue
             # Integer milliseconds so `gcd` is exact; `rep` is a human-chosen
             # round number of seconds, so nothing is lost rounding here.
-            g_ms = math.gcd(int(round(rep1 * 1000)), int(round(rep2 * 1000)))
+            g_ms = math.gcd(round(rep1 * 1000), round(rep2 * 1000))
             if g_ms <= 0:
                 continue
-            d_ms = int(round((c1 - c2) * 1000)) % g_ms
+            d_ms = round((c1 - c2) * 1000) % g_ms
             apart = min(d_ms, g_ms - d_ms) / 1000.0
             sweep = max(sweep1, sweep2)
             if apart < sweep:

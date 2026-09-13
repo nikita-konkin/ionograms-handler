@@ -13,6 +13,32 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Cheap and first. A lint failure is a one-line fix, and finding it after a
+  # four-minute test run wastes the time it was meant to save.
+  #
+  # `ruff`'s config pins `target-version = "py38"` -- see pyproject.toml for
+  # why that is not `requires-python`. The matching runtime check is
+  # `tests/test_agent.py::test_the_agent_stays_within_python_38`, which runs in
+  # the job below: this stops a linter *suggesting* 3.9+ syntax for the
+  # station's agent, and that stops it arriving any other way.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Lint
+        run: ruff check .
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -39,7 +65,7 @@ jobs:
         run: python -m pytest tests -q
 
   publish:
-    needs: test
+    needs: [lint, test]
     # Pull requests are tested, not published: a fork must not be able to push
     # an image the work server would then pull.
     if: github.event_name != 'pull_request'

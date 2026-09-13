@@ -309,7 +309,8 @@ LAUNCHER = Path(__file__).resolve().parent.parent / "tools/chirp-rx-launch.sh"
 
 def test_chirp_rx_runs_the_launcher_that_reads_the_ini():
     unit = (UNIT_DIR / "chirp-rx.service").read_text()
-    execs = [l for l in unit.splitlines() if l.startswith("ExecStart=")]
+    execs = [line for line in unit.splitlines()
+             if line.startswith("ExecStart=")]
     assert len(execs) == 1, execs
     assert execs[0].endswith("tools/chirp-rx-launch.sh"), (
         f"{execs[0]} -- exec'ing the recorder directly puts the LO back in two "
@@ -323,10 +324,11 @@ def test_the_launcher_execs_so_the_recorder_stays_mainpid():
     transmitting UDP to a host that is gone and is recoverable only by removing
     power -- a site visit. This is the most expensive line in the file."""
     body = LAUNCHER.read_text()
-    launch = [l for l in body.splitlines() if "rx_uhd_ext_gps" in l
-              and not l.lstrip().startswith("#")]
+    launch = [line for line in body.splitlines()
+              if "rx_uhd_ext_gps" in line
+              and not line.lstrip().startswith("#")]
     assert launch, "the launcher no longer starts the recorder at all"
-    assert any(l.startswith("exec ") for l in launch), (
+    assert any(line.startswith("exec ") for line in launch), (
         f"the recorder is started without `exec`: {launch}. systemd's MAINPID "
         f"would be the shell, and SIGINT would never reach the USRP.")
 

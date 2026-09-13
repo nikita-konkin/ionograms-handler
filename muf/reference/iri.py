@@ -30,8 +30,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..geometry import (DEFAULT_HMF2_KM, Point, control_points, fof2_to_muf,
-                        great_circle_km, hop_count)
+from ..geometry import (
+    DEFAULT_HMF2_KM,
+    Point,
+    control_points,
+    fof2_to_muf,
+    great_circle_km,
+    hop_count,
+)
 from . import ReferenceSeries, as_index
 from .indices import IndexUnavailable, solar_indices
 
@@ -99,7 +105,7 @@ def _pyiri_day(module, day: dt.date, hours: np.ndarray, point: Point,
 def _fof2_iri2016(module, when: dt.datetime, point: Point) -> float:
     """foF2 from the Fortran IRI at one time and place."""
     profile = module.IRI(when, (100, 1000, 50), point.lat, point.lon)
-    value = profile["NmF2"] if "NmF2" in profile else None
+    value = profile.get("NmF2", None)
     if value is None:
         return float("nan")
     nmf2 = float(np.asarray(value).ravel()[0])       # electrons per m^3

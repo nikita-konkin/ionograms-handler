@@ -230,7 +230,7 @@ def fetch(url: str, token: str | None) -> tuple[int, int, float]:
     except urllib.error.HTTPError as exc:
         body, code = exc.read(), exc.code
     except OSError as exc:
-        raise SystemExit(f"cannot reach {url}: {exc}")
+        raise SystemExit(f"cannot reach {url}: {exc}") from None
     return code, len(body), (time.perf_counter() - started) * 1000
 
 
@@ -253,7 +253,7 @@ def measure_pages(base: str, token: str | None, repeats: int = 6) -> list[dict]:
             "status": code,
             "cold_ms": round(first, 1),
             "warm_ms": round(statistics.median(rest), 1),
-            "p99_ms": round(max([first] + rest), 1),
+            "p99_ms": round(max([first, *rest]), 1),
             "kb": round(size / 1024, 1),
         })
     return out
@@ -349,8 +349,8 @@ def regressions(run: dict, baseline: dict) -> list[tuple[str, str, str]]:
                 f"{page['warm_ms']} ms warm against {prior['warm_ms']} ms "
                 f"({ratio:.2f}x)."))
 
-    if baseline.get("picks") and run.get("picks"):
-        if baseline["picks"] != run["picks"]:
+    if (baseline.get("picks") and run.get("picks")
+            and baseline["picks"] != run["picks"]):
             moved = sum(1 for a, b in zip(baseline["picks"], run["picks"])
                         if a != b)
             found.append((

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pandas as pd
@@ -43,9 +44,9 @@ def test_gate_parsing():
 
 
 def test_gate_rejects_inverted_and_malformed():
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         cli._gate("5000,2000")
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         cli._gate("nonsense")
 
 

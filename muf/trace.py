@@ -452,8 +452,11 @@ def reconstruct(
             measured point, so a wide gap is left empty rather than bridged by
             whatever the fit does in between.
     """
-    from scipy.interpolate import Akima1DInterpolator, PchipInterpolator, \
-        UnivariateSpline
+    from scipy.interpolate import (
+        Akima1DInterpolator,
+        PchipInterpolator,
+        UnivariateSpline,
+    )
 
     if item.n_points < min_points:
         return Reconstruction(np.empty(0), np.empty(0), item, ok=False,
@@ -487,7 +490,8 @@ def reconstruct(
                                      s=float(item.n_points))
             knots = np.asarray(curve.get_knots())
         elif method in ("pchip", "makima"):
-            bin_mhz = max(np.ptp(freq) / 12.0, float(np.min(np.diff(freq)[np.diff(freq) > 0]))
+            bin_mhz = max(np.ptp(freq) / 12.0,
+                          float(np.min(np.diff(freq)[np.diff(freq) > 0]))
                           if np.any(np.diff(freq) > 0) else 0.05)
             centres, medians = _smoothed_knots(freq, vrange, item.weight, bin_mhz)
             if len(centres) < 3:

@@ -6,10 +6,20 @@ import math
 
 import pytest
 
-from muf.geometry import (EARTH_RADIUS_KM, MAX_SINGLE_HOP_KM, Point,
-                          control_points, describe_path, fof2_to_muf,
-                          great_circle_km, hop_count, intermediate, m_factor,
-                          midpoint, muf_to_fof2)
+from muf.geometry import (
+    EARTH_RADIUS_KM,
+    MAX_SINGLE_HOP_KM,
+    Point,
+    control_points,
+    describe_path,
+    fof2_to_muf,
+    great_circle_km,
+    hop_count,
+    intermediate,
+    m_factor,
+    midpoint,
+    muf_to_fof2,
+)
 
 # The registry's Nicosia, which is what the loader now hands to this module
 # for a `cyprus1` sounding; the header's own round 35.00/34.00 is 59.9 km away

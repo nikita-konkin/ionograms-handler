@@ -31,8 +31,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..geometry import (DEFAULT_HMF2_KM, Point, control_points,
-                        fof2_to_muf, great_circle_km, hop_count, midpoint)
+from ..geometry import (
+    DEFAULT_HMF2_KM,
+    Point,
+    control_points,
+    fof2_to_muf,
+    great_circle_km,
+    hop_count,
+)
 from . import ReferenceSeries, as_index
 
 #: DIDBase's tabulated-characteristics endpoint.
@@ -105,7 +111,7 @@ def build_url(ursi: str, start: dt.datetime, stop: dt.datetime,
     }
     if path_km:
         # Makes the server return MUFD scaled to this path length.
-        params["DMUF"] = str(int(round(path_km)))
+        params["DMUF"] = str(round(path_km))
     return DIDB_URL + "?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
 
 

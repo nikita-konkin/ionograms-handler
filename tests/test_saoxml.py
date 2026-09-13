@@ -12,13 +12,11 @@ from xml.etree import ElementTree as ET
 
 import numpy as np
 import pytest
+from conftest import synth_iq
 
 from muf import extractors, fit, geometry, spectro, trace
 from muf.export import saoxml
 from muf.pipeline import Options
-
-from conftest import synth_iq
-
 
 WINDOW = 512
 N_FREQ = 200
@@ -29,7 +27,7 @@ HALF_SPAN = 60_000.0
 #: the recording cover its whole nominal sweep. Without this the synthetic file
 #: is a truncated sweep and every pick correctly earns the "D" letter, which
 #: would mask the other cases.
-COMPLETE_SWEEP = dict(dur=2)
+COMPLETE_SWEEP = {"dur": 2}
 
 
 def _sounding(make_lfs, echo_last_bin=120, **header):
@@ -400,7 +398,7 @@ def test_real_sounding_reports_the_known_muf(real_file):
     """The 03:00 UTC sounding is the package's pinned reference: 12.2 MHz."""
     root = saoxml.export_file(real_file, Options(methods=("algo",)))
     chars = root[0].find("CharacteristicList")
-    muf = [c for c in chars.findall("Custom") if c.get("Name") == "MUF"][0]
+    muf = next(c for c in chars.findall("Custom") if c.get("Name") == "MUF")
 
     assert float(muf.get("Val")) == pytest.approx(12.2, abs=0.3)
 
@@ -572,6 +570,7 @@ def test_render_over_a_raster_spans_the_whole_sweep(sounding, tmp_path):
     nothing else to see; over a raster it throws away the sweep.
     """
     import matplotlib.pyplot as plt
+
     from muf import render
 
     record = _round_trip(sounding, tmp_path)[0]
@@ -785,7 +784,7 @@ def test_whitening_is_reported_but_never_applied(make_lfs):
 
 def test_a_header_without_whitening_omits_it(make_lfs):
     """v2 has no such field, and a blank would read as "not whitened"."""
-    ion = _sounding(make_lfs, **COMPLETE_SWEEP)
+    _sounding(make_lfs, **COMPLETE_SWEEP)
     acq = saoxml._acquisition(object())
 
     assert "Whitening" not in acq.attrib

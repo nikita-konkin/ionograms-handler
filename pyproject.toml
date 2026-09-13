@@ -37,6 +37,7 @@ cnn = ["tensorflow>=2.16"]
 # only at fitting.
 predict = ["joblib>=1.4", "statsmodels>=0.14", "xgboost>=2.1"]
 test = ["pytest>=8"]
+lint = ["ruff>=0.16"]
 
 [project.scripts]
 muf = "muf.cli:main"
@@ -54,6 +55,62 @@ packages = ["muf", "muf.extractors", "muf.reference", "services",
 # page render.
 [tool.setuptools.package-data]
 "services.api" = ["schema.sql", "templates/*.html"]
+
+[tool.ruff]
+# **The lowest interpreter any of this code actually runs on, which is not
+# `requires-python`.** `muf` needs 3.10 and says so above; `services/agent` is
+# copied to the acquisition laptop and run by the `.venv38` there, and
+# `deploy/README.md` promises that it "is Python 3.8-clean, so the station's
+# `.venv38` runs it unmodified".
+#
+# Two rules make this load-bearing rather than tidy. `UP035` rewrites
+# `typing.Callable` to `collections.abc.Callable`, which is not subscriptable
+# before 3.9; `B905` adds `zip(..., strict=)`, which is 3.10. Either would pass
+# CI on 3.12 and fail on the station, where a traceback is an AnyDesk session
+# and an outage rather than a red tick.
+#
+# `tests/test_agent.py::test_the_agent_stays_within_python_38` is the backstop:
+# this setting stops a *linter* suggesting 3.9+ syntax, and that test stops it
+# arriving by any other route.
+target-version = "py38"
+
+# 88, not the 79 most of this tree already keeps to. Of 58 000 lines, 1 588 run
+# past 79 and only 74 past 88 -- so 79 would mean reflowing prose comments by
+# the thousand for no gain, and 88 codifies what the code does.
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "PIE", "RET", "SIM", "UP", "RUF"]
+ignore = [
+    # The Cyrillic in `services/api/locale/ru.py` is the product, and the
+    # console's arrows and check marks are deliberate. Ambiguity with Latin
+    # look-alikes is the point of a translation file.
+    "RUF001", "RUF002", "RUF003",
+    # `Depends(...)` and `Body(...)` in a default argument is how FastAPI
+    # declares a dependency. Flagging it flags every route in the service.
+    "B008",
+    # `contextlib.suppress` is not clearer than `try/except/pass` at the sites
+    # here, each of which carries a comment about what it is swallowing.
+    "SIM105",
+    # Its fix rewrites `%` to `.format()` rather than to an f-string, because
+    # these are implicitly concatenated multi-line messages. That is longer,
+    # pushes past the line length, and reads worse than what it replaces.
+    "UP031",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures are imported to be re-used as fixtures, which is a redefinition to
+# pyflakes and the documented pytest idiom to everyone else.
+"tests/test_archive_discovery.py" = ["F811"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["muf", "services", "tools", "tests"]
+# Keep a merged import on one line when it fits. Without this, combining two
+# `from x import y` lines produces a parenthesised block, which both churns the
+# diff and drops a trailing `# noqa` onto a line that no longer exists -- which
+# is exactly how `tests/test_api.py` lost the `E402` it needs after
+# `pytest.importorskip`.
+split-on-trailing-comma = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

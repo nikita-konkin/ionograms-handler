@@ -291,7 +291,7 @@ def pick_muf(
     if percentile >= 100.0:
         index = int(qualifying.max())
     else:
-        index = int(round(float(np.percentile(qualifying, percentile))))
+        index = round(float(np.percentile(qualifying, percentile)))
         index = int(qualifying[np.abs(qualifying - index).argmin()])
 
     # Detections, not width: a bridged run that reported its span would claim

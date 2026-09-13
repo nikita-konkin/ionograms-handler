@@ -72,8 +72,7 @@ def seed_soundings(conn, days: int = 4, tx: str = "NIC", rx: str = "DOB"):
 
 
 def register(conn, artifact, **kw):
-    row = importer.import_artifact(artifact, param="muf", conn=conn, **kw)
-    return row
+    return importer.import_artifact(artifact, param="muf", conn=conn, **kw)
 
 
 # --------------------------------------------------------------------------

@@ -85,9 +85,9 @@ from pathlib import Path
 # the same reason, as tools/diagnose_reception.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from muf.geometry import Point, great_circle_km, hop_count   # noqa: E402
-from muf.stations import default_registry                    # noqa: E402
-from services.api import db                                  # noqa: E402
+from muf.geometry import Point, great_circle_km, hop_count
+from muf.stations import default_registry
+from services.api import db
 
 #: Tables with a plain `station` column and nothing derived from it.
 STATION_TABLES = ("config_epoch", "transmitter", "health_report", "command")
@@ -199,7 +199,8 @@ def survey(conn: sqlite3.Connection, old: str, new: str) -> Plan:
         "AND (new.code = old.code OR new.sounder_id = old.sounder_id) "
         "WHERE old.station = ?", (new, old)
     ):
-        plan.collisions.append(("transmitter", f"{row['code']} (id {row['sounder_id']})"))
+        plan.collisions.append(
+            ("transmitter", f"{row['code']} (id {row['sounder_id']})"))
 
     # A command queued to the old name has been sitting undeliverable, because
     # no agent reports under that name any more. Renaming it makes it live: the
@@ -250,7 +251,7 @@ def report(plan: Plan) -> None:
         print()
         print(f"reference         {plan.reference_rows} modelled value(s) are now "
               f"stale -- evaluated at the old path's control point.")
-        print(f"                  Left alone unless --drop-reference.")
+        print("                  Left alone unless --drop-reference.")
 
     if plan.stale_filenames:
         print()

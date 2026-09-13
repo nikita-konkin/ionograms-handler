@@ -180,7 +180,7 @@ class StationConfig:
     })
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "StationConfig":
+    def from_json(cls, path: str | Path) -> StationConfig:
         """Read the station config, and fail legibly when it is not there.
 
         Both errors below are re-raised with the path and the environment
@@ -206,7 +206,7 @@ class StationConfig:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "StationConfig":
+    def from_dict(cls, data: dict) -> StationConfig:
         known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
         for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir"):
             if key in known:
@@ -217,7 +217,7 @@ class StationConfig:
         return cls(**known)
 
     @classmethod
-    def from_env(cls) -> "StationConfig":
+    def from_env(cls) -> StationConfig:
         """``AGENT_CONFIG`` points at a JSON file; otherwise the defaults.
 
         ``AGENT_TOKEN`` overrides the file's ``token``, and is how the compose

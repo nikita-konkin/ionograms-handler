@@ -14,8 +14,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location(
     "adjudicate", ROOT / "tools" / "adjudicate.py")
@@ -187,7 +185,8 @@ def _fake_archive(monkeypatch, soundings):
 
     def files(root):
         for i, name in enumerate(soundings):
-            yield P("/arch") / name, dt.datetime(2026, 8, 17, 20, i, tzinfo=dt.UTC), "NIC1"
+            yield (P("/arch") / name,
+                   dt.datetime(2026, 8, 17, 20, i, tzinfo=dt.UTC), "NIC1")
 
     monkeypatch.setattr(adjudicate, "_archive_files", files)
     monkeypatch.setattr(adjudicate.loader, "load", lambda p: p)

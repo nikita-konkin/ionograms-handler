@@ -117,7 +117,7 @@ def run_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
     """Run one model against one circuit and write its forecast rows."""
     issued_at = issued_at or db.utcnow()
 
-    estimator, contract, quality = artifacts.load_verified(
+    estimator, _contract, quality = artifacts.load_verified(
         model["artifact"], model.get("golden_input"), model.get("golden_output"),
         allow_skew=allow_skew,
     )
@@ -241,7 +241,8 @@ def describe(result: dict) -> str:
     """One line per circuit, in the style `services.api.watch.describe` set."""
     where = f"{result.get('tx')}->{result.get('rx')}"
     if not result.get("written"):
-        return f"  {where} [{result.get('param','?')}]: {result.get('detail','nothing')}"
+        return (f"  {where} [{result.get('param','?')}]: "
+                f"{result.get('detail','nothing')}")
     skew = "" if result.get("golden") == "ok" else f" golden={result.get('golden')}"
     kind = "backtest" if result.get("backtest") else "forecast"
     start, stop = result["valid"]

@@ -99,7 +99,7 @@ def just_after(index) -> str:
 
 def test_truth_is_measured_never_tracked(conn):
     """A gap in the picks is a gap in the scoring, not a filled grid point."""
-    index, muf, _ = seed(conn, days=3)
+    index, _muf, _ = seed(conn, days=3)
     conn.execute(
         "DELETE FROM extraction WHERE sounding_id IN "
         "(SELECT id FROM sounding WHERE datetime >= ? AND datetime < ?)",
@@ -123,7 +123,7 @@ def test_a_perfect_forecast_scores_zero(conn):
 
 
 def test_a_prediction_far_from_any_pick_is_dropped_not_guessed(conn):
-    _, muf, _ = seed(conn, days=3)
+    _, _muf, _ = seed(conn, days=3)
     observed = scoring.truth(conn, "muf", TX, RX, "contour")
     stray = pd.Series([20.0], index=[START + pd.Timedelta(days=400)])
     assert len(scoring.pair(stray, observed)) == 0
@@ -152,19 +152,20 @@ def test_a_muf_forecast_below_a_lower_bound_still_costs(conn):
 
 def test_the_censored_sign_flips_for_lof(conn):
     """A `loflim` pick is an upper bound: below it is free, above it is not."""
-    index, _, lof = seed(conn, days=3)
+    _index, _, _lof = seed(conn, days=3)
     conn.execute("UPDATE extraction SET loflim = 1")
     conn.commit()
     observed = scoring.truth(conn, "lof", TX, RX, "contour")
     under = pd.Series(observed["value"].to_numpy() - 3.0, index=observed.index)
     over = pd.Series(observed["value"].to_numpy() + 3.0, index=observed.index)
-    assert np.allclose(scoring.absolute_error(scoring.pair(under, observed), "lof"), 0.0)
+    assert np.allclose(
+        scoring.absolute_error(scoring.pair(under, observed), "lof"), 0.0)
     assert np.allclose(scoring.absolute_error(scoring.pair(over, observed), "lof"), 3.0)
 
 
 def test_bounds_are_counted_apart_from_the_headline_number(conn):
     """Half the picks censored must not dilute the MAE of the other half."""
-    index, muf, _ = seed(conn, days=3)
+    index, _muf, _ = seed(conn, days=3)
     half = len(index) // 2
     conn.execute(
         "UPDATE extraction SET limited = 1 WHERE sounding_id IN "
@@ -200,9 +201,10 @@ def test_a_lead_is_filed_under_the_nearest_horizon(lead_s, expected):
 
 def test_persistence_is_offset_by_the_lead(conn):
     """At a 24 h lead it is yesterday's value at the same UTC minute."""
-    index, muf, _ = seed(conn, days=5)
+    _index, muf, _ = seed(conn, days=5)
     observed = scoring.truth(conn, "muf", TX, RX, "contour")
-    at = pd.DatetimeIndex(observed.index[observed.index >= START + pd.Timedelta(days=2)])
+    at = pd.DatetimeIndex(
+        observed.index[observed.index >= START + pd.Timedelta(days=2)])
     predicted = scoring.baseline_series(
         conn, "persistence", "muf", TX, RX, observed, at, 86400, START)
     yesterday = muf.reindex(at - pd.Timedelta(days=1))
@@ -211,7 +213,7 @@ def test_persistence_is_offset_by_the_lead(conn):
 
 def test_persistence_at_a_short_lead_is_the_recent_value(conn):
     """Not a fixed day: at a 1 h lead the comparison is what was known 1 h ago."""
-    index, muf, _ = seed(conn, days=3)
+    _index, muf, _ = seed(conn, days=3)
     observed = scoring.truth(conn, "muf", TX, RX, "contour")
     at = pd.DatetimeIndex(observed.index[10:])
     predicted = scoring.baseline_series(
@@ -221,7 +223,7 @@ def test_persistence_at_a_short_lead_is_the_recent_value(conn):
 
 
 def test_recurrence_reaches_back_a_solar_rotation(conn):
-    index, muf, _ = seed(conn, days=40)
+    _index, muf, _ = seed(conn, days=40)
     observed = scoring.truth(conn, "muf", TX, RX, "contour")
     at = pd.DatetimeIndex(observed.index[observed.index >= START + scoring.RECURRENCE])
     predicted = scoring.baseline_series(
@@ -233,7 +235,7 @@ def test_recurrence_reaches_back_a_solar_rotation(conn):
 
 def test_recurrence_drops_instants_with_no_history_behind_them(conn):
     """Nothing 27 days back means no pair, not an interpolated stand-in."""
-    _, muf, _ = seed(conn, days=5)
+    _, _muf, _ = seed(conn, days=5)
     observed = scoring.truth(conn, "muf", TX, RX, "contour")
     at = pd.DatetimeIndex(observed.index)
     predicted = scoring.baseline_series(
@@ -252,7 +254,7 @@ def test_the_harmonic_baseline_refuses_to_fit_on_what_it_is_scored_on(conn):
 
 
 def test_the_harmonic_baseline_tracks_a_diurnal_series(conn):
-    index, muf, _ = seed(conn, days=10)
+    _index, _muf, _ = seed(conn, days=10)
     observed = scoring.truth(conn, "muf", TX, RX, "contour")
     split = START + pd.Timedelta(days=5)
     at = pd.DatetimeIndex(observed.index[observed.index >= split])
@@ -282,7 +284,7 @@ def test_iri_says_why_it_has_nothing_for_lof(conn):
 
 
 def test_iri_is_read_from_the_stored_reference_rows(conn):
-    index, muf, _ = seed(conn, days=3)
+    _index, _muf, _ = seed(conn, days=3)
     conn.execute(
         "INSERT INTO reference (sounding_id, source, param, value) "
         "SELECT id, 'iri', 'muf', 17.0 FROM sounding")
@@ -323,8 +325,8 @@ def test_scoring_a_model_writes_rows_and_marks_it_scored(conn):
     assert result["scored"] > 0
     assert result["mae"]["86400"] == 0.5
     assert registry.state_of(registry.get(conn, model_id)) == "scored"
-    row = [r for r in scoring.scores(conn, "muf", TX, RX)
-           if r["subject"] == f"model:{model_id}"][0]
+    row = next(r for r in scoring.scores(conn, "muf", TX, RX)
+           if r["subject"] == f"model:{model_id}")
     assert row["horizon_s"] == 86400
     assert row["bias"] == 0.5
 
@@ -394,7 +396,7 @@ def test_a_baseline_reports_once_not_once_per_horizon(conn):
                                       now=just_after(index))
     assert len(results) == len(scoring.BASELINES)
     assert set(results[0]["mae"]) == {str(h) for h in scoring.HORIZONS}
-    iri = [r for r in results if r["name"] == "iri"][0]
+    iri = next(r for r in results if r["name"] == "iri")
     assert "absorption floor" not in (iri["detail"] or "")   # muf, so it is a
     assert "no IRI rows stored" in iri["detail"]             # storage problem
 
@@ -404,8 +406,8 @@ def test_a_baseline_that_finds_no_pairs_says_why(conn):
     index, _, _ = seed(conn, days=5)
     scoring.score_baselines(conn, "muf", TX, RX, "contour", (86400,),
                             window_days=2, now=just_after(index))
-    row = [r for r in scoring.scores(conn, "muf", TX, RX)
-           if r["subject"] == "baseline:recurrence-27d"][0]
+    row = next(r for r in scoring.scores(conn, "muf", TX, RX)
+           if r["subject"] == "baseline:recurrence-27d")
     assert row["n"] == 0
     assert "does not go far enough" in row["detail"]["unavailable"]
 

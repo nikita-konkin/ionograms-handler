@@ -199,12 +199,12 @@ def fit_nose(
                 f_nose, h_nose = f_nose[keep], h_nose[keep]
 
     extrapolation = float(vertex_freq - observed_max)
-    common = dict(
-        muf_mhz=float(vertex_freq), vrange_km=float(vertex_range),
-        curvature=float(a), rms_residual_mhz=residual,
-        n_points=int(f_nose.size), observed_max_mhz=observed_max,
-        extrapolation_mhz=extrapolation,
-    )
+    common = {
+        "muf_mhz": float(vertex_freq), "vrange_km": float(vertex_range),
+        "curvature": float(a), "rms_residual_mhz": residual,
+        "n_points": int(f_nose.size), "observed_max_mhz": observed_max,
+        "extrapolation_mhz": extrapolation,
+    }
 
     if residual > max_residual_mhz:
         return TraceFit(**common, ok=False,

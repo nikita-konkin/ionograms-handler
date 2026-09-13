@@ -55,8 +55,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from fastapi import (APIRouter, Body, Depends, HTTPException, Query, Request,
-                     status)
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 
 from muf.stations import default_registry
 
@@ -707,8 +706,8 @@ async def upload_model(request: Request,
                     continue
                 if not head:
                     head = chunk[:4]
-                    if not (head.startswith(artifacts.PICKLE_MAGIC)
-                            or head.startswith(artifacts.ZIP_MAGIC)):
+                    if not head.startswith(
+                            (artifacts.PICKLE_MAGIC, artifacts.ZIP_MAGIC)):
                         raise HTTPException(
                             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                             f"{filename} does not begin like a model artifact "

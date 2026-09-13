@@ -19,16 +19,14 @@ from pathlib import Path
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient          # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-from muf.geometry import Point                     # noqa: E402
-from muf.reference import ReferenceSeries          # noqa: E402
-from muf.reference import indices                  # noqa: E402
-from services.api import acquisition as acq        # noqa: E402
-from services.api.locale import en                 # noqa: E402
-from services.api import auth, db, main, net       # noqa: E402
-from services.api import series as series_mod      # noqa: E402
-from services.api import web_routes                # noqa: E402
+from muf.geometry import Point  # noqa: E402
+from muf.reference import ReferenceSeries, indices  # noqa: E402
+from services.api import acquisition as acq  # noqa: E402
+from services.api import auth, db, main, net, web_routes  # noqa: E402
+from services.api import series as series_mod  # noqa: E402
+from services.api.locale import en  # noqa: E402
 
 
 @pytest.fixture
@@ -89,7 +87,8 @@ def test_read_is_open_when_no_read_token_is_set(client):
 def test_read_token_does_not_grant_control(client, monkeypatch):
     """arch 4.3: public read must not share a scope with the stop button."""
     monkeypatch.setattr(auth, "READ_TOKEN", "rd")
-    assert client.get("/stations", headers={"Authorization": "Bearer rd"}).status_code == 200
+    assert client.get(
+        "/stations", headers={"Authorization": "Bearer rd"}).status_code == 200
     r = client.post("/stations/SIM/commands", json={"name": "stop"},
                     headers={"Authorization": "Bearer rd"})
     assert r.status_code == 401
@@ -100,7 +99,8 @@ def test_read_token_does_not_grant_control(client, monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_a_pushed_report_appears_with_its_metrics(client):
-    assert client.post("/stations/health", json=report(), headers=CTL).status_code == 200
+    assert client.post("/stations/health", json=report(),
+                       headers=CTL).status_code == 200
 
     body = client.get("/stations/SIM/health").json()
     assert body["healthy"] is False
@@ -130,7 +130,8 @@ def test_the_raw_document_is_kept_verbatim(client, tmp_path):
     client.post("/stations/health", json=payload, headers=CTL)
 
     with db.session(tmp_path / "api.sqlite3") as conn:
-        stored = json.loads(db.rows(conn, "SELECT document FROM health_report")[0]["document"])
+        stored = json.loads(
+            db.rows(conn, "SELECT document FROM health_report")[0]["document"])
     assert stored["metrics"][0]["future_field"] == "kept"
 
 
@@ -488,7 +489,7 @@ def test_the_agent_and_the_server_agree_on_every_path(client, tmp_path):
         method = request.get_method()
         url = request.full_url.replace("http://testserver", "")
         body = json.loads(request.data.decode()) if request.data else None
-        headers = {k: v for k, v in request.header_items()}
+        headers = dict(request.header_items())
         response = (client.get(url, headers=headers) if method == "GET"
                     else client.post(url, json=body, headers=headers))
 
@@ -549,7 +550,7 @@ def test_a_product_on_the_stations_disk_reaches_the_console(client, tmp_path,
     def opener(request, timeout=None):
         url = request.full_url.replace("http://testserver", "")
         body = json.loads(request.data.decode()) if request.data else None
-        headers = {k: v for k, v in request.header_items()}
+        headers = dict(request.header_items())
         response = (client.get(url, headers=headers)
                     if request.get_method() == "GET"
                     else client.post(url, json=body, headers=headers))
@@ -611,7 +612,8 @@ def test_a_real_error_row_is_skipped(conn, tmp_path):
            "datetime": "2026-02-04T00:00:10"}
     (tmp_path / "bad.lfs").write_bytes(b"x")
 
-    assert ingest.ingest_row(conn, row, tmp_path / "bad.lfs", tmp_path, ("algo",)) is None
+    assert ingest.ingest_row(
+        conn, row, tmp_path / "bad.lfs", tmp_path, ("algo",)) is None
     assert db.rows(conn, "SELECT * FROM sounding") == []
 
 
@@ -671,12 +673,11 @@ def test_both_formats_reach_the_database_distinguishable(conn, tmp_path,
     what a parallel run produces -- could not be told apart at all.
     """
     import numpy as np
+    from conftest import synth_iq
 
     from muf import pipeline
     from muf.pipeline import Options
     from services.api import ingest
-
-    from conftest import synth_iq
 
     lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                             half_span_km=60_000.0, echo_last_bin=120))
@@ -709,19 +710,18 @@ def test_the_watcher_offers_only_what_is_not_already_held(conn, tmp_path,
     rather than with what arrived.
     """
     import numpy as np
+    from conftest import synth_iq
 
     from muf import pipeline
     from muf.pipeline import Options
     from services.api import ingest, watch
-
-    from conftest import synth_iq
 
     lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                             half_span_km=60_000.0, echo_last_bin=120))
     chirp = make_chirp_h5(np.full((4, 64), 100.0))
     methods = ("algo",)
 
-    new, found, fresh, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    new, found, _fresh, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
     assert found == 2 and {p.name for p in new} == {lfs.name, chirp.name}
 
     row = pipeline.process_file(lfs, Options(window=512, methods=methods))
@@ -729,7 +729,8 @@ def test_the_watcher_offers_only_what_is_not_already_held(conn, tmp_path,
 
     new, found, *_ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
     assert found == 2, "still two on disk"
-    assert [p.name for p in new] == [chirp.name], "the ingested one is not offered again"
+    assert [p.name for p in new] == [chirp.name], \
+        "the ingested one is not offered again"
 
 
 def test_a_method_added_later_brings_old_soundings_back(conn, tmp_path, make_lfs):
@@ -738,11 +739,11 @@ def test_a_method_added_later_brings_old_soundings_back(conn, tmp_path, make_lfs
     Widening --methods must not silently leave the existing rows short of the
     new estimator, with no way to notice but a column of nulls.
     """
+    from conftest import synth_iq
+
     from muf import pipeline
     from muf.pipeline import Options
     from services.api import ingest, watch
-
-    from conftest import synth_iq
 
     lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                             half_span_km=60_000.0, echo_last_bin=120))
@@ -758,9 +759,9 @@ def test_a_file_still_arriving_is_left_for_the_next_pass(conn, tmp_path, make_lf
     """A sounding mid-write or mid-sync reads as a short sweep, and a short
     sweep does not fail -- it ingests with `sweep_complete` false and stays
     that way. Waiting one pass is cheaper than the wrong row."""
-    from services.api import watch
-
     from conftest import synth_iq
+
+    from services.api import watch
 
     make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                       half_span_km=60_000.0, echo_last_bin=120))
@@ -780,9 +781,9 @@ def test_a_future_dated_file_is_ingested_not_withheld_forever(conn, tmp_path, ma
     """
     import os
 
-    from services.api import watch
-
     from conftest import synth_iq
+
+    from services.api import watch
 
     lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                             half_span_km=60_000.0, echo_last_bin=120))
@@ -923,8 +924,10 @@ def test_a_whole_second_upper_bound_covers_its_own_microseconds():
     """`'…23:59:59.999999'` is longer than `'…23:59:59'` with the same prefix,
     so it compares greater and `to=…T23:59:59` dropped the whole last second.
     Timestamps here carry microseconds, so that second is never empty."""
-    assert db.time_bound("2026-08-09 23:59:59", end=True) == "2026-08-09 23:59:59.999999"
-    assert db.time_bound("2026-08-09 23:59:59") == "2026-08-09 23:59:59", "lower bound unchanged"
+    assert (db.time_bound("2026-08-09 23:59:59", end=True)
+            == "2026-08-09 23:59:59.999999")
+    assert db.time_bound("2026-08-09 23:59:59") == "2026-08-09 23:59:59", \
+        "lower bound unchanged"
     assert db.time_bound("2026-08-09 23:59:59.5", end=True) == "2026-08-09 23:59:59.5"
 
 
@@ -1146,7 +1149,8 @@ def test_a_day_the_model_fails_on_does_not_take_the_others_with_it(monkeypatch):
         if index[0].month == 8:
             return ReferenceSeries(name="iri", error="no solar driver")
         return ReferenceSeries(name="iri", muf=pd.Series(20.0, index=index),
-                               detail=pd.DataFrame({"fof2": pd.Series(6.0, index=index)}),
+                               detail=pd.DataFrame(
+                                   {"fof2": pd.Series(6.0, index=index)}),
                                source="fake")
 
     monkeypatch.setattr(iri, "available", lambda: True)
@@ -2171,7 +2175,7 @@ def test_a_source_entered_by_hand_needs_no_census_row(client):
     assert r.status_code == 200
 
     listed = client.get("/stations/SIM/transmitters").json()["transmitters"]
-    entry = [t for t in listed if t["code"] == "CYP"][0]["timings"][0]
+    entry = next(t for t in listed if t["code"] == "CYP")["timings"][0]
     # Stored verbatim: the schedule the station holds is these numbers, and a
     # rate silently rounded or a slot folded here would put it on air at the
     # wrong second.
@@ -2186,7 +2190,7 @@ def test_a_hand_entered_source_places_on_a_clock(client):
     _identify(client, code="CYP",
               timings=[{"chirp-rate": 50e3, "rep": 300.0, "chirpt": 210.0}])
     listed = client.get("/stations/SIM/transmitters").json()["transmitters"]
-    entry = [t for t in listed if t["code"] == "CYP"][0]["timings"][0]
+    entry = next(t for t in listed if t["code"] == "CYP")["timings"][0]
 
     # 210 s into a 300 s cycle, so a sweep that began 5 s ago is in progress.
     slot = acquisition.place(entry, now=215.0, span_mhz=24.8)
@@ -2306,7 +2310,8 @@ def test_ids_are_not_handed_out_twice_even_after_a_forget(client):
     """Products on disk carry the id. Reusing it makes two sites one number."""
     _identify(client, code="NIC")
     _identify(client, code="SGO")
-    assert client.delete("/stations/SIM/transmitters/NIC", headers=CTL).status_code == 200
+    assert client.delete(
+        "/stations/SIM/transmitters/NIC", headers=CTL).status_code == 200
 
     again = _identify(client, code="TGO").json()["transmitter"]
     assert again["sounder_id"] == 3
@@ -2531,7 +2536,8 @@ def test_only_one_epoch_is_ever_open(client, tmp_path):
     configurations and a guess behind every attribution after it."""
     for _ in range(3):
         cid = client.post("/stations/SIM/commands", headers=CTL, json={
-            "name": "set_config", "params": {"changes": {"mode": "search"}}}).json()["id"]
+            "name": "set_config",
+            "params": {"changes": {"mode": "search"}}}).json()["id"]
         client.post(f"/stations/SIM/commands/{cid}/ack", headers=CTL,
                     json={"results": [_journal(mode="true")]})
 
@@ -2826,7 +2832,7 @@ def test_an_http_error_still_means_reachable(monkeypatch):
     """
     import urllib.error
 
-    def refuse(*a, **k):                        # noqa: ANN002, ANN003
+    def refuse(*a, **k):
         raise urllib.error.HTTPError("https://example.invalid/x", 404,
                                      "Not Found", {}, None)
 
@@ -2892,7 +2898,7 @@ def test_the_net_route_never_probes(client, monkeypatch):
     Otherwise anyone who can reach this port can make the server call three
     third parties, and every caller pays the timeout.
     """
-    def explode(*a, **k):                       # noqa: ANN002, ANN003
+    def explode(*a, **k):
         raise AssertionError("the route probed the network")
 
     monkeypatch.setattr(net, "probe", explode)
@@ -3079,7 +3085,6 @@ def test_the_colour_bar_is_the_map_the_raster_was_drawn_with():
     """A bar built from a different colormap than the image it explains is
     worse than no bar, because it still reads as authoritative."""
     from muf import render
-
     from services.api import sao
 
     axis = sao.colour_axis()
@@ -3092,7 +3097,6 @@ def test_the_colour_bar_is_the_map_the_raster_was_drawn_with():
 def test_the_colour_bar_follows_a_change_of_colormap(monkeypatch):
     """Nothing transcribes the scale, so changing the map moves the bar too."""
     from muf import render
-
     from services.api import sao
 
     monkeypatch.setattr(render, "DEFAULT_CMAP", "viridis")
@@ -3126,10 +3130,9 @@ def test_the_page_draws_without_a_bar_rather_than_inventing_one(monkeypatch):
     """No matplotlib, no honest scale. Guessing one would be a confident
     wrong answer about what the picture means."""
     from muf import render
-
     from services.api import sao
 
-    def refuse(*a, **k):                        # noqa: ANN002, ANN003
+    def refuse(*a, **k):
         raise ModuleNotFoundError("no matplotlib")
 
     monkeypatch.setattr(render, "colour_scale", refuse)
@@ -3232,7 +3235,7 @@ def test_a_scaling_that_fails_does_not_take_the_page_with_it(client, scaled,
     of them, and hides the reason too."""
     from services.api import sao
 
-    def refuse(*a, **k):                        # noqa: ANN002, ANN003
+    def refuse(*a, **k):
         raise OSError("truncated product")
 
     monkeypatch.setattr(sao, "build", refuse)
@@ -3788,7 +3791,7 @@ def test_the_leaderboard_is_drawn_for_the_circuit_that_was_asked_for(client,
         api_db.execute(
             "INSERT INTO score (subject, param, tx, rx, horizon_s, scored_at, "
             "n, mae) VALUES (?,?,?,?,?,?,?,?)",
-            (f"baseline:persistence", family, "cyprus1", "rx", 86400,
+            ("baseline:persistence", family, "cyprus1", "rx", 86400,
              db.utcnow(), 200, mae))
     api_db.commit()
 

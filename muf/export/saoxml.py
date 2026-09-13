@@ -103,8 +103,9 @@ from xml.etree import ElementTree as ET
 
 import numpy as np
 
-from .. import (__version__, extractors, fit as fit_module, geometry,
-                lof as lof_module, spectro, trace)
+from .. import __version__, extractors, geometry, trace
+from .. import fit as fit_module
+from .. import lof as lof_module
 from ..pipeline import Options, band_edge_mhz, circuit_ceiling
 
 #: Value of the ``FormatVersion`` attribute this module writes.

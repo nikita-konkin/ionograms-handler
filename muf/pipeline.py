@@ -27,8 +27,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import (extractors, fit, interference, loader, lof as lof_module,
-               pick as pick_module, spectro, trace)
+from . import extractors, fit, interference, loader, spectro, trace
+from . import lof as lof_module
+from . import pick as pick_module
 from .extractors import DEFAULT_METHODS
 from .loader import find_soundings, read_header
 
@@ -63,7 +64,7 @@ def sounded_ceiling(cal, band_ceiling_mhz: float | None = None) -> float:
     return float(band_ceiling_mhz)
 
 
-def circuit_ceiling(header, options: "Options") -> float | None:
+def circuit_ceiling(header, options: Options) -> float | None:
     """The ceiling to use for one sounding, or None to fall back to the sweep.
 
     Order is explicit-flag, then registry, then nothing. The flag wins because
@@ -340,7 +341,7 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
             ion, min_run=options.min_run or pick_module.DEFAULT_MIN_RUN,
             band_floor_mhz=options.band_floor_mhz,
         ).items():
-            row[f"lof{int(round(level))}"] = low.lof_mhz
+            row[f"lof{round(level)}"] = low.lof_mhz
 
     return row
 
@@ -468,7 +469,7 @@ def process_many(
     else:
         # Around the whole pool, not just its construction: workers are spawned
         # on demand, so the last one can start well after the first task does.
-        with _pinned_threads(PIN_THREADS):
+        with _pinned_threads(PIN_THREADS):  # noqa: SIM117 -- see above
             # `mp_context` rather than the platform default: see
             # `POOL_START_METHODS`. The environment pinned just above is
             # inherited by the workers either way, because both remaining

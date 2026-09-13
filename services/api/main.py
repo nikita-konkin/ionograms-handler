@@ -23,9 +23,19 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent_routes, archive_routes, archives, auth, control_routes
-from . import db, i18n, net, read_routes, sources
-from . import web_routes
+from . import (
+    agent_routes,
+    archive_routes,
+    archives,
+    auth,
+    control_routes,
+    db,
+    i18n,
+    net,
+    read_routes,
+    sources,
+    web_routes,
+)
 
 VERSION = "0.1.0"
 

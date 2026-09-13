@@ -260,8 +260,8 @@ def gate_indices(
             f"(axis spans {axis_min:.0f}..{axis_max:.0f} km)"
         )
 
-    i_lo = max(0, min(int(math.ceil((half_span - hi_km) / step)), n_range - 1))
-    i_hi = max(0, min(int(math.floor((half_span - lo_km) / step)), n_range - 1))
+    i_lo = max(0, min(math.ceil((half_span - hi_km) / step), n_range - 1))
+    i_hi = max(0, min(math.floor((half_span - lo_km) / step), n_range - 1))
     if i_hi < i_lo:
         raise ValueError(
             f"empty range gate {lo_km:.0f}..{hi_km:.0f} km "
