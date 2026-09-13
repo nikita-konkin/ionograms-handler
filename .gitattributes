@@ -1,0 +1,30 @@
+# Line endings, decided here rather than by whichever machine last touched a
+# file.
+#
+# This tree is edited on macOS and on Windows and deployed to Linux, and it
+# arrived with 17 files in CRLF and 124 in LF -- a split nobody chose and that
+# nothing kept consistent. The cost is not only tidiness: a Python edit made on
+# one machine rewrites every line of a CRLF file, so a one-line change arrives
+# as a whole-file diff and `git blame` stops answering.
+#
+# `text=auto` normalises to LF *in the repository*; `eol=lf` also checks out LF
+# everywhere, which is what the deployed files need and what every editor in
+# use here handles.
+* text=auto eol=lf
+
+# These reach the station and are read by Linux. A CRLF in a shell script is
+# not untidy, it is `bad interpreter: /bin/sh^M` on a host reached over
+# AnyDesk; in a unit file it is a value with a stray carriage return in it.
+# Already true of all of them today -- stated so it stays true.
+*.sh       text eol=lf
+*.service  text eol=lf
+*.timer    text eol=lf
+*.target   text eol=lf
+
+# Never converted, never diffed as text. `text=auto` inspects content and would
+# leave these alone on its own, but a heuristic is the wrong thing to rest a
+# 6 MB PDF on.
+*.pdf binary
+# Saved page, not a template: it carries NUL bytes and is binary by content
+# despite the extension, so the blanket `*.html` handling must not reach it.
+docs/references/DIDBase-rules-of-the-road.html binary
