@@ -183,6 +183,13 @@ database_to.ini
 database2.ini
 data/
 deploy/.env
+# ...and every other name that file gets. The exact-filename rule above did not
+# cover `deploy/.env.bak-20260905`, which a backup made on 2026-09-05 and which
+# then reached origin in b9b49e0 carrying the live CONTROL_TOKEN. A rule that
+# names one filename does not protect a secret; a rule that names the *shape*
+# of the filename does.
+deploy/.env.*
+!deploy/.env.example
 *.sqlite3
 
 # Claude Code preview config -- machine-specific paths
