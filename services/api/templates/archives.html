@@ -284,23 +284,8 @@
 // Same contract as the console's start/stop buttons: the control token lives
 // in sessionStorage, put there on the console page, never baked into a page
 // that might be left open.
-// `token()` comes from base.html now -- one definition, four pages.
-
-async function control(url, method, body) {
-  const tok = token();
-  if (!tok) return {ok: false, detail: T('common.js.no_token')};
-  const r = await fetch(url, {
-    method,
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const out = await r.json().catch(() => ({}));
-  // `status` as well as `detail`: a 409 carrying a remedy is offered as a
-  // choice rather than printed as a failure, and the caller needs the code
-  // to tell that case from an ordinary refusal.
-  return r.ok ? {ok: true, body: out}
-              : {ok: false, status: r.status, detail: out.detail || r.status};
-}
+// `token()` and `control()` both come from base.html now -- one
+// definition each, four pages.
 
 const write = (id, text, bad) => {
   const el = document.getElementById(id);

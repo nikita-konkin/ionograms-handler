@@ -554,36 +554,6 @@
   // One place where a control request is made and its failures are worded,
   // because the two callers below must not disagree about what a 401 means.
   // Returns {ok, body} or {ok: false, detail}.
-  async function control(url, body, method) {
-    const token = tokField.value.trim();
-    // Flagged rather than worded as a refusal: nothing was sent, so "refused"
-    // would blame the server for a field the operator has not filled in yet.
-    if (!token) return {ok: false, needsToken: true,
-                        detail: T('console.js.paste_token')};
-    let r, out;
-    try {
-      r = await fetch(url, {
-        method: method || 'POST',
-        headers: {'Content-Type': 'application/json',
-                  'Authorization': 'Bearer ' + token},
-        // A DELETE carries no body, and sending `"undefined"` as one gets it
-        // parsed as JSON by the server and refused as a malformed request.
-        body: body === undefined || body === null ? undefined : JSON.stringify(body)
-      });
-      out = await r.json().catch(() => ({}));
-    } catch (e) {
-      return {ok: false, detail: 'could not reach the server: ' + e.message};
-    }
-    // The server answers 401 with the same "control token required" whether
-    // none was sent or the wrong one was -- it will not confirm which half of
-    // a guess was right. Here we know a token *was* sent, so say the useful
-    // half: it was rejected, and re-pasting it is the thing to try.
-    if (r.status === 401)
-      return {ok: false, detail: 'this server did not accept that control token.'};
-    if (!r.ok) return {ok: false, detail: out.detail || r.status};
-    return {ok: true, body: out};
-  }
-
   async function send(station, name) {
     const token = tokField.value.trim();
     if (!token) { say(station, T('console.js.paste_token'), true); return; }
@@ -605,7 +575,8 @@
 
     say(station, T('console.js.sending', {name: name}));
     const r = await control('/stations/' + encodeURIComponent(station)
-                            + '/commands', {name: name, issued_by: 'web'});
+                            + '/commands', 'POST',
+                            {name: name, issued_by: 'web'});
     if (!r.ok) { say(station, T('console.js.refused', {detail: r.detail}), true); return; }
 
     // Queued is not done. The station pulls on its own cycle, so the row below
@@ -635,7 +606,7 @@
 
     forgetSay(station, T('console.js.forgetting', {station: station}));
     const r = await control('/stations/' + encodeURIComponent(station),
-                            null, 'DELETE');
+                            'DELETE');
     if (!r.ok) {
       forgetSay(station, r.needsToken ? r.detail
                 : T('console.js.refused', {detail: r.detail}), true);
@@ -717,10 +688,10 @@
     // copy of them that travelled through a form.
     const r = mode === 'scheduled'
       ? await control('/stations/' + encodeURIComponent(station) + '/schedule',
-                      {codes: codes, issued_by: 'web'})
+                      'POST', {codes: codes, issued_by: 'web'})
       : await control('/stations/' + encodeURIComponent(station) + '/commands',
-                      {name: 'set_config', issued_by: 'web',
-                       params: {changes: {mode: mode}}});
+                      'POST', {name: 'set_config', issued_by: 'web',
+                               params: {changes: {mode: mode}}});
     if (!r.ok) {
       planSay(station, (r.needsToken ? '' : 'refused: ') + r.detail, true);
       return;
@@ -860,7 +831,7 @@
 
     bandSay(station, T('console.js.band_sending'));
     const r = await control('/stations/' + encodeURIComponent(station)
-                            + '/commands',
+                            + '/commands', 'POST',
                             {name: 'set_config', issued_by: 'web',
                              params: {changes: {set_band: changes}}});
     if (!r.ok) {
@@ -890,7 +861,7 @@
     }
     storageSay(station, T('console.js.storage_sending'));
     const r = await control('/stations/' + encodeURIComponent(station)
-                            + '/commands',
+                            + '/commands', 'POST',
                             {name: 'set_config', issued_by: 'web',
                              params: {changes: {output_dir: path}}});
     if (!r.ok) {
@@ -932,8 +903,8 @@
     }
   }
 
-  // Its own fetch rather than `control()`: this one is a read, and the four
-  // page-local `control()` helpers all short-circuit when no token is set.
+  // Its own fetch rather than `control()`: this one is a read, and the
+  // shared `control()` short-circuits when no token is set.
   async function accounts(url, method, body) {
     const tok = token();
     if (!tok) return null;

@@ -476,18 +476,6 @@
 // never baked into a page that might be left open.
 // `token()` comes from base.html now -- one definition, four pages.
 
-async function control(url, method, body) {
-  const tok = token();
-  if (!tok) return {ok: false, detail: T('common.js.no_token')};
-  const r = await fetch(url, {
-    method,
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const out = await r.json().catch(() => ({}));
-  return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
-}
-
 // Three panels, three places to answer in. A message about an upload that
 // appeared beside the promotion buttons would be read as being about them.
 const say = (text, bad, where) => {

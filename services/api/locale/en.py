@@ -1159,6 +1159,12 @@ MESSAGES: dict[str, str] = {
 
     # -- shared, browser side ---------------------------------------------
     "common.js.no_token": "No control token. Paste it on the console page first.",
+    # Both were hardcoded English inside `console.html`'s own `control()`.
+    # Folding the four copies into one would have spread an untranslated
+    # string to four pages, so they became keys on the way.
+    "common.js.unreachable": "could not reach the server: {detail}",
+    "common.js.token_refused":
+        "This server did not accept that control token.",
 
     # -- archives, browser side -------------------------------------------
     "archives.js.path_set":

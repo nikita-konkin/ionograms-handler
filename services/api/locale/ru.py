@@ -1169,6 +1169,9 @@ MESSAGES: dict[str, str] = {
     # -- shared, browser side ---------------------------------------------
     "common.js.no_token":
         "Нет управляющего токена. Сначала вставьте его на странице консоли.",
+    "common.js.unreachable": "не удалось связаться с сервером: {detail}",
+    "common.js.token_refused":
+        "Этот сервер не принял такой управляющий токен.",
 
     # -- archives, browser side -------------------------------------------
     "archives.js.path_set":

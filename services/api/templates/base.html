@@ -123,6 +123,60 @@
      button. */
   const token = () => sessionStorage.getItem('tok') || '';
 
+  /* One `control()`, where there were four.
+
+     Each page grew its own copy and then each copy grew a different fix, so
+     the four disagreed about things an operator can feel:
+
+     * the console trimmed the token and the other three did not, so a token
+       pasted with a trailing newline worked here and returned a bare 401 on
+       archives, forecast and sources;
+     * only the console caught a fetch that never reached the server, and only
+       the console said that a 401 means *this token was rejected* rather than
+       repeating the server's deliberately unhelpful "control token required";
+     * only archives passed `status` back, which is what lets a 409 carrying a
+       remedy be offered as a choice instead of printed as a failure;
+     * and the console's took `(url, body, method)` while the other three took
+       `(url, method, body)` -- the same name, in the same codebase, with two
+       of the arguments swapped.
+
+     This is the union of the four, so every page gets every fix.
+
+     Argument order is `(url, method, body)`: 22 of the 28 call sites already
+     used it, and it is the order `fetch` itself takes. */
+  async function control(url, method, body) {
+    const tok = token().trim();
+    // Flagged rather than worded as a refusal: nothing was sent, so "refused"
+    // would blame the server for a field the operator has not filled in yet.
+    if (!tok) return {ok: false, needsToken: true,
+                      detail: T('common.js.no_token')};
+    let r, out;
+    try {
+      r = await fetch(url, {
+        method: method || 'POST',
+        headers: {'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + tok},
+        // A DELETE carries no body, and sending `"undefined"` as one gets it
+        // parsed as JSON by the server and refused as a malformed request.
+        body: body === undefined || body === null
+              ? undefined : JSON.stringify(body),
+      });
+      out = await r.json().catch(() => ({}));
+    } catch (e) {
+      return {ok: false, detail: T('common.js.unreachable', {detail: e.message})};
+    }
+    // The server answers 401 the same way whether no token was sent or the
+    // wrong one was -- it will not confirm which half of a guess was right.
+    // Here we know a token *was* sent, so say the useful half.
+    if (r.status === 401)
+      return {ok: false, status: 401, detail: T('common.js.token_refused')};
+    // `status` as well as `detail`: a 409 carrying a remedy is offered as a
+    // choice rather than printed as a failure, and the caller needs the code
+    // to tell that case from an ordinary refusal.
+    return r.ok ? {ok: true, body: out}
+                : {ok: false, status: r.status, detail: out.detail || r.status};
+  }
+
   const ME = fetch('/whoami', token()
       ? {headers: {'Authorization': 'Bearer ' + token()}} : undefined)
     .then(r => r.json())

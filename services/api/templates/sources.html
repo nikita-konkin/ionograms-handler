@@ -202,19 +202,6 @@ const station = () => stationBox ? stationBox.value : '';
 
 // `token()` comes from base.html now -- one definition, four pages.
 
-async function control(url, method, body) {
-  const tok = token();
-  if (!tok) return {ok: false, detail:
-    T('common.js.no_token')};
-  const r = await fetch(url, {
-    method,
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const out = await r.json().catch(() => ({}));
-  return r.ok ? {ok: true, body: out} : {ok: false, detail: out.detail || r.status};
-}
-
 // --- the identify form ----------------------------------------------------
 
 // Which verified transmitter, if any, a census group already is. Matched on
