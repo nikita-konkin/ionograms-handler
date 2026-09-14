@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import math
 import os
 import re
 import shutil
@@ -145,6 +146,46 @@ JOB_SILENT_S = 7200.0
 #: Free space below this on the data volume and the station has days, not
 #: weeks. `save_raw_voltage` turns days into hours -- see sec. 3.4.
 DISK_WARN_FRACTION = 0.10
+
+#: Metres per second, for turning an unmodelled path excess into the delay it
+#: costs. Named rather than inlined because two places now need the same one.
+C_KM_S = 299792.458
+
+#: Earth radius used for the hop geometry. Matches `muf.geometry`, which this
+#: cannot import: the agent runs on the station's 3.8 interpreter with no
+#: scientific stack, and a health metric must never depend on one.
+EARTH_RADIUS_KM = 6371.0
+
+#: How far *early* an arrival may be before the reading is a clock fault.
+#:
+#: This is the tight side, and it is tight because the physics is one-sided.
+#: `solve_epoch_offset` models ``tau = distance_km / c`` -- a straight line
+#: along the ground, with no ionosphere in it. A real signal reflects off a
+#: layer 300-450 km up, so its path is always *longer* and it can only arrive
+#: **late**. An arrival earlier than the ground line is not a short path; there
+#: is no such thing. It is the receiver's clock running slow.
+#:
+#: The fault this station actually had was -2.108 ms, so half a millisecond
+#: catches it with room to spare while clearing the +/-0.07 ms scatter of a
+#: sound solve by seven times over.
+EPOCH_EARLY_LIMIT_S = 0.5e-3
+
+
+def hop_excess_s(distance_km: float, hops: int, virtual_height_km: float) -> float:
+    """How much later than the ground line a reflected path arrives.
+
+    Spherical, not the flat-Earth ``sqrt(d^2 + 4h^2)``: at ~1300 km per hop the
+    two differ by 13%, and the difference lands directly in a threshold. Each
+    hop is two equal slant legs to a mirror at ``virtual_height_km``; the leg
+    is the third side of a triangle with the Earth's centre.
+    """
+    if hops < 1 or distance_km <= 0 or virtual_height_km <= 0:
+        return 0.0
+    half_ground = (distance_km / hops) / 2.0
+    phi = half_ground / EARTH_RADIUS_KM
+    r, rh = EARTH_RADIUS_KM, EARTH_RADIUS_KM + virtual_height_km
+    leg = math.sqrt(max(0.0, r * r + rh * rh - 2 * r * rh * math.cos(phi)))
+    return max(0.0, 2.0 * hops * leg - distance_km) / C_KM_S
 
 #: Scatter across the reference transmitter's slots, past which the epoch
 #: solve is not a measurement. A sound one at DOB agreed to 0.08 ms across
@@ -1141,19 +1182,45 @@ def epoch_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric
     # seconds break transmitter *identification*; the remainder breaks range.
     whole = round(offset.seconds)
     remainder = offset.seconds - whole
+
+    # The window is asymmetric because the physics is. `solve_epoch_offset`
+    # models tau = distance/c, a straight line along the ground with no
+    # ionosphere in it, so a real signal -- reflecting off a layer 300-450 km
+    # up -- can only ever arrive LATE. Early is not a short path; there is no
+    # such thing. It is a slow clock, which is what -2.108 ms was here.
+    #
+    # Measured 2026-09-14, and this is the reading that forced the change: a
+    # symmetric abs() < 1 ms called +1.28 ms a fault. It is not one. The
+    # recorder takes its epoch from the GPSDO's gps_time on a PPS edge (patch
+    # 0001 prints `[source: GPSDO gps_time]`, and it does), the host clock's
+    # own 0.77 ms bias never reaches a sample, and 1.28 ms is two hops over
+    # 2588 km at ~330 km virtual height. Ordinary evening F2 geometry, red
+    # every night.
+    hops = int(spec.get("max_hops", 2) or 2)
+    height = float(spec.get("max_virtual_height_km", 450.0) or 450.0)
+    late = hop_excess_s(float(spec["distance_km"]), hops, height)
+
     parts = []
     if whole:
         parts.append(f"{whole:+d} whole second(s) -- transmit seconds are "
                      f"misidentified")
-    parts.append(f"{remainder * 1e3:+.1f} ms = {abs(remainder) * 299792.458:.0f} km "
-                 f"of range error")
+    km = abs(remainder) * C_KM_S
+    if -EPOCH_EARLY_LIMIT_S < offset.seconds < late:
+        parts.append(f"{remainder * 1e3:+.1f} ms = {km:.0f} km, inside the "
+                     f"{late * 1e3:.2f} ms this path can add by reflecting")
+    else:
+        parts.append(f"{remainder * 1e3:+.1f} ms = {km:.0f} km of range error")
 
     return Metric(
         "epoch_offset_s", round(offset.seconds, 6),
-        ok=abs(offset.seconds) < 1e-3,
+        ok=(-EPOCH_EARLY_LIMIT_S < offset.seconds < late),
         detail=(f"{spec.get('name', 'reference')}, {offset.n_slots} slots, "
                 f"{offset.n_samples} samples, +/-{offset.residual_sd_s * 1e3:.2f} ms "
-                f"({offset.range_uncertainty_km:.0f} km); " + "; ".join(parts)),
+                f"({offset.range_uncertainty_km:.0f} km); " + "; ".join(parts)
+                + f". Window {-EPOCH_EARLY_LIMIT_S * 1e3:+.1f} to "
+                  f"{late * 1e3:+.2f} ms -- {hops} hop(s) over "
+                  f"{float(spec['distance_km']):.0f} km at {height:.0f} km "
+                  f"virtual height, which the solve does not model"),
     )
 
 

@@ -450,6 +450,88 @@ def test_epoch_metric_is_unknown_when_the_slots_disagree(monkeypatch, station):
     assert "disagree" in metric.detail
 
 
+def _solved(monkeypatch, station, seconds, *, sd=0.00007):
+    """A clean solve at a chosen offset, so only the verdict is under test."""
+    class FakeOffset:
+        residual_sd_s, n_slots, n_samples = sd, 2, 75
+        range_uncertainty_km = 20.0
+    FakeOffset.seconds = seconds
+
+    from muf import io_detect
+    monkeypatch.setattr(io_detect, "solve_epoch_offset", lambda *a, **k: FakeOffset())
+    monkeypatch.setattr(io_detect, "read_timing", lambda p: object())
+    (station.output_dir / "par-ch0-1.0000.h5").write_bytes(b"x")
+    return health.epoch_offset(station, max_age_s=1e9)
+
+
+def test_an_ordinary_two_hop_path_is_not_a_clock_fault(monkeypatch, station):
+    """+1.28 ms on 2026-09-14, which the symmetric abs() < 1 ms called red.
+
+    It is not a fault. The recorder takes its epoch from the GPSDO's gps_time
+    on a PPS edge -- patch 0001 prints `[source: GPSDO gps_time]` and the
+    journal shows it doing so -- so the host clock's own measured 0.77 ms bias
+    never reaches a sample. 1.28 ms is two hops over 2588 km at ~330 km
+    virtual height: an ordinary evening F2 geometry that went red every night.
+    """
+    metric = _solved(monkeypatch, station, 0.001282)
+
+    assert metric.ok is True, metric.detail
+    assert "inside the" in metric.detail
+    # And it says what the window is, because a bare pass on a number that
+    # used to fail explains nothing.
+    assert "2 hop(s) over 2588 km at 450 km virtual height" in metric.detail
+
+
+def test_an_early_arrival_is_still_a_failure(monkeypatch, station):
+    """-2.108 ms, the fault this station actually had.
+
+    The model is a straight line along the ground, so there is no path that
+    arrives sooner. Early is a slow clock, and the tight side of the window
+    exists to say so.
+    """
+    metric = _solved(monkeypatch, station, -0.002108)
+
+    assert metric.ok is False
+    assert "range error" in metric.detail
+
+
+def test_a_late_arrival_past_the_hop_budget_is_a_failure(monkeypatch, station):
+    """Beyond what two hops at 450 km can add, "the ionosphere did it" stops
+    being available as an explanation."""
+    metric = _solved(monkeypatch, station, 0.004)
+
+    assert metric.ok is False
+    assert "range error" in metric.detail
+
+
+def test_a_whole_second_is_never_inside_the_window(monkeypatch, station):
+    """The 0.956 s fault. Whole seconds break transmitter identification, not
+    just range, and no hop budget reaches that far."""
+    metric = _solved(monkeypatch, station, 0.956)
+
+    assert metric.ok is False
+    assert "whole second" in metric.detail
+
+
+def test_the_hop_budget_is_spherical_not_flat_earth(station):
+    """At ~1300 km per hop the two differ by 13%, and the difference lands
+    straight in a threshold. Flat-Earth sqrt(d^2 + 4h^2) gives 1.88 ms for the
+    two-hop 450 km case; the spherical geometry gives 2.13."""
+    import math
+
+    d, hops, h = 2587.83, 2, 450.0
+    spherical = health.hop_excess_s(d, hops, h)
+    flat = (hops * math.sqrt((d / hops) ** 2 + 4 * h * h) - d) / health.C_KM_S
+
+    assert abs(spherical * 1e3 - 2.13) < 0.01
+    assert spherical > flat * 1.10
+
+    # Monotonic in both arguments, and zero for nonsense rather than negative.
+    assert health.hop_excess_s(d, 1, h) < health.hop_excess_s(d, 2, h)
+    assert health.hop_excess_s(d, 2, 300.0) < health.hop_excess_s(d, 2, 450.0)
+    assert health.hop_excess_s(d, 0, h) == 0.0
+    assert health.hop_excess_s(0.0, 2, h) == 0.0
+
 # --------------------------------------------------------------------------
 # Control
 # --------------------------------------------------------------------------

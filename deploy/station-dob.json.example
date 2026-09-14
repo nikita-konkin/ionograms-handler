@@ -220,9 +220,22 @@
     "positive, which is the only sign an unmodelled hop excess can produce.",
     "That is the measurement that confirmed the site, not just the assertion.",
     "",
-    "It now sits 25 us inside the abs(offset) < 1e-3 failure threshold and",
-    "will flap red when the virtual height runs high. The budget is spent on",
-    "group path the model does not subtract, not on a clock fault."
+    "It sat 25 us inside the old symmetric abs(offset) < 1e-3 threshold and",
+    "flapped red whenever the virtual height ran high, which was most nights.",
+    "Settled 2026-09-14: the window is now asymmetric and geometric.",
+    "",
+    "Early is the tight side -- the solve models a straight ground line, so",
+    "no real path arrives sooner and -0.5 ms is already a slow clock. Late",
+    "gets max_hops x max_virtual_height_km of budget, 2.13 ms here, because",
+    "reflecting off a layer a few hundred km up is what the model leaves",
+    "out. +1.28 ms measured that evening is two hops at ~330 km.",
+    "",
+    "The host clock is NOT in this budget and does not need to be: the",
+    "recorder sets its epoch from the GPSDO gps_time sensor on a PPS edge",
+    "(patch 0001, which prints `[source: GPSDO gps_time]` on every start).",
+    "Measured the same evening, the host clock was 0.77 ms fast and none of",
+    "it reached a sample. If that line ever says `host clock` instead, the",
+    "GPSDO did not lock and this budget is the wrong shape."
   ],
   "reference_tx": {
     "name": "cyprus1",
@@ -230,6 +243,8 @@
     "transmit_seconds": [235, 240, 245, 300],
     "distance_km": 2587.83,
     "cycle_s": 300.0,
-    "window_s": 2.0
+    "window_s": 2.0,
+    "max_hops": 2,
+    "max_virtual_height_km": 450.0
   }
 }

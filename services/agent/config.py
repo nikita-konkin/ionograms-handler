@@ -205,11 +205,37 @@ class StationConfig:
         "name": "cyprus1",
         "rate": 100e3,
         "transmit_seconds": [235, 240, 245, 300],
-        "distance_km": 3436.0,
+        # Nicosia to THIS receiver, Yoshkar-Ola. It read 3436.0 here until
+        # 2026-09-14 -- the Nicosia->Dombas figure, left behind when the site
+        # was corrected on 2026-08-16. The station's own agent.json was fixed
+        # then and this default was not, so anything deployed from the
+        # defaults inherited an 848 km error that comes back as clock error:
+        # epoch_offset_s read -0.002108 s against a GPSDO-disciplined
+        # recorder, where 2.1 ms of real clock error is not available.
+        "distance_km": 2587.83,
         "cycle_s": 300.0,
         # Wide enough to admit an epoch error past a whole second, which is
         # exactly the case worth catching.
         "window_s": 2.0,
+        # The late half of the pass window, as geometry rather than as a
+        # number chosen to clear a reading. `solve_epoch_offset` models
+        # tau = distance/c -- a straight line along the ground -- so a real
+        # signal, reflecting off a layer a few hundred km up, always arrives
+        # later than it predicts. These two say how much later is still the
+        # ionosphere and not a fault: the worst case that cannot be excluded.
+        #
+        # 2 hops at 450 km over 2587.83 km is 2.13 ms. Measured on this
+        # circuit 2026-09-14: +1.28 ms, which is 2 hops at ~330 km -- an
+        # ordinary evening F2 path that a symmetric 1 ms threshold called a
+        # fault every night.
+        #
+        # Raising these costs sensitivity in one direction only: a *fast*
+        # clock hides inside the budget, because nothing here can tell a
+        # fast clock from a longer path. A slow one cannot hide -- see
+        # EPOCH_EARLY_LIMIT_S -- and the way to close the other half is a
+        # second reference at a different distance (BACKLOG sec. 16).
+        "max_hops": 2,
+        "max_virtual_height_km": 450.0,
     })
 
     @classmethod
