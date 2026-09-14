@@ -33,11 +33,42 @@ MODEL = os.environ.get("SAO_MODEL", "1") not in ("0", "", "false")
 #: prev/next, so a handful of neighbours is the access pattern to serve.
 CACHE_SIZE = 24
 
-#: Estimators exported, in the order the panel lists them. All three, because
+#: Estimators exported, in the order the panel lists them. Several, because
 #: the spec's separate-storage rule (sec. 1.3.4) puts each in its own
-#: ``<SAORecord>`` and the disagreement between them is information: three
-#: methods on one trace is the closest thing this pipeline has to an error bar.
-METHODS = ("algo", "kmeans", "contour")
+#: ``<SAORecord>`` and the disagreement between them is information: more
+#: than one method on a trace is the closest thing this pipeline has to an
+#: error bar.
+#:
+#: Deliberately *not* ``extractors.DEFAULT_METHODS``, which is the same list
+#: minus ``dp``. That one decides what a scan **stores**, and ``dp`` is held
+#: out of it so re-running an old archive keeps meaning what it meant. This
+#: one decides what the page **draws**, live from the product, and writes
+#: nothing down -- so holding ``dp`` back here bought nothing and cost the
+#: only view that would let anyone judge it. It is 10 ms per sounding, and
+#: docs/2026-08-30-segmentation-quality.md sec. 6a asks for precisely this:
+#: a look at the trace, because no agreement statistic built out of the
+#: other estimators can rank it against them.
+#:
+#: ``cnn`` stays out. It needs a model trained on this geometry and raises
+#: per file without one -- a tab that fails rather than one that disagrees.
+METHODS = ("algo", "kmeans", "contour", "dp")
+
+#: What ``/soundings/{id}/sao.xml`` writes, which is **not** the list above.
+#: That endpoint exists to serve the same document ``muf export`` produces on
+#: the station, and ``muf export`` defaults to ``extractors.DEFAULT_METHODS``.
+#: Letting the panel's list reach the download would have put a fourth
+#: ``<SAORecord>`` in the server's copy and none in the station's, so two
+#: files of the same sounding would no longer compare equal -- the one
+#: property that makes serving it worthwhile. Kept in step by
+#: ``test_the_download_still_matches_what_the_station_exports``.
+#:
+#: The cost is a second cache entry: ``methods`` is part of the memo key, so
+#: a sounding that is viewed and then downloaded is scaled twice. Paid
+#: deliberately. The alternative -- build once with the panel's list and drop
+#: the extra record before serialising -- means matching records by the
+#: ``AutoScaler`` text or by position, and dropping the wrong one is a silent
+#: wrong answer where this is only a slow one, on a link nobody clicks twice.
+EXPORT_METHODS = ("algo", "kmeans", "contour")
 
 _LOCK = threading.Lock()
 _CACHE: OrderedDict[tuple, Scaling] = OrderedDict()

@@ -3228,6 +3228,58 @@ def test_the_sounding_page_draws_the_scaling_itself(client, scaled):
     assert client.get("/static/plotly.min.js").status_code == 200
 
 
+def test_the_panel_offers_every_estimator_it_can_draw(client, scaled):
+    """``dp`` is one of them, which it was not until today.
+
+    It has been a registered extractor since 2026-08-30 and is stored at
+    ingest, so a sounding could show a `dp` row in its Extractions table
+    while the panel above offered no way to look at the trace behind it.
+    That is the one thing docs/2026-08-30-segmentation-quality.md sec. 6a
+    asks for: it argues `dp` cannot be ranked by agreement with the other
+    estimators, because every comparator is made of them.
+    """
+    from services.api import sao
+
+    assert "dp" in sao.METHODS
+    sounding_id, path = scaled
+
+    for method in sao.METHODS:
+        page = client.get(f"/ui/sounding/{sounding_id}?method={method}")
+        assert page.status_code == 200
+        assert f"method={method}" in page.text, f"{method} is not offered"
+
+    # Offered and scalable are different claims, and the page cannot tell
+    # them apart: a method that never ran renders the same empty frame as
+    # one that ran and found nothing. Ask the scaling instead -- a missing
+    # record is the failure mode a stale METHODS list would produce.
+    scaling = sao.build(path, gate=None, methods=sao.METHODS)
+    for method in sao.METHODS:
+        assert scaling.record(method) is not None, f"{method} has no record"
+
+
+def test_the_download_still_matches_what_the_station_exports(client, scaled):
+    """Adding `dp` to the panel must not add a record to the SAO.XML.
+
+    `/soundings/{id}/sao.xml` is worth serving only because it is the same
+    file `muf export` writes on the station, and that defaults to
+    `DEFAULT_METHODS`. Inheriting the panel's list would have put a fourth
+    `<SAORecord>` in the server's copy and none in the station's -- a
+    divergence with no symptom until somebody diffed two files that were
+    supposed to be identical.
+    """
+    from muf import extractors
+    from services.api import sao
+
+    assert sao.EXPORT_METHODS == extractors.DEFAULT_METHODS
+
+    sounding_id, _ = scaled
+    body = client.get(f"/soundings/{sounding_id}/sao.xml").text
+    # `</SAORecord>`, not `<SAORecord`: the latter also matches the
+    # `<SAORecordList>` wrapper and counts one record too many.
+    assert body.count("</SAORecord>") == len(extractors.DEFAULT_METHODS)
+    assert "dp" not in body
+
+
 def test_a_scaling_that_fails_does_not_take_the_page_with_it(client, scaled,
                                                              monkeypatch):
     """The row, the neighbours and the stored extractions are still worth

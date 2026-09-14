@@ -569,8 +569,12 @@ def sounding_sao(sounding_id: int, request: Request,
 
     Separate records rather than one merged scaling: the spec keeps
     independent scalings apart (sec. 1.3.4), and the disagreement between
-    three estimators on one trace is the closest thing this pipeline has to an
+    the estimators on one trace is the closest thing this pipeline has to an
     error bar. Merging them would throw it away.
+
+    ``EXPORT_METHODS`` explicitly, not the module default: the sounding page
+    offers ``dp`` as a fourth live scaling, and inheriting that here would
+    add a record the station's own export does not write.
     """
     from muf.export import saoxml
 
@@ -578,7 +582,8 @@ def sounding_sao(sounding_id: int, request: Request,
 
     path = _sounding_path(request, sounding_id)
     with _serving(path):
-        scaling = sao_mod.build(path, gate=gate)
+        scaling = sao_mod.build(path, gate=gate,
+                                methods=sao_mod.EXPORT_METHODS)
     body = saoxml.to_string(scaling.root)
     name = Path(path).stem
     return Response(
