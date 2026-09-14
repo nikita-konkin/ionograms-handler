@@ -399,13 +399,42 @@ def job_states(config: StationConfig) -> list[Metric]:
 
         _, status = _show(unit, "ExecMainStatus")
         _, when = _show(unit, "ExecMainExitTimestamp")
+        _, condition = _show(unit, "ConditionResult")
 
         env = _unit_environment(unit)
         remote = env.get("ARCHIVE_REMOTE", "")
         where = f" -> {remote}" if remote else ""
         ran = f", last ran {when}" if when else ", never run"
 
-        if result == "success":
+        # `Result` is `success` on a unit that has never run a single time --
+        # it is systemd's default, not a verdict -- and `success` is also what
+        # a start skipped by ConditionPathIsMountPoint leaves behind. Both
+        # rendered green, one of them under the sentence "last run succeeded,
+        # never run". Each is handled before `result` is trusted.
+        if condition == "no":
+            # The most urgent of the three, and previously invisible in both
+            # directions: a skipped start is not a failed run, so `Result`
+            # stays at whatever the last real run left, and the timer keeps
+            # firing on schedule so the silence check never trips either. The
+            # archive simply stops moving.
+            return_detail = (
+                f"the last start was SKIPPED -- a condition was not met, "
+                f"almost always the archive share not being mounted{where}. "
+                f"systemd does not count that as a failure, so this job can "
+                f"skip every pass for days with the timer firing normally"
+                f"{ran}. `systemctl show {unit} --property=ConditionResult` "
+                f"and `findmnt` on the share say which.")
+            out.append(Metric(f"job:{unit}", "skipped", ok=False,
+                              detail=return_detail))
+        elif not when:
+            out.append(Metric.unknown(
+                f"job:{unit}",
+                f"never run{where}. `Result={result}` is the value systemd "
+                f"carries before a unit has run at all, so it is not evidence "
+                f"of anything -- green here would have been a claim nothing "
+                f"measured. The timer metric beside this one says whether it "
+                f"is about to."))
+        elif result == "success":
             out.append(Metric(f"job:{unit}", result, ok=True,
                               detail=f"last run succeeded{ran}{where}"))
         else:

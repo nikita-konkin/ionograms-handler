@@ -1669,6 +1669,10 @@ def test_a_oneshot_between_runs_is_not_a_failure(monkeypatch, station):
     """
     _fake_show(monkeypatch, {
         ("chirp-archive-sync.service", "Result"): "success",
+        # A unit that has actually run carries this. Omitting it used to
+        # make no difference, because `Result=success` alone was trusted.
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-14 20:57:09 MSK",
         ("chirp-archive-sync.service", "ExecMainStatus"): "0",
         ("chirp-archive-sync.timer", "ActiveState"): "active",
         ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
@@ -1679,6 +1683,76 @@ def test_a_oneshot_between_runs_is_not_a_failure(monkeypatch, station):
     assert health.HealthReport("TST", 0.0, metrics).healthy
 
 
+def test_a_job_that_has_never_run_is_not_reported_as_succeeding(monkeypatch,
+                                                                station):
+    """Seen on the console, 2026-09-14: "last run succeeded, never run".
+
+    `Result=success` is the value systemd carries before a unit has run at
+    all, so the green came from a default rather than from a result. On that
+    day the archive had just been repointed at a new NAS and the question
+    being asked of this row was precisely "has it copied anything yet" -- and
+    the row answered yes.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    })
+    job = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+    job = job["job:chirp-archive-sync.service"]
+
+    assert job.ok is None, job.detail
+    assert "never run" in job.detail
+    # Unknown, not red: a timer installed five minutes ago has not failed at
+    # anything. The timer metric beside it is what says whether it will fire.
+    assert "systemd carries before a unit has run" in job.detail
+
+
+def test_a_start_skipped_by_its_condition_is_red(monkeypatch, station):
+    """The hole neither existing metric covered.
+
+    ConditionPathIsMountPoint failing is not an error: systemd leaves
+    `Result=success`, the timer keeps firing exactly on schedule so the
+    silence check never trips, and the job copies nothing. The archive stops
+    moving with two green rows above it.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ConditionResult"): "no",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-10 04:00:00 MSK",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    })
+    metrics = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+    job = metrics["job:chirp-archive-sync.service"]
+
+    assert job.ok is False
+    assert job.value == "skipped"
+    assert "not being mounted" in job.detail
+    # The stale success is still shown -- "it last worked on the 10th" is the
+    # useful half of the reading, it just is not a pass.
+    assert "2026-09-10" in job.detail
+    # And the timer is genuinely fine, which is the confusing part.
+    assert metrics["timer:chirp-archive-sync.timer"].ok is True
+
+
+def test_an_older_systemd_without_conditionresult_still_judges_the_run(
+        monkeypatch, station):
+    """`ConditionResult` is systemd 218+, but `_show` answers empty for any
+    property a systemd does not know, and an unreadable condition must not
+    turn a successful run into a skipped one."""
+    _fake_show(monkeypatch, {
+        ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-14 20:57:09 MSK",
+        ("chirp-archive-sync.timer", "ActiveState"): "active",
+        ("chirp-archive-sync.timer", "LastTriggerUSec"): str(int(time.time() * 1e6)),
+    })
+    job = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
+
+    assert job["job:chirp-archive-sync.service"].ok is True
+
 def test_a_stopped_timer_fails_even_though_no_run_failed(monkeypatch, station):
     """The quieter half, and the one worth the extra metric.
 
@@ -1688,6 +1762,8 @@ def test_a_stopped_timer_fails_even_though_no_run_failed(monkeypatch, station):
     """
     _fake_show(monkeypatch, {
         ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-14 20:57:09 MSK",
         ("chirp-archive-sync.timer", "ActiveState"): "inactive",
     })
     metrics = {m.name: m for m in health.job_states(replace(station, job_units=JOBS))}
@@ -1703,6 +1779,8 @@ def test_a_timer_that_is_active_but_silent_is_a_failure(monkeypatch, station):
     stale = int((time.time() - 3 * 3600) * 1e6)
     _fake_show(monkeypatch, {
         ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-14 20:57:09 MSK",
         ("chirp-archive-sync.timer", "ActiveState"): "active",
         ("chirp-archive-sync.timer", "LastTriggerUSec"): str(stale),
     })
@@ -1724,6 +1802,8 @@ def test_the_job_reports_the_destination_the_unit_actually_uses(monkeypatch,
     """
     _fake_show(monkeypatch, {
         ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-14 20:57:09 MSK",
         ("chirp-archive-sync.service", "Environment"):
             "ARCHIVE_LOCAL=/home/ionouser/ionozond_data2 "
             "ARCHIVE_REMOTE=/mnt/tec_data_tb/ionozond_data2",
@@ -2187,6 +2267,8 @@ def test_an_older_systemd_without_value_still_reports(monkeypatch, station):
     """
     table = {
         ("chirp-archive-sync.service", "Result"): "success",
+        ("chirp-archive-sync.service", "ExecMainExitTimestamp"):
+            "Пн 2026-09-14 20:57:09 MSK",
         ("chirp-archive-sync.service", "Environment"):
             "ARCHIVE_LOCAL=%s ARCHIVE_REMOTE=/mnt/ionozond_16tb/x"
             % station.chirp_config.parent,
