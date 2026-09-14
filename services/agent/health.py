@@ -223,6 +223,88 @@ def unit_states(config: StationConfig) -> list[Metric]:
     return out
 
 
+#: Suffixes systemd loads. A `.bak-2026-09-14` beside a unit is ignored by
+#: systemd and must be ignored here too, or every `sed -i.bak` would report
+#: drift against a file nothing reads.
+UNIT_SUFFIXES = (".service", ".timer", ".target", ".mount", ".automount",
+                 ".socket", ".path")
+
+
+def _directives(text: str) -> list[str]:
+    """The lines systemd acts on: comments and blank lines dropped.
+
+    Comments are most of the bulk of these files and they are *supposed* to
+    change -- a repo that gains a paragraph of reasoning has not drifted. What
+    must not differ is the settings, and both incidents here were one line:
+    an ``Environment=`` naming a different destination.
+    """
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith(("#", ";")):
+            kept.append(stripped)
+    return kept
+
+
+def units_match_repo(config: StationConfig) -> Metric:
+    """Do the installed unit files still say what the repo's copies say.
+
+    Nothing else checks this. `systemctl` reads `/etc/systemd/system` and no
+    document reads the repo, so the two drift silently and in both directions:
+    the installed `chirp-archive-sync.service` was edited in place on
+    2026-08-22 and went unnoticed for four days, and on 2026-09-14 the repo
+    copies turned out to be pointed at a different NAS entirely, one routine
+    `sudo cp` away from redirecting the archive with every unit still green.
+
+    Only units present in **both** places are compared. A unit in the repo and
+    not installed is the ordinary state of a station that does not run all of
+    them -- the digisonde receivers, the mount units before they are installed
+    -- and reporting that as drift would be the false-red this whole config
+    was shaped to avoid.
+    """
+    name = "units_match_repo"
+    source = Path(config.unit_source_dir) if config.unit_source_dir else None
+    if source is None or not source.is_dir():
+        return Metric.unknown(name, f"{source}: no repo unit directory to compare")
+
+    installed = Path(config.unit_install_dir)
+    checked, differ, unreadable = 0, [], 0
+    for path in sorted(source.iterdir()):
+        if path.suffix not in UNIT_SUFFIXES:
+            continue
+        target = installed / path.name
+        if not target.is_file():
+            continue
+        try:
+            mine = _directives(path.read_text(encoding="utf-8", errors="replace"))
+            theirs = _directives(target.read_text(encoding="utf-8",
+                                                  errors="replace"))
+        except OSError:
+            unreadable += 1
+            continue
+        checked += 1
+        if mine != theirs:
+            differ.append(path.name)
+
+    if not checked:
+        return Metric.unknown(
+            name,
+            f"none of the repo's units are installed in {installed}"
+            + (f" ({unreadable} unreadable)" if unreadable else ""))
+    if not differ:
+        return Metric(name, checked, ok=True,
+                      detail=f"{checked} installed unit(s) match {source}")
+
+    # Deliberately does not say "run sudo cp". Which copy is right is not
+    # knowable from here, and on 2026-09-14 it was the installed one.
+    return Metric(
+        name, None, ok=False,
+        detail=(f"{', '.join(differ)} differ from {source} in a directive, not "
+                f"a comment. systemd obeys {installed}; the repo copy is what a "
+                f"deploy would install over it. Diff them and decide which is "
+                f"right before copying either way -- the repo copy has named "
+                f"the wrong NAS before now."))
+
 def _show(unit: str, prop: str) -> tuple[int, str]:
     """One ``systemctl show`` property, on any systemd this station may have.
 
@@ -1112,6 +1194,7 @@ def collect(config: StationConfig | None = None, *,
     metrics.extend(disk_free(config))
     metrics.extend(archive_remote_free(config))
     metrics.append(archive_paths_agree(config))
+    metrics.append(units_match_repo(config))
     metrics.append(sample_rate(config))
     metrics.extend(band(config))
     metrics.append(uptime_s())

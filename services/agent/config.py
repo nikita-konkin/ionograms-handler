@@ -136,6 +136,26 @@ class StationConfig:
     #: then falls back to the flat threshold and says so.
     ringbuffer_unit: str = "chirp-ringbuffer.service"
 
+    #: The repo's copy of the unit files, and where they are installed.
+    #:
+    #: ``systemctl`` reads the installed copy and nothing reads the repo's,
+    #: so the two are free to disagree -- and have, twice, in both
+    #: directions. On 2026-08-22 the installed `chirp-archive-sync.service`
+    #: was edited in place and the repo stayed stale for four days. On
+    #: 2026-09-14 the reverse turned up: the repo copies on this station had
+    #: been pointed at `/mnt/tec_data_tb` -- a different NAS, a different
+    #: domain, a share called `tec_data_temp` -- and were never installed.
+    #: The documented deploy step is `sudo cp .../systemd/*.service
+    #: /etc/systemd/system/`, so that edit was one routine command away from
+    #: silently redirecting the whole archive, with every unit still green.
+    #:
+    #: The default is derived from this module's own location rather than
+    #: hardcoded: the agent runs *out of* the checkout, so its own directory
+    #: is the repo copy by construction and cannot be configured wrong.
+    unit_source_dir: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parent / "systemd")
+    unit_install_dir: Path = Path("/etc/systemd/system")
+
     units: tuple[str, ...] = DEFAULT_UNITS
     #: Of those, the ones allowed to be inactive. See
     #: :data:`DEFAULT_OPTIONAL_UNITS`; set it to ``[]`` to have every listed

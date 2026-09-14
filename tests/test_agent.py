@@ -1747,6 +1747,116 @@ def test_a_missing_systemctl_is_unknown_not_failed(monkeypatch, station):
     assert health.HealthReport("TST", 0.0, metrics).healthy
 
 
+# --- repo units against installed units --------------------------------------
+
+_UNIT = """# A comment that is allowed to change.
+[Unit]
+ConditionPathIsMountPoint=/mnt/ionozond_5tb
+
+[Service]
+Environment=ARCHIVE_REMOTE=/mnt/ionozond_5tb/ionozond_data2
+ExecStart=/usr/bin/rsync -rlD \\
+    ${ARCHIVE_LOCAL}/ ${ARCHIVE_REMOTE}/
+"""
+
+
+def _units(tmp_path, repo_text, installed_text, name="chirp-archive-sync.service"):
+    source, installed = tmp_path / "repo", tmp_path / "etc"
+    source.mkdir(), installed.mkdir()
+    (source / name).write_text(repo_text)
+    if installed_text is not None:
+        (installed / name).write_text(installed_text)
+    return source, installed
+
+
+def test_a_repo_unit_pointed_at_another_nas_is_caught(station, tmp_path):
+    """2026-09-14. The repo copies on the station named /mnt/tec_data_tb --
+    a different box, a different domain, a share called `tec_data_temp` --
+    while the installed units said something else entirely. Nothing read the
+    repo, so nothing noticed; the documented deploy step is a `sudo cp` that
+    would have redirected the whole archive with every unit still green."""
+    source, installed = _units(
+        tmp_path,
+        _UNIT.replace("ionozond_5tb/ionozond_data2", "tec_data_tb/ionozond_data2"),
+        _UNIT)
+
+    metric = health.units_match_repo(
+        replace(station, unit_source_dir=source, unit_install_dir=installed))
+
+    assert metric.ok is False
+    assert "chirp-archive-sync.service" in metric.detail
+    # Must not tell an operator to copy: on the day this was written, the
+    # installed copy was the correct one.
+    assert "sudo cp" not in metric.detail
+    assert "decide which is right" in metric.detail
+
+
+def test_comments_may_differ_without_reporting_drift(station, tmp_path):
+    """Most of these files is prose and it is meant to grow. Flagging a
+    reworded paragraph would make the check unreadable within a week."""
+    source, installed = _units(
+        tmp_path, _UNIT,
+        _UNIT.replace(
+            "# A comment that is allowed to change.",
+            "# Rewritten entirely, with\n# two more lines.\n;and a semicolon"))
+
+    metric = health.units_match_repo(
+        replace(station, unit_source_dir=source, unit_install_dir=installed))
+
+    assert metric.ok is True
+    assert metric.value == 1
+
+
+def test_a_unit_that_is_not_installed_is_not_drift(station, tmp_path):
+    """The ordinary state of a station that does not run every unit in the
+    repo -- the digisonde receivers, a .mount not yet copied. Reporting it
+    would be the false-red the units list was trimmed to avoid."""
+    source, installed = _units(tmp_path, _UNIT, None)
+    (source / "chirp-digisonde@.service").write_text(_UNIT)
+
+    metric = health.units_match_repo(
+        replace(station, unit_source_dir=source, unit_install_dir=installed))
+
+    assert metric.ok is None
+    assert "none of the repo's units are installed" in metric.detail
+
+
+def test_a_sed_backup_beside_a_unit_is_ignored(station, tmp_path):
+    """`sed -i.bak-...` leaves a file systemd does not load, and neither may
+    this -- otherwise every in-place edit reports drift against nothing."""
+    source, installed = _units(tmp_path, _UNIT, _UNIT)
+    (installed / "chirp-archive-sync.service.bak-20260914").write_text("[X]\nY=1\n")
+    (source / "notes.md").write_text("not a unit")
+
+    metric = health.units_match_repo(
+        replace(station, unit_source_dir=source, unit_install_dir=installed))
+
+    assert metric.ok is True
+    assert metric.value == 1
+
+
+def test_no_repo_directory_is_unknown_not_a_failure(station, tmp_path):
+    """An agent installed without its checkout beside it cannot answer, and
+    `unknown` is the honest word for that."""
+    metric = health.units_match_repo(
+        replace(station, unit_source_dir=tmp_path / "gone"))
+
+    assert metric.ok is None
+    assert "no repo unit directory" in metric.detail
+
+
+def test_the_shipped_units_are_what_this_check_compares(station):
+    """The default is derived from the module's own location, so an agent
+    running out of the checkout cannot be configured to compare the wrong
+    tree. Guards against someone 'tidying' it into a hardcoded path."""
+    from services.agent import config as config_mod
+
+    default = config_mod.StationConfig().unit_source_dir
+
+    assert default.is_dir()
+    assert (default / "chirp-archive-sync.service").is_file()
+    assert default == Path(config_mod.__file__).resolve().parent / "systemd"
+
 # --- the ringbuffer is supposed to be full -----------------------------------
 
 _DRF = ("{ path=/home/ionouser/chirpsounder2/.venv38/bin/drf ; argv[]=drf "
