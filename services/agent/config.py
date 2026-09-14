@@ -123,6 +123,19 @@ class StationConfig:
     #: because filling it is a different failure with a different remedy.
     ringbuffer_dir: Path = Path("/dev/shm/hf25")
 
+    #: The unit that runs ``drf ringbuffer``, read only for its ``-z`` size.
+    #:
+    #: Free space on the ringbuffer volume cannot be judged without it. The
+    #: ring is *supposed* to sit at its cap -- 14000MB of a 16.8 GB tmpfs on
+    #: this station -- so a flat "85% full is a warning" threshold is in
+    #: permanent near-breach against a buffer that is working correctly, and
+    #: a check that is always one step from red is a check nobody reads.
+    #: With the cap known, full-to-cap is green and overrunning it is not.
+    #:
+    #: Empty on a station whose ringbuffer is not systemd's -- the metric
+    #: then falls back to the flat threshold and says so.
+    ringbuffer_unit: str = "chirp-ringbuffer.service"
+
     units: tuple[str, ...] = DEFAULT_UNITS
     #: Of those, the ones allowed to be inactive. See
     #: :data:`DEFAULT_OPTIONAL_UNITS`; set it to ``[]`` to have every listed

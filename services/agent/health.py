@@ -111,7 +111,30 @@ FUTURE_PRODUCT_TOLERANCE_S = 5.0
 
 #: Ringbuffer occupancy past this is the hour-before-failure signal. Observed
 #: at 94 % on 2026-08-05 with `ringbuffer_max_age_min` too high.
+#:
+#: **Fallback only**, used when the ring's own cap cannot be read. A ring
+#: sized at 14000MB of a 16.8 GB tmpfs leaves 16.7% free when it is working
+#: perfectly, against the 15% this allows -- 1.7 points, about 285 MB. The
+#: threshold and the buffer size were set independently and nearly collide,
+#: so on that station this reads as a station one bad minute from red,
+#: forever. See :data:`RINGBUFFER_HEADROOM_FLOOR`.
 RINGBUFFER_WARN_FRACTION = 0.85
+
+#: Of the space the ring's own ``-z`` deliberately leaves free, how much may
+#: be gone before that is a failure.
+#:
+#: 1.0 is a ring exactly at its cap, which is success -- ``drf`` printing
+#: ``99% size`` on a steady cadence is what a healthy trimmer looks like.
+#: Below 1.0 something is in the ring's headroom: the trimmer has stopped,
+#: or another tenant is on the same tmpfs.
+#:
+#: Half, not something tighter, because this metric cannot be an early
+#: warning and pretending otherwise would be the same mistake again. At
+#: 25 MS/s the recorder writes 100 MB/s, so a dead trimmer crosses 2.8 GB of
+#: headroom in **28 seconds** -- less than one push interval. What this
+#: catches is the aftermath. The leading indicator is the bounded ``% size``
+#: line in ``journalctl -u chirp-ringbuffer``, which stops or reaches 100%.
+RINGBUFFER_HEADROOM_FLOOR = 0.5
 
 #: How long a healthy archive timer may stay silent before that is a failure
 #: rather than a wait. The sync timer runs every 5 min and the prune hourly,
@@ -578,6 +601,54 @@ def newest_product_age(config: StationConfig, scan=None) -> Metric:
                   detail=f"{source}; threshold {STALE_PRODUCT_S:.0f}s")
 
 
+#: ``-z 14000MB`` in the unit's ExecStart. Decimal multipliers, which is what
+#: ``drf`` means by MB and what the size-to-seconds arithmetic in
+#: ``chirp-ringbuffer.service`` assumes: 12000MB / 100 MB/s = 120 s, measured
+#: at 119 s.
+#: The separator is optional because ``-z14000MB`` is valid short-option
+#: spelling, and a size this cannot read falls back to the flat floor
+#: silently -- a miss here is a wrong verdict, not an error.
+_SIZE_ARG = re.compile(r"(?:-z|--size)[=\s]*(\d+(?:\.\d+)?)\s*([KMGT]?)B?\b")
+_SIZE_SCALE = {"": 1, "K": 10 ** 3, "M": 10 ** 6, "G": 10 ** 9, "T": 10 ** 12}
+
+
+def ringbuffer_cap_bytes(config: StationConfig) -> int | None:
+    """The ring's own ``-z`` size, read from the running unit.
+
+    From ``systemctl show``, not from the repo's copy of the unit, for the
+    reason :func:`_unit_environment` documents: the installed file is the one
+    that is true, and the two have diverged before without anyone noticing for
+    days.
+
+    ``None`` when there is no unit to ask, the property cannot be read, or no
+    size argument is in it -- all ordinary on a station whose ringbuffer is
+    started by a script rather than by systemd.
+    """
+    unit = (config.ringbuffer_unit or "").strip()
+    if not unit:
+        return None
+    code, text = _show(unit, "ExecStart")
+    if code != 0 or not text:
+        return None
+    found = _SIZE_ARG.search(text)
+    if not found:
+        return None
+    try:
+        return int(float(found.group(1)) * _SIZE_SCALE[found.group(2)])
+    except (ValueError, KeyError, OverflowError):          # pragma: no cover
+        return None
+
+
+def _volume(name: str, path: Path):
+    """``shutil.disk_usage``, or the Metric explaining why there is none."""
+    if not path.exists():
+        return Metric.unknown(name, f"{path}: no such path"), None
+    try:
+        return None, shutil.disk_usage(path)
+    except OSError as exc:
+        return Metric.unknown(name, f"{type(exc).__name__}: {exc}"), None
+
+
 def disk_free(config: StationConfig) -> list[Metric]:
     """Free space on the data volume and on the ringbuffer.
 
@@ -586,24 +657,66 @@ def disk_free(config: StationConfig) -> list[Metric]:
     `ringbuffer_max_age_min` set too high rather than a disk problem.
     """
     out = []
-    for name, path, warn in (
-        ("disk_free_fraction", product_root(config), DISK_WARN_FRACTION),
-        ("ringbuffer_free_fraction", Path(config.ringbuffer_dir),
-         1.0 - RINGBUFFER_WARN_FRACTION),
-    ):
-        if not path.exists():
-            out.append(Metric.unknown(name, f"{path}: no such path"))
-            continue
-        try:
-            usage = shutil.disk_usage(path)
-        except OSError as exc:
-            out.append(Metric.unknown(name, f"{type(exc).__name__}: {exc}"))
-            continue
+
+    failed, usage = _volume("disk_free_fraction", product_root(config))
+    if failed is not None:
+        out.append(failed)
+    else:
         fraction = usage.free / usage.total if usage.total else 0.0
-        out.append(Metric(name, round(fraction, 4), ok=(fraction > warn),
+        out.append(Metric("disk_free_fraction", round(fraction, 4),
+                          ok=(fraction > DISK_WARN_FRACTION),
                           detail=f"{usage.free / 1e9:.1f} GB free of "
                                  f"{usage.total / 1e9:.1f} GB"))
+
+    out.append(_ringbuffer_metric(config))
     return out
+
+
+def _ringbuffer_metric(config: StationConfig) -> Metric:
+    """The ringbuffer volume, judged against the ring's own cap where it can be.
+
+    The value stays free-of-total, unchanged: `BACKLOG.md` sec. 20 tells an
+    operator to watch this number across a rotation and `chirp-rx.service`
+    points at it by name, so its meaning is not ours to redefine. What changes
+    is the verdict.
+
+    A ring at its cap is success, not a warning -- the whole point of ``-z`` is
+    that the buffer stays full and old samples fall off the back. Judged on
+    free-of-total it looks like a volume 84% consumed, which on this station
+    sits 1.7 points from a red it never deserved. Judged against the headroom
+    the cap deliberately leaves, the same buffer reads 100% and moves only when
+    something is actually in that headroom.
+    """
+    name = "ringbuffer_free_fraction"
+    failed, usage = _volume(name, Path(config.ringbuffer_dir))
+    if failed is not None:
+        return failed
+
+    fraction = usage.free / usage.total if usage.total else 0.0
+    where = f"{usage.free / 1e9:.1f} GB free of {usage.total / 1e9:.1f} GB"
+    cap = ringbuffer_cap_bytes(config)
+
+    # A cap at or past the volume is a misconfiguration, not a reading: there
+    # is no headroom to measure, and dividing by it would report the fullest
+    # possible buffer as fine.
+    if cap is None or not 0 < cap < usage.total:
+        why = ("no -z size on " + (config.ringbuffer_unit or "a ringbuffer unit")
+               if cap is None
+               else f"-z {cap / 1e9:.1f} GB is not smaller than the volume")
+        floor = 1.0 - RINGBUFFER_WARN_FRACTION
+        return Metric(name, round(fraction, 4), ok=(fraction > floor),
+                      detail=f"{where}; judged against a flat {floor:.0%} "
+                             f"floor because {why}")
+
+    designed = usage.total - cap
+    headroom = usage.free / designed
+    return Metric(
+        name, round(fraction, 4),
+        ok=(headroom > RINGBUFFER_HEADROOM_FLOOR),
+        detail=(f"{where}; ring capped at {cap / 1e9:.1f} GB, so "
+                f"{designed / 1e9:.1f} GB is headroom by design and "
+                f"{headroom:.0%} of it is free "
+                f"(floor {RINGBUFFER_HEADROOM_FLOOR:.0%})"))
 
 
 def sample_rate(config: StationConfig) -> Metric:

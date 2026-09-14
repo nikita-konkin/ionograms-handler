@@ -70,7 +70,27 @@
   ],
   "output_dir": "/home/ionouser/ionozond_data2",
 
+  "_ringbuffer_unit_comment": [
+    "Read only for the -z size in its ExecStart, and only to judge",
+    "ringbuffer_free_fraction. The ring is SUPPOSED to sit at its cap --",
+    "14000MB of a 16.8 GB tmpfs here, so 16.7% free is what a perfectly",
+    "trimming buffer looks like, against a flat 15% floor. 1.7 points. The",
+    "threshold and the buffer size were set independently and nearly",
+    "collide, so the station read as one bad minute from red, forever.",
+    "",
+    "With the cap known, full-to-cap is 100% of designed headroom and green;",
+    "anything eating that headroom is not. Set \"\" on a station whose",
+    "ringbuffer is started by a script -- the metric then falls back to the",
+    "flat floor and says in its detail that it did.",
+    "",
+    "It cannot be an early warning and does not pretend to be: at 25 MS/s",
+    "the recorder writes 100 MB/s, so a dead trimmer crosses 2.8 GB of",
+    "headroom in 28 seconds, inside one push interval. The leading",
+    "indicator is the bounded `% size` line in journalctl -u",
+    "chirp-ringbuffer, which stops or reaches 100%."
+  ],
   "ringbuffer_dir": "/dev/shm/hf25",
+  "ringbuffer_unit": "chirp-ringbuffer.service",
 
   "_units_comment": [
     "EMPTY ON PURPOSE, while DOB is still run by dombas.sh.",

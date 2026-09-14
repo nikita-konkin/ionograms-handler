@@ -1747,6 +1747,116 @@ def test_a_missing_systemctl_is_unknown_not_failed(monkeypatch, station):
     assert health.HealthReport("TST", 0.0, metrics).healthy
 
 
+# --- the ringbuffer is supposed to be full -----------------------------------
+
+_DRF = ("{ path=/home/ionouser/chirpsounder2/.venv38/bin/drf ; argv[]=drf "
+        "ringbuffer -z 14000MB /dev/shm/hf25 -p 2 ; ignore_errors=no }")
+
+
+def _tmpfs(monkeypatch, *, total, free):
+    class Usage:
+        pass
+    Usage.total, Usage.free = total, free
+    Usage.used = total - free
+    monkeypatch.setattr(health.shutil, "disk_usage", lambda p: Usage)
+
+
+def test_a_ring_sitting_at_its_cap_is_success_not_a_warning(monkeypatch, station,
+                                                            tmp_path):
+    """The real DOB numbers, which the flat threshold called a near-failure.
+
+    14000MB of a 16.8 GB tmpfs leaves 16.7% free when `drf` is trimming
+    perfectly -- it prints `139 files, 99% size` on a two-second cadence --
+    against a flat floor of 15%. 1.7 points, about 285 MB. A check permanently
+    one bad minute from red is a check that stops being read, which is the
+    same failure mode as the eleven false reds the units list was written to
+    avoid.
+    """
+    _fake_show(monkeypatch, {("chirp-ringbuffer.service", "ExecStart"): _DRF})
+    _tmpfs(monkeypatch, total=16_800_000_000, free=2_800_000_000)
+
+    metric = health._ringbuffer_metric(replace(station, ringbuffer_dir=tmp_path))
+
+    assert metric.ok is True
+    # The number itself is unchanged: BACKLOG sec. 20 tells an operator to
+    # watch it across a rotation, so redefining it would invalidate the advice.
+    assert metric.value == 0.1667
+    assert "100% of it is free" in metric.detail
+    assert "capped at 14.0 GB" in metric.detail
+
+
+def test_a_ring_eating_its_own_headroom_is_red(monkeypatch, station, tmp_path):
+    """The failure the metric exists for: nothing trimming /dev/shm.
+
+    On 2026-08-11 it sat at 100%, the recording developed holes, and every
+    other process stayed green for two days.
+    """
+    _fake_show(monkeypatch, {("chirp-ringbuffer.service", "ExecStart"): _DRF})
+    _tmpfs(monkeypatch, total=16_800_000_000, free=900_000_000)
+
+    metric = health._ringbuffer_metric(replace(station, ringbuffer_dir=tmp_path))
+
+    assert metric.ok is False
+    assert "32% of it is free" in metric.detail
+
+
+def test_without_a_ringbuffer_unit_the_flat_floor_still_applies(monkeypatch,
+                                                               station,
+                                                               tmp_path):
+    """A script-run station has no unit to read, and must not go unmeasured.
+
+    It falls back to the old judgement and says which one it used, so nobody
+    reads a lenient number as the cap-aware one.
+    """
+    _fake_show(monkeypatch, {})
+    _tmpfs(monkeypatch, total=16_800_000_000, free=2_800_000_000)
+
+    metric = health._ringbuffer_metric(
+        replace(station, ringbuffer_dir=tmp_path, ringbuffer_unit=""))
+
+    assert metric.ok is True                     # 16.7% clears the flat 15%
+    assert "flat 15% floor" in metric.detail
+    assert "no -z size" in metric.detail
+
+    _tmpfs(monkeypatch, total=16_800_000_000, free=2_000_000_000)
+    lean = health._ringbuffer_metric(
+        replace(station, ringbuffer_dir=tmp_path, ringbuffer_unit=""))
+    assert lean.ok is False
+
+
+def test_a_cap_that_is_not_smaller_than_the_volume_is_refused(monkeypatch,
+                                                              station, tmp_path):
+    """`-z` at or past the tmpfs size leaves no headroom to divide by.
+
+    Dividing anyway would report the fullest possible buffer as fine -- a
+    confident wrong answer where the flat floor is merely a blunt one.
+    """
+    big = _DRF.replace("14000MB", "20000MB")
+    _fake_show(monkeypatch, {("chirp-ringbuffer.service", "ExecStart"): big})
+    _tmpfs(monkeypatch, total=16_800_000_000, free=100_000_000)
+
+    metric = health._ringbuffer_metric(replace(station, ringbuffer_dir=tmp_path))
+
+    assert metric.ok is False
+    assert "not smaller than the volume" in metric.detail
+
+
+def test_the_cap_is_read_from_the_installed_unit_in_every_spelling(monkeypatch,
+                                                                   station):
+    """Decimal multipliers, because that is what the size-to-seconds
+    arithmetic in chirp-ringbuffer.service assumes and measured at."""
+    for argv, expected in (
+        ("-z 14000MB", 14_000_000_000),
+        ("-z14000MB", 14_000_000_000),            # valid short-option spelling
+        ("--size=12000MB", 12_000_000_000),
+        ("-z 2GB", 2_000_000_000),
+        ("-p 2", None),
+    ):
+        _fake_show(monkeypatch, {
+            ("chirp-ringbuffer.service", "ExecStart"):
+                "{ argv[]=drf ringbuffer %s /dev/shm/hf25 }" % argv})
+        assert health.ringbuffer_cap_bytes(station) == expected, argv
+
 # --- the volume it writes to -------------------------------------------------
 
 def test_the_remote_archive_volume_is_measured_not_only_the_local_one(
