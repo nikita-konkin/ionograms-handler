@@ -136,8 +136,31 @@
     "chirp-detect.service",
     "chirp-timings.service",
     "chirp-ionograms.service",
-    "chirp-metadata.service",
-    "chirp-sync.service"
+    "chirp-metadata.service"
+  ],
+
+  "_chirp_sync_comment": [
+    "chirp-sync.service is DELIBERATELY absent from the list above, and was",
+    "removed from it on 2026-09-14 after being watched for weeks as a",
+    "permanent red.",
+    "",
+    "It uploads dashboard images, gated on `copy_to_server` in my_station.ini",
+    "-- and that key is false here on purpose: it also gates seven blocking",
+    "60 s POSTs to juha.no, one of them inside calc_ionograms.py:438, which",
+    "is the 8.37% sounding loss of BACKLOG sec. 3. See",
+    "docs/chirpsounder2-config.md.",
+    "",
+    "With the key false the script prints `Copy to server disabled in",
+    "configuration. Exiting` and exits 0 -- which Restart=always retries",
+    "every 60 s forever, so the unit reports `activating` (SubState",
+    "auto-restart) and health reads it as a failure. Disabled instead, it",
+    "reports `inactive`, which health also reads as a failure. There is no",
+    "state in which watching it is informative while the feature is off.",
+    "",
+    "Add it back ONLY together with `copy_to_server = true` AND an",
+    "Environment=IONOWEBSYNC_URL= that this network can actually reach. The",
+    "ini key is global, so enabling it for the dashboard enables it for the",
+    "deadline-critical caller too."
   ],
 
   "startup_grace_s": 300,
