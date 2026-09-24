@@ -167,11 +167,30 @@ def restart(config: StationConfig, **kw) -> CommandResult:
 #: dozens of keys, most of which would need a considered decision and a site
 #: visit if they went wrong.
 EDITABLE = {
-    "mode": ("lfm", "serendipitous"),
+    # `[config]`, not `[lfm]`: chirp_config.py:216 reads
+    # `cf["config"]["serendipitous"]` and nothing reads the `[lfm]` copy.
+    # This pointed at `[lfm]` until 2026-09-24, so every mode change the
+    # console sent between 09-14 and 09-24 was acknowledged, journalled as
+    # `mode: 'false' -> 'true'`, and did nothing: the station kept running
+    # scheduled while the console said Search. docs/chirpsounder2-config.md
+    # had named this exact trap ("set in [lfm] and read from [config]") --
+    # the agent was the thing that sprang it. See MIRRORS for the [lfm] copy.
+    "mode": ("config", "serendipitous"),
     "sounder_timings": ("lfm", "sounder_timings"),
     "output_dir": ("config", "output_dir"),
     "max_range_extent": ("lfm", "max_range_extent"),
     "save_raw_voltage": ("lfm", "save_raw_voltage"),
+}
+
+#: Decorative copies kept equal to the key that is actually read.
+#:
+#: The live ini carries `serendipitous` in both sections. Writing only the one
+#: chirpsounder reads would leave the other disagreeing, and the `[lfm]` copy
+#: is where a human -- and this agent, until 2026-09-24 -- looks first. A
+#: mirror is written only where the option already exists: creating
+#: decoration in a file that never had it helps nobody.
+MIRRORS = {
+    "mode": (("lfm", "serendipitous"),),
 }
 
 #: Changes that are not a key at all but an operation over several, each with
@@ -648,7 +667,11 @@ def _validate(parser: configparser.ConfigParser, changes: dict,
             return changes[key]
         return parser.get(section, option, fallback=None)
 
-    mode = value_of("mode", "lfm", "serendipitous")
+    mode = value_of("mode", "config", "serendipitous")
+    if mode is None:
+        # An ini with only the decorative copy. chirpsounder would not read
+        # it, but it is still the operator's stated intent, so validate it.
+        mode = value_of("mode", "lfm", "serendipitous")
     if mode is not None and str(mode).lower() in ("false", "scheduled", "schedule"):
         timings = value_of("sounder_timings", "lfm", "sounder_timings")
         try:
@@ -817,6 +840,9 @@ def apply_config(config: StationConfig, changes: dict, *,
             parser.add_section(section)
         before[key] = parser.get(section, option, fallback=None)
         parser.set(section, option, str(value))
+        for m_section, m_option in MIRRORS.get(key, ()):
+            if parser.has_option(m_section, m_option):
+                parser.set(m_section, m_option, str(value))
 
     plan = None
     if band_request is not None:

@@ -266,7 +266,7 @@ the two cases, and `tests/test_systemd_units.py` now pins the floor.
 
 #### Two acquisition modes, and one flag that is independent of both
 
-`[lfm] serendipitous` selects between them, and they are not "search" versus
+`[config] serendipitous` selects between them, and they are not "search" versus
 "receiver" — the second is a *schedule*, not a set of receivers:
 
 | | `serendipitous = true` | `serendipitous = false` (default) |
@@ -325,7 +325,7 @@ Deliberately smaller than the Qt console. The surface is:
 | Command | Maps to |
 |---|---|
 | start / stop / restart sounding | `systemctl start\|stop\|restart chirp.target` |
-| change acquisition mode | `[lfm] serendipitous`, plus `sounder_timings` when scheduled (§2.5) |
+| change acquisition mode | `[config] serendipitous`, plus `sounder_timings` when scheduled (§2.5) |
 | change storage path | `[config] output_dir` |
 | change the active schedule | `sounder_timings` entries |
 | trigger a transfer | the sync job, out of band from the target |

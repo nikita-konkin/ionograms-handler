@@ -34,6 +34,7 @@ def station(tmp_path) -> StationConfig:
         "[config]\n"
         "sample_rate = 25e6\n"
         'output_dir = "%s"\n'
+        "serendipitous = true\n"
         "[lfm]\n"
         "serendipitous = true\n"
         "sounder_timings = []\n"
@@ -755,8 +756,53 @@ def test_only_allowed_config_keys(station):
 def test_mode_names_map_to_the_flag(station):
     control.apply_config(station, {"mode": "search"})
     assert control.read_config(station.chirp_config).get(
-        "lfm", "serendipitous") == "true"
+        "config", "serendipitous") == "true"
 
+
+def test_mode_is_written_where_chirpsounder_reads_it(station, tmp_path):
+    """2026-09-24: Search was set from the console several times, every
+    command came back Acked, and the station kept running scheduled.
+
+    chirp_config.py:216 reads `cf["config"]["serendipitous"]`. The agent wrote
+    `[lfm] serendipitous`, which nothing reads -- and then reported the
+    `[lfm]` value as `before`, so the journal said `'false' -> 'true'` the
+    first time and `'true' -> 'true'` after, while `[config]` sat at false
+    throughout. This is the live ini's shape: the key in both sections,
+    disagreeing.
+    """
+    station.chirp_config.write_text(
+        "[config]\n"
+        'output_dir = "%s"\n'
+        "serendipitous = false\n"
+        "[lfm]\n"
+        "serendipitous = true\n"
+        "sounder_timings = []\n" % tmp_path.as_posix(),
+        encoding="utf-8")
+
+    result = control.apply_config(station, {"mode": "search"})
+    parser = control.read_config(station.chirp_config)
+
+    assert parser.get("config", "serendipitous") == "true"
+    # The decorative copy is kept equal, so the file stops lying either way.
+    assert parser.get("lfm", "serendipitous") == "true"
+    # And the journal reports the value that was actually in force.
+    assert "mode: 'false' -> 'true'" in result.detail
+
+
+def test_the_mirror_is_not_created_where_it_never_existed(station, tmp_path):
+    station.chirp_config.write_text(
+        "[config]\n"
+        'output_dir = "%s"\n'
+        "serendipitous = false\n"
+        "[lfm]\n"
+        "sounder_timings = []\n" % tmp_path.as_posix(),
+        encoding="utf-8")
+
+    control.apply_config(station, {"mode": "search"})
+    parser = control.read_config(station.chirp_config)
+
+    assert parser.get("config", "serendipitous") == "true"
+    assert not parser.has_option("lfm", "serendipitous")
 
 def test_scheduled_mode_without_a_schedule_is_refused(station):
     """The combination that records nothing and reports healthy."""
@@ -770,6 +816,7 @@ def test_scheduled_mode_with_a_schedule_is_accepted(station):
                                             "sounder_timings": timings})
     assert result.ok
     parser = control.read_config(station.chirp_config)
+    assert parser.get("config", "serendipitous") == "false"
     assert parser.get("lfm", "serendipitous") == "false"
 
 

@@ -78,8 +78,10 @@ so a malformed value is not an error, it is a missing attribute.
 
 * **`serendipitous` is set in `[lfm]` and read from `[config]`.** The live file
   has it in both. `chirp_config.py:216` reads `cf["config"]["serendipitous"]`
-  only, so the `[lfm]` copy is decoration. Both happen to say `false`, so this
-  has never bitten -- it is a trap armed and waiting.
+  only, so the `[lfm]` copy is decoration. It bit on 2026-09-24: the agent's
+  `mode` command wrote `[lfm]`, every Search request from the console was
+  acknowledged, and `[config]` stayed `false` for ten days. The agent now
+  writes `[config]` and keeps an existing `[lfm]` copy equal to it.
 * **`copy_destination = "shovel@4.235.86.214:/var/www/html/iono/"` is read by
   nothing.** See below; this is the most consequential finding in the census.
 * `serendipitous_ionogram_workers`, and the serendipitous range keys, are live
