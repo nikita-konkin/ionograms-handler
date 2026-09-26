@@ -60,9 +60,11 @@ def _warm(app: FastAPI) -> None:
     # a lock, so while it runs every request for the sources page waits on it;
     # a log that only speaks on success makes "still reading" and "died in the
     # thread" the same silence, which is what happened on DOB.
+    roots = sources.census_roots(app.state.db, app.state.archive_root)
     print(f"  census warm: reading up to {sources.DEFAULT_MAX_FILES} "
-          f"detection file(s) under {app.state.archive_root}", flush=True)
-    got = sources.warm(app.state.archive_root)
+          f"detection file(s) under {', '.join(str(r) for r in roots)}",
+          flush=True)
+    got = sources.warm(roots)
     if got is None:
         print(f"  census warm: failed after "
               f"{time.perf_counter() - started:.1f}s (see warning above)",

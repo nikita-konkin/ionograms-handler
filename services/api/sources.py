@@ -316,7 +316,57 @@ def _cdetection_rows(path, rows):
 # place, attached to the same code.
 # --------------------------------------------------------------------------
 
-def _scan(root: Path, max_days: int) -> tuple[list, int, list[Path]]:
+def census_roots(conn, archive_root) -> list[Path]:
+    """Where the census should look: every enabled archive, else the root.
+
+    It used to look at ``ARCHIVE_ROOT`` alone, which was right while that root
+    *was* one station's folder of dated days. Since the archives page, the
+    root is a parent -- ``/archive`` holding ``ionozond_5tb/ionozond_data2``,
+    ``ionozond_5tb/ionozond_data`` and the rest -- so none of its children are
+    dates, `_day_directories` fell back to the root itself, and the census
+    looked for detection files directly in ``/archive``. On 2026-09-27 that
+    was "Read 0 file(s) in 0.00 s" beside a station that had just produced a
+    search-mode ionogram: the files were there, one level further down.
+
+    Relative relpaths are under the primary root and absolute ones are kept as
+    written, the same rule `archives.resolve` stores them by. Disabled
+    archives are left out -- that is what disabled means -- and so is a folder
+    that is not there, which would otherwise read as "no transmitters".
+    """
+    from . import db
+
+    base = Path(archive_root)
+    out = []
+    try:
+        rows = db.archives(conn, enabled_only=True)
+    except Exception:
+        rows = []
+    for row in rows:
+        rel = Path(row["relpath"])
+        path = rel if rel.is_absolute() else base / rel
+        if path.is_dir():
+            out.append(path)
+    return out or [base]
+
+
+def _all_days(roots: list[Path], max_days: int) -> list[Path]:
+    """Each root's newest ``max_days``, merged newest first.
+
+    Per root rather than overall, so one busy archive cannot crowd a second
+    station out of the census entirely. A flat root (no dated children) is
+    scanned whole and goes last: it has no date to rank by.
+    """
+    dated, flat = [], []
+    for root in roots:
+        days = _day_directories(root, max_days)
+        if days == [root]:
+            flat.append(root)
+        else:
+            dated.extend(days)
+    return daydir.newest(dated) + flat
+
+
+def _scan(root, max_days: int) -> tuple[list, int, list[Path]]:
     """The days, and the best detection product each of them holds.
 
     Scan first, read second. A directory listing is one round trip per
@@ -334,7 +384,8 @@ def _scan(root: Path, max_days: int) -> tuple[list, int, list[Path]]:
     """
     from muf import io_detect
 
-    days = _day_directories(root, max_days)
+    roots = list(root) if isinstance(root, (list, tuple)) else [Path(root)]
+    days = _all_days(roots, max_days)
     scans, matched = [], 0
     for day in days:
         try:
@@ -481,10 +532,15 @@ def census(archive_root: str | os.PathLike, *,
     from muf import io_detect
 
     cycle = cycle_s or io_detect.DEFAULT_CYCLE_S
-    root = Path(archive_root)
+    # One root or several -- see `census_roots`. Keyed on all of them, so
+    # enabling a second archive is a new question and not a cache hit.
+    if isinstance(archive_root, (list, tuple)):
+        root = [Path(r) for r in archive_root]
+    else:
+        root = [Path(archive_root)]
     started = time.perf_counter()
-    params = (str(root), max_days, cycle, min_count, max_scatter_s,
-              max_slot_fraction, min_repeats, max_files)
+    params = (tuple(str(r) for r in root), max_days, cycle, min_count,
+              max_scatter_s, max_slot_fraction, min_repeats, max_files)
 
     if not block:
         served = _served(params, max_age_s)
@@ -552,6 +608,7 @@ def census(archive_root: str | os.PathLike, *,
         cost = dict(
             totals,
             days=[d.name for d in days],
+            roots=[str(r) for r in root],
             files=matched, found=found, capped=capped, budget=max_files,
             records=len(records), unchanged=False,
             seconds=round(time.perf_counter() - started, 2),

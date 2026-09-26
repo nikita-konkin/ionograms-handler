@@ -475,7 +475,8 @@ def sources_page(request: Request,
     `muf detect` on the station and transcribe the numbers.
     """
     conn = request.app.state.db
-    census = sources_mod.census(request.app.state.archive_root,
+    census = sources_mod.census(sources_mod.census_roots(
+                                    conn, request.app.state.archive_root),
                                 max_days=max_days, min_count=min_count,
                                 block=False,
                                 max_age_s=sources_mod.DEFAULT_MAX_AGE_S)

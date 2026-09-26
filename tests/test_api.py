@@ -4068,3 +4068,55 @@ def test_both_faults_are_reported_together(client, monkeypatch):
 
     assert "11s apart" in body["warning"]
     assert "nanS nanW" in body["warning"]
+
+
+def test_the_census_reads_the_registered_archives_not_the_bare_root(
+        cold_census, tmp_path, make_detection_h5):
+    """2026-09-27: "First census running", indefinitely, beside a station that
+    had just produced a search-mode ionogram.
+
+    Since the archives page, ARCHIVE_ROOT is a *parent* -- ``/archive`` holding
+    ``ionozond_5tb/ionozond_data2`` and friends -- so none of its children are
+    dates and the census fell back to the root itself. `find_products` walks
+    recursively, so that meant every share under ``/archive``, disabled ones
+    included, every day ever written, over SMB1: a walk with no end in sight
+    instead of one day of one station.
+    """
+    from services.api import db
+
+    station = tmp_path / "ionozond_5tb" / "ionozond_data2" / "2026-09-27"
+    station.mkdir(parents=True)
+    make_detection_h5("chirp", cycles=6, into=station)
+    disabled = tmp_path / "ionozond_16tb" / "old" / "2026-09-27"
+    disabled.mkdir(parents=True)
+    make_detection_h5("chirp", cycles=6, into=disabled)
+
+    # What the page used to ask: everything, the disabled archive included.
+    before = cold_census.census(tmp_path, max_days=2, min_count=2)
+    cold_census._LAST.clear()
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    db.add_archive(conn, name="live", relpath="ionozond_5tb/ionozond_data2",
+                   methods="algo")
+    off = db.add_archive(conn, name="old", relpath="ionozond_16tb/old",
+                         methods="algo")
+    db.set_archive_enabled(conn, off, False)
+    db.add_archive(conn, name="gone", relpath="not/mounted", methods="algo")
+
+    roots = cold_census.census_roots(conn, tmp_path)
+    assert roots == [tmp_path / "ionozond_5tb" / "ionozond_data2"]
+
+    got = cold_census.census(roots, max_days=2, min_count=2)
+    assert got["count"] >= 1, got
+    assert got["cost"]["roots"] == [str(roots[0])]
+    # Half the files: the disabled archive is no longer walked.
+    assert got["cost"]["files"] * 2 == before["cost"]["files"]
+
+
+def test_with_no_archives_registered_the_root_is_still_scanned(
+        cold_census, tmp_path):
+    """A server that predates the archives page keeps working as it did."""
+    from services.api import db
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    assert cold_census.census_roots(conn, tmp_path) == [tmp_path]
