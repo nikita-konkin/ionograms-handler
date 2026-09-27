@@ -33,7 +33,7 @@ from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 
-from . import daydir
+from . import daydir, db
 
 #: Cap on directories scanned in one request. A census reads every detection
 #: file under the target, and an archive holds thousands; the endpoint is meant
@@ -333,8 +333,6 @@ def census_roots(conn, archive_root) -> list[Path]:
     archives are left out -- that is what disabled means -- and so is a folder
     that is not there, which would otherwise read as "no transmitters".
     """
-    from . import db
-
     base = Path(archive_root)
     out = []
     try:
@@ -725,3 +723,114 @@ def _as_row(emitter) -> dict:
                    if emitter.observed_seconds else 0.0),
     }
     return row
+
+
+#: The marker v2 writes when it cannot name the transmitter -- upstream's
+#: spelling, `calc_ionograms.py:189`. Every search-mode product carries it.
+SEARCH_TX = "unkown"
+
+#: How far a product's start may sit from a census row's arrival instant and
+#: still be that row's. The census gives a whole second plus a fraction; a
+#: search-mode ``t0`` is measured from the same timing solutions, so the two
+#: agree to milliseconds. One second is generous against that and still tight
+#: against the nearest distinct slots on this station (280 and 282).
+EXAMPLE_SLOT_S = 1.0
+
+
+def _unix(stamp: str) -> float | None:
+    """`sounding.datetime` (ISO, UTC, naive) as unix seconds."""
+    from datetime import datetime, timezone
+
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", ""))
+    except ValueError:
+        return None
+    return when.replace(tzinfo=timezone.utc).timestamp()
+
+
+def slot_examples(conn, *, station: str, rate: float, seconds, fraction: float,
+                  cycle_s: float, start: float, end: float | None = None,
+                  per_slot: int = 2,
+                  rate_tol_hz: float = 1.0,
+                  slot_tol_s: float = EXAMPLE_SLOT_S) -> dict:
+    """Ingested search-mode ionograms that belong to one census row, per slot.
+
+    The census says *that* something repeats at a rate and a second; it cannot
+    say whether that something is an ionospheric trace or a carrier sweeping
+    through the band. That is the question the Identify button asks, and the
+    answer is a picture. On 2026-09-27 the first row on Yoshkar-Ola was one
+    100 kHz/s group across eight slots -- 0, 50, 230, 235, 240, 250, 270, 291 --
+    labelled NIC0, which is almost certainly several Nicosia transmitters
+    sharing a site and so a phase. Per slot is what can show that.
+
+    Matching is rate first -- exact to ``rate_tol_hz``, because two emitters at
+    one second and different rates are different emitters -- then arrival
+    instant against ``second + fraction`` on the cycle. Rows with no recorded
+    rate cannot be matched honestly and are counted, not guessed at: they
+    predate the column, and a 125 kHz/s sweep shown under a 100 kHz/s row is
+    worse than no picture.
+
+    Per slot, the best trace (most methods picking, then SNR) and the newest,
+    so the pair says both "is this real" and "is it still there".
+
+    ``start``/``end`` are unix seconds, and the caller should pass the row's
+    own ``first_seen``/``last_seen``: the census covers the newest *day
+    folders*, which on a station that has been quiet are not the last N days,
+    and a window measured back from now would then find nothing beside a row
+    that plainly exists.
+    """
+    wanted = sorted({int(s) % int(cycle_s) for s in seconds})
+    rows = db.rows(conn,
+        "SELECT s.id, s.datetime, s.chirp_rate,"
+        " MAX(e.snr) AS snr,"
+        " SUM(CASE WHEN e.muf IS NOT NULL THEN 1 ELSE 0 END) AS picks"
+        " FROM sounding s LEFT JOIN extraction e ON e.sounding_id = s.id"
+        " WHERE lower(s.tx) = ? AND lower(s.rx) = ?"
+        " AND s.datetime >= ? AND s.datetime <= ?"
+        " GROUP BY s.id",
+        (SEARCH_TX, str(station).strip().lower(),
+         _iso(start - cycle_s), _iso((end or time.time()) + cycle_s)))
+
+    by_slot: dict[int, list] = {s: [] for s in wanted}
+    unrated = 0
+    for row in rows:
+        at = _unix(row["datetime"])
+        if at is None:
+            continue
+        phase = at % cycle_s
+        slot = None
+        for s in wanted:
+            d = abs(phase - (s + fraction))
+            if min(d, cycle_s - d) <= slot_tol_s:
+                slot = s
+                break
+        if slot is None:
+            continue
+        if row["chirp_rate"] is None:
+            unrated += 1
+            continue
+        if abs(row["chirp_rate"] - rate) > rate_tol_hz:
+            continue
+        by_slot[slot].append(row)
+
+    out = []
+    for s in wanted:
+        found = by_slot[s]
+        chosen = []
+        if found:
+            best = max(found, key=lambda r: (r["picks"] or 0, r["snr"] or -1e9))
+            chosen.append(dict(best, why="best"))
+            newest = max(found, key=lambda r: r["datetime"])
+            if newest["id"] != best["id"] and per_slot > 1:
+                chosen.append(dict(newest, why="newest"))
+        out.append({"second": s, "count": len(found), "examples": chosen})
+    return {"slots": out, "unrated": unrated}
+
+
+def _iso(unix: float) -> str:
+    """The lower bound in the same text form `sounding.datetime` is stored in,
+    so the comparison is a string one SQLite can do on the index."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(unix, tz=timezone.utc).replace(
+        tzinfo=None).isoformat(sep=" ")

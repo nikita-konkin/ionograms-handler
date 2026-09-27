@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS sounding (
     gate_lo         REAL, gate_hi REAL,
     sweep_complete  INTEGER,
     sweep_fraction  REAL,
+    -- Hz/s, from the product header. The only thing that tells a 100 kHz/s
+    -- sweep from a 125 kHz/s one arriving in the same second, which is what
+    -- the sources page needs to put a search-mode `unkown` product under the
+    -- census row it belongs to. NULL for rows ingested before 2026-09-27 and
+    -- NaN-rated formats (a Digisonde is pulsed, not swept).
+    chirp_rate      REAL,
     -- Which acquisition configuration produced it. NULL until a config_epoch
     -- covering this datetime exists, which is the honest answer for anything
     -- recorded before the agent was deployed.

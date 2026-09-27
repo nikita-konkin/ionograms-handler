@@ -4120,3 +4120,184 @@ def test_with_no_archives_registered_the_root_is_still_scanned(
 
     conn = db.init(db.connect(tmp_path / "t.sqlite3"))
     assert cold_census.census_roots(conn, tmp_path) == [tmp_path]
+
+
+# --- search-mode ionograms under the census row they belong to ----------------
+
+def _search_sounding(conn, when, *, rate=100e3, rx="Yoshkar-Ola", tx="unkown",
+                     snr=20.0, muf=None, name=None):
+    """One ingested product, as the pipeline would leave it."""
+    from services.api import db
+
+    stamp = when.strftime("%Y-%m-%d %H:%M:%S.%f")
+    file = name or f"lfm_ionogram-{tx}-{rx}-ch0-0-{when.timestamp():.2f}.h5"
+    cur = conn.execute(
+        "INSERT INTO sounding (file, path, format, datetime, tx, rx, chirp_rate,"
+        " ingested_at) VALUES (?, ?, 'chirp2', ?, ?, ?, ?, ?)",
+        (file, "d/" + file, stamp, tx, rx, rate, db.utcnow()))
+    conn.execute("INSERT INTO extraction (sounding_id, method, snr, muf)"
+                 " VALUES (?, 'algo', ?, ?)", (cur.lastrowid, snr, muf))
+    conn.commit()
+    return cur.lastrowid
+
+
+def _recent(second, fraction=0.00994, hours_ago=1.0):
+    """A moment `hours_ago` back whose phase on the 300 s cycle is exact."""
+    import datetime as dt
+
+    base = (int(time.time() - hours_ago * 3600) // 300) * 300
+    return dt.datetime.fromtimestamp(base + second + fraction, tz=dt.timezone.utc
+                                     ).replace(tzinfo=None)
+
+
+def test_examples_land_in_their_slot_and_not_the_next(tmp_path):
+    """280 and 282 are both real, separate rows on Yoshkar-Ola; a picture
+    of one under the other would be exactly the confusion this exists to end."""
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    at_280 = _search_sounding(conn, _recent(280))
+    at_282 = _search_sounding(conn, _recent(282, 0.0248))
+
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[280], fraction=0.01437,
+                                cycle_s=300.0, start=time.time() - 86400)
+    ids = [x["id"] for s in got["slots"] for x in s["examples"]]
+    assert ids == [at_280]
+    assert at_282 not in ids
+
+
+def test_a_different_rate_in_the_same_second_is_a_different_emitter(tmp_path):
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    _search_sounding(conn, _recent(285), rate=125e3)
+
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[285], fraction=0.01, cycle_s=300.0,
+                                start=time.time() - 86400)
+    assert got["slots"][0]["examples"] == []
+
+
+def test_rows_from_before_the_rate_column_are_counted_not_guessed(tmp_path):
+    """A 125 kHz/s sweep under a 100 kHz/s row is worse than no picture."""
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    _search_sounding(conn, _recent(235), rate=None)
+
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[235], fraction=0.00994,
+                                cycle_s=300.0, start=time.time() - 86400)
+    assert got["slots"][0]["examples"] == []
+    assert got["unrated"] == 1
+
+
+def test_each_slot_gets_its_best_trace_and_its_newest(tmp_path):
+    """The eight-slot "NIC0" row on 2026-09-27 is the case: per slot, so a row
+    that is really several transmitters shows as several traces."""
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    best = _search_sounding(conn, _recent(235, hours_ago=5), muf=18.0, snr=30.0)
+    _search_sounding(conn, _recent(235, hours_ago=3), snr=12.0)
+    newest = _search_sounding(conn, _recent(235, hours_ago=1), snr=10.0)
+    other = _search_sounding(conn, _recent(240), muf=20.0)
+    # Another receiver, same second: not this row's picture.
+    _search_sounding(conn, _recent(235), rx="DOB", muf=25.0, snr=50.0)
+
+    got = sources.slot_examples(conn, station="yoshkar-ola", rate=100e3,
+                                seconds=[240, 235], fraction=0.00994,
+                                cycle_s=300.0, start=time.time() - 86400)
+    slots = {s["second"]: s for s in got["slots"]}
+    assert [s["second"] for s in got["slots"]] == [235, 240]
+    assert [(x["id"], x["why"]) for x in slots[235]["examples"]] == [
+        (best, "best"), (newest, "newest")]
+    assert slots[235]["count"] == 3
+    assert [x["id"] for x in slots[240]["examples"]] == [other]
+
+
+def test_a_slot_near_the_top_of_the_cycle_wraps(tmp_path):
+    """Second 0 received a hair early is second 299.99 of the cycle before."""
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    early = _search_sounding(conn, _recent(299, fraction=0.7))
+
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[0], fraction=0.0, cycle_s=300.0,
+                                start=time.time() - 86400)
+    assert [x["id"] for x in got["slots"][0]["examples"]] == [early]
+
+
+def test_the_rate_is_recorded_at_ingest(tmp_path):
+    """Without it nothing new would ever match, and every row would be
+    `unrated` forever."""
+    import datetime as dt
+
+    from services.api import db, ingest
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    row = {"file": "x.h5", "datetime": dt.datetime(2026, 9, 27, 12),
+           "tx": "unkown", "rx": "Yoshkar-Ola", "chirp_rate": 500008.4}
+    sid = ingest.ingest_row(conn, row, tmp_path / "x.h5", tmp_path, ["algo"],
+                            muted=lambda tx, rx: False)
+    got = db.one(conn, "SELECT chirp_rate FROM sounding WHERE id = ?", (sid,))
+    assert got["chirp_rate"] == 500008.4
+
+
+def test_an_existing_database_gains_the_rate_column(tmp_path):
+    """`CREATE TABLE IF NOT EXISTS` does nothing to the station's table."""
+    import sqlite3
+
+    from services.api import db
+
+    path = tmp_path / "old.sqlite3"
+    db.init(db.connect(path)).close()
+    raw = sqlite3.connect(path)
+    raw.execute("ALTER TABLE sounding DROP COLUMN chirp_rate")
+    raw.commit()
+    assert "chirp_rate" not in {r[1] for r in raw.execute(
+        "PRAGMA table_info(sounding)")}
+    raw.close()
+
+    conn = db.init(db.connect(path))
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sounding)")}
+    assert "chirp_rate" in cols
+
+
+def test_the_examples_endpoint(client):
+    conn = client.app.state.db
+    sid = _search_sounding(conn, _recent(280), muf=20.0)
+
+    r = client.get("/sources/examples", params={
+        "station": "Yoshkar-Ola", "rate": 100000, "seconds": "280,282",
+        "fraction": 0.01437})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert [s["second"] for s in got["slots"]] == [280, 282]
+    assert got["slots"][0]["examples"][0]["id"] == sid
+
+    assert client.get("/sources/examples", params={
+        "station": "x", "rate": 1, "seconds": "a,b"}).status_code == 422
+
+
+def test_the_window_is_the_rows_own_span_not_the_last_days(tmp_path):
+    """The census covers the newest day *folders*. On a station that has been
+    quiet for a week those are a week old, and a window measured back from now
+    would show nothing beside a row that is plainly on the page."""
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    old = _search_sounding(conn, _recent(235, hours_ago=24 * 9))
+    first = time.time() - 24 * 9 * 3600 - 7200
+
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[235], fraction=0.00994, cycle_s=300.0,
+                                start=first, end=first + 4 * 3600)
+    assert [x["id"] for x in got["slots"][0]["examples"]] == [old]
+
+    none = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                 seconds=[235], fraction=0.00994, cycle_s=300.0,
+                                 start=time.time() - 86400)
+    assert none["slots"][0]["examples"] == []

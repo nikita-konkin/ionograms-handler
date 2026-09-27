@@ -807,6 +807,31 @@ MESSAGES: dict[str, str] = {
     "sources.col.span": "Span h",
     "sources.col.identified_as": "Identified as",
     "sources.identify": "Identify",
+    "sources.examples": "Ionograms",
+    "sources.examples_title": (
+        "Search-mode ionograms heard in each of this row's slots: the best "
+        "trace and the newest. What the numbers cannot say is whether this is"
+        " an ionospheric echo or interference -- this can."
+    ),
+    "sources.js.examples_loading": (
+        "Looking for ingested search-mode ionograms in these slots…"
+    ),
+    "sources.js.examples_failed": "Could not load examples ({detail}).",
+    "sources.js.examples_best": "best trace",
+    "sources.js.examples_newest": "newest",
+    "sources.js.examples_count": "{n} matched",
+    "sources.js.examples_none_slot": "none ingested in this slot",
+    "sources.js.examples_none": (
+        "No search-mode ionogram from {station} has been ingested for this "
+        "row. They arrive only if the unkown circuit is not muted for this "
+        "receiver (Archives, mute rules) and the archive scan has reached "
+        "them."
+    ),
+    "sources.js.examples_unrated": (
+        "{n} more ionogram(s) fall in these slots but were ingested before "
+        "chirp rate was recorded, so they cannot be told apart from another "
+        "rate arriving in the same second, and are left out."
+    ),
     "sources.khz_s": "{rate} kHz/s",
     "sources.seconds_note":
         "<b>Seconds are as received, not as transmitted.</b> A slot is the "

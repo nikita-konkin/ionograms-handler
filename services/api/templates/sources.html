@@ -70,7 +70,12 @@
         <th>{{ t('sources.col.span') }}</th><th>{{ t('sources.col.identified_as') }}</th></tr>
     {% for e in census.emitters %}
     <tr>
-      <td><button class="identify" data-row='{{ e|tojson }}'>{{ t('sources.identify') }}</button></td>
+      <td><button class="identify" data-row='{{ e|tojson }}'>{{ t('sources.identify') }}</button>
+          <button class="examples-toggle" data-rate="{{ e.rate }}"
+            data-seconds="{{ e.observed_seconds|join(',') }}"
+            data-fraction="{{ e.fraction_s or 0 }}" data-cycle="{{ e.cycle_s }}"
+            data-start="{{ e.first_seen }}" data-end="{{ e.last_seen }}"
+            title="{{ t('sources.examples_title') }}">{{ t('sources.examples') }}</button></td>
       <td>{{ t('sources.khz_s', rate='%.1f'|format(e.rate / 1000)) }}</td>
       <td>{{ e.observed_seconds|join(', ') }}</td>
       <td>{{ e.count }}</td>
@@ -441,6 +446,71 @@ function markClaims() {
   });
 }
 
+// --- what each row actually looks like ------------------------------------
+
+// On demand, one row at a time: every picture is an HDF5 read over the archive
+// mount, and the whole census at once would be dozens of them for rows nobody
+// asked about. A second click closes it; changing receiver closes them all,
+// because the pictures belong to the receiver they were fetched for.
+function closeExamples() {
+  document.querySelectorAll('tr.examples').forEach(r => r.remove());
+}
+
+async function toggleExamples(button) {
+  const row = button.closest('tr');
+  const open = row.nextElementSibling;
+  if (open && open.classList.contains('examples')) { open.remove(); return; }
+  const cells = row.children.length;
+  const tr = document.createElement('tr');
+  tr.className = 'examples';
+  tr.innerHTML = `<td colspan="${cells}" class="muted">${T('sources.js.examples_loading')}</td>`;
+  row.after(tr);
+
+  const q = new URLSearchParams({
+    station: station(), rate: button.dataset.rate,
+    seconds: button.dataset.seconds, fraction: button.dataset.fraction,
+    cycle_s: button.dataset.cycle,
+    start: button.dataset.start, end: button.dataset.end,
+  });
+  let got;
+  try {
+    const r = await fetch('/sources/examples?' + q, token()
+      ? {headers: {'Authorization': 'Bearer ' + token()}} : undefined);
+    if (!r.ok) throw new Error(r.status);
+    got = await r.json();
+  } catch (e) {
+    tr.firstElementChild.textContent = T('sources.js.examples_failed', {detail: e.message});
+    return;
+  }
+
+  const any = got.slots.some(s => s.examples.length);
+  const figures = got.slots.map(slot => {
+    const pics = slot.examples.map(x => `
+      <a href="/ui/sounding/${x.id}" title="${x.datetime}">
+        <img loading="lazy" alt="${x.datetime}"
+             src="/ionogram/${x.id}.png?gate=auto&bare=true&dpi=40"
+             style="width:240px;height:120px;object-fit:fill;display:block;
+                    border:1px solid var(--line, #ccc)"></a>
+      <div class="muted" style="font-size:.75rem">${x.why === 'best' ? T('sources.js.examples_best') : T('sources.js.examples_newest')}
+        · ${x.datetime.slice(5, 16)}${x.snr != null ? ' · ' + x.snr.toFixed(1) + ' dB' : ''}</div>`).join('');
+    return `<figure style="margin:0 1rem .75rem 0;display:inline-block;vertical-align:top">
+      <figcaption><b>${slot.second} s</b>
+        <span class="muted">${T('sources.js.examples_count', {n: slot.count})}</span></figcaption>
+      ${pics || `<div class="muted" style="font-size:.8rem">${T('sources.js.examples_none_slot')}</div>`}
+    </figure>`;
+  }).join('');
+  const notes = [];
+  if (!any) notes.push(T('sources.js.examples_none', {station: station()}));
+  if (got.unrated) notes.push(T('sources.js.examples_unrated', {n: got.unrated}));
+  tr.firstElementChild.className = '';
+  tr.firstElementChild.innerHTML = figures
+    + notes.map(n => `<p class="note">${n}</p>`).join('');
+}
+
+document.querySelectorAll('.examples-toggle').forEach(b =>
+  b.addEventListener('click', () => toggleExamples(b)));
+
+if (stationBox) stationBox.addEventListener('change', closeExamples);
 if (stationBox) stationBox.addEventListener('change', renderVerified);
 
 renderVerified();

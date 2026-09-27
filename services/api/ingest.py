@@ -30,6 +30,7 @@ from . import db
 SOUNDING_COLUMNS = (
     "tx", "rx", "path_type", "tx_lat", "tx_lon", "rx_lat", "rx_lon", "path_km",
     "freq_start", "freq_stop", "gate_lo", "gate_hi", "sweep_fraction",
+    "chirp_rate",
 )
 
 #: ``(database column, pipeline suffix)`` for each per-method value.

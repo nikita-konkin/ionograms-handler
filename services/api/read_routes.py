@@ -20,7 +20,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response
 
-from . import auth, db
+from . import acquisition, auth, db
 from . import net as net_mod
 from . import sources as sources_mod
 from .auth import require_read
@@ -482,6 +482,43 @@ def sources(request: Request,
                               max_days=max_days, cycle_s=cycle_s,
                               min_count=min_count, block=False,
                               max_age_s=sources_mod.DEFAULT_MAX_AGE_S)
+
+
+@router.get("/sources/examples")
+def source_examples(request: Request,
+                    station: str,
+                    rate: float = Query(..., gt=0),
+                    seconds: str = Query(..., max_length=400),
+                    fraction: float = Query(0.0, ge=0.0, lt=1.0),
+                    cycle_s: float = Query(300.0, gt=0),
+                    start: float | None = None,
+                    end: float | None = None,
+                    days: int = Query(sources_mod.DEFAULT_MAX_DAYS, ge=1, le=14),
+                    ) -> dict:
+    """Ingested search-mode ionograms for one census row, slot by slot.
+
+    Read scope, database only: it never opens a product. The page renders the
+    returned ids through ``/ionogram/{id}.png``, and only when asked, because a
+    render is an HDF5 read over the archive mount and a census of seven rows
+    and twenty slots is forty of them. See `sources.slot_examples`.
+
+    ``start``/``end`` (unix seconds) should be the row's own span; without
+    them the window is the last ``days`` back from now.
+    """
+    try:
+        wanted = [int(float(s)) for s in seconds.split(",") if s.strip()]
+    except ValueError:
+        raise HTTPException(422,
+                            "seconds: comma-separated numbers") from None
+    if not wanted:
+        raise HTTPException(422,
+                            "seconds: at least one")
+    return sources_mod.slot_examples(
+        request.app.state.db, station=station, rate=rate, seconds=wanted,
+        fraction=fraction, cycle_s=cycle_s,
+        start=start if start is not None else time.time() - days * 86400.0,
+        end=end,
+        rate_tol_hz=acquisition.MATCH_RATE_HZ)
 
 
 @router.get("/net")

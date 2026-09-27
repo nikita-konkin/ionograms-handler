@@ -212,6 +212,10 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         rx_lat=round(header.rx_latitude, 4),
         rx_lon=round(header.rx_longitude, 4),
         path_km=round(_path_km(header), 1),
+        # Hz/s. What separates two emitters that arrive in the same second at
+        # different rates -- the sources page needs it to show a search-mode
+        # product under the right census row. NaN for a pulsed Digisonde.
+        chirp_rate=getattr(header, "rate", None),
     )
 
     try:
