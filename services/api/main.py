@@ -53,14 +53,21 @@ BUILD_TIME = os.environ.get("API_BUILD_TIME", "")
 WARM_CENSUS = os.environ.get("CENSUS_WARM", "1") not in ("0", "", "false")
 
 
-def _warm(app: FastAPI) -> None:
-    """The cold census, off the request path. Runs in a daemon thread."""
+def _warm(app: FastAPI, roots: list) -> None:
+    """The cold census, off the request path. Runs in a daemon thread.
+
+    ``roots`` is resolved by the caller, on the thread that owns the database.
+    This thread must never touch ``app.state.db``: it is the request path's
+    connection, and ``lifespan`` closes it at shutdown whether or not this
+    thread is still mid-query. Reading it from here segfaulted CI on
+    2026-09-26 -- a test client starts and stops the app in milliseconds, so
+    the close landed inside a query nearly every run.
+    """
     started = time.perf_counter()
     # Announced before it starts, not only when it finishes. The census holds
     # a lock, so while it runs every request for the sources page waits on it;
     # a log that only speaks on success makes "still reading" and "died in the
     # thread" the same silence, which is what happened on DOB.
-    roots = sources.census_roots(app.state.db, app.state.archive_root)
     print(f"  census warm: reading up to {sources.DEFAULT_MAX_FILES} "
           f"detection file(s) under {', '.join(str(r) for r in roots)}",
           flush=True)
@@ -121,8 +128,9 @@ async def lifespan(app: FastAPI):
         # cold read rather than leaving anything half-written. Kept on
         # `app.state` so it can be waited on -- a fire-and-forget thread is
         # one a test can only observe by sleeping and hoping.
+        roots = sources.census_roots(app.state.db, app.state.archive_root)
         app.state.census_warm = threading.Thread(
-            target=_warm, args=(app,), daemon=True, name="census-warm")
+            target=_warm, args=(app, roots), daemon=True, name="census-warm")
         app.state.census_warm.start()
     yield
     app.state.db.close()
