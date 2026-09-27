@@ -625,11 +625,29 @@ def snr_to_power(snr: np.ndarray) -> np.ndarray:
     return np.maximum(finite + 1.0, 0.0) / NOISE_COEF
 
 
+def computed_rows(noise_floor: np.ndarray | None, n_freq: int) -> np.ndarray | None:
+    """Which frequency rows v2 actually computed, or None if it cannot say.
+
+    **Not** a test on ``SNR``: v2 stores every cell under its storage threshold
+    as NaN, so NaN there is ordinary sparsification and a quiet row can be
+    almost entirely NaN. ``noise_floor`` is one value per row, the median power
+    of that row, and it is NaN only when there was no row to take the median
+    of -- when the samples for that stretch of the sweep were never read.
+
+    ``noise_floor`` carries one more entry than ``freqs`` in every v2 product
+    seen so far (497 against 496); the extra trailing value is ignored.
+    """
+    if noise_floor is None or noise_floor.size < n_freq:
+        return None
+    return np.isfinite(noise_floor[:n_freq])
+
+
 def _build_calibration(header: ChirpHeader,
                        freqs_mhz: np.ndarray,
                        vrange_km: np.ndarray,
                        gate_km: tuple[float, float],
-                       nominal_stop_mhz: float | None) -> Calibration:
+                       nominal_stop_mhz: float | None,
+                       computed: np.ndarray | None = None) -> Calibration:
     """Axes straight from the file's own ``freqs`` and ``ranges``.
 
     Not via ``calibrate.build``: that derives the axes from header arithmetic,
@@ -645,6 +663,22 @@ def _build_calibration(header: ChirpHeader,
     # and freq_stop is the upper edge of the last bin.
     freq_start = float(freqs_mhz[0]) - freq_step / 2.0
     freq_stop = float(freqs_mhz[-1]) + freq_step / 2.0
+    freq_stop_nominal = (freq_stop if nominal_stop_mhz is None
+                         else float(nominal_stop_mhz))
+
+    # The span the data actually covers, which on a late analysis is narrower
+    # than the axis. The top edge moves `freq_stop` itself, so the existing
+    # truncation logic flags a MUF there with no new code path; the bottom
+    # edge goes in `freq_floor`, which `sweep_complete` and the LOF bound read.
+    freq_floor = None
+    if computed is not None and computed.any() and not computed.all():
+        first = int(np.argmax(computed))
+        last = int(computed.size - 1 - np.argmax(computed[::-1]))
+        if first > 0:
+            freq_floor = float(freqs_mhz[first]) - freq_step / 2.0
+        if last < computed.size - 1:
+            freq_stop_nominal = max(freq_stop_nominal, freq_stop)
+            freq_stop = float(freqs_mhz[last]) + freq_step / 2.0
 
     # Where the stored slice sits on the full FFT axis. Exact when v2 did not
     # add its sub-second range offset; approximate when it did, since that
@@ -659,8 +693,7 @@ def _build_calibration(header: ChirpHeader,
         vrange=vrange_km,
         freq_start=freq_start,
         freq_stop=freq_stop,
-        freq_stop_nominal=(freq_stop if nominal_stop_mhz is None
-                           else float(nominal_stop_mhz)),
+        freq_stop_nominal=freq_stop_nominal,
         half_span=half_span,
         range_step=step,
         # v2 does not zero-pad, so the stored bin spacing is the true
@@ -669,6 +702,7 @@ def _build_calibration(header: ChirpHeader,
         gate_km=gate_km,
         gate_idx=(i_lo, i_hi),
         n_range_full=n_range_full,
+        freq_floor=freq_floor,
     )
 
 
@@ -860,6 +894,8 @@ def load(path: str | Path,
         snr = np.asarray(fh["SNR"][()])
         freqs_hz = np.asarray(fh["freqs"][()], dtype=np.float64)
         ranges_m = np.asarray(fh["ranges"][()], dtype=np.float64)
+        noise_floor = (np.asarray(fh["noise_floor"][()], dtype=np.float64)
+                       if "noise_floor" in fh else None)
 
     if snr.ndim != 2:
         raise ValueError(f"{path}: SNR has shape {snr.shape}, expected 2-D")
@@ -933,7 +969,8 @@ def load(path: str | Path,
 
     freqs_mhz = freqs_hz / 1e6
     cal = _build_calibration(header, freqs_mhz, vrange_km, (lo, hi),
-                             nominal_stop_mhz)
+                             nominal_stop_mhz,
+                             computed=computed_rows(noise_floor, freqs_mhz.size))
 
     return Ionogram(
         power=power.astype(np.float32),

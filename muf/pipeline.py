@@ -21,7 +21,7 @@ import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -61,7 +61,11 @@ def sounded_ceiling(cal, band_ceiling_mhz: float | None = None) -> float:
     """
     if band_ceiling_mhz is None:
         return float(cal.freq_stop)
-    return float(band_ceiling_mhz)
+    # Never above what this product recorded. A circuit's ceiling says how high
+    # the path *can* return; a sweep whose top was never analysed cannot show a
+    # trace above where its data stops, so a pick there is a bound whatever the
+    # registry says.
+    return min(float(band_ceiling_mhz), float(cal.freq_stop))
 
 
 def circuit_ceiling(header, options: Options) -> float | None:
@@ -108,6 +112,33 @@ def band_edge_mhz(cal, band_ceiling_mhz: float | None = None) -> float:
     """
     ceiling = sounded_ceiling(cal, band_ceiling_mhz)
     return ceiling - BAND_EDGE_BINS * cal.freq_step_mhz
+
+
+def lof_floor_mhz(cal, band_floor_mhz: float | None = None) -> float | None:
+    """The floor an LOF is censored against: the circuit's, raised to where
+    this product's data actually begins. See `Calibration.freq_lo`."""
+    if cal.freq_floor is None:
+        return band_floor_mhz
+    return max(band_floor_mhz or cal.freq_floor, cal.freq_floor)
+
+
+def lof_bounded(cal, low):
+    """``low`` with ``at_band_floor`` set wherever the LOF is not a measurement.
+
+    At the floor, as before. And whenever the bottom of the sweep was never
+    computed, **however far above the gap the LOF sits**: "no echo between the
+    data's start and here" says nothing about the stretch below that was never
+    observed. The 291 s product of 2026-09-27 06:44 had data from 19.55 MHz and
+    an algo LOF of 27.6 -- eight MHz clear of the floor and still a bound.
+
+    One definition for the ``loflim_`` columns and the SAO ``E`` letter, for
+    the reason `band_edge_mhz` gives for the MUF side.
+    """
+    if low is None or low.at_band_floor or cal.freq_floor is None:
+        return low
+    if not np.isfinite(low.lof_mhz):
+        return low
+    return replace(low, at_band_floor=True)
 
 
 @dataclass
@@ -264,6 +295,13 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         sweep_fraction=round(ion.cal.sweep_fraction, 4),
     )
 
+    # The floor an LOF is censored against: the circuit's own, if one was
+    # supplied, raised to where this product's data actually begins. A v2
+    # product analysed late is missing the bottom of its sweep (see
+    # `Calibration.freq_lo`), and an LOF found at the first row that has data
+    # says only that the ionosphere returned *somewhere at or below* it.
+    lof_floor = lof_floor_mhz(ion.cal, options.band_floor_mhz)
+
     per_method = options.per_method()
     if options.max_range_slope is None and getattr(header, "format", "") == "digisonde":
         # A digisonde reception is one antenna listening to a crowded band it
@@ -324,15 +362,16 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         # The low-frequency end of this estimator's own trace, so LOF and MUF
         # describe the same detected set and can be compared per method.
         if options.lof:
-            low = lof_module.pick_lof(
+            low = lof_bounded(ion.cal, lof_module.pick_lof(
                 result.presence, ion.freq, power_db=ion.db, vrange=ion.vrange,
                 min_run=options.min_run or pick_module.DEFAULT_MIN_RUN,
-                band_floor_mhz=options.band_floor_mhz,
-            )
+                band_floor_mhz=lof_floor,
+            ))
             row[f"lof_{name}"] = low.lof_mhz
             row[f"lofsnr_{name}"] = low.snr_db
             # At the floor the true LOF is below the band: an upper bound, the
-            # mirror image of limited_.
+            # mirror image of limited_. `lof_bounded` extends that to every LOF
+            # on a product missing the bottom of its sweep.
             row[f"loflim_{name}"] = bool(low.at_band_floor)
 
         if result.error:
@@ -343,7 +382,7 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
     if options.lof:
         for level, low in lof_module.ladder(
             ion, min_run=options.min_run or pick_module.DEFAULT_MIN_RUN,
-            band_floor_mhz=options.band_floor_mhz,
+            band_floor_mhz=lof_floor,
         ).items():
             row[f"lof{round(level)}"] = low.lof_mhz
 

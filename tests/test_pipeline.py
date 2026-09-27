@@ -509,3 +509,135 @@ def test_the_range_rule_is_on_for_digisonde_and_off_for_lfs(synthetic_path, opti
 def test_an_explicit_slope_overrides_the_per_format_default(make_digisonde_h5):
     opts = pipeline.Options(methods=("algo",), max_range_slope=999.0)
     assert opts.per_method()["algo"]["max_range_slope"] == 999.0
+
+
+# --- a v2 product whose analysis began late -----------------------------------
+
+def _late_product(make_chirp_h5, *, blank_below=0, blank_above=None):
+    """A 7-32 MHz product with a trace from 11.4 MHz up, and the rows v2 never
+    computed blanked the way it leaves them: NaN in `SNR` *and* `noise_floor`.
+
+    The shape of Yoshkar-Ola's search-mode days, 2026-09-25..27: 44% of
+    100 kHz/s products lacked the bottom of the sweep, because the rank that
+    analysed it waited ~200 s for a free slot and the 139 s ringbuffer had
+    already overwritten the low frequencies.
+    """
+    import h5py
+
+    n_freq, fftlen = 120, 600
+    power = np.full((n_freq, fftlen), 100.0)
+    for i in range(20, n_freq):
+        power[i, 300 + i // 8: 306 + i // 8] = 1e5
+    path = make_chirp_h5(power, keep=slice(None),
+                         freqs_hz=np.linspace(7.05e6, 31.8e6, n_freq),
+                         name=f"lfm_ionogram-x-y-ch0-000-{blank_below}-{blank_above}.h5")
+    with h5py.File(path, "r+") as fh:
+        snr, floor = fh["SNR"][()], fh["noise_floor"][()]
+        snr[:blank_below] = np.nan
+        floor[:blank_below] = np.nan
+        if blank_above is not None:
+            snr[blank_above:] = np.nan
+            floor[blank_above:n_freq] = np.nan
+        del fh["SNR"]
+        fh["SNR"] = snr
+        fh["noise_floor"][...] = floor
+    return path
+
+
+def _row(path):
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return pipeline.process_file(path, Options(methods=("algo",)))
+
+
+def test_a_missing_sweep_bottom_makes_lof_a_bound(make_chirp_h5):
+    """The 291 s product of 2026-09-27 06:44 UTC reported LOF 27.6 MHz and a
+    complete sweep. Its data started at 19.55 MHz; below that every row was
+    NaN. An LOF at the first row with data is where the recording begins, not
+    where the ionosphere starts returning -- an upper bound, like an LOF at the
+    bottom of the declared band."""
+    full, late = _row(_late_product(make_chirp_h5)), _row(
+        _late_product(make_chirp_h5, blank_below=40))
+
+    assert full["sweep_complete"] and full["sweep_fraction"] == 1.0
+    assert not full["loflim_algo"]
+
+    assert not late["sweep_complete"]
+    assert late["sweep_fraction"] == pytest.approx(2 / 3, abs=0.01)
+    assert late["loflim_algo"] is True
+    assert late["lof_algo"] > full["lof_algo"]
+    # The top was untouched, so the MUF is the same measurement in both.
+    assert late["muf_algo"] == full["muf_algo"]
+
+
+def test_a_missing_sweep_top_makes_muf_a_bound(make_chirp_h5):
+    """The mirror case, through the machinery that already existed for .lfs:
+    the recorded top moves `freq_stop`, and a trace reaching it is `limited`."""
+    row = _row(_late_product(make_chirp_h5, blank_above=90))
+
+    assert not row["sweep_complete"]
+    assert row["freq_stop"] < 26.0
+    assert row["limited_algo"] is True
+    assert row["muf_algo"] < 26.0
+
+
+def test_sparsified_cells_are_not_missing_rows(make_chirp_h5):
+    """v2 stores every cell under its storage threshold as NaN, so a normal
+    product is mostly NaN in `SNR`. Only `noise_floor`, one median per row,
+    says whether a row was computed at all -- reading coverage off `SNR` would
+    call every quiet frequency missing."""
+    import h5py
+
+    path = _late_product(make_chirp_h5)
+    with h5py.File(path) as fh:
+        assert np.isnan(fh["SNR"][()]).mean() > 0.9
+    assert _row(path)["sweep_complete"] is True
+
+
+def test_a_registry_ceiling_never_outranks_the_recorded_top(make_chirp_h5):
+    """A circuit's ceiling says how high the path can return; a product whose
+    top was never analysed cannot show a trace above where its data stops."""
+    from muf.io_chirp import load
+
+    ion = load(_late_product(make_chirp_h5, blank_above=90))
+    assert pipeline.sounded_ceiling(ion.cal, 32.48) == pytest.approx(ion.cal.freq_stop)
+    assert pipeline.sounded_ceiling(ion.cal, 20.0) == 20.0
+
+
+def test_every_lof_is_a_bound_when_the_bottom_is_missing(make_chirp_h5):
+    """Not only an LOF sitting on the gap. Data from 19.55 MHz with a trace from
+    27.6 up means "nothing between 19.55 and 27.6"; below 19.55 was never looked
+    at, so the true LOF can be anywhere under 27.6."""
+    import h5py
+
+    path = _late_product(make_chirp_h5, blank_below=40)
+    with h5py.File(path, "r+") as fh:
+        snr = fh["SNR"][()]
+        snr[40:70] = np.nan              # quiet above the gap, trace resumes at 70
+        del fh["SNR"]
+        fh["SNR"] = snr
+    row = _row(path)
+
+    assert row["lof_algo"] > 20.0        # well clear of the 16 MHz data floor
+    assert row["loflim_algo"] is True
+
+
+def test_the_sao_export_agrees_with_the_csv_about_a_late_product(make_chirp_h5):
+    """`band_edge_mhz` exists because the CSV and the SAO file once disagreed
+    about which MUFs were censored. The LOF side gets the same single
+    definition: a product missing the bottom of its sweep carries the `E`
+    qualifying letter on its LOF, exactly where `loflim_` is True."""
+    import warnings
+
+    from muf.export import saoxml
+
+    path = _late_product(make_chirp_h5, blank_below=40)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        root = saoxml.export_file(path, Options(methods=("algo",)))
+    lofs = [el for el in root.iter("Custom") if el.get("Name") == "LOF"]
+    assert lofs, saoxml.to_string(root)[:500]
+    assert all(el.get("QL") == saoxml.QL_LESS_THAN for el in lofs)
+    assert _row(path)["loflim_algo"] is True

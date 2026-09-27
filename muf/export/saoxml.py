@@ -106,7 +106,13 @@ import numpy as np
 from .. import __version__, extractors, geometry, trace
 from .. import fit as fit_module
 from .. import lof as lof_module
-from ..pipeline import Options, band_edge_mhz, circuit_ceiling
+from ..pipeline import (
+    Options,
+    band_edge_mhz,
+    circuit_ceiling,
+    lof_bounded,
+    lof_floor_mhz,
+)
 
 #: Value of the ``FormatVersion`` attribute this module writes.
 FORMAT_VERSION = "5.0"
@@ -618,17 +624,19 @@ def records_for(ion, options: Options | None = None, **kwargs) -> list[ET.Elemen
     # The ladder is estimator-independent, so it is computed once and shared:
     # every record in the file gets the same rungs, which is the point of it.
     rungs = None
+    floor = lof_floor_mhz(ion.cal, options.band_floor_mhz)
     if options.lof:
-        rungs = lof_module.ladder(ion, band_floor_mhz=options.band_floor_mhz)
+        rungs = {level: lof_bounded(ion.cal, rung) for level, rung
+                 in lof_module.ladder(ion, band_floor_mhz=floor).items()}
 
     out = []
     for result in results.values():
         segments = nose = low = None
         if options.lof:
-            low = lof_module.pick_lof(
+            low = lof_bounded(ion.cal, lof_module.pick_lof(
                 result.presence, ion.freq, power_db=ion.db, vrange=ion.vrange,
-                band_floor_mhz=options.band_floor_mhz,
-            )
+                band_floor_mhz=floor,
+            ))
         if result.ok:
             freq, vrange, weight = trace.extract_points(ion, result)
             _, _, path_km = geometry.path_of(ion.header)

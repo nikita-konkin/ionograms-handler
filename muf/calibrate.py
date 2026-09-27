@@ -296,6 +296,10 @@ class Calibration:
     gate_km: tuple[float, float]
     gate_idx: tuple[int, int]  # inclusive, into the ungated axis
     n_range_full: int
+    # Lowest frequency the product actually holds data for, when that is above
+    # `freq_start`. None means the axis and the data start together, which is
+    # every .lfs file and every complete v2 product. See `freq_lo`.
+    freq_floor: float | None = None
 
     @property
     def freq_step_mhz(self) -> float:
@@ -304,20 +308,39 @@ class Calibration:
         return float(self.freq[1] - self.freq[0])
 
     @property
+    def freq_lo(self) -> float:
+        """Lowest frequency with data: `freq_floor` if set, else the axis start.
+
+        Not the same as `freq_start` on a v2 product whose analysis began late.
+        On Yoshkar-Ola's search-mode days (2026-09-25..27) 44% of 100 kHz/s
+        products have NaN rows from 7 MHz up to as far as 31 MHz: the rank that
+        analysed the sweep waited for a free slot, and by the time it read the
+        ringbuffer the start of the sweep had been overwritten. The axis still
+        says 7.05 MHz. An LOF read off such a product is the frequency where
+        the data begins, not where the ionosphere starts returning.
+        """
+        return self.freq_start if self.freq_floor is None else self.freq_floor
+
+    @property
     def sweep_complete(self) -> bool:
-        """False when the recording stopped before the sweep finished.
+        """False when the recording lacks part of the sweep at either end.
 
         Truncated files still carry a header claiming the full sweep, so this
-        is the only way to notice. A MUF from an incomplete sweep is capped by
-        where the recording stopped, not by the ionosphere.
+        is the only way to notice. A MUF from a sweep cut short at the top is
+        capped by where the recording stopped; an LOF from one missing its
+        bottom is floored by where it began. Neither is the ionosphere.
         """
-        return self.freq_stop >= self.freq_stop_nominal - self.freq_step_mhz
+        step = self.freq_step_mhz
+        return (self.freq_stop >= self.freq_stop_nominal - step
+                and self.freq_lo <= self.freq_start + step)
 
     @property
     def sweep_fraction(self) -> float:
         """How much of the intended sweep the recording actually contains."""
         span = self.freq_stop_nominal - self.freq_start
-        return 1.0 if span <= 0 else (self.freq_stop - self.freq_start) / span
+        if span <= 0:
+            return 1.0
+        return max(0.0, self.freq_stop - self.freq_lo) / span
 
     @property
     def n_freq(self) -> int:
