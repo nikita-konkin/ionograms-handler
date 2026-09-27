@@ -721,7 +721,7 @@ def test_the_watcher_offers_only_what_is_not_already_held(conn, tmp_path,
     chirp = make_chirp_h5(np.full((4, 64), 100.0))
     methods = ("algo",)
 
-    new, found, _fresh, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    new, found, _fresh, _, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
     assert found == 2 and {p.name for p in new} == {lfs.name, chirp.name}
 
     row = pipeline.process_file(lfs, Options(window=512, methods=methods))
@@ -766,7 +766,7 @@ def test_a_file_still_arriving_is_left_for_the_next_pass(conn, tmp_path, make_lf
     make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
                       half_span_km=60_000.0, echo_last_bin=120))
 
-    new, found, fresh, _ = watch.find_new([tmp_path], conn, ("algo",), min_age_s=3600)
+    new, found, fresh, *_ = watch.find_new([tmp_path], conn, ("algo",), min_age_s=3600)
     assert found == 1 and new == [] and fresh == 1
 
 
@@ -790,7 +790,7 @@ def test_a_future_dated_file_is_ingested_not_withheld_forever(conn, tmp_path, ma
     ahead = time.time() + 20565          # the measured NAS skew
     os.utime(lfs, (ahead, ahead))
 
-    new, found, fresh, skewed = watch.find_new([tmp_path], conn, ("algo",),
+    new, found, fresh, skewed, _ = watch.find_new([tmp_path], conn, ("algo",),
                                                min_age_s=3600)
     assert found == 1
     assert [p.name for p in new] == [lfs.name], "must not be withheld"
@@ -800,6 +800,38 @@ def test_a_future_dated_file_is_ingested_not_withheld_forever(conn, tmp_path, ma
     assert "FUTURE-DATED" in watch.describe(
         {"found": 1, "new": 1, "too_fresh": 0, "future_dated": 1,
          "held_back": 0, "loaded": 1, "skipped": 0})
+
+
+def test_muted_files_do_not_eat_the_batch(conn, tmp_path, make_chirp_h5):
+    """Yoshkar-Ola, 2026-09-27: "200 new, 1702 held for the next pass, loaded 0".
+
+    A declined file never gets a row, so it is "new" on every pass; sorted by
+    name, the muted `agent1`/`chilton`/... sat at the front and a 200 batch
+    re-declined the same files forever. Muted products must not reach the
+    batch at all -- and the receiver's hyphen must not defeat the match.
+    """
+    import numpy as np
+
+    from services.api import db, watch
+
+    power = np.full((4, 64), 100.0)
+    for i, tx in enumerate(("agent1", "chilton", "unkown")):
+        make_chirp_h5(power, txname=tx, station_name="Yoshkar-Ola", chirp_id=i)
+    keep = make_chirp_h5(power, txname="unkown", station_name="DOB", chirp_id=9)
+    db.mute_circuit(conn, "agent1", "Yoshkar-Ola")
+    db.mute_circuit(conn, "CHILTON")                  # any receiver
+    db.mute_circuit(conn, "unkown", "yoshkar-ola")
+
+    new, found, _fresh, _skewed, muted = watch.find_new(
+        [tmp_path], conn, ("algo",), min_age_s=0)
+    assert found == 4 and muted == 3
+    assert [p.name for p in new] == [keep.name]
+
+    result = watch.run_once([tmp_path], conn, methods=("algo",),
+                            archive_root=tmp_path, batch=1, min_age_s=0,
+                            quiet=True)
+    assert result["loaded"] == 1 and result["held_back"] == 0
+    assert "3 muted" in watch.describe(result)
 
 
 def test_a_tree_with_no_soundings_is_skipped_not_fatal(conn, tmp_path):

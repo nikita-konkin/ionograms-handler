@@ -79,11 +79,52 @@ def already_done(conn: sqlite3.Connection, methods: tuple[str, ...]) -> set[str]
     return {name for name, got in seen.items() if wanted <= got}
 
 
+#: v2's product name, up to the transmitter and receiver:
+#: ``lfm_ionogram-{txname}-{station_name}-{ch}-{cid:03d}-{t0:.2f}.h5``.
+V2_PREFIX = "lfm_ionogram-"
+
+
+def muted_by_name(conn: sqlite3.Connection):
+    """``matcher(filename) -> bool`` for v2 products a mute rule covers.
+
+    **Why at the listing, and not only at the write.** `ingest_row` declines a
+    muted row, and a declined file never gets a row -- so `already_done` never
+    counts it, and every pass offers it again. That alone is only waste. With
+    ``--batch`` it is a stall: `find_new` sorts by name, the batch takes the
+    front of the list, and on Yoshkar-Ola the front is `agent1`, `chilton`,
+    `db049`, `juliusruh` ... -- all muted. Every pass spent its whole budget
+    re-reading and re-declining the same 200 files and reported "loaded 0,
+    1702 held for the next pass" for as long as anyone let it (2026-09-27).
+
+    **Prefixes, not a parse.** Station names contain hyphens -- `Yoshkar-Ola`
+    -- and so does the separator, so splitting ``lfm_ionogram-unkown-Yoshkar-
+    Ola-ch0-...`` is ambiguous; `io_chirp._NAME_RE` reads the receiver as
+    `Yoshkar`. Asking "does the name start with this rule's circuit" has no
+    ambiguity to resolve. Folded, like the rules themselves.
+
+    The filename is a proxy for the file's own attributes, which `ingest_row`
+    trusts over it. The two agree unless a station was renamed in its config
+    between writes; `.lfs` names carry no circuit and are left to the write.
+    """
+    prefixes = []
+    for rule in db.rows(conn, "SELECT tx, rx FROM muted_circuit"):
+        head = f"{V2_PREFIX}{rule['tx']}-"
+        prefixes.append(head + (f"{rule['rx']}-" if rule["rx"] else ""))
+    prefixes = tuple(prefixes)
+
+    def matcher(name: str) -> bool:
+        return bool(prefixes) and name.lower().startswith(prefixes)
+
+    return matcher
+
+
 def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
              *, format: str | None = None):
     """Soundings on disk that the database does not already hold.
 
-    Returns ``(new, n_found, n_too_fresh, n_skewed)``. Targets holding no
+    Returns ``(new, n_found, n_too_fresh, n_skewed, n_muted)``. A v2 product
+    whose circuit is muted is counted and left out -- see `muted_by_name` for
+    why that cannot wait for the write. Targets holding no
     soundings at all are skipped rather than fatal: an archive normally
     contains detection trees, digisonde products and empty days beside the
     ionograms, and one of those must not stop the scan.
@@ -103,8 +144,9 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
 
     now = time.time() if now is None else now
     done = already_done(conn, methods)
+    muted = muted_by_name(conn)
 
-    found, fresh, skewed, new = 0, 0, 0, []
+    found, fresh, skewed, silenced, new = 0, 0, 0, 0, []
     for target in targets:
         try:
             paths = loader.find_soundings(target, format=format)
@@ -113,6 +155,9 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
         for path in paths:
             found += 1
             if path.name in done:
+                continue
+            if muted(path.name):
+                silenced += 1
                 continue
             try:
                 age = now - path.stat().st_mtime
@@ -129,7 +174,7 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
                 continue
             new.append(path)
     new.sort(key=lambda p: p.name)
-    return new, found, fresh, skewed
+    return new, found, fresh, skewed, silenced
 
 
 def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
@@ -139,16 +184,16 @@ def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
 
     from . import ingest as ingest_mod
 
-    new, found, fresh, skewed = find_new(targets, conn, methods, min_age_s,
-                                         format=format)
+    new, found, fresh, skewed, silenced = find_new(targets, conn, methods,
+                                                   min_age_s, format=format)
     held_back = 0
     if batch and len(new) > batch:
         held_back = len(new) - batch
         new = new[:batch]
 
     result = {"found": found, "new": len(new), "too_fresh": fresh,
-              "future_dated": skewed, "held_back": held_back,
-              "loaded": 0, "skipped": 0}
+              "future_dated": skewed, "muted": silenced,
+              "held_back": held_back, "loaded": 0, "skipped": 0}
     if not new or dry_run:
         return result
 
@@ -169,6 +214,10 @@ def describe(result: dict) -> str:
         # is not ours, and a count that never falls is a file server to fix.
         bits.append(f"{result['future_dated']} FUTURE-DATED (archive clock is "
                     f"ahead of ours)")
+    if result.get("muted"):
+        # Said every pass for the same reason as FUTURE-DATED: a mute rule
+        # that covers more than intended is otherwise invisible from here.
+        bits.append(f"{result['muted']} muted")
     if result["held_back"]:
         bits.append(f"{result['held_back']} held for the next pass")
     if result["new"]:
