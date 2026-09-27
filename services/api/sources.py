@@ -706,10 +706,72 @@ def _finite(value):
     return value
 
 
+#: Virtual reflection heights bracketing a distance estimate: the usual span
+#: of hmF2, the same bracket `muf.geometry.DEFAULT_HMF2_KM` sits inside.
+RANGE_HEIGHTS_KM = (250.0, 400.0)
+
+#: The longest delay a transmitter keyed on the whole second can show: half
+#: way round the Earth is ~20 000 km, ~67 ms. A phase beyond this is not a
+#: travel time -- the transmitter starts off the second, or the phase is the
+#: receiver's clock sitting just before one -- and gets no distance.
+MAX_DELAY_S = 0.070
+
+
+def _ground_for(delay_s: float, hops: int, height_km: float) -> float | None:
+    """Ground distance whose ``hops``-hop path takes ``delay_s``.
+
+    `health.hop_excess_s` is the same spherical geometry the epoch check
+    trusts; the path's length rises monotonically with ground distance, so a
+    bisection is exact enough and needs nothing past the standard library.
+    """
+    from services.agent.health import C_KM_S, hop_excess_s
+
+    def late(d):
+        return d / C_KM_S + hop_excess_s(d, hops, height_km) - delay_s
+
+    lo, hi = 0.0, delay_s * C_KM_S          # the ground can't exceed the path
+    if late(lo) > 0:
+        return None                          # too short for this many hops
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if late(mid) < 0 else (lo, mid)
+    return (lo + hi) / 2
+
+
+def ground_range_km(delay_s: float | None) -> tuple[int, int] | None:
+    """How far away a transmitter is, from its arrival phase. ``(lo, hi)`` km.
+
+    Chirp transmitters key on the whole GPS second, and so does this
+    receiver's epoch, so the fraction of a second a sweep arrives at is its
+    travel time. That fixes the *path* length; the ground distance under it
+    depends on how the path bent, which one receiver cannot see. So the answer
+    is a bracket: the fewest hops the path length allows and one more, each
+    at `RANGE_HEIGHTS_KM`.
+
+    Checked against Cyprus -> Yoshkar-Ola, 2588 km: its 9.96 ms gives
+    2446-2894 km. Distance only, never a position -- one receiver puts the
+    transmitter on a circle. The receiver's own epoch offset rides along
+    uncorrected; it is under a millisecond, and the bracket is wider.
+    """
+    if delay_s is None or not 0.0 < delay_s <= MAX_DELAY_S:
+        return None
+    from muf.geometry import MAX_SINGLE_HOP_KM
+    from services.agent.health import C_KM_S
+
+    fewest = max(1, math.ceil(delay_s * C_KM_S / MAX_SINGLE_HOP_KM))
+    found = [d for hops in (fewest, fewest + 1) for h in RANGE_HEIGHTS_KM
+             if (d := _ground_for(delay_s, hops, h)) is not None]
+    if not found:
+        return None
+    return round(min(found)), round(max(found))
+
+
 def _as_row(emitter) -> dict:
     """One emitter, plus the `sounder_timings` entry it would become."""
     row = {key: _finite(value) for key, value in asdict(emitter).items()}
     row["span_hours"] = round(emitter.span_hours, 2)
+    got = ground_range_km(_finite(getattr(emitter, "fraction_s", None)))
+    row["range_km"] = list(got) if got else None
     row["observed_seconds"] = list(emitter.observed_seconds)
     row["repeats_per_slot"] = round(_repeats_per_slot(emitter), 1)
     # The entry `control.set_config` would write. `transmit_name` is left for

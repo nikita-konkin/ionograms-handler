@@ -66,7 +66,9 @@
     <tr><th></th><th>{{ t('sources.col.rate') }}</th><th>{{ t('sources.col.heard_at') }}</th>
         <th>{{ t('sources.col.n') }}</th>
         <th title="{{ t('sources.col.per_slot_title') }}">{{ t('sources.col.per_slot') }}</th>
-        <th>{{ t('sources.col.phase') }}</th><th>{{ t('sources.col.snr') }}</th>
+        <th>{{ t('sources.col.phase') }}</th>
+        <th title="{{ t('sources.col.distance_title') }}">{{ t('sources.col.distance') }}</th>
+        <th>{{ t('sources.col.snr') }}</th>
         <th>{{ t('sources.col.span') }}</th><th>{{ t('sources.col.identified_as') }}</th></tr>
     {% for e in census.emitters %}
     <tr>
@@ -83,6 +85,11 @@
       <td>{{ e.repeats_per_slot }}</td>
       <td class="muted">{{ '%.2f'|format(e.fraction_s * 1000) if e.fraction_s is not none else '—' }}
           <span class="muted">{% if e.fraction_sd_s is not none %}&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}{% endif %}</span></td>
+      {% if e.range_km %}
+      <td title="{{ t('sources.col.distance_title') }}">{{ e.range_km[0] }}&ndash;{{ e.range_km[1] }}</td>
+      {% else %}
+      <td class="muted" title="{{ t('sources.distance_none') }}">&mdash;</td>
+      {% endif %}
       <td>{{ '%.1f'|format(e.snr_median) if e.snr_median is not none else '—' }}</td>
       <td class="muted">{{ e.span_hours }}</td>
       <td class="claim" data-rate="{{ e.rate }}"
@@ -114,7 +121,12 @@
         <td>{{ e.repeats_per_slot }}</td>
         <td>{{ '%.2f'|format(e.fraction_s * 1000) if e.fraction_s is not none else '—' }}
             {% if e.fraction_sd_s is not none %}&plusmn;{{ '%.2f'|format(e.fraction_sd_s * 1000) }}{% endif %}</td>
-        <td>{{ '%.1f'|format(e.snr_median) if e.snr_median is not none else '—' }}</td>
+        {% if e.range_km %}
+      <td title="{{ t('sources.col.distance_title') }}">{{ e.range_km[0] }}&ndash;{{ e.range_km[1] }}</td>
+      {% else %}
+      <td class="muted" title="{{ t('sources.distance_none') }}">&mdash;</td>
+      {% endif %}
+      <td>{{ '%.1f'|format(e.snr_median) if e.snr_median is not none else '—' }}</td>
         <td>{{ e.rejected_because }}</td>
       </tr>
       {% endfor %}

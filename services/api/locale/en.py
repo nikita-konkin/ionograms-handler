@@ -803,6 +803,16 @@ MESSAGES: dict[str, str] = {
     "sources.col.per_slot_title":
         "Detections divided by distinct slots: how often it came back",
     "sources.col.phase": "Phase ms",
+    "sources.col.distance": "Distance km",
+    "sources.col.distance_title":
+        "How far away the transmitter is, from its arrival phase: transmitters "
+        "start on the whole second, so the phase is the travel time. A range, "
+        "not a point -- one receiver cannot tell how the path bent (fewest hops "
+        "or one more, reflecting at 250-400 km), and cannot tell direction at "
+        "all. Cyprus, 2588 km away, comes out 2446-2894.",
+    "sources.distance_none":
+        "No distance: the phase is longer than any path round the Earth, so "
+        "this transmitter does not start on the whole second.",
     "sources.col.snr": "SNR",
     "sources.col.span": "Span h",
     "sources.col.identified_as": "Identified as",

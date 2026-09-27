@@ -1656,6 +1656,8 @@ def test_the_sources_page_and_endpoint_agree(cold_census, client, tmp_path,
     assert page.status_code == 200
     assert api["count"] == warmed["count"], "served something else"
     assert f"{api['count']} emitter(s)" in page.text
+    assert all("range_km" in e for e in api["emitters"])
+    assert "Distance km" in page.text
 
 
 # --------------------------------------------------------------------------
@@ -4356,3 +4358,43 @@ def test_the_window_is_the_rows_own_span_not_the_last_days(tmp_path):
                                  seconds=[235], fraction=0.00994, cycle_s=300.0,
                                  start=time.time() - 86400)
     assert none["slots"][0]["examples"] == []
+
+
+# --------------------------------------------------------------------------
+# Distance from arrival phase
+# --------------------------------------------------------------------------
+
+def test_the_distance_bracket_holds_the_one_transmitter_we_know():
+    """Cyprus -> Yoshkar-Ola is 2587.83 km, and the census put NIC0's
+    arrival at 9.96 ms. A bracket that missed the one known answer would be
+    decoration; one this wide around it is the honest resolution of a single
+    receiver that cannot see how the path bent."""
+    from services.api.sources import ground_range_km
+
+    lo, hi = ground_range_km(9.96e-3)
+    assert lo < 2587.83 < hi
+    assert hi - lo < 600
+
+
+def test_distance_grows_with_delay_and_stays_below_the_path():
+    """Longer delay, further away -- and never further than light could go,
+    since a reflected path is always longer than the ground under it."""
+    from services.agent.health import C_KM_S
+    from services.api.sources import ground_range_km
+
+    delays = (5.76e-3, 9.96e-3, 19.43e-3, 45.26e-3)
+    ranges = [ground_range_km(d) for d in delays]
+    for (lo, hi), d in zip(ranges, delays):
+        assert 0 < lo <= hi <= d * C_KM_S
+    assert [lo for lo, _ in ranges] == sorted(lo for lo, _ in ranges)
+
+
+def test_a_phase_no_path_could_take_gets_no_distance():
+    """A phase past ~67 ms is longer than half way round the Earth: that
+    transmitter is not keyed on the whole second, and a number here would
+    be a schedule offset dressed as a distance."""
+    from services.api.sources import ground_range_km
+
+    assert ground_range_km(0.5) is None
+    assert ground_range_km(0.0) is None
+    assert ground_range_km(None) is None
