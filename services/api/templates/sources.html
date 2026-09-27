@@ -73,7 +73,8 @@
       <td><button class="identify" data-row='{{ e|tojson }}'>{{ t('sources.identify') }}</button>
           <button class="examples-toggle" data-rate="{{ e.rate }}"
             data-seconds="{{ e.observed_seconds|join(',') }}"
-            data-fraction="{{ e.fraction_s or 0 }}" data-cycle="{{ e.cycle_s }}"
+            data-fraction="{{ e.fraction_s or 0 }}" data-sd="{{ e.fraction_sd_s or 0 }}"
+            data-cycle="{{ e.cycle_s }}"
             data-start="{{ e.first_seen }}" data-end="{{ e.last_seen }}"
             title="{{ t('sources.examples_title') }}">{{ t('sources.examples') }}</button></td>
       <td>{{ t('sources.khz_s', rate='%.1f'|format(e.rate / 1000)) }}</td>
@@ -469,6 +470,7 @@ async function toggleExamples(button) {
   const q = new URLSearchParams({
     station: station(), rate: button.dataset.rate,
     seconds: button.dataset.seconds, fraction: button.dataset.fraction,
+    fraction_sd: button.dataset.sd,
     cycle_s: button.dataset.cycle,
     start: button.dataset.start, end: button.dataset.end,
   });

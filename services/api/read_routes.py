@@ -490,6 +490,7 @@ def source_examples(request: Request,
                     rate: float = Query(..., gt=0),
                     seconds: str = Query(..., max_length=400),
                     fraction: float = Query(0.0, ge=0.0, lt=1.0),
+                    fraction_sd: float = Query(0.0, ge=0.0, lt=1.0),
                     cycle_s: float = Query(300.0, gt=0),
                     start: float | None = None,
                     end: float | None = None,
@@ -515,7 +516,7 @@ def source_examples(request: Request,
                             "seconds: at least one")
     return sources_mod.slot_examples(
         request.app.state.db, station=station, rate=rate, seconds=wanted,
-        fraction=fraction, cycle_s=cycle_s,
+        fraction=fraction, fraction_sd=fraction_sd, cycle_s=cycle_s,
         start=start if start is not None else time.time() - days * 86400.0,
         end=end,
         rate_tol_hz=acquisition.MATCH_RATE_HZ)

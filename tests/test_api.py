@@ -4218,16 +4218,39 @@ def test_each_slot_gets_its_best_trace_and_its_newest(tmp_path):
 
 
 def test_a_slot_near_the_top_of_the_cycle_wraps(tmp_path):
-    """Second 0 received a hair early is second 299.99 of the cycle before."""
+    """A group whose instant is 0.4 ms into the cycle has products stamped a
+    hair before it -- 299.9998 s of the previous cycle -- and they are its."""
     from services.api import db, sources
 
     conn = db.init(db.connect(tmp_path / "t.sqlite3"))
-    early = _search_sounding(conn, _recent(299, fraction=0.7))
+    early = _search_sounding(conn, _recent(299, fraction=0.9998))
 
     got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
-                                seconds=[0], fraction=0.0, cycle_s=300.0,
+                                seconds=[0], fraction=0.0004, cycle_s=300.0,
                                 start=time.time() - 86400)
     assert [x["id"] for x in got["slots"][0]["examples"]] == [early]
+
+
+def test_two_groups_in_one_second_keep_their_own_pictures(tmp_path):
+    """Yoshkar-Ola, 2026-09-25..27: 100 kHz/s at 270 s arrived as two census
+    groups, phase 9.95 ms and 19.43 ms. A whole-second window put the same
+    eight ionograms under both. Search-mode t0 agrees with its group to about
+    a millisecond, so the phase is what tells them apart."""
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    mine = _search_sounding(conn, _recent(270, fraction=0.01943))
+
+    theirs = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                   seconds=[270], fraction=0.00995,
+                                   fraction_sd=0.00081, cycle_s=300.0,
+                                   start=time.time() - 86400)
+    own = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[270], fraction=0.01943,
+                                fraction_sd=0.00051, cycle_s=300.0,
+                                start=time.time() - 86400)
+    assert theirs["slots"][0]["examples"] == []
+    assert [x["id"] for x in own["slots"][0]["examples"]] == [mine]
 
 
 def test_the_rate_is_recorded_at_ingest(tmp_path):

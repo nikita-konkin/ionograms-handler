@@ -730,11 +730,18 @@ def _as_row(emitter) -> dict:
 SEARCH_TX = "unkown"
 
 #: How far a product's start may sit from a census row's arrival instant and
-#: still be that row's. The census gives a whole second plus a fraction; a
-#: search-mode ``t0`` is measured from the same timing solutions, so the two
-#: agree to milliseconds. One second is generous against that and still tight
-#: against the nearest distinct slots on this station (280 and 282).
-EXAMPLE_SLOT_S = 1.0
+#: still be that row's: ``EXAMPLE_SD_FACTOR`` times the row's own phase
+#: scatter, never less than ``EXAMPLE_MIN_TOL_S``.
+#:
+#: Measured on Yoshkar-Ola's first search-mode days (2026-09-25..27, 1416
+#: products): a search-mode ``t0`` agrees with the census instant to a median
+#: of 0.1 ms and a 95th percentile under 2.1 ms, because both come from the
+#: same timing solutions. The first cut of this used a whole second, which put
+#: the same eight 270 s ionograms under two rows -- one group at 9.95 ms, the
+#: other at 19.43 ms, same rate, same second. Milliseconds is what separates
+#: them.
+EXAMPLE_SD_FACTOR = 4.0
+EXAMPLE_MIN_TOL_S = 0.005
 
 
 def _unix(stamp: str) -> float | None:
@@ -750,9 +757,8 @@ def _unix(stamp: str) -> float | None:
 
 def slot_examples(conn, *, station: str, rate: float, seconds, fraction: float,
                   cycle_s: float, start: float, end: float | None = None,
-                  per_slot: int = 2,
-                  rate_tol_hz: float = 1.0,
-                  slot_tol_s: float = EXAMPLE_SLOT_S) -> dict:
+                  fraction_sd: float = 0.0, per_slot: int = 2,
+                  rate_tol_hz: float = 1.0) -> dict:
     """Ingested search-mode ionograms that belong to one census row, per slot.
 
     The census says *that* something repeats at a rate and a second; it cannot
@@ -780,6 +786,7 @@ def slot_examples(conn, *, station: str, rate: float, seconds, fraction: float,
     that plainly exists.
     """
     wanted = sorted({int(s) % int(cycle_s) for s in seconds})
+    slot_tol_s = max(EXAMPLE_MIN_TOL_S, EXAMPLE_SD_FACTOR * (fraction_sd or 0.0))
     rows = db.rows(conn,
         "SELECT s.id, s.datetime, s.chirp_rate,"
         " MAX(e.snr) AS snr,"
@@ -824,7 +831,7 @@ def slot_examples(conn, *, station: str, rate: float, seconds, fraction: float,
             if newest["id"] != best["id"] and per_slot > 1:
                 chosen.append(dict(newest, why="newest"))
         out.append({"second": s, "count": len(found), "examples": chosen})
-    return {"slots": out, "unrated": unrated}
+    return {"slots": out, "unrated": unrated, "tolerance_s": slot_tol_s}
 
 
 def _iso(unix: float) -> str:
