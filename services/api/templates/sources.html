@@ -495,7 +495,7 @@ async function toggleExamples(button) {
                     border:1px solid var(--line, #ccc)"></a>
       <div class="muted" style="font-size:.75rem">${x.why === 'best' ? T('sources.js.examples_best') : T('sources.js.examples_newest')}
         · ${x.datetime.slice(5, 16)}${x.snr != null ? ' · ' + x.snr.toFixed(1) + ' dB' : ''}</div>`).join('');
-    return `<figure style="margin:0 1rem .75rem 0;display:inline-block;vertical-align:top">
+    return `<figure>
       <figcaption><b>${slot.second} s</b>
         <span class="muted">${T('sources.js.examples_count', {n: slot.count})}</span></figcaption>
       ${pics || `<div class="muted" style="font-size:.8rem">${T('sources.js.examples_none_slot')}</div>`}
@@ -504,8 +504,8 @@ async function toggleExamples(button) {
   const notes = [];
   if (!any) notes.push(T('sources.js.examples_none', {station: station()}));
   if (got.unrated) notes.push(T('sources.js.examples_unrated', {n: got.unrated}));
-  tr.firstElementChild.className = '';
-  tr.firstElementChild.innerHTML = figures
+  tr.firstElementChild.className = 'gallery';
+  tr.firstElementChild.innerHTML = `<div class="gallery-grid">${figures}</div>`
     + notes.map(n => `<p class="note">${n}</p>`).join('');
 }
 

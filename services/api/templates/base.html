@@ -31,7 +31,7 @@
   nav.lang a { margin-right:.4rem; font-size:.85rem; letter-spacing:.05em; }
   nav.lang a:last-child { margin-right:0; }
   nav a:hover, nav a.on { color:var(--accent); }
-  main { padding:1rem; max-width:1400px; }
+  main { padding:1rem; max-width:1400px; margin:0 auto; box-sizing:border-box; }
   .panel { background:var(--panel); border:1px solid var(--line);
            border-radius:8px; padding:1rem; margin-bottom:1rem; }
   h2 { margin:.2rem 0 .8rem; font-size:1rem; }
@@ -69,6 +69,14 @@
   a { color:var(--accent); }
   .note { color:var(--dim); font-size:.85rem; }
   img.iono { max-width:100%; border:1px solid var(--line); border-radius:6px; }
+  /* Thumbnails under a table row. The cell spans the row, and every cell
+     inherits `nowrap` from above -- so without this the pictures run on in
+     one line, the table grows to hold them, and every column is dragged out
+     to the width of the widest gallery. Wrapping keeps the table the width of
+     its text and lets the pictures take as many lines as the window needs. */
+  td.gallery { white-space:normal; }
+  .gallery-grid { display:flex; flex-wrap:wrap; gap:.25rem 1rem; }
+  .gallery-grid figure { margin:0 0 .75rem 0; }
 </style>
 
 <script>
