@@ -21,7 +21,7 @@ from jinja2 import pass_context
 
 from muf.reference import indices
 
-from . import acquisition, auth, db, i18n
+from . import acquisition, auth, build, db, i18n
 from . import net as net_mod
 from . import sao as sao_mod
 from . import series as series_mod
@@ -36,7 +36,7 @@ router = APIRouter(include_in_schema=False, dependencies=[Depends(require_read)]
 # through eight route signatures, is eight chances to forget one.
 templates = Jinja2Templates(
     directory=str(Path(__file__).parent / "templates"),
-    context_processors=[i18n.context])
+    context_processors=[i18n.context, build.context])
 
 #: Age past which a station is shown as stale rather than as whatever it last
 #: said. Defined in `acquisition` because the acquiring/stopped indicator

@@ -28,6 +28,7 @@ from . import (
     archive_routes,
     archives,
     auth,
+    build,
     control_routes,
     db,
     i18n,
@@ -37,16 +38,8 @@ from . import (
     web_routes,
 )
 
-VERSION = "0.1.0"
-
-#: The commit this image was built from, stamped in by `deploy/Dockerfile.api`.
-#:
-#: `VERSION` is a hand-edited string and has read 0.1.0 through every deploy so
-#: far, which made "is the fix on the server?" a question two four-minute page
-#: loads could not answer. This one changes on its own. Empty outside a build,
-#: where the answer is whatever the checkout says.
-BUILD_SHA = os.environ.get("API_BUILD_SHA", "")
-BUILD_TIME = os.environ.get("API_BUILD_TIME", "")
+#: Which build this is lives in `build`, shared with the page header.
+VERSION = build.VERSION
 
 #: Read the archive once at startup instead of making the first visitor do it.
 #: Set to 0 where the archive is huge or absent and the census is not wanted.
@@ -89,8 +82,10 @@ def _warm(app: FastAPI, roots: list) -> None:
 async def lifespan(app: FastAPI):
     app.state.db = db.init(db.connect())
     app.state.archive_root = Path(os.environ.get("ARCHIVE_ROOT", "."))
-    print(f"api {VERSION}{' ' + BUILD_SHA if BUILD_SHA else ''}  "
-          f"db={db.DEFAULT_DB}  archive={app.state.archive_root}")
+    stamp = build.info()
+    print(f"api {VERSION}{' ' + stamp['sha'] if stamp['sha'] else ''}"
+          f"{'  committed ' + stamp['committed_at'] if stamp['committed_at'] else ''}"
+          f"  db={db.DEFAULT_DB}  archive={app.state.archive_root}")
     print(f"  {auth.describe()}")
     print(f"  ui language: {i18n.default_lang()}"
           f" (of {', '.join(i18n.LOCALES)}; per-browser via the header toggle)")
@@ -186,8 +181,12 @@ def healthz() -> dict:
     only way to tell a deployed fix from an undeployed one is to look for its
     effects.
     """
+    stamp = build.info()
     return {"ok": True, "version": VERSION,
-            "build": BUILD_SHA or "source", "built_at": BUILD_TIME or None}
+            "build": stamp["sha"] or "source",
+            "committed_at": stamp["committed_at"],
+            "built_at": stamp["built_at"],
+            "started_at": stamp["started_at"]}
 
 
 @app.get("/", include_in_schema=False)

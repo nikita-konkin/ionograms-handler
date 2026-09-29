@@ -2134,11 +2134,43 @@ def test_the_build_is_reported_so_a_deploy_can_be_checked(client,
     assert got["ok"] is True
     assert got["build"] == "source", "an unstamped checkout is not a build"
 
-    monkeypatch.setattr(main, "BUILD_SHA", "3097398")
-    monkeypatch.setattr(main, "BUILD_TIME", "2026-08-13T18:40:00Z")
+    from services.api import build
+
+    monkeypatch.setattr(build, "SHA", "3097398abcdef0123")
+    monkeypatch.setattr(build, "BUILD_TIME", "2026-08-13T18:40:00Z")
+    monkeypatch.setattr(build, "COMMIT_TIME", "2026-08-13T21:12:05+03:00")
     stamped = client.get("/healthz").json()
-    assert stamped["build"] == "3097398"
-    assert stamped["built_at"] == "2026-08-13T18:40:00Z"
+    assert stamped["build"] == "3097398", "seven characters, like --oneline"
+    assert stamped["built_at"] == "2026-08-13 18:40Z"
+    assert stamped["committed_at"] == "2026-08-13 18:12Z", "in UTC"
+    assert stamped["started_at"]
+
+
+def test_every_page_says_which_build_and_how_new(client, monkeypatch):
+    """Asked for on 2026-09-29: the console should show the build and when
+    the code was last updated, not only /healthz."""
+    from services.api import build
+
+    monkeypatch.setattr(build, "SHA", "ee29d76aaaa")
+    monkeypatch.setattr(build, "COMMIT_TIME", "2026-09-29T07:30:00Z")
+    page = client.get("/ui").text
+    assert "ee29d76" in page and "2026-09-29 07:30Z" in page
+
+    # An overlay build that inherited a stale stamp must not be believed over
+    # the commit: the commit date is the one shown.
+    monkeypatch.setattr(build, "BUILD_TIME", "2026-09-27T09:29:31Z")
+    assert "2026-09-29 07:30Z" in client.get("/ui").text
+
+
+def test_an_unstamped_checkout_still_says_something_true(client, monkeypatch):
+    from services.api import build
+
+    for name in ("SHA", "BUILD_TIME", "COMMIT_TIME"):
+        monkeypatch.setattr(build, name, "")
+    got = build.info()
+    assert got["sha"] is None and got["updated_is"] == "start"
+    assert got["updated"] == got["started_at"]
+    assert "source" in client.get("/ui").text
 
 
 def test_a_census_row_with_a_missing_column_is_still_json():

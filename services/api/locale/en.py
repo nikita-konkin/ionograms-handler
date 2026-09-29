@@ -27,6 +27,11 @@ MESSAGES: dict[str, str] = {
 
     # -- chrome ---------------------------------------------------------
     "app.title": "Ionograms",
+    "chrome.build": "build {sha} · updated {date}",
+    "chrome.build_source": "source",
+    "chrome.build_title":
+        "Code committed {committed} · image built {built} · "
+        "running since {started} (UTC)",
     "chrome.language": "Language",
 
     "nav.console": "Console",

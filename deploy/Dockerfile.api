@@ -58,8 +58,10 @@ USER api
 # which is what a checkout run by uvicorn looks like.
 ARG API_BUILD_SHA=unknown
 ARG API_BUILD_TIME=unknown
+ARG API_COMMIT_TIME=unknown
 ENV API_BUILD_SHA=$API_BUILD_SHA \
-    API_BUILD_TIME=$API_BUILD_TIME
+    API_BUILD_TIME=$API_BUILD_TIME \
+    API_COMMIT_TIME=$API_COMMIT_TIME
 
 EXPOSE 8000
 

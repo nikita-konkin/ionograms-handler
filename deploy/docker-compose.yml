@@ -26,8 +26,13 @@ services:
       args:
         # An image built here is a working copy, not a commit, and `/healthz`
         # should say so rather than name a SHA whose tree it may not match.
-        # Override deliberately: API_BUILD_SHA=$(git rev-parse --short HEAD).
+        # Override deliberately, all three together:
+        #   API_BUILD_SHA=$(git rev-parse --short HEAD) \
+        #   API_COMMIT_TIME=$(git log -1 --format=%cI) \
+        #   API_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose ... --build
         API_BUILD_SHA: "${API_BUILD_SHA:-local build}"
+        API_BUILD_TIME: "${API_BUILD_TIME:-unknown}"
+        API_COMMIT_TIME: "${API_COMMIT_TIME:-unknown}"
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
     environment:

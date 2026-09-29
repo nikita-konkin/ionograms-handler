@@ -299,6 +299,16 @@
        invisible until /whoami answers, so a signed-out page shows nothing
        rather than flashing "anonymous". #}
     <span id="who" class="note" style="display:none"></span>
+    {# Which code this page came from, on every page: "is my fix deployed?"
+       should be a glance, not a curl. The date is the code's own -- see
+       `build.py` for why not the image's. #}
+    <span class="note build"
+          title="{{ t('chrome.build_title',
+                      committed=build.committed_at or '—',
+                      built=build.built_at or '—',
+                      started=build.started_at) }}">{{ t('chrome.build',
+            sha=build.sha or t('chrome.build_source'),
+            date=build.updated) }}</span>
     <span class="note">{% block hint %}{% endblock %}</span>
     {# The toggle carries the whole query string across, so changing language
        while looking at a filtered, sorted table does not also reset the

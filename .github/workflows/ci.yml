@@ -193,7 +193,11 @@ jobs:
 
       - id: stamp
         if: steps.creds.outputs.ready == 'true'
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        # `committed`: when the code last changed, which is what the page
+        # header shows as "updated" -- see services/api/build.py.
+        run: |
+          echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "committed=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         if: steps.creds.outputs.ready == 'true'
@@ -209,6 +213,7 @@ jobs:
           build-args: |
             API_BUILD_SHA=${{ github.sha }}
             API_BUILD_TIME=${{ steps.stamp.outputs.at }}
+            API_COMMIT_TIME=${{ steps.stamp.outputs.committed }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
