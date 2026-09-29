@@ -4418,3 +4418,37 @@ def test_startup_clears_the_distance_invented_for_an_unknown_end(tmp_path):
     got = {r["file"]: r["path_km"] for r in
            db.rows(conn, "SELECT file, path_km FROM sounding")}
     assert got == {"known.h5": 2587.8, "unknown.h5": None}
+
+
+def test_identify_schedules_the_rate_the_transmitter_is_set_to():
+    """210 of 210 timing solutions reported the 500 kHz/s transmitter as
+    exactly 500008.4 -- the detector's candidate step. Scheduled at that, the
+    dechirp smears every trace by 70-320 km. A rate a hair off the kHz/s grid
+    is on it; one clearly between grid points is left as found."""
+    from services.api.sources import nominal_rate
+
+    assert nominal_rate(500008.4) == 500000.0
+    assert nominal_rate(100000.0) == 100000.0
+    assert nominal_rate(124996.0) == 125000.0
+    assert nominal_rate(123456.0) == 123456.0          # 0.4% off: real
+    assert nominal_rate(None) is None
+
+
+def test_the_census_row_offers_the_nominal_rate():
+    from dataclasses import dataclass
+
+    from services.api import sources
+
+    @dataclass
+    class Emitter:
+        rate: float = 500008.4
+        count: int = 138
+        observed_seconds: tuple = (114,)
+        cycle_s: float = 300.0
+        fraction_s: float = 5.76e-3
+        span_hours: float = 30.0
+
+    row = sources._as_row(Emitter())
+    assert row["rate"] == 500008.4, "the detected rate stays visible"
+    assert row["nominal_rate"] == 500000.0
+    assert row["timing_entry"]["chirp-rate"] == 500000.0

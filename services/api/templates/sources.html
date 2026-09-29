@@ -228,7 +228,9 @@ const station = () => stationBox ? stationBox.value : '';
 function ownerOf(row) {
   const seconds = row.observed_seconds || [];
   return (VERIFIED[station()] || []).find(t => (t.timings || []).some(e =>
-    Math.abs(e['chirp-rate'] - row.rate) <= MATCH_RATE_HZ
+    // Nominal: a record saved from Identify holds 500000 where the census
+    // row says 500008.4, and the two are the same transmitter.
+    Math.abs(e['chirp-rate'] - (row.nominal_rate ?? row.rate)) <= MATCH_RATE_HZ
     && seconds.some(s => Math.abs(e.chirpt - s) <= MATCH_SLOT_S))) || null;
 }
 
@@ -305,7 +307,8 @@ if (save) save.addEventListener('click', async () => {
     // The census row it was read off, kept verbatim: the identification is a
     // judgement, so what it was made on travels with it.
     evidence: editing,
-    timings: seconds.map(s => ({'chirp-rate': editing.rate, rep: rep, chirpt: s})),
+    timings: seconds.map(s => ({'chirp-rate': editing.nominal_rate ?? editing.rate,
+                                rep: rep, chirpt: s})),
   });
   if (!r.ok) { out.textContent = T('sources.js.refused', {detail: r.detail}); return; }
   // Re-identifying replaces rather than appends, exactly as the upsert on the
@@ -417,7 +420,7 @@ function renderVerified() {
       <td class="muted">${t.name || ''}</td>
       <td class="muted">${t.sounder_id}</td>
       <td class="muted">${T('sources.js.khz_s',
-          {rate: (t.timings[0] || {})['chirp-rate'] / 1000})}</td>
+          {rate: ((t.timings[0] || {})['chirp-rate'] / 1000).toFixed(1)})}</td>
       <td>${t.timings.map(e => e.chirpt + 's').join(', ')}
           <span class="muted">${T('sources.js.of_rep',
             {rep: (t.timings[0] || {}).rep})}</span></td>

@@ -766,6 +766,37 @@ def ground_range_km(delay_s: float | None) -> tuple[int, int] | None:
     return round(min(found)), round(max(found))
 
 
+#: The grid transmitters set their chirp rate on: every one this network hears
+#: sweeps at a whole number of kHz/s (50, 100, 125, 500).
+NOMINAL_RATE_STEP_HZ = 1000.0
+
+#: How close a detected rate must be to that grid to be read as sitting on it.
+#: The detector's own candidate step is well inside this -- 500 kHz/s comes
+#: back as 500008.4, 1.7e-5 off -- while a transmitter genuinely between grid
+#: points would be off by a whole part in a thousand or more.
+NOMINAL_RATE_TOLERANCE = 1e-4
+
+
+def nominal_rate(rate: float | None) -> float | None:
+    """The rate the transmitter is set to, from the rate the detector found.
+
+    `find_timings.py` fits a chirp rate from a discrete candidate list, so
+    what a timing solution reports is the nearest candidate, not a
+    measurement: 210 of 210 timing solutions for the 500 kHz/s transmitter
+    said exactly 500008.4. Copied into `sounder_timings`, that 8.4 Hz/s
+    becomes a dechirp error of ~70 km at 7 MHz growing to ~320 km at 32 MHz
+    -- a smeared trace on every scheduled sweep. A rate off the grid by more
+    than `NOMINAL_RATE_TOLERANCE` is left as detected: it is then telling us
+    something.
+    """
+    if rate is None or not math.isfinite(rate) or rate <= 0:
+        return rate
+    snapped = round(rate / NOMINAL_RATE_STEP_HZ) * NOMINAL_RATE_STEP_HZ
+    if snapped and abs(rate - snapped) <= NOMINAL_RATE_TOLERANCE * snapped:
+        return float(snapped)
+    return float(rate)
+
+
 def _as_row(emitter) -> dict:
     """One emitter, plus the `sounder_timings` entry it would become."""
     row = {key: _finite(value) for key, value in asdict(emitter).items()}
@@ -778,8 +809,10 @@ def _as_row(emitter) -> dict:
     # the operator: nothing in a detection identifies the transmitter, and a
     # guessed name would end up in the product file name and then in the
     # database, looking like knowledge.
+    row["nominal_rate"] = nominal_rate(emitter.rate)
     row["timing_entry"] = {
-        "chirp-rate": emitter.rate,
+        # Nominal, not detected: this is what the station will dechirp with.
+        "chirp-rate": row["nominal_rate"],
         "rep": emitter.cycle_s,
         "chirpt": (float(emitter.observed_seconds[0])
                    if emitter.observed_seconds else 0.0),
