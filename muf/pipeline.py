@@ -99,7 +99,8 @@ def circuit_ceiling(header, options: Options) -> float | None:
     if lookup is None:
         return None
     return lookup(getattr(header, "tx_name", ""),
-                  getattr(header, "rx_name", ""))
+                  getattr(header, "rx_name", ""),
+                  getattr(header, "t0", None))
 
 
 def band_edge_mhz(cal, band_ceiling_mhz: float | None = None) -> float:

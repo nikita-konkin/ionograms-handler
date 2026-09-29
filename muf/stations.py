@@ -46,6 +46,25 @@ LFS = ".lfs header"
 LOCAL = "local"
 
 
+#: The cycle a slot second is counted in -- the 300 s every scheduled
+#: transmitter this network hears repeats on, and the census's own cycle.
+SLOT_CYCLE_S = 300
+
+
+def _slot_of(t0: float | None) -> int | None:
+    """Second of the cycle a sweep starts in. Rounded: a search-mode `t0`
+    carries the arrival delay, ~10 ms past the whole second."""
+    if t0 is None:
+        return None
+    try:
+        t0 = float(t0)
+    except (TypeError, ValueError):
+        return None
+    if t0 != t0:                                   # NaN
+        return None
+    return round(t0 % SLOT_CYCLE_S) % SLOT_CYCLE_S
+
+
 @dataclass(frozen=True)
 class Station:
     """One site. ``code`` is what a product's ``txname``/``station_name`` holds."""
@@ -60,12 +79,18 @@ class Station:
     #: Highest frequency this transmitter's echoes actually reach, **keyed by
     #: receiving station**: ``(("DOB", 24.53),)``. See :meth:`ceiling_for`.
     band_ceiling_mhz: tuple[tuple[str, float], ...] = ()
+    #: The same, for **one slot** of this transmitter into one receiver:
+    #: ``(("Yoshkar-Ola", 250, 20.0),)`` -- receiver, second of the
+    #: `SLOT_CYCLE_S` cycle, MHz. Wins over `band_ceiling_mhz` for soundings
+    #: that start in that second. See :meth:`ceiling_for`.
+    slot_ceiling_mhz: tuple[tuple[str, int, float], ...] = ()
 
     @property
     def coordinates(self) -> tuple[float, float]:
         return (self.latitude, self.longitude)
 
-    def ceiling_for(self, receiver: str | None) -> float | None:
+    def ceiling_for(self, receiver: str | None,
+                    t0: float | None = None) -> float | None:
         """The band ceiling on this transmitter's circuit to ``receiver``.
 
         ``None`` when nothing has been measured for that pair, which means "use
@@ -80,10 +105,23 @@ class Station:
         site as ``cyprus1`` reaches the top of a 32.5 MHz sweep into
         Yoshkar-Ola. One number on the transmitter would have to be wrong for
         one of them.
+
+        **A slot can have its own.** Nicosia into Yoshkar-Ola sweeps to ~30 MHz
+        in the 230 s slot and stops at exactly 20 MHz in the 250 s slot: 448
+        traces over four days, none above 20.2 MHz, all computed to 31.8. The
+        site-wide entry cannot say that, so ``t0`` -- the sweep's start --
+        picks a per-slot entry first. Keyed on the slot rather than on the
+        console's per-slot code (`NIC0`), because an operator re-points a code
+        at another slot and the ceiling belongs to what is transmitted there.
         """
         if not receiver:
             return None
         key = str(receiver).strip().lower()
+        slot = _slot_of(t0)
+        if slot is not None:
+            for code, second, mhz in self.slot_ceiling_mhz:
+                if str(code).strip().lower() == key and int(second) == slot:
+                    return float(mhz)
         for code, mhz in self.band_ceiling_mhz:
             if str(code).strip().lower() == key:
                 return float(mhz)
@@ -140,7 +178,11 @@ _V2_STATIONS = (
             note="also the .lfs archive's 'cyprus1'; its header says "
                  "35.0/34.0, 59.9 km away, superseded by these five decimals. "
                  "NIC0-NIC4 are per-slot codes for this same emitter",
-            band_ceiling_mhz=(("DOB", 24.53),)),
+            band_ceiling_mhz=(("DOB", 24.53),),
+            # The 250 s slot stops its sweep at 20 MHz; the 230 s and 291 s
+            # slots go on to ~30. Measured on search-mode products,
+            # 2026-09-25..28, and the reason MUFs there are lower bounds.
+            slot_ceiling_mhz=(("Yoshkar-Ola", 250, 20.0),)),
     Station("Ramfjordmoen", "Ramfjordmoen",
             69.58187184247221, 19.220853348827067, V2),
     Station("ROTHR1", "ROTHR Chesapeake Bay",
@@ -241,7 +283,8 @@ class Registry(Mapping):
             return None
         return self._by_code.get(self._key(name))
 
-    def band_ceiling(self, transmitter: str, receiver: str) -> float | None:
+    def band_ceiling(self, transmitter: str, receiver: str,
+                     t0: float | None = None) -> float | None:
         """Measured band ceiling for one circuit, or None if there is no entry.
 
         None means "no measurement", never "no limit": the caller falls back to
@@ -250,7 +293,7 @@ class Registry(Mapping):
         are the two cases the `limited_` flag exists to tell apart.
         """
         station = self.station(transmitter)
-        return None if station is None else station.ceiling_for(receiver)
+        return None if station is None else station.ceiling_for(receiver, t0)
 
     def __getitem__(self, name: str) -> tuple[float, float]:
         station = self.station(name)
@@ -341,6 +384,7 @@ def _station_from(code: str, entry: Mapping, source: str) -> Station:
         aliases=tuple(str(a) for a in entry.get("aliases", ())),
         note=str(entry.get("note", "")),
         band_ceiling_mhz=_ceilings_from(code, entry, source),
+        slot_ceiling_mhz=_slot_ceilings_from(code, entry, source),
     )
 
 
@@ -364,6 +408,31 @@ def _ceilings_from(code: str, entry: Mapping, source: str
     return tuple((str(rx), float(mhz)) for rx, mhz in raw.items())
 
 
+def _slot_ceilings_from(code: str, entry: Mapping, source: str
+                        ) -> tuple[tuple[str, int, float], ...]:
+    """``{"slot_ceiling_mhz": {"Yoshkar-Ola": {"250": 20.0}}}``.
+
+    Receiver, then second of the cycle, then MHz -- the same "a ceiling
+    belongs to a circuit" rule as `_ceilings_from`, one level narrower.
+    """
+    raw = entry.get("slot_ceiling_mhz")
+    if raw is None:
+        return ()
+    bad = ValueError(
+        f"station {code!r} in {source}: slot_ceiling_mhz must map receiver "
+        f"code to {{second-of-cycle: MHz}}, e.g. "
+        f"{{\"Yoshkar-Ola\": {{\"250\": 20.0}}}} -- got {raw!r}")
+    if not isinstance(raw, Mapping):
+        raise bad
+    out = []
+    for rx, slots in raw.items():
+        if not isinstance(slots, Mapping):
+            raise bad
+        for second, mhz in slots.items():
+            out.append((str(rx), int(second) % SLOT_CYCLE_S, float(mhz)))
+    return tuple(out)
+
+
 def describe(registry: Registry | None = None) -> str:
     """The table, for ``muf stations`` and for a config-check in a log."""
     registry = registry or default_registry()
@@ -375,4 +444,7 @@ def describe(registry: Registry | None = None) -> str:
             lines.append(f"{'':14} note: {station.note}")
         for rx, mhz in station.band_ceiling_mhz:
             lines.append(f"{'':14} band ceiling into {rx}: {mhz:.2f} MHz")
+        for rx, second, mhz in station.slot_ceiling_mhz:
+            lines.append(f"{'':14} band ceiling into {rx}, {second} s slot: "
+                         f"{mhz:.2f} MHz")
     return "\n".join(lines)

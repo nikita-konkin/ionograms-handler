@@ -344,3 +344,71 @@ def test_a_transmitter_code_nobody_has_identified_still_does_not_resolve():
     for it would be the failure this table exists to prevent -- a plausible
     path length is worse than none."""
     assert stations.default_registry().station("NIC9") is None
+
+
+# --------------------------------------------------------------------------
+# A ceiling for one slot of a transmitter
+# --------------------------------------------------------------------------
+
+#: 2026-09-29 04:14:10Z sits at second 250 of the 300 s cycle.
+SLOT_250 = 1790655250.0
+
+
+def test_the_250_s_slot_of_nicosia_stops_at_20_mhz_into_yoshkar_ola():
+    """Measured: 448 search-mode traces in the 250 s slot, none above 20.2
+    MHz, every product computed to 31.8. The 230 s and 291 s slots of the
+    same site reach ~30, so the ceiling is the slot's, not the site's."""
+    registry = stations.default_registry()
+    assert SLOT_250 % 300 == 250
+    assert registry.band_ceiling("NIC0", "Yoshkar-Ola", SLOT_250) == 20.0
+    # Any code for the site; the slot is what matters.
+    assert registry.band_ceiling("NIC3", "yoshkar-ola", SLOT_250) == 20.0
+    # A search-mode t0 carries the ~10 ms arrival delay.
+    assert registry.band_ceiling("NIC", "Yoshkar-Ola", SLOT_250 + 0.0099) == 20.0
+
+
+def test_other_slots_and_circuits_keep_what_they_had():
+    registry = stations.default_registry()
+    assert registry.band_ceiling("NIC0", "Yoshkar-Ola", SLOT_250 - 20) is None
+    assert registry.band_ceiling("NIC0", "Yoshkar-Ola") is None      # no t0
+    assert registry.band_ceiling("NIC", "DOB", SLOT_250) == pytest.approx(24.53)
+
+
+def test_the_pipeline_passes_the_sweep_start_to_the_lookup():
+    from muf import pipeline
+    from muf.pipeline import Options
+
+    class Header:
+        tx_name, rx_name, t0 = "NIC0", "Yoshkar-Ola", SLOT_250
+
+    assert pipeline.circuit_ceiling(Header(), Options()) == 20.0
+
+
+def test_a_slot_ceiling_can_come_from_a_station_file(tmp_path):
+    path = tmp_path / "stations.json"
+    path.write_text(json.dumps({"XX": {
+        "lat": 1.0, "lon": 2.0,
+        "slot_ceiling_mhz": {"RX": {"250": 20.0, "10": 18.5}}}}))
+    registry = stations.from_json(path)
+    assert registry.band_ceiling("XX", "rx", SLOT_250) == 20.0
+    assert registry.band_ceiling("XX", "rx", SLOT_250 + 60) == 18.5
+    assert "250 s slot: 20.00 MHz" in stations.describe(registry)
+
+    path.write_text(json.dumps({"XX": {"lat": 1.0, "lon": 2.0,
+                                       "slot_ceiling_mhz": {"RX": 20.0}}}))
+    with pytest.raises(ValueError, match="second-of-cycle"):
+        stations.from_json(path)
+
+
+def test_a_nic0_product_in_the_250_s_slot_carries_the_20_mhz_ceiling(make_chirp_h5):
+    """End to end: the row a real product becomes records the slot's ceiling,
+    so a MUF at 19.9 MHz there is a lower bound, not a measurement."""
+    from muf import pipeline
+    from muf.pipeline import Options
+
+    freqs = np.arange(40) * 0.8e6 + 0.5e6               # 0.5 .. 31.7 MHz
+    path = make_chirp_h5(np.full((40, 64), 100.0), txname="NIC0",
+                         station_name="Yoshkar-Ola", t0=SLOT_250,
+                         freqs_hz=freqs)
+    row = pipeline.process_file(path, Options(methods=("algo",)))
+    assert row["band_ceiling"] == pytest.approx(20.0)
