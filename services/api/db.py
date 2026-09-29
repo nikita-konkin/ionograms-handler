@@ -160,10 +160,30 @@ def _add_missing_columns(conn: sqlite3.Connection) -> list[str]:
     return applied
 
 
+def _forget_invented_distances(conn: sqlite3.Connection) -> int:
+    """Clear the 20015 km every unregistered circuit was stored with.
+
+    `geometry.great_circle_km` turned NaN coordinates into half the Earth's
+    circumference until 2026-09-29, and ingest stored it. The coordinates
+    themselves went in as NULL, so the rows that carry the invented number are
+    exactly those with a NULL end and a distance. Idempotent: once cleared,
+    nothing matches, and a row ingested since never had one.
+    """
+    try:
+        cur = conn.execute(
+            "UPDATE sounding SET path_km = NULL WHERE path_km IS NOT NULL"
+            " AND (tx_lat IS NULL OR tx_lon IS NULL"
+            "      OR rx_lat IS NULL OR rx_lon IS NULL)")
+    except sqlite3.Error:                      # pragma: no cover - defensive
+        return 0
+    return cur.rowcount
+
+
 def init(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Create anything missing. Safe to call on every start."""
     conn.executescript(SCHEMA.read_text(encoding="utf-8"))
     _add_missing_columns(conn)
+    _forget_invented_distances(conn)
     conn.commit()
     return conn
 

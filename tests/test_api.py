@@ -4398,3 +4398,23 @@ def test_a_phase_no_path_could_take_gets_no_distance():
     assert ground_range_km(0.5) is None
     assert ground_range_km(0.0) is None
     assert ground_range_km(None) is None
+
+
+def test_startup_clears_the_distance_invented_for_an_unknown_end(tmp_path):
+    """Rows ingested before the fix carry 20015 km beside a NULL position.
+    A known circuit keeps its distance; an unknown one loses the fake."""
+    from services.api import db
+
+    conn = db.init(db.connect(tmp_path / "x.sqlite3"))
+    for name, tx_lat, km in (("known.h5", 35.18, 2587.8),
+                             ("unknown.h5", None, 20015.1)):
+        conn.execute(
+            "INSERT INTO sounding (file, path, datetime, ingested_at, tx_lat,"
+            " tx_lon, rx_lat, rx_lon, path_km) VALUES (?, ?, '2026-09-28',"
+            " '2026-09-28', ?, 33.4, 56.6, 47.9, ?)", (name, name, tx_lat, km))
+    conn.commit()
+
+    db.init(conn)
+    got = {r["file"]: r["path_km"] for r in
+           db.rows(conn, "SELECT file, path_km FROM sounding")}
+    assert got == {"known.h5": 2587.8, "unknown.h5": None}
