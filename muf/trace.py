@@ -281,7 +281,13 @@ def identify_hops(
     two candidates without favouring either by ``margin_km``, are left
     unlabelled -- an honest "don't know" beats a coin-flip label that later
     analysis would take at face value.
+
+    An unknown ``ground_km`` labels nothing. Every comparison against NaN is
+    False, so without this each segment passed both "don't know" tests and
+    came out 1-hop.
     """
+    if not math.isfinite(ground_km):
+        return segments
     for item in segments:
         observed = item.median_range
 

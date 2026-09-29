@@ -788,3 +788,22 @@ def test_a_header_without_whitening_omits_it(make_lfs):
     acq = saoxml._acquisition(object())
 
     assert "Whitening" not in acq.attrib
+
+
+def test_an_unregistered_transmitter_exports_no_invented_distance(make_chirp_h5):
+    """The export carried `GreatCircleDistance="20015.1"` and `D=20015 km` for
+    every transmitter not yet in the station table. Unknown is written as
+    absent -- never as "nan", and never as half the Earth."""
+    import numpy as np
+
+    from muf.export import saoxml
+    from muf.pipeline import Options
+
+    power = np.full((40, 256), 100.0)
+    power[10:30, 60:64] = 1e7
+    path = make_chirp_h5(power, txname="Rostov_on_Salekhard",
+                         station_name="DOB")
+    text = saoxml.to_string(saoxml.export_file(path, Options(methods=("algo",))))
+    assert "20015" not in text
+    assert "nan" not in text.lower()
+    assert "GreatCircleDistance" not in text

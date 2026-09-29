@@ -226,12 +226,15 @@ def _system_info(ion, method: str) -> ET.Element:
 
     ET.SubElement(info, "ObliquePath", _attrs(
         TransmitterName=header.tx_name,
-        TransmitterLatitude=f"{tx.lat:.4f}",
-        TransmitterLongitude=f"{tx.lon:.4f}",
+        TransmitterLatitude=(f"{tx.lat:.4f}" if geometry.known(tx) else ""),
+        TransmitterLongitude=(f"{tx.lon:.4f}" if geometry.known(tx) else ""),
         ReceiverName=header.rx_name,
-        ReceiverLatitude=f"{rx.lat:.4f}",
-        ReceiverLongitude=f"{rx.lon:.4f}",
-        GreatCircleDistance=f"{path_km:.1f}",
+        ReceiverLatitude=(f"{rx.lat:.4f}" if geometry.known(rx) else ""),
+        ReceiverLongitude=(f"{rx.lon:.4f}" if geometry.known(rx) else ""),
+        # Blank, and so absent, when an end is unregistered: `_attrs` drops
+        # empty values, and "nan" in a schema'd float attribute is worse.
+        GreatCircleDistance=(f"{path_km:.1f}" if geometry.known(tx, rx)
+                             else ""),
         Units="km",
     ))
 
@@ -443,6 +446,8 @@ def _characteristics(ion, result, nose, letter: str,
                      model: ModelValues | None = None,
                      lof=None, lof_ladder=None) -> ET.Element:
     _, _, path_km = geometry.path_of(ion.header)
+    distance = (f"D={path_km:.0f} km" if np.isfinite(path_km)
+                else "path length unknown")
     chars = ET.Element("CharacteristicList")
 
     pick = result.pick
@@ -452,7 +457,7 @@ def _characteristics(ion, result, nose, letter: str,
             Description=(
                 f"Operational MUF measured for the "
                 f"{ion.header.tx_name}-{ion.header.rx_name} path, "
-                f"D={path_km:.0f} km. Not URSI MUF(3000): that is a "
+                f"{distance}. Not URSI MUF(3000): that is a "
                 f"transmission-curve conversion from a vertical critical "
                 f"frequency (UAG-23A 1.50)."
             ),
@@ -475,20 +480,23 @@ def _characteristics(ion, result, nose, letter: str,
         # ray that cannot exist. It is also the convention `iri.predict` and
         # the series page convert by, so a reader comparing the download
         # against the page is comparing one geometry with itself.
-        hops = geometry.hop_count(path_km)
-        hop_km = path_km / hops
-        equivalent = geometry.muf_to_fof2(pick.muf_mhz, hop_km,
-                                          EQUIVALENT_HMF2_KM)
-        # A bare ``D=`` cannot be read as a hop distance or a path distance,
-        # and the two stop being the same number the moment the path hops.
-        model_options = f"hmF2={EQUIVALENT_HMF2_KM:.0f}km,hop={hop_km:.0f}km"
-        if hops > 1:
-            model_options += f",D={path_km:.0f}km,{hops} hops"
-        ET.SubElement(chars, "Modeled", _attrs(
-            Name="foF2", Units="MHz", Val=f"{equivalent:.3f}",
-            ModelName="secant-law",
-            ModelOptions=model_options,
-        ))
+        # No secant-law foF2 without a path: the obliquity is a function of
+        # the hop's ground distance, and there is none to give it.
+        if np.isfinite(path_km):
+            hops = geometry.hop_count(path_km)
+            hop_km = path_km / hops
+            equivalent = geometry.muf_to_fof2(pick.muf_mhz, hop_km,
+                                              EQUIVALENT_HMF2_KM)
+            # A bare ``D=`` cannot be read as a hop distance or a path distance,
+            # and the two stop being the same number the moment the path hops.
+            model_options = f"hmF2={EQUIVALENT_HMF2_KM:.0f}km,hop={hop_km:.0f}km"
+            if hops > 1:
+                model_options += f",D={path_km:.0f}km,{hops} hops"
+            ET.SubElement(chars, "Modeled", _attrs(
+                Name="foF2", Units="MHz", Val=f"{equivalent:.3f}",
+                ModelName="secant-law",
+                ModelOptions=model_options,
+            ))
 
     if nose is not None and nose.ok:
         ET.SubElement(chars, "Custom", _attrs(

@@ -157,8 +157,9 @@ def _iri_for(ion) -> dict:
         return {"error": f"not installed. {iri.INSTALL_HINT}"}
 
     tx, rx, path_km = geometry.path_of(ion.header)
-    if tx is None or rx is None:
-        return {"error": "no geometry for this circuit; IRI needs both ends"}
+    if not geometry.known(tx, rx):
+        from muf.reference import UNKNOWN_PATH
+        return {"error": UNKNOWN_PATH}
 
     import pandas as pd
 

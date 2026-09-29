@@ -150,3 +150,62 @@ def test_measured_muf_implies_plausible_fof2():
     assert 3.0 < night < 5.0
     assert 8.0 < midday < 12.0
     assert midday > night
+
+
+# --------------------------------------------------------------------------
+# An unregistered end is an unknown path, not half the Earth
+# --------------------------------------------------------------------------
+
+
+def _nowhere():
+    from muf.geometry import Point
+    return Point(float("nan"), float("nan"))
+
+
+def test_an_unknown_end_is_an_unknown_distance_not_20015_km():
+    """`min(1.0, nan)` is 1.0, so the haversine clamp swallowed the NaN and
+    every unregistered transmitter sat exactly half way round the world:
+    Rostov_on_Salekhard -> Yoshkar-Ola "(20015 km, oblique)", 2026-09-28."""
+    import math
+
+    from muf.geometry import Point, control_points, great_circle_km, known
+
+    here = Point(56.63, 47.89)
+    assert math.isnan(great_circle_km(_nowhere(), here))
+    assert math.isnan(great_circle_km(here, _nowhere()))
+    assert not known(_nowhere(), here) and known(here)
+    assert control_points(_nowhere(), here) == []
+
+
+def test_asking_for_hops_of_an_unknown_path_is_an_error_not_a_guess():
+    import pytest
+
+    from muf.geometry import hop_count
+
+    with pytest.raises(ValueError):
+        hop_count(float("nan"))
+
+
+def test_the_hop_labeller_labels_nothing_without_a_distance():
+    """Every comparison against NaN is False, so both "don't know" tests
+    passed and each segment came out confidently 1-hop."""
+    import numpy as np
+
+    from muf.trace import Segment, identify_hops
+
+    seg = Segment(freq=np.linspace(8, 12, 20), vrange=np.full(20, 2700.0))
+    (out,) = identify_hops([seg], float("nan"))
+    assert out.hops is None and out.height_km is None
+
+
+def test_models_refuse_an_unknown_path_and_say_why():
+    import pandas as pd
+
+    from muf.geometry import Point
+    from muf.reference import UNKNOWN_PATH, chapman, giro
+
+    here = Point(56.63, 47.89)
+    times = pd.to_datetime(["2026-09-28 12:00"])
+    assert giro.predict(_nowhere(), here, times).error == UNKNOWN_PATH
+    assert chapman.predict(_nowhere(), here, times,
+                           scale_mhz=20.0).error == UNKNOWN_PATH

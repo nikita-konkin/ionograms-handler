@@ -79,6 +79,11 @@ MESSAGES: dict[str, str] = {
     "sounding.arrows":
         "&larr; и &rarr; перелистывают зондирования по времени.",
     "sounding.col.path": "Трасса",
+    "sounding.path_unknown": "дальность неизвестна",
+    "sounding.path_unknown_title":
+        "У одного из концов трассы нет зарегистрированных координат, поэтому "
+        "нет ни длины трассы, ни числа скачков, ни сравнения с моделью. Сама "
+        "ионограмма от этого не страдает.",
     "sounding.col.sweep": "Полоса",
     "sounding.col.gate": "Строб",
     "sounding.col.file": "Файл",

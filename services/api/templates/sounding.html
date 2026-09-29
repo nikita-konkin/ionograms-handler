@@ -28,7 +28,8 @@
     <tr><th>{{ t('soundings.col.time') }}</th><td>{{ sounding.datetime }}</td>
         <th>{{ t('sounding.col.path') }}</th><td>{{ sounding.tx }} &rarr; {{ sounding.rx }}
             {% if sounding.path_km %}({{ '%.0f'|format(sounding.path_km) }} {{ t('unit.km') }},
-            {{ sounding.path_type }}){% endif %}</td></tr>
+            {{ sounding.path_type }}){% else %}<span class="muted"
+              title="{{ t('sounding.path_unknown_title') }}">({{ t('sounding.path_unknown') }})</span>{% endif %}</td></tr>
     <tr><th>{{ t('soundings.col.format') }}</th><td>{{ sounding.format or '?' }}</td>
         <th>{{ t('sounding.col.sweep') }}</th><td>{{ '%.3f'|format(sounding.freq_start or 0) }}&ndash;{{ '%.3f'|format(sounding.freq_stop or 0) }} {{ t('unit.mhz') }}
             {% if not sounding.sweep_complete %}

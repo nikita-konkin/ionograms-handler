@@ -33,8 +33,8 @@ import math
 import numpy as np
 import pandas as pd
 
-from ..geometry import Point, midpoint
-from . import ReferenceSeries, as_index
+from ..geometry import Point, known, midpoint
+from . import UNKNOWN_PATH, ReferenceSeries, as_index
 
 #: alpha-Chapman: Nm ~ sqrt(cos X), and f ~ sqrt(Nm), giving foF2 ~ cos(X)^0.25.
 CHAPMAN_EXPONENT = 0.25
@@ -108,6 +108,8 @@ def predict(
     if not len(index):
         return ReferenceSeries("chapman", error="no timestamps given")
 
+    if not known(tx, rx):
+        return ReferenceSeries("chapman", error=UNKNOWN_PATH)
     control = midpoint(tx, rx)
     curve = shape(index, control, night_fraction)
 

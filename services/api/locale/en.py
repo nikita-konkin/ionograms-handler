@@ -88,6 +88,11 @@ MESSAGES: dict[str, str] = {
     "sounding.latest": "Latest sounding",
     "sounding.arrows": "&larr; and &rarr; step through soundings in time order.",
     "sounding.col.path": "Path",
+    "sounding.path_unknown": "distance unknown",
+    "sounding.path_unknown_title":
+        "One end of this circuit has no registered position, so there is no "
+        "path length, hop count or model comparison for it. The ionogram "
+        "itself is unaffected.",
     "sounding.col.sweep": "Sweep",
     "sounding.col.gate": "Gate",
     "sounding.col.file": "File",

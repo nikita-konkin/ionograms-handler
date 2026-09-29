@@ -37,8 +37,9 @@ from ..geometry import (
     fof2_to_muf,
     great_circle_km,
     hop_count,
+    known,
 )
-from . import ReferenceSeries, as_index
+from . import UNKNOWN_PATH, ReferenceSeries, as_index
 from .indices import IndexUnavailable, solar_indices
 
 INSTALL_HINT = (
@@ -155,6 +156,8 @@ def predict(
     if name is None:
         return ReferenceSeries("iri", error=f"not installed. {INSTALL_HINT}")
 
+    if not known(tx, rx):
+        return ReferenceSeries("iri", error=UNKNOWN_PATH)
     path_km = great_circle_km(tx, rx)
     points = control_points(tx, rx)
     hops = hop_count(path_km)

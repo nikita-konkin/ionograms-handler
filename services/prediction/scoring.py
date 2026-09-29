@@ -383,7 +383,7 @@ def circuit_point(conn: sqlite3.Connection, tx: str, rx: str) -> Point | None:
         return None
     points = control_points(Point(row["tx_lat"], row["tx_lon"]),
                             Point(row["rx_lat"], row["rx_lon"]))
-    return points[0]
+    return points[0] if points else None
 
 
 def harmonic_design(index: pd.DatetimeIndex, point: Point) -> np.ndarray:

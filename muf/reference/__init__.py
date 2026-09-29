@@ -70,6 +70,13 @@ def _registry() -> dict[str, Callable[..., ReferenceSeries]]:
 
 ALL_REFERENCES = ("giro", "iri", "chapman", "minimuf")
 
+#: Why a model was not run for a circuit with an unregistered end. Said, not
+#: computed around: a model evaluated at NaN coordinates reports "no usable
+#: foF2 for nanS nanW", which reads as a model failure rather than as the
+#: missing station entry it is.
+UNKNOWN_PATH = ("path unknown: the transmitter or receiver has no registered "
+                "position, so there is no control point to evaluate")
+
 
 def get(name: str) -> Callable[..., ReferenceSeries]:
     reg = _registry()

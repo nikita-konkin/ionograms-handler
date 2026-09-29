@@ -35,8 +35,24 @@ class Point:
         return f"{abs(self.lat):.2f}{ns} {abs(self.lon):.2f}{ew}"
 
 
+def known(*points: Point) -> bool:
+    """Is every point a real position? False for an unregistered station."""
+    return all(math.isfinite(p.lat) and math.isfinite(p.lon) for p in points)
+
+
 def great_circle_km(a: Point, b: Point) -> float:
-    """Distance along the surface, in km."""
+    """Distance along the surface, in km. NaN when either end is unknown.
+
+    NaN, not a number that looks like one. `io_chirp._coords_for` gives an
+    unregistered transmitter NaN coordinates by design, and this used to turn
+    them into 20015 km: ``min(1.0, nan)`` is ``1.0``, so the haversine clamp
+    swallowed the NaN and returned half the Earth's circumference. Every
+    `unkown` product, and every transmitter named before its site is known
+    (Rostov_on_Salekhard, Australia_1, Maga_Khaba -- 2026-09-28), was stored
+    as a 20015 km, six-hop path, and handed to IRI and the hop labeller as one.
+    """
+    if not known(a, b):
+        return float("nan")
     p1, p2 = math.radians(a.lat), math.radians(b.lat)
     dp = p2 - p1
     dl = math.radians(b.lon - a.lon)
@@ -65,6 +81,8 @@ def control_points(a: Point, b: Point) -> list[Point]:
     limited by the worst control point, conventionally taken 2000 km in from
     each end -- the convention MINIMUF and the CCIR methods use.
     """
+    if not known(a, b):
+        return []
     if great_circle_km(a, b) <= MAX_SINGLE_HOP_KM:
         return [midpoint(a, b)]
     return [intermediate(a, b, 2000.0), intermediate(b, a, 2000.0)]
@@ -86,6 +104,9 @@ def hop_count(path_km: float) -> int:
     fifth, which reads as the instrument over-picking rather than the model
     being asked the wrong question.
     """
+    if not math.isfinite(path_km):
+        raise ValueError("hop count of an unknown path length -- check "
+                         "geometry.known() before asking")
     if path_km <= MAX_SINGLE_HOP_KM:
         return 1
     return math.ceil(path_km / MAX_SINGLE_HOP_KM)
@@ -98,6 +119,8 @@ def describe_path(a: Point, b: Point) -> str:
     circuit differently -- both used to format a bare midpoint themselves, and
     a midpoint is the wrong answer for a path that hops twice.
     """
+    if not known(a, b):
+        return "path unknown: a station has no registered position"
     path_km = great_circle_km(a, b)
     points = control_points(a, b)
     hops = hop_count(path_km)

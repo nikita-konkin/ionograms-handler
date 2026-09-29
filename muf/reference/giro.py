@@ -38,8 +38,9 @@ from ..geometry import (
     fof2_to_muf,
     great_circle_km,
     hop_count,
+    known,
 )
-from . import ReferenceSeries, as_index
+from . import UNKNOWN_PATH, ReferenceSeries, as_index
 
 #: DIDBase's tabulated-characteristics endpoint.
 #:
@@ -257,6 +258,8 @@ def predict(
     if not len(index):
         return ReferenceSeries("giro", error="no timestamps given")
 
+    if not known(tx, rx):
+        return ReferenceSeries("giro", error=UNKNOWN_PATH)
     path_km = great_circle_km(tx, rx)
 
     # `control_points`, not `midpoint`. Past `MAX_SINGLE_HOP_KM` the path
