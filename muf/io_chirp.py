@@ -782,6 +782,29 @@ def v2_spectrogram(z: np.ndarray, window: int, step: int,
     return out
 
 
+#: Where an absolute range axis stops being physical. An echo arrives after it
+#: was sent, so on an axis whose zero is the transmit instant nothing real sits
+#: below 0 km; the receiver's own epoch error is under a millisecond and the
+#: shortest path any of these circuits has is hundreds of km, so no margin is
+#: needed for either.
+MIN_ABSOLUTE_RANGE_KM = 0.0
+
+
+def physical_floor_km(header: ChirpHeader) -> float | None:
+    """The lowest range a real echo can occupy in this product, or None.
+
+    None for a relative axis -- a search-mode `unkown` product, whose zero is
+    the detection's own timing solution and whose echoes sit either side of
+    it by design. Everything else is a scheduled sweep keyed on the whole
+    second, where the negative half of the stored window is time *before* the
+    transmitter started: a strong narrowband carrier crossing the sweep lands
+    there, and nothing else can. Seen 2026-09-28 17:26-18:16Z on Rostov into
+    Yoshkar-Ola: a 25 m broadcast carrier at 12.1 MHz, -2545 km, scaled by
+    kmeans and contour as MUF 12.2 / LOF 12.0 for eleven sweeps running.
+    """
+    return None if header.range_is_relative else MIN_ABSOLUTE_RANGE_KM
+
+
 def reprocess(path: str | Path,
               window: int,
               gate_km: tuple[float, float] | None = None,
@@ -846,6 +869,13 @@ def reprocess(path: str | Path,
         if not keep.any():
             raise ValueError(
                 f"{path}: gate {want_lo:.0f}-{want_hi:.0f} km keeps no bin")
+        vrange_km, power = vrange_km[keep], power[:, keep]
+
+    # The same floor `load` applies, so a reprocess and the stored product
+    # agree on which half of the axis is physical.
+    if not relative_reason and lo < MIN_ABSOLUTE_RANGE_KM < hi:
+        lo = MIN_ABSOLUTE_RANGE_KM
+        keep = vrange_km >= lo
         vrange_km, power = vrange_km[keep], power[:, keep]
 
     if SNR_OFFSET_DB:
@@ -959,6 +989,15 @@ def load(path: str | Path,
                 f"{path}: gate {lo:.0f}-{hi:.0f} km is narrower than one "
                 f"{float(np.median(np.abs(np.diff(vrange_km)))):.1f} km bin"
             )
+        vrange_km = vrange_km[keep]
+        power = power[:, keep]
+
+    # After any requested gate, so no request -- "Full" included -- can bring
+    # the impossible half back into what the extractors search.
+    floor = physical_floor_km(header)
+    if floor is not None and lo < floor < hi:
+        lo = floor
+        keep = vrange_km >= lo
         vrange_km = vrange_km[keep]
         power = power[:, keep]
 

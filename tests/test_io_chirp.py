@@ -585,3 +585,37 @@ def test_real_other_products_are_rejected_by_schema(real_chirp_dir, pattern):
         pytest.skip(f"no {pattern} alongside the products")
     with pytest.raises(ValueError, match="not a chirpsounder2 ionogram product"):
         io_chirp.read_header(others[0])
+
+
+def test_a_scheduled_product_is_not_searched_before_transmission(make_chirp_h5):
+    """Rostov -> Yoshkar-Ola, 2026-09-28 17:26Z: a 12.1 MHz broadcast carrier
+    crossed the sweep and landed at -2545 km, and kmeans and contour scaled it
+    as MUF 12.2 / LOF 12.0 for eleven sweeps. On an axis whose zero is the
+    transmit second, the negative half is time before the transmitter started."""
+    import numpy as np
+
+    from muf import io_chirp
+
+    path = make_chirp_h5(np.full((4, 64), 100.0), txname="Rostov_on_Salekhard",
+                         station_name="Yoshkar-Ola", t0=1790616414.0)
+    ion = io_chirp.load(path)
+    assert not ion.header.range_is_relative
+    assert ion.vrange.min() >= 0.0 and ion.cal.gate_km[0] == 0.0
+
+
+def test_a_search_mode_product_keeps_both_halves(make_chirp_h5):
+    """`unkown` products are relative: their zero is the detection's own
+    timing, and the echo sits either side of it by design."""
+    import warnings
+
+    import numpy as np
+
+    from muf import io_chirp
+
+    path = make_chirp_h5(np.full((4, 64), 100.0), txname="unkown",
+                         station_name="Yoshkar-Ola", t0=1790616414.01)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ion = io_chirp.load(path)
+    assert ion.header.range_is_relative
+    assert ion.vrange.min() < 0.0

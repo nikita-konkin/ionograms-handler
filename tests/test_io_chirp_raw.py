@@ -100,8 +100,10 @@ def test_reprocessing_recovers_what_float16_clipped(make_chirp_z_h5):
     Re-deriving from `z` gets the real amplitude, which is why 73.734 in a
     stored product should be treated as "at least this", not as a measurement.
     """
+    # Below centre: that side of the stored window is positive range once the
+    # axis is completed, and `load` drops the other half as pre-transmission.
     path = make_chirp_z_h5(window=WINDOW, step=STEP,
-                           echo_bin=WINDOW // 2 + 20, echo_amplitude=300.0)
+                           echo_bin=WINDOW // 2 - 20, echo_amplitude=300.0)
     stored = io_chirp.load(path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -121,7 +123,9 @@ def test_a_finer_window_halves_the_range_bin(make_chirp_z_h5):
         fine = io_chirp.reprocess(path, window=WINDOW * 2)
 
     assert fine.cal.range_step == pytest.approx(coarse.cal.range_step / 2, rel=1e-6)
-    assert fine.vrange.size == coarse.vrange.size * 2
+    # Twice the bins over the same span. Not an exact 2x count: both are cut
+    # at 0 km, and where that edge falls between bins differs by one.
+    assert abs(fine.vrange.size - coarse.vrange.size * 2) <= 1
     # and it costs frequency rows, because fewer whole windows fit
     assert fine.freq.size < coarse.freq.size
 
