@@ -1270,6 +1270,10 @@ MESSAGES: dict[str, str] = {
     "series.trace.residual_bound": "Residual (bound)",
     "series.trace.sweep_top": "Sweep top",
     "series.js.trace.forecast": "{param} forecast",
+    "series.js.trace.forecast_thin": "{param} forecast, mostly filled input",
+    "series.js.thin_hover":
+        "built mostly from tracker fill, not soundings: %{customdata:.0%} of "
+        "its input window was measured",
     "series.js.trace.forecast_band": "{param} forecast \u00b1\u03c3",
     "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
     "series.js.trace.forecast_recital": "{model} \u00b7 fitted here",

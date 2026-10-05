@@ -194,7 +194,10 @@ def test_the_target_is_measured_never_tracked(conn):
     The tracker will supply a value there -- that is what it is for -- and it
     is an estimate. Fitting to estimates teaches the model the filter.
     """
-    seed(conn, days=8, gaps=slice(288 * 4, 288 * 5))
+    # Four hours: short enough to be bridged (`dataset.MAX_BRIDGE_HOURS`), so
+    # the tracker really does supply values there. A day-long hole is now left
+    # empty and would test nothing.
+    seed(conn, days=8, gaps=slice(288 * 4, 288 * 4 + 48))
     parts = train.assemble(conn, plan())
 
     series = parts["series"]

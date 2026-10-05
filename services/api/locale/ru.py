@@ -1275,6 +1275,10 @@ MESSAGES: dict[str, str] = {
     "series.trace.residual_bound": "Невязка (граница)",
     "series.trace.sweep_top": "Верх развёртки",
     "series.js.trace.forecast": "Прогноз {param}",
+    "series.js.trace.forecast_thin": "Прогноз {param}, вход в основном заполнен",
+    "series.js.thin_hover":
+        "построен в основном по заполнению трекера, а не по зондированиям: "
+        "измерено %{customdata:.0%} входного окна",
     "series.js.trace.forecast_band": "Прогноз {param} \u00b1\u03c3",
     "series.js.trace.forecast_compare": "{param} \u00b7 {model}",
     "series.js.trace.forecast_recital": "{model} \u00b7 обучена здесь",

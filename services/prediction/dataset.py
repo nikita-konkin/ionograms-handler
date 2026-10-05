@@ -47,6 +47,34 @@ PARAMS = {
     "lof": {"value": "lof", "censor": "loflim"},
 }
 
+#: The longest hole between picks the tracker may bridge, in hours.
+#:
+#: The tracker is a constant-velocity Kalman smoother: its uncertainty across
+#: a gap grows as the gap's length cubed. Measured on this filter: a 6 h gap
+#: peaks at 4.7 MHz, 24 h at 35 MHz, 3 days at 178 MHz and the 20-day outage
+#: NIC3 -> Yoshkar-Ola had in September at 3039 MHz -- drawn as a forecast
+#: band reaching 3 GHz. Worse than the band, the *values* across such a gap
+#: are a straight line between its two edges, and every model downstream took
+#: that line as input and forecast from it.
+#:
+#: **A hole is bridged whole or left empty whole.** Inside a short hole both
+#: edges are known and the smoother's sigma peaks mid-way, 4.7 MHz at 6 h.
+#: Filling only the first few hours of a long one instead would be one-sided
+#: extrapolation -- 12 MHz three hours past the last pick -- which is the
+#: same fault in a smaller size. So a longer hole is left empty end to end:
+#: value and sigma NaN, and the features, which refuse to build across a NaN,
+#: produce no row there.
+#:
+#: Six hours keeps all but a handful of holes on Yoshkar-Ola's August data (5
+#: over 3 h in twelve days on NIC1, all outages, none nightly), so the model
+#: loses almost nothing it had.
+#:
+#: A hole is measured between picks *of any kind*, censored included. A pick
+#: at the band edge is not a measurement, but it is proof the circuit was up;
+#: a circuit whose MUF sits above the sweep all afternoon must not be blanked
+#: every afternoon as if it had gone silent.
+MAX_BRIDGE_HOURS = 6.0
+
 #: Rows this many samples short of a full decomposition period cannot produce
 #: features, so a window shorter than this is refused rather than returned
 #: empty.
@@ -66,6 +94,8 @@ class Series:
     n_filled: int
     n_rejected: int
     n_censored: int
+    #: Grid points left empty: inside a hole longer than `MAX_BRIDGE_HOURS`.
+    n_unfilled: int = 0
 
     @property
     def values(self) -> pd.Series:
@@ -74,8 +104,8 @@ class Series:
     def __str__(self) -> str:
         return (f"{self.param} {self.tx}->{self.rx} [{self.method}]: "
                 f"{len(self.frame)} points, {self.n_measured} measured, "
-                f"{self.n_filled} filled, {self.n_rejected} rejected, "
-                f"{self.n_censored} censored")
+                f"{self.n_filled} filled, {self.n_unfilled} left empty, "
+                f"{self.n_rejected} rejected, {self.n_censored} censored")
 
 
 def observations(conn: sqlite3.Connection, param: str, tx: str, rx: str,
@@ -150,6 +180,7 @@ def tracked(conn: sqlite3.Connection, param: str, tx: str, rx: str,
             start: str | None = None, end: str | None = None,
             drop_censored: bool = True,
             process_noise: float = track_mod.DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
+            max_bridge_hours: float = MAX_BRIDGE_HOURS,
             ) -> Series:
     """Track one parameter and return it on a regular grid.
 
@@ -175,8 +206,14 @@ def tracked(conn: sqlite3.Connection, param: str, tx: str, rx: str,
             f"rest had no pick."
         )
 
-    grid = pd.date_range(picks["datetime"].iloc[0].ceil(f"{step_s}s"),
-                         picks["datetime"].iloc[-1], freq=f"{step_s}s")
+    # Bounded by real picks, not by soundings: a run of soundings with no
+    # pick at either end -- a scheduled transmitter that has gone silent, as
+    # NIC3's 245 s slot did -- would otherwise extend the grid into hours the
+    # tracker can only extrapolate, with a sigma rising without limit.
+    present = picks["value"].notna().to_numpy()
+    spanned = picks["datetime"][present]
+    grid = pd.date_range(spanned.iloc[0].ceil(f"{step_s}s"),
+                         spanned.iloc[-1], freq=f"{step_s}s")
 
     times = pd.DatetimeIndex(picks["datetime"]).append(grid)
     values = np.concatenate([usable, np.full(len(grid), np.nan)])
@@ -222,10 +259,18 @@ def tracked(conn: sqlite3.Connection, param: str, tx: str, rx: str,
     }, index=grid)
     frame.index.name = "datetime"
 
+    # Inside a hole too long to bridge, the tracker is guessing. See
+    # `MAX_BRIDGE_HOURS`.
+    stranded = _in_long_holes(grid, pd.DatetimeIndex(spanned),
+                              pd.Timedelta(hours=max_bridge_hours))
+    frame.loc[stranded, ["value", "sigma"]] = np.nan
+
+    filled = ~frame["measured"] & frame["value"].notna()
     return Series(
         frame=frame, param=param, tx=tx, rx=rx, method=method,
         n_measured=int(frame["measured"].sum()),
-        n_filled=int((~frame["measured"]).sum()),
+        n_filled=int(filled.sum()),
+        n_unfilled=int(stranded.sum()),
         n_rejected=result.n_rejected,
         n_censored=int(censored.sum()),
     )
@@ -245,3 +290,17 @@ def circuits(conn: sqlite3.Connection, param: str = "muf",
         f"GROUP BY s.tx, s.rx ORDER BY n DESC",
         (method,),
     )
+
+
+def _in_long_holes(grid: pd.DatetimeIndex, picks: pd.DatetimeIndex,
+                   longest: pd.Timedelta) -> np.ndarray:
+    """Which grid points sit strictly inside a hole between picks longer
+    than ``longest``."""
+    out = np.zeros(len(grid), dtype=bool)
+    if len(picks) < 2:
+        return out
+    picks = picks.sort_values()
+    holes = np.flatnonzero((picks[1:] - picks[:-1]) > longest)
+    for i in holes:
+        out |= (grid > picks[i]) & (grid < picks[i + 1])
+    return out

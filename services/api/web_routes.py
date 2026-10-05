@@ -413,7 +413,8 @@ def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
             try:
                 rows = db.rows(
                     conn,
-                    "SELECT f.valid_at, f.value, f.sigma, m.name, m.id, "
+                    "SELECT f.valid_at, f.value, f.sigma, f.input_measured, "
+                    "       m.name, m.id, "
                     "       m.active, m.target_alias, "
                     "       m.trained_from, m.trained_to "
                     "FROM forecast f JOIN model_registry m ON m.id = f.model_id "
@@ -429,6 +430,7 @@ def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
                 continue
             if not rows:
                 continue
+            rows = _broken_at_gaps(rows)
             found[(tx, rx, param)] = {
                 "tx": tx, "rx": rx, "param": param,
                 "model": rows[0]["name"],
@@ -449,8 +451,43 @@ def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
                 "t": [_iso_stamp(row["valid_at"]) for row in rows],
                 "value": [row["value"] for row in rows],
                 "sigma": [row["sigma"] for row in rows],
+                "input_measured": [row.get("input_measured") for row in rows],
             }
     return found
+
+
+#: A hole in a forecast wider than this many of its own steps is drawn as a
+#: hole. Plotly joins consecutive points whatever lies between them, so a run
+#: that has no rows across a silent fortnight would otherwise be drawn as a
+#: straight line over it -- the very thing `dataset.MAX_BRIDGE_HOURS` stopped
+#: the model from producing.
+GAP_STEPS = 3
+
+
+def _broken_at_gaps(rows: list[dict]) -> list[dict]:
+    """Insert an all-null row inside every gap, which plotly draws as a break."""
+    if len(rows) < 3:
+        return rows
+    import pandas as pd
+
+    times = pd.to_datetime([row["valid_at"] for row in rows], format="mixed")
+    steps = times[1:] - times[:-1]
+    step = steps.median()
+    if not step or pd.isna(step):
+        return rows
+    out = [rows[0]]
+    for previous, row, gap in zip(rows, rows[1:], steps):
+        if gap > GAP_STEPS * step:
+            middle = pd.Timestamp(previous["valid_at"]) + gap / 2
+            out.append({**dict.fromkeys(row),
+                        "valid_at": middle.strftime(db.TIME_FORMAT),
+                        "name": row["name"], "id": row["id"],
+                        "active": row["active"],
+                        "target_alias": row["target_alias"],
+                        "trained_from": row["trained_from"],
+                        "trained_to": row["trained_to"]})
+        out.append(row)
+    return out
 
 
 def _iso_stamp(text: str) -> str:

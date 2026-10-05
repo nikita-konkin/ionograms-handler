@@ -272,16 +272,37 @@ def _decompose(series: pd.Series, period: int) -> pd.DataFrame:
     *t ± period/2*. That is only safe here because the lag applied afterwards
     exceeds half the period -- 288 against 144 for the default. :func:`build`
     enforces it rather than trusting it.
+
+    **One stretch at a time.** The tracked series has holes where the station
+    was silent for longer than `dataset.MAX_BRIDGE_HOURS`, and
+    ``seasonal_decompose`` refuses a NaN outright. Each unbroken run is
+    decomposed on its own; a run shorter than two periods -- the least
+    ``seasonal_decompose`` can estimate a seasonal from -- yields NaN, so the
+    model gets no row there rather than one built across the hole. Nothing
+    is carried between runs: the trend of one stretch knows nothing of the
+    next, which is the point.
     """
     from statsmodels.tsa.seasonal import seasonal_decompose
 
-    result = seasonal_decompose(series, model="additive", period=period,
-                                extrapolate_trend="freq")
-    return pd.DataFrame({
-        "trend": result.trend,
-        "seasonal": result.seasonal,
-        "residual": result.resid,
-    }, index=series.index)
+    out = pd.DataFrame(np.nan, index=series.index,
+                       columns=["trend", "seasonal", "residual"])
+    present = series.notna().to_numpy()
+    if not present.any():
+        return out
+    # Run boundaries: where presence flips.
+    edges = np.flatnonzero(np.diff(present.astype(np.int8))) + 1
+    starts = np.concatenate([[0], edges])
+    stops = np.concatenate([edges, [len(series)]])
+    for start, stop in zip(starts, stops):
+        if not present[start] or stop - start < 2 * period:
+            continue
+        run = series.iloc[start:stop]
+        result = seasonal_decompose(run, model="additive", period=period,
+                                    extrapolate_trend="freq")
+        out.iloc[start:stop, 0] = result.trend.to_numpy()
+        out.iloc[start:stop, 1] = result.seasonal.to_numpy()
+        out.iloc[start:stop, 2] = result.resid.to_numpy()
+    return out
 
 
 def build(series: pd.Series, recipe: Recipe, *, alias: str) -> pd.DataFrame:

@@ -225,6 +225,13 @@
   const traces = [], family = [];
   const add = (spec, group) => { traces.push(spec); family.push(group); };
 
+  // Past this, a forecast band is the tracker saying it is guessing; see the
+  // band below. The width of a fast sunrise transition, roughly -- what the
+  // tracker reaches across a 6 h hole, the longest it is allowed to fill.
+  const BAND_SIGMA_MAX_MHZ = 5;
+  // Below this fraction of measured input, a forecast row is drawn faint.
+  const THIN_INPUT = 0.5;
+
   // Values kept only where the bound flag matches, so the measured and the
   // bounded form of one parameter are two traces on one x. `null` is a gap in
   // plotly, which is what an absent value is.
@@ -413,19 +420,36 @@
       // The band is the *tracker's* sigma at the instant each row was built
       // from -- the input uncertainty, not an interval the model claims. Drawn
       // first so the line sits on top of it.
+      //
+      // **Drawn only where it is believable, and in pieces.** A sigma past
+      // BAND_SIGMA_MAX_MHZ is the tracker reporting that it is guessing --
+      // across a 20-day outage it reached 3039 MHz and drew a 3 GHz band that
+      // squashed every measurement into a line at the bottom. Such points get
+      // no band at all: an interval wider than the whole HF band says nothing
+      // a reader can use. Each surviving run becomes its own closed shape
+      // (`toself` closes each null-separated piece separately), so a hole in
+      // the forecast is a hole in the band too, not a polygon spanning it.
+      // Clamped at zero below, for the same reason as ever: an interval
+      // reaching -20 MHz includes frequencies that cannot exist.
       if (some(f.sigma)) {
-        // Clamped at zero. Across a long gap the tracker's sigma grows
-        // without bound, and an interval whose lower edge is -20 MHz states
-        // an uncertainty that includes frequencies that cannot exist -- it
-        // also drags the axis down and squashes the measurements into a
-        // third of the panel.
-        const lo = f.value.map((v, k) => v === null || f.sigma[k] === null
-                                         ? null : Math.max(0, v - f.sigma[k]));
-        const hi = f.value.map((v, k) => v === null || f.sigma[k] === null
-                                         ? null : v + f.sigma[k]);
-        add({
-          x: f.t.concat(f.t.slice().reverse()),
-          y: hi.concat(lo.slice().reverse()),
+        const usable = f.value.map((v, k) => v !== null && f.sigma[k] !== null
+                                             && f.sigma[k] <= BAND_SIGMA_MAX_MHZ);
+        const bx = [], by = [];
+        let k = 0;
+        while (k < usable.length) {
+          if (!usable[k]) { k++; continue; }
+          let end = k;
+          while (end + 1 < usable.length && usable[end + 1]) end++;
+          const idx = [];
+          for (let i = k; i <= end; i++) idx.push(i);
+          idx.forEach(i => { bx.push(f.t[i]); by.push(f.value[i] + f.sigma[i]); });
+          idx.slice().reverse().forEach(i => {
+            bx.push(f.t[i]); by.push(Math.max(0, f.value[i] - f.sigma[i])); });
+          bx.push(null); by.push(null);
+          k = end + 1;
+        }
+        if (bx.length) add({
+          x: bx, y: by, band: true,
           name: tag + T('series.js.trace.forecast_band',
                         {param: f.param.toUpperCase()}),
           legendgroup: group, type: 'scatter', mode: 'lines',
@@ -471,8 +495,22 @@
       const ahead = inside ? severed(f.value, inside, false) : f.value;
       if (!some(ahead)) return;
 
+      // Rows built mostly from the tracker's fill rather than from soundings
+      // are the filter's forecast as much as the model's, and are drawn faint.
+      // A row with no record (forecasts issued before it was kept) counts as
+      // well-founded, which is what they were taken for when they were made.
+      // The faint run is widened by one point each side so the two traces
+      // meet instead of leaving a sliver of nothing at every change.
+      const measured = f.input_measured || [];
+      const thin = ahead.map((_, k) => measured[k] !== null
+                             && measured[k] !== undefined
+                             && measured[k] < THIN_INPUT);
+      const thinWide = thin.map((v, k) => v || thin[k - 1] || thin[k + 1]);
+      const firm = ahead.map((v, k) => (thin[k] ? null : v));
+      const weak = ahead.map((v, k) => (thinWide[k] ? v : null));
+
       add({
-        x: f.t, y: ahead,
+        x: f.t, y: firm,
         name: tag + (f.comparison
           ? T('series.js.trace.forecast_compare',
               {param: f.param.toUpperCase(), model: f.model})
@@ -480,6 +518,16 @@
         legendgroup: group, type: 'scatter', mode: 'lines',
         line: {width: 1.6, dash: dash, color: colour},
         hovertemplate: hover,
+      }, 'forecast');
+      if (some(weak)) add({
+        x: f.t, y: weak,
+        name: tag + T('series.js.trace.forecast_thin',
+                      {param: f.param.toUpperCase()}),
+        legendgroup: group, type: 'scatter', mode: 'lines',
+        line: {width: 1.1, dash: dash, color: colour}, opacity: 0.35,
+        customdata: measured,
+        hovertemplate: '%{y:.2f} {{ t('unit.mhz') }}<extra>' + circuit.name
+          + '<br>' + T('series.js.thin_hover') + '</extra>',
       }, 'forecast');
     });
 
@@ -549,6 +597,26 @@
                      title: {text: {{ t('series.axis.hmf2')|tojson }}},
                      titlefont: {color: PARAM.hmf2},
                      tickfont: {color: PARAM.hmf2}};
+  }
+
+  // The frequency axis is sized by what was measured and what is claimed --
+  // the picks, the model lines, the forecasts -- and never by a band. A band
+  // is the one trace whose extent says how unsure something is rather than
+  // where anything is, and letting it set the scale is how one bad sigma
+  // turned the whole panel into a flat line. Bands past the top are clipped,
+  // which is the right way round. `band` is not a plotly key; it is dropped
+  // before plotting.
+  let ceiling = 0;
+  traces.forEach(t => {
+    if (t.band || (t.yaxis && t.yaxis !== 'y')) return;
+    (t.y || []).forEach(v => {
+      if (typeof v === 'number' && isFinite(v) && v > ceiling) ceiling = v;
+    });
+  });
+  traces.forEach(t => { delete t.band; });
+  if (ceiling > 0) {
+    layout.yaxis.range = [0, ceiling * 1.08];
+    layout.yaxis.autorange = false;
   }
 
   Plotly.newPlot(div, traces, layout, {

@@ -423,10 +423,13 @@ def assemble(conn, plan: dict) -> dict:
     largest_window = max(plan["windows"], default=0)
     needed = plan["lag"] + max(
         largest_window, plan["period"] if plan["components"] else 0)
-    if len(series.frame) < max(dataset.MIN_SAMPLES, needed):
+    # Usable points, not grid points: the grid now spans holes the tracker
+    # declined to fill (`dataset.MAX_BRIDGE_HOURS`), and those are not data.
+    usable = int(series.frame["value"].notna().sum())
+    if usable < max(dataset.MIN_SAMPLES, needed):
         raise TrainError(
-            f"{tx} -> {rx} has {len(series.frame)} grid points "
-            f"({len(series.frame) * dataset.DEFAULT_STEP_S / 86400:.1f} days). "
+            f"{tx} -> {rx} has {usable} usable grid points "
+            f"({usable * dataset.DEFAULT_STEP_S / 86400:.1f} days). "
             f"A lag-{plan['lag']} model with a {largest_window}-sample window "
             f"needs {needed} of them before it can build a single row, and "
             f"the minimum useful window is {dataset.MIN_SAMPLES}. This is a "
@@ -440,8 +443,9 @@ def assemble(conn, plan: dict) -> dict:
     if frame.empty:
         raise TrainError(
             f"no feature row could be built for {tx} -> {rx}: the rolling "
-            f"windows never fill within the {len(series.frame)} grid points "
-            f"available.")
+            f"windows never fill within any unbroken stretch of the {usable} "
+            f"usable grid points. A stretch ends wherever the station went "
+            f"silent for more than {dataset.MAX_BRIDGE_HOURS:.0f} h.")
 
     observed = scoring.truth(conn, param, tx, rx, plan["method"],
                              start=plan.get("start"), end=plan.get("end"))

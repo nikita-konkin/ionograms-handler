@@ -111,6 +111,24 @@ def build_features(series: dataset.Series, model: dict) -> pd.DataFrame:
                                  alias=model["target_alias"] or recipe.alias)
 
 
+def input_window(model: dict) -> int:
+    """Samples the widest feature of this model reads, ending at its lag.
+
+    The decomposition's centred filter reads half a period either side, but
+    only the half before the lag is past data; the whole period is used here
+    anyway because the seasonal estimate is drawn from the full stretch.
+    """
+    recipe = legacy_features.parse(
+        model["features"],
+        period=(model.get("feature_recipe") or {}).get(
+            "period", legacy_features.DEFAULT_DECOMPOSITION_PERIOD),
+    )
+    widest = max(recipe.windows, default=1)
+    if recipe.components:
+        widest = max(widest, recipe.period)
+    return max(1, int(widest))
+
+
 def run_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
               method: str = "contour", issued_at: str | None = None,
               allow_skew: bool = False) -> dict:
@@ -147,6 +165,16 @@ def run_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
     lag_step = pd.Timedelta(seconds=frame.attrs["step_s"] * frame.attrs["lag"])
     source_sigma = series.frame["sigma"].reindex(frame.index - lag_step)
 
+    # How much of what each row was built from was measured rather than
+    # filled -- over the widest window any of its features reads, ending at
+    # the instant the row was built from. `dataset.MAX_BRIDGE_HOURS` keeps
+    # multi-day gaps out entirely; this marks the shorter ones it still
+    # bridges, so a forecast resting mostly on the tracker's fill is visibly
+    # weaker than one resting on soundings.
+    measured = series.frame["measured"].astype(float).rolling(
+        input_window(model), min_periods=1).mean()
+    source_measured = measured.reindex(frame.index - lag_step)
+
     # **Horizon is lead time, not wall-clock distance from the run.** A lagged
     # model predicts an instant from data one lag earlier, so its lead time is
     # the lag -- the same 24 h whether it runs live or over a 2023 archive.
@@ -169,13 +197,14 @@ def run_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
             _clean(float(value)),
             _clean(float(source_sigma.iloc[position])),
             None, None, quality_json,
+            _clean(round(float(source_measured.iloc[position]), 3)),
         ))
 
     with conn:
         conn.executemany(
             "INSERT OR REPLACE INTO forecast (model_id, param, tx, rx, "
-            "issued_at, valid_at, horizon_s, value, sigma, lo, hi, quality) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "issued_at, valid_at, horizon_s, value, sigma, lo, hi, quality, "
+            "input_measured) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
 

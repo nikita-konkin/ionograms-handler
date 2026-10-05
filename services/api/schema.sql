@@ -367,6 +367,10 @@ CREATE TABLE IF NOT EXISTS forecast (
     valid_at   TEXT NOT NULL,
     horizon_s  INTEGER NOT NULL,
     value      REAL, sigma REAL, lo REAL, hi REAL,
+    -- Fraction, 0..1, of the grid points this row's features were built from
+    -- that a real pick backs; the rest the tracker filled. A row built mostly
+    -- from fill is a forecast of the filter, and is drawn faint for it.
+    input_measured REAL,
     -- JSON: the solar driver's age and which source answered, the version skew
     -- if the model was run across one, and whether the input window was short.
     -- Travels with the value, never separately -- same rule as `extraction`.

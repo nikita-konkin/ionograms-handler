@@ -138,6 +138,7 @@ ADDED_COLUMNS = (
     ("train_job", "worker", "TEXT"),
     ("infer_job", "worker", "TEXT"),
     ("sounding", "chirp_rate", "REAL"),
+    ("forecast", "input_measured", "REAL"),
 )
 
 
