@@ -342,7 +342,7 @@ Write**. A read-only token authenticates and then cannot push.
 
 **Until those secrets exist the pipeline still runs and still passes.** The
 publish job checks for them first and, finding none, writes a job-summary note
-naming the secrets and where to add them, then skips the registry steps. The
+naming the secrets and where to add them, then skips the Docker Hub push. The
 alternative was `login-action` failing with `Username and password required` --
 accurate, but it names neither the secret nor its location, and it turns a
 pipeline red for a reason that has nothing to do with the commit. A fork sees
@@ -358,6 +358,34 @@ nothing is wrong and nothing needs changing. It is a notice about actions that
 still bundle the older runtime; the workflow is already on Node 24. Do **not**
 set `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION` -- that pins you *back* to the
 deprecated runtime.
+
+### GitHub Container Registry
+
+Every published build also goes to `ghcr.io/nikita-konkin/<image>`, with the
+same tags, pushed with the workflow's own `GITHUB_TOKEN` -- there is no secret
+to set, and it publishes even when the Docker Hub secrets are absent.
+
+It exists because the work server stopped being able to pull from Docker Hub
+on 2026-09-27: the registry API answered, but every blob download from its CDN
+timed out, so each deploy became a local overlay build. To pull from GitHub
+instead, check the server can reach it and switch the namespace:
+
+```bash
+curl -sI https://ghcr.io/v2/ | head -1     # expect HTTP 401 -- reachable, wants auth
+```
+```bash
+# in deploy/.env
+IMAGE_NAMESPACE=ghcr.io/nikita-konkin
+```
+
+A package pushed this way starts **private**. Either make each one public once
+(GitHub → your profile → Packages → `ionograms-api` → Package settings →
+Change visibility), or log the server in with a personal access token that has
+`read:packages`:
+
+```bash
+echo "$GHCR_PAT" | docker login ghcr.io -u nikita-konkin --password-stdin
+```
 
 ### Rolling back
 
