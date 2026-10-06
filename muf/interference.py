@@ -57,6 +57,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import carriers as carriers_module
 from .extractors.contour import DEFAULT_THRESHOLD_DB
 from .spectro import NOISE_COEF
 
@@ -189,13 +190,38 @@ def suppress(ion, found: Interference | None = None, *,
     return dataclasses.replace(ion, power=power, _db=None), found
 
 
-def apply(ion, options):
-    """Suppression driven by :class:`~muf.pipeline.Options`, or a pass-through.
+@dataclass(frozen=True)
+class Rejected:
+    """What :func:`apply` removed. ``None`` for a rule that was switched off."""
 
-    One call site's worth of branching, in one place, so every command that
-    runs estimators honours the flag identically instead of three of them
-    remembering to.
+    bursts: Interference | None = None
+    carriers: carriers_module.Carriers | None = None
+
+    @property
+    def any(self) -> bool:
+        return bool((self.bursts is not None and self.bursts.any)
+                    or (self.carriers is not None and self.carriers.any))
+
+    def describe(self, freq_mhz=None) -> str:
+        parts = []
+        if self.carriers is not None and self.carriers.any:
+            parts.append(self.carriers.describe())
+        if self.bursts is not None and self.bursts.any:
+            parts.append(self.bursts.describe(freq_mhz))
+        return "; ".join(parts) or "nothing rejected"
+
+
+def apply(ion, options) -> tuple[object, Rejected]:
+    """Every rejection :class:`~muf.pipeline.Options` asks for, in one place.
+
+    One call site's worth of branching, so every command that runs estimators
+    honours the flags identically instead of three of them remembering to.
+    Carriers first: they are found by what surrounds them, and a burst row
+    flattened beside one would make it look more alone than it is.
     """
-    if not getattr(options, "reject_interference", False):
-        return ion, None
-    return suppress(ion)
+    carriers = bursts = None
+    if getattr(options, "reject_carriers", True):
+        ion, carriers = carriers_module.suppress(ion)
+    if getattr(options, "reject_interference", False):
+        ion, bursts = suppress(ion)
+    return ion, Rejected(bursts=bursts, carriers=carriers)

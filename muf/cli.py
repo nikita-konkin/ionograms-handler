@@ -100,6 +100,12 @@ def _common(parser: argparse.ArgumentParser) -> None:
                              "by default because it changes results -- and "
                              "measured over two archives it changed very few, "
                              "so treat it as a diagnostic first.")
+    parser.add_argument("--keep-carriers", action="store_true",
+                        help="do not flatten features that are narrow in "
+                             "frequency with no trace at their range on "
+                             "either side (a carrier, a stripe, a sweep-end "
+                             "splash). They are flattened by default; see "
+                             "muf.carriers.")
     parser.add_argument("--band-floor", type=float, default=None, metavar="MHZ",
                         help="lowest frequency the transmitter actually "
                              "radiates, for flagging LOF that ran off the "
@@ -165,6 +171,7 @@ def _options(args) -> Options:
         format=getattr(args, "input_format", None),
         stations=_load_registry(getattr(args, "stations", None)),
         reject_interference=getattr(args, "reject_interference", False),
+        reject_carriers=not getattr(args, "keep_carriers", False),
     )
 
 
@@ -264,7 +271,7 @@ def cmd_plot(args) -> int:
             options.gate_km, options.cache_dir, format=options.format,
         )
         ion, rejected = interference.apply(ion, options)
-        if rejected is not None and rejected.any:
+        if rejected.any:
             print(f"  {path.name}: {rejected.describe(ion.freq)}", file=sys.stderr)
         if auto:
             found = calibrate.auto_gate(ion.power, ion.cal.vrange)

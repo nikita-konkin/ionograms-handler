@@ -183,18 +183,21 @@ def test_suppression_does_not_mutate_its_input(make_lfs):
 # --------------------------------------------------------------------------
 
 def test_apply_is_off_by_default(make_lfs):
-    """It changes a MUF, so it must be asked for."""
+    """It changes a MUF, so it must be asked for. (The carrier rule, which is
+    on, leaves this burst alone: the synthetic echo crosses it, so it is not
+    alone at its range -- see muf.carriers.)"""
     ion = _burst(_sounding(make_lfs), row=BURST_ROW)
     same, found = interference.apply(ion, Options())
 
-    assert same is ion and found is None
+    assert same is ion
+    assert found.bursts is None and not found.any
 
 
 def test_apply_honours_the_flag(make_lfs):
     ion = _burst(_sounding(make_lfs), row=BURST_ROW)
     clean, found = interference.apply(ion, Options(reject_interference=True))
 
-    assert found.any
+    assert found.bursts.any and found.any
     assert clean is not ion
 
 

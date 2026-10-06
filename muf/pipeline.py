@@ -188,6 +188,11 @@ class Options:
     #: transform that changes a MUF must be asked for -- see muf.interference,
     #: which also records how little it changed when measured.
     reject_interference: bool = False
+    #: Flatten features narrow in frequency with no trace at their range on
+    #: either side -- a carrier, a stripe, a sweep-end splash. On by default:
+    #: it was written against a MUF that was wrong, and measured over the
+    #: archive to remove nothing that was a trace. See muf.carriers.
+    reject_carriers: bool = True
 
     def per_method(self) -> dict[str, dict]:
         """Method keyword arguments, with the shared picker settings folded in."""
@@ -266,8 +271,10 @@ def process_file(path: str | Path, options: Options | None = None) -> dict:
         return row
 
     ion, rejected = interference.apply(ion, options)
-    if rejected is not None and rejected.any:
-        row["interference_rows"] = rejected.n_rows
+    if rejected.bursts is not None and rejected.bursts.any:
+        row["interference_rows"] = rejected.bursts.n_rows
+    if rejected.carriers is not None and rejected.carriers.any:
+        row["carriers"] = rejected.carriers.describe()
 
     ceiling = circuit_ceiling(header, options)
 

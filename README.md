@@ -1229,6 +1229,7 @@ products, where v2 fixed the window at archive time.
 | `--zero-periods N`      | Zero-padding periods. Subdivides range bins **without improving resolution** — it interpolates, it does not resolve.                                                                                                                                                                                                                                                                                                   |
 | `--gate LO,HI`          | Virtual-range gate in km. Default comes from the file header's geometry. Narrowing it is the main lever on runtime.                                                                                                                                                                                                                                                                                                    |
 | `--reject-interference` | Flatten frequency rows whose above-43 dB energy occupies more than 800 km of range. A burst has no delay and smears across every range bin; an echo is narrow in range and continuous in frequency. Off by default because it changes results — and measured over three archives it changed a MUF about once in twenty soundings, so treat it as a diagnostic first. See `muf/interference.py` for the measured yield. |
+| `--keep-carriers`      | Do **not** flatten carriers: features at most 0.3 MHz wide with no echo within 500 km of their range for 1.5 MHz either side, and recorded rows below them. Flattened by default — on the archive every contour MUF this changed (39 of 10,171) had been read off the top edge of a lone blob, such as Rostov's 17.05 MHz on 2026-09-28. See `muf/carriers.py`.                                                       |
 | `--gate auto`           | `plot` **only.** Fit the range window to where the echo actually is, per sounding. On DOB's search-mode products the stored axis is ±3998 km and the trace occupies a few hundred, so the default plot is a hairline in an empty field; this is a ~15× vertical zoom. Soundings with no range concentration are left at full extent and counted at the end, rather than cropped to an invented window.                 |
 | `--cache-dir DIR`       | Cache the gated array per sounding, so re-running with different estimator settings skips the FFTs entirely. The useful mode when tuning.                                                                                                                                                                                                                                                                              |
 
@@ -1651,6 +1652,7 @@ muf/                    the pipeline
   pipeline.py           per-file and per-day driving, parallelism
   compare.py            agreement metrics and reports
   interference.py       rejecting burst rows that cannot be echoes
+  carriers.py           rejecting narrow features with no trace around them
   render.py, cli.py
 services/
   agent/                runs ON the station: health push, control, logs
