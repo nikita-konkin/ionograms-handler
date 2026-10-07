@@ -910,8 +910,9 @@ def scan_once(row: dict, *, archive_root, db_path=None, batch=None,
         # The archive's own format, honoured here and not only when the
         # folder was registered. A folder narrowed to one format must stop
         # ingesting the others, or nothing removed from it stays removed.
-        new, found, fresh, skewed, silenced = watch.find_new(
-            [target], conn, methods, min_age_s, format=row.get("format"))
+        new, found, fresh, skewed, silenced, relinked = watch.find_new(
+            [target], conn, methods, min_age_s, format=row.get("format"),
+            archive_root=Path(archive_root))
 
         held_back = 0
         if batch and len(new) > batch:
@@ -920,6 +921,7 @@ def scan_once(row: dict, *, archive_root, db_path=None, batch=None,
 
         result = {"found": found, "new": len(new), "too_fresh": fresh,
                   "future_dated": skewed, "muted": silenced,
+                  "relinked": relinked,
                   "held_back": held_back, "loaded": 0, "skipped": 0}
         if not new:
             _set_status(phase="done", total=0, done=0)

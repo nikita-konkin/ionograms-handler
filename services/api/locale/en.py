@@ -126,6 +126,13 @@ MESSAGES: dict[str, str] = {
         "The stored extractions below are unaffected &mdash; they were written "
         "at ingest. Try <a href=\"{url}\">rendered</a>, which needs no SAO "
         "record.",
+    "sounding.file_missing":
+        "The file is no longer at its stored path. The stored extractions "
+        "below are unaffected &mdash; they were written at ingest &mdash; but "
+        "nothing can be drawn without the file. If its folder moved or was "
+        "copied elsewhere under the archive, the next scan of the folder that "
+        "holds it now points this sounding there (<a href=\"/ui/archives\">"
+        "Archives</a>).",
     "sounding.show_points": "Scaled points",
     "sounding.show_raster": "Raster",
     "sounding.show_marks": "MUF / LOF",

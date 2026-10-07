@@ -79,6 +79,27 @@ def already_done(conn: sqlite3.Connection, methods: tuple[str, ...]) -> set[str]
     return {name for name, got in seen.items() if wanted <= got}
 
 
+def stored_paths(conn: sqlite3.Connection) -> dict[str, str]:
+    """``sounding.file -> sounding.path`` for every row."""
+    return {row["file"]: row["path"]
+            for row in db.rows(conn, "SELECT file, path FROM sounding")}
+
+
+def _lost(stored: str, archive_root: Path) -> bool:
+    """True if a stored path no longer opens. An unreachable share counts.
+
+    "Host is down" is what a dead CIFS mount answers, and it is exactly the
+    case this is for -- `Path.exists` raises on it rather than saying False.
+    """
+    full = Path(stored)
+    if not full.is_absolute():
+        full = archive_root / full
+    try:
+        return not full.exists()
+    except OSError:
+        return True
+
+
 #: v2's product name, up to the transmitter and receiver:
 #: ``lfm_ionogram-{txname}-{station_name}-{ch}-{cid:03d}-{t0:.2f}.h5``.
 V2_PREFIX = "lfm_ionogram-"
@@ -119,10 +140,24 @@ def muted_by_name(conn: sqlite3.Connection):
 
 
 def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
-             *, format: str | None = None):
+             *, format: str | None = None, archive_root: Path | None = None):
     """Soundings on disk that the database does not already hold.
 
-    Returns ``(new, n_found, n_too_fresh, n_skewed, n_muted)``. A v2 product
+    Returns ``(new, n_found, n_too_fresh, n_skewed, n_muted, n_relinked)``.
+
+    **Relinking.** Given ``archive_root``, a file already indexed under another
+    path whose stored path no longer opens has its row pointed here instead,
+    and counts as relinked rather than new -- its extractions are kept, only
+    the path the pages open changes. Without this a moved archive could never
+    heal: `already_done` keys on the basename, so the copy is skipped forever
+    while the row points at the old place. That was tesla's ~10,000 August
+    soundings, indexed from ``ionozond_data2`` (now disabled; its share went
+    down 2026-09-09) and drawn as FileNotFoundError ever since, though the
+    station's sync had put the same files under ``ionozond_5tb/ionozond_data2``.
+    A row whose stored path still opens is never moved, so a file kept in two
+    places stays where it was first indexed.
+
+    A v2 product
     whose circuit is muted is counted and left out -- see `muted_by_name` for
     why that cannot wait for the write. Targets holding no
     soundings at all are skipped rather than fatal: an archive normally
@@ -145,8 +180,9 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
     now = time.time() if now is None else now
     done = already_done(conn, methods)
     muted = muted_by_name(conn)
+    stored = stored_paths(conn) if archive_root is not None else {}
 
-    found, fresh, skewed, silenced, new = 0, 0, 0, 0, []
+    found, fresh, skewed, silenced, new, moves = 0, 0, 0, 0, [], []
     for target in targets:
         try:
             paths = loader.find_soundings(target, format=format)
@@ -155,6 +191,11 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
         for path in paths:
             found += 1
             if path.name in done:
+                if path.name in stored:
+                    here = _relative(path, archive_root)
+                    if (here != stored[path.name]
+                            and _lost(stored[path.name], archive_root)):
+                        moves.append((here, path.name))
                 continue
             if muted(path.name):
                 silenced += 1
@@ -174,7 +215,24 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
                 continue
             new.append(path)
     new.sort(key=lambda p: p.name)
-    return new, found, fresh, skewed, silenced
+    if moves:
+        conn.executemany("UPDATE sounding SET path = ? WHERE file = ?", moves)
+        conn.commit()
+    return new, found, fresh, skewed, silenced, len(moves)
+
+
+def _relative(path: Path, archive_root: Path) -> str:
+    """The path as `ingest` would store it. Lexical first: a scan meets every
+    file it already holds, and resolving each one on a network share costs a
+    round trip per path component."""
+    try:
+        return path.relative_to(archive_root).as_posix()
+    except ValueError:
+        pass
+    try:
+        return path.resolve().relative_to(archive_root.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
 
 
 def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
@@ -184,15 +242,16 @@ def run_once(targets, conn, *, methods, archive_root, jobs=1, batch=0,
 
     from . import ingest as ingest_mod
 
-    new, found, fresh, skewed, silenced = find_new(targets, conn, methods,
-                                                   min_age_s, format=format)
+    new, found, fresh, skewed, silenced, relinked = find_new(
+        targets, conn, methods, min_age_s, format=format,
+        archive_root=Path(archive_root))
     held_back = 0
     if batch and len(new) > batch:
         held_back = len(new) - batch
         new = new[:batch]
 
     result = {"found": found, "new": len(new), "too_fresh": fresh,
-              "future_dated": skewed, "muted": silenced,
+              "future_dated": skewed, "muted": silenced, "relinked": relinked,
               "held_back": held_back, "loaded": 0, "skipped": 0}
     if not new or dry_run:
         return result
@@ -218,6 +277,9 @@ def describe(result: dict) -> str:
         # Said every pass for the same reason as FUTURE-DATED: a mute rule
         # that covers more than intended is otherwise invisible from here.
         bits.append(f"{result['muted']} muted")
+    if result.get("relinked"):
+        bits.append(f"{result['relinked']} relinked (moved here from a folder "
+                    f"that no longer has them)")
     if result["held_back"]:
         bits.append(f"{result['held_back']} held for the next pass")
     if result["new"]:

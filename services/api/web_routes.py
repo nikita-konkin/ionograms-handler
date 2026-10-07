@@ -947,6 +947,7 @@ def sounding(request: Request, sounding_id: int, gate: str = "auto",
     # is briefly wrong rather than briefly empty.
     scaling = frame = None
     sao_error = ""
+    file_missing = False
     if row is not None and plot == "interactive":
         try:
             scaling = sao_mod.build(_product_path(request, row), gate=gate)
@@ -957,12 +958,16 @@ def sounding(request: Request, sounding_id: int, gate: str = "auto",
             # the stored extractions -- is still worth reading, and a page
             # that 500s because one panel could not be drawn hides all of it.
             sao_error = f"{type(exc).__name__}: {exc}"
+            # Said differently, because the usual advice is wrong for it: the
+            # rendered plot needs the same file.
+            file_missing = isinstance(exc, FileNotFoundError)
 
     return templates.TemplateResponse(request, "sounding.html", {
         "sounding": row, "extractions": extractions, "gate": gate,
         "prev": neighbours["prev"], "next": neighbours["next"],
         "scaling": scaling, "frame": frame, "sao_error": sao_error,
-        "method": method, "methods": sao_mod.METHODS, "plot": plot,
+        "file_missing": file_missing, "method": method,
+        "methods": sao_mod.METHODS, "plot": plot,
     })
 
 

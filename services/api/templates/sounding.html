@@ -81,8 +81,12 @@
   <p class="note" style="margin-top:.8rem">
     <span class="pill fail">{{ t('sounding.no_scaling') }}</span> {{ sao_error }}
   </p>
+  {% if file_missing %}
+  <p class="note">{{ t('sounding.file_missing') }}</p>
+  {% else %}
   <p class="note">{{ t('sounding.scaling_failed',
     url='/ui/sounding/%d?gate=%s&plot=rendered'|format(sounding.id, gate)) }}</p>
+  {% endif %}
 
 {% else %}
   {# The raster is a PNG behind the traces, not a heatmap trace. 486 x 3999

@@ -721,7 +721,7 @@ def test_the_watcher_offers_only_what_is_not_already_held(conn, tmp_path,
     chirp = make_chirp_h5(np.full((4, 64), 100.0))
     methods = ("algo",)
 
-    new, found, _fresh, _, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
+    new, found, _fresh, _, _, _ = watch.find_new([tmp_path], conn, methods, min_age_s=0)
     assert found == 2 and {p.name for p in new} == {lfs.name, chirp.name}
 
     row = pipeline.process_file(lfs, Options(window=512, methods=methods))
@@ -790,7 +790,7 @@ def test_a_future_dated_file_is_ingested_not_withheld_forever(conn, tmp_path, ma
     ahead = time.time() + 20565          # the measured NAS skew
     os.utime(lfs, (ahead, ahead))
 
-    new, found, fresh, skewed, _ = watch.find_new([tmp_path], conn, ("algo",),
+    new, found, fresh, skewed, _, _ = watch.find_new([tmp_path], conn, ("algo",),
                                                min_age_s=3600)
     assert found == 1
     assert [p.name for p in new] == [lfs.name], "must not be withheld"
@@ -822,7 +822,7 @@ def test_muted_files_do_not_eat_the_batch(conn, tmp_path, make_chirp_h5):
     db.mute_circuit(conn, "CHILTON")                  # any receiver
     db.mute_circuit(conn, "unkown", "yoshkar-ola")
 
-    new, found, _fresh, _skewed, muted = watch.find_new(
+    new, found, _fresh, _skewed, muted, _ = watch.find_new(
         [tmp_path], conn, ("algo",), min_age_s=0)
     assert found == 4 and muted == 3
     assert [p.name for p in new] == [keep.name]
@@ -832,6 +832,76 @@ def test_muted_files_do_not_eat_the_batch(conn, tmp_path, make_chirp_h5):
                             quiet=True)
     assert result["loaded"] == 1 and result["held_back"] == 0
     assert "3 muted" in watch.describe(result)
+
+
+def _indexed(conn, tmp_path, make_lfs, folder: str):
+    """One sounding written under ``folder``, ingested relative to tmp_path."""
+    from conftest import synth_iq
+
+    from muf import pipeline
+    from muf.pipeline import Options
+    from services.api import ingest
+
+    (tmp_path / folder).mkdir()
+    lfs = make_lfs(synth_iq(n_freq=200, window=512, echo_range_km=2700.0,
+                            half_span_km=60_000.0, echo_last_bin=120))
+    lfs = lfs.rename(tmp_path / folder / lfs.name)
+    row = pipeline.process_file(lfs, Options(window=512, methods=("algo",)))
+    ingest.ingest_row(conn, row, lfs, tmp_path, ("algo",))
+    conn.commit()
+    return lfs
+
+
+def test_a_moved_file_is_relinked_not_lost(conn, tmp_path, make_lfs):
+    """tesla's ~10,000 August soundings: indexed from a share that went down,
+    the same files present under another archive, and every page drawing
+    FileNotFoundError because the scan skipped the copy as already done."""
+    import shutil
+
+    from services.api import watch
+
+    old = _indexed(conn, tmp_path, make_lfs, "old")
+    (tmp_path / "new").mkdir()
+    shutil.move(old, tmp_path / "new" / old.name)
+
+    new, found, *_, relinked = watch.find_new(
+        [tmp_path / "new"], conn, ("algo",), min_age_s=0, archive_root=tmp_path)
+
+    assert new == [] and found == 1, "relinked, not re-derived"
+    assert relinked == 1
+    assert db.one(conn, "SELECT path FROM sounding")["path"] == f"new/{old.name}"
+    assert "1 relinked" in watch.describe({
+        "found": 1, "new": 0, "too_fresh": 0, "held_back": 0, "relinked": 1})
+
+
+def test_a_file_kept_in_two_places_stays_where_it_was(conn, tmp_path, make_lfs):
+    """Only a path that no longer opens is moved."""
+    import shutil
+
+    from services.api import watch
+
+    old = _indexed(conn, tmp_path, make_lfs, "old")
+    (tmp_path / "copy").mkdir()
+    shutil.copy(old, tmp_path / "copy" / old.name)
+
+    *_, relinked = watch.find_new([tmp_path / "copy"], conn, ("algo",),
+                                  min_age_s=0, archive_root=tmp_path)
+    assert relinked == 0
+    assert db.one(conn, "SELECT path FROM sounding")["path"] == f"old/{old.name}"
+
+
+def test_without_a_root_nothing_is_relinked(conn, tmp_path, make_lfs):
+    import shutil
+
+    from services.api import watch
+
+    old = _indexed(conn, tmp_path, make_lfs, "old")
+    (tmp_path / "new").mkdir()
+    shutil.move(old, tmp_path / "new" / old.name)
+
+    *_, relinked = watch.find_new([tmp_path / "new"], conn, ("algo",), min_age_s=0)
+    assert relinked == 0
+    assert db.one(conn, "SELECT path FROM sounding")["path"] == f"old/{old.name}"
 
 
 def test_a_tree_with_no_soundings_is_skipped_not_fatal(conn, tmp_path):
@@ -3363,6 +3433,24 @@ def test_a_scaling_that_fails_does_not_take_the_page_with_it(client, scaled,
     assert got.status_code == 200
     assert "truncated product" in got.text
     assert "extractions" in got.text
+
+
+def test_a_missing_file_says_what_will_bring_it_back(client, scaled,
+                                                     monkeypatch):
+    """"Try rendered" is wrong advice when the file is gone -- rendered needs
+    it too. A missing file points at the archive scan, which relinks it."""
+    from services.api import sao
+
+    def gone(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "/archive/x.h5")
+
+    monkeypatch.setattr(sao, "build", gone)
+    sounding_id, _ = scaled
+    page = client.get(f"/ui/sounding/{sounding_id}").text
+
+    assert "no longer at its stored path" in page
+    assert "/ui/archives" in page
+    assert "plot=rendered" not in page.split("no longer at its stored path")[0][-400:]
 
 
 # --------------------------------------------------------------------------
