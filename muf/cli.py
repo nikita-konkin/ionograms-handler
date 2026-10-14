@@ -691,11 +691,24 @@ def cmd_lof(args) -> int:
 
 def cmd_info(args) -> int:
     """Print header and derived geometry for a sounding -- no processing."""
-    from . import calibrate
+    from . import calibrate, echo_window
 
     for path in find_soundings(args.target, format=args.input_format)[: args.limit]:
         header = read_header(path, format=args.input_format)
-        if loader.format_of(path, args.input_format) != loader.LFS:
+        fmt = loader.format_of(path, args.input_format)
+        window = None
+        if fmt == loader.ECHO_WINDOW or getattr(header, "has_echo_window", False):
+            window = echo_window.read(path, samples=False)
+        if fmt == loader.ECHO_WINDOW:
+            # The source capture's arithmetic, over the range the window kept:
+            # loading would reconstruct every sample just to print an axis.
+            cal = calibrate.build(
+                header,
+                n_freq=max(1, window.source_samples // args.window),
+                window=args.window, zero_periods=args.zero_periods,
+                gate_km=(window.range_lo_km, window.range_hi_km),
+            )
+        elif fmt != loader.LFS:
             # Every .h5 product stores its own axes, so they are read rather
             # than derived. `calibrate.build` would apply .lfs arithmetic -- a
             # 512-byte header and 8 bytes per sample -- to a file with
@@ -725,8 +738,56 @@ def cmd_info(args) -> int:
               f"-> bins {cal.gate_idx[0]}..{cal.gate_idx[1]} "
               f"({cal.n_range} of {cal.n_range_full}, "
               f"{cal.n_range_full/cal.n_range:.0f}x reduction)")
+        if window is not None:
+            print(f"  {window.describe()}")
         print()
     return 0
+
+
+def cmd_echo_window(args) -> int:
+    """Keep the echo window of each source's dechirped voltage.
+
+    Per file and idempotent. Exit status 1 if any file failed -- a
+    verification that did not pass, or an error -- and 0 when every file was
+    written, already had a window, or had nothing to keep.
+    """
+    from . import echo_window
+
+    paths = [p for p in find_soundings(args.target)
+             if loader.format_of(p) in (loader.LFS, loader.CHIRP2)
+             and not p.name.lower().endswith(loader.ECHO_WINDOW_SUFFIX)]
+    if not paths:
+        print("error: no .lfs captures or lfm_ionogram products to cut",
+              file=sys.stderr)
+        return 1
+    if args.into is not None and len(paths) != 1:
+        print("error: --into names one product, so give exactly one .lfs",
+              file=sys.stderr)
+        return 1
+
+    manual = None if args.range == AUTO_GATE else args.range
+    registry = _load_registry(args.stations)
+    failed = 0
+    for path in paths:
+        try:
+            report = echo_window.write(
+                path, margin_km=args.margin_km, max_hops=args.max_hops,
+                manual_km=manual, into=args.into, out_dir=args.out,
+                drop_raw=args.drop_raw, verify=args.verify,
+                dry_run=args.dry_run, stations=registry)
+        except echo_window.NoEchoError as exc:
+            print(f"{path.name}: skipped -- {exc}")
+            continue
+        except echo_window.VerificationError as exc:
+            failed += 1
+            print(f"{path.name}: NOT WRITTEN -- {exc}")
+            continue
+        except (OSError, ValueError, KeyError) as exc:
+            failed += 1
+            print(f"{path.name}: error -- {exc}")
+            continue
+        print(report.line())
+    return 1 if failed else 0
 
 
 def cmd_detect(args) -> int:
@@ -1059,6 +1120,53 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("--zero-periods", type=int,
                       default=spectro.DEFAULT_ZERO_PERIODS)
     info.set_defaults(func=cmd_info)
+
+    # echo-window
+    from .echo_window import DEFAULT_MARGIN_KM, DEFAULT_MAX_HOPS
+
+    ew = sub.add_parser(
+        "echo-window",
+        help="keep the dechirped voltage around the echoes (docs/echo-window.md)",
+        description="Shift the dechirped voltage to the centre of the echoes' "
+                    "beat band, low-pass and decimate it -- about 1 MB a "
+                    "sounding, lossless inside the band -- so the fast "
+                    "channel (Doppler, fading, phase) survives without the "
+                    "raw capture. A v2 product gets the group appended; an "
+                    ".lfs gets a standalone <stem>.echo.h5 and is never "
+                    "modified. Re-running is a no-op.")
+    ew.add_argument("target", type=Path, nargs="+",
+                    help=".lfs captures, lfm_ionogram-*.h5 products with `z`, "
+                         "or directories of either")
+    ew.add_argument("--margin-km", type=float,
+                    default=DEFAULT_MARGIN_KM, metavar="KM",
+                    help="range kept beyond the echoes on each side "
+                         "(default: %(default)s)")
+    ew.add_argument("--max-hops", type=int, default=DEFAULT_MAX_HOPS,
+                    help="hops the geometry candidate leaves room for "
+                         "(default: %(default)s)")
+    ew.add_argument("--range", type=_gate, default=None, metavar="LO,HI",
+                    help="keep exactly this range, km, instead of selecting "
+                         "one; on the axis `muf info` shows for the source")
+    ew.add_argument("--into", type=Path, default=None, metavar="H5",
+                    help=".lfs only: append the group to this chirpsounder2-"
+                         "format product of the same capture instead of "
+                         "writing <stem>.echo.h5")
+    ew.add_argument("--out", type=Path, default=None, metavar="DIR",
+                    help=".lfs only: write <stem>.echo.h5 here (default: "
+                         "beside the capture)")
+    ew.add_argument("--drop-raw", action="store_true",
+                    help="v2 only: rewrite the product without its full `z`, "
+                         "reclaiming the space. Always verified first; a "
+                         "product that does not verify keeps `z`.")
+    ew.add_argument("--verify", action="store_true",
+                    help="re-cut from the source and compare bit for bit, "
+                         "and check in-window power against the source")
+    ew.add_argument("--dry-run", action="store_true",
+                    help="print the window, rate and size; write nothing")
+    ew.add_argument("--stations", type=Path, default=None, metavar="FILE",
+                    help="merge a JSON registry or a chirpsounder2 server.ini "
+                         "over the built-in table, for the geometry candidate")
+    ew.set_defaults(func=cmd_echo_window)
 
     det = sub.add_parser(
         "detect",

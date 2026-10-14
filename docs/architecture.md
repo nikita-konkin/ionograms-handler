@@ -449,6 +449,8 @@ Our side is built:
 | `io_chirp.reprocess(path, window)` | a new `Ionogram` at any window |
 | `loader.load(..., window=N)` | routes to `reprocess` when `z` is present, warns and ignores when it is not |
 
+**The echo window keeps what matters of `z` at 1/50 the size.** `muf echo-window` stores the dechirped voltage only around the echoes (shifted, low-passed, decimated: 1.5 MB against 80 on cyprus1), appended to a v2 product or beside an `.lfs`, and `--drop-raw` can then reclaim `z`. Specification and measurements: [`echo-window.md`](echo-window.md).
+
 The port is reimplemented rather than imported, for the §2.2 reason — the clone
 is pinned and disposable, and our ionograms must not be a property of whichever
 commit is checked out. It is kept honest by re-deriving a product at its

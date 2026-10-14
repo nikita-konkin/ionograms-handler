@@ -215,10 +215,17 @@ def make_chirp_z_h5(tmp_path):
               station_name: str = "synthrx", channel: str = "ch0",
               chirp_id: int = 3, seed: int = 11,
               storage_threshold: float = 2.0,
-              name: str | None = None) -> Path:
+              name: str | None = None,
+              z: np.ndarray | None = None) -> Path:
         rng = np.random.default_rng(seed)
-        n = n_freq * step + window + step
-        z = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+        if z is not None:
+            # A caller-built waveform -- an echo at a chosen range, a Doppler
+            # spectrum -- stored as is; `n_freq` then follows from its length.
+            z = np.asarray(z, dtype=np.complex64)
+            n = len(z)
+        else:
+            n = n_freq * step + window + step
+            z = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
         if echo_bin is not None:
             # A constant beat frequency is a constant range: the simplest
             # thing that lands in one range bin at every frequency.

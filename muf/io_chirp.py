@@ -332,6 +332,12 @@ class ChirpHeader:
     #: window; see `reprocess` and architecture.md sec. 3.4.
     has_raw_voltage: bool = False
 
+    #: True when the product carries an ``echo_window`` group: the dechirped
+    #: voltage kept only around the echoes (``docs/echo-window.md``). With
+    #: ``z`` dropped it is what is left of the waveform, and an ionogram can
+    #: still be re-derived from it -- inside its range window only.
+    has_echo_window: bool = False
+
     @property
     def range_offset_km(self) -> float:
         """Propagation range implied by ``t0``'s fractional part.
@@ -522,6 +528,7 @@ def read_header(path: str | Path,
         offset_applied = (bool(_scalar(fh["range_offset_applied"][()]))
                           if "range_offset_applied" in fh else False)
         has_raw_voltage = RAW_VOLTAGE_KEY in fh
+        has_echo_window = ECHO_WINDOW_GROUP in fh
         range_start = (float(_scalar(fh["range_gate_start_m"][()]))
                        if "range_gate_start_m" in fh else float("nan"))
         range_stop = (float(_scalar(fh["range_gate_stop_m"][()]))
@@ -595,6 +602,7 @@ def read_header(path: str | Path,
         num_detections=detections,
         range_relative_reason=relative_reason,
         has_raw_voltage=has_raw_voltage,
+        has_echo_window=has_echo_window,
         software_version=software_version,
         git_commit=git_commit,
         git_dirty=git_dirty,
@@ -714,6 +722,12 @@ def _build_calibration(header: ChirpHeader,
 #: and one that does not cannot.
 RAW_VOLTAGE_KEY = "z"
 
+#: Root-level group holding the echo window of ``z``: the voltage shifted,
+#: low-passed and decimated around the echoes. Ours, not v2's -- see
+#: ``muf.echo_window`` and ``docs/echo-window.md``. Named here so reading a
+#: header does not import the writer.
+ECHO_WINDOW_GROUP = "echo_window"
+
 #: v2's incoherent averaging factor (``calc_ionograms.py:134``). Each output
 #: row is the mean of 13 sub-windows straddling the nominal position, which is
 #: why its ionograms look smoother than a single FFT would give. Reproducing
@@ -734,6 +748,16 @@ def read_raw_voltage(path: str | Path) -> np.ndarray:
                 f"cannot be re-derived at another window."
             )
         return np.asarray(fh[RAW_VOLTAGE_KEY][()], dtype=np.complex64)
+
+
+def read_echo_window(path: str | Path):
+    """The product's echo window: samples plus typed attributes.
+
+    A :class:`muf.echo_window.EchoWindow`; raises if the product has none.
+    """
+    from . import echo_window
+
+    return echo_window.read(path)
 
 
 def v2_spectrogram(z: np.ndarray, window: int, step: int,
