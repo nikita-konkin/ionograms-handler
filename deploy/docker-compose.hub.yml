@@ -158,6 +158,54 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
+  # The public results page: static files written into a host folder that the
+  # host's own nginx serves. The api itself is never exposed -- its reads are
+  # open, and the same read router answers /principals, model artifacts and
+  # station health. Opt-in, because it needs a folder and a web server first:
+  #   docker compose --profile publish up -d
+  # See deploy/README.md, "Public page".
+  publish:
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    profiles: ["publish"]
+    depends_on:
+      api:
+        condition: service_healthy
+    # Publishing more often than `watch` ingests (INGEST_INTERVAL_S) shows
+    # nothing new; the two default to the same 15 minutes.
+    command: >
+      python -m services.publish.publisher
+      --db /data/ionograms.sqlite3 --archive-root /archive --out /publish/site
+      --interval ${PUBLISH_INTERVAL_S:-900}
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      ARCHIVE_ROOT: /archive
+      # Allow-list, "TX->RX, TX->RX", case-insensitive. Nothing else is
+      # published, and a muted circuit is dropped even when listed. Empty
+      # refuses to start rather than publishing everything.
+      PUBLISH_CIRCUITS: "${PUBLISH_CIRCUITS:-}"
+      PUBLISH_METHOD: "${PUBLISH_METHOD:-contour}"
+      PUBLISH_DAYS: "${PUBLISH_DAYS:-30}"
+    # Same reason as `watch`: no server in here, so the image's healthcheck
+    # would only ever say unhealthy. The log line every pass is the liveness.
+    healthcheck:
+      disable: true
+    volumes:
+      # Read-write only so SQLite can reach the -wal/-shm files beside the
+      # database. The publisher opens the database itself read-only.
+      - api-data:/data
+      - "${ARCHIVE_HOST_PATH:-./archive}:/archive:ro"
+      - "${ARCHIVE_HOST_PATH_2:-${ARCHIVE_HOST_PATH:-./archive}}:/archive2:ro"
+      - "${ARCHIVE_HOST_PATH_3:-${ARCHIVE_HOST_PATH:-./archive}}:/archive3:ro"
+      # The folder the web server serves; must be writable by uid 10001. A
+      # default rather than `:?`: compose interpolates every service, profiled
+      # or not, so a required variable here would stop `up` for everyone who
+      # never enabled the page.
+      - "${PUBLISH_DIR:-./public-site}:/publish/site"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    restart: unless-stopped
+
   # Runs already-trained models forward on a timer and writes `forecast` rows.
   #
   # Its own image, not the api's: the model libraries stay out of the service

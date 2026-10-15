@@ -146,7 +146,7 @@ def test_no_forecast_rests_on_an_outage_and_each_says_how_measured(conn,
 
 
 def test_the_series_page_breaks_a_forecast_at_its_holes():
-    from services.api.web_routes import _broken_at_gaps
+    from services.api.series import _broken_at_gaps
 
     base = {"value": 10.0, "sigma": 1.0, "input_measured": 1.0, "name": "m",
             "id": 1, "active": 1, "target_alias": None, "trained_from": None,

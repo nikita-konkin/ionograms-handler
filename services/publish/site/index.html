@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oblique ionospheric sounding</title>
+<meta name="description" content="Live oblique ionospheric sounding results: ionograms, maximum usable frequency and forecast.">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <div>
+      <h1 data-t="title">Oblique ionospheric sounding</h1>
+      <p class="sub" data-t="subtitle"></p>
+    </div>
+    <div class="meta">
+      <button type="button" id="lang" class="link"></button>
+      <span id="updated" class="muted"></span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <p id="banner" class="banner" hidden></p>
+  <nav id="circuits" class="tabs" aria-label="Circuits"></nav>
+
+  <section id="circuit" hidden>
+    <p id="path" class="muted"></p>
+
+    <div class="card">
+      <h2 data-t="latest"></h2>
+      <figure class="latest">
+        <img id="latest-img" alt="" width="640" height="280">
+        <figcaption id="latest-cap"></figcaption>
+      </figure>
+      <h3 data-t="last_24h"></h3>
+      <div id="strip" class="strip"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2 data-t="series"></h2>
+        <div id="ranges" class="seg" role="group"></div>
+      </div>
+      <div id="chart" class="chart"></div>
+      <div id="legend" class="legend"></div>
+    </div>
+
+    <div class="card">
+      <h2 data-t="forecast"></h2>
+      <p class="note" data-t="experimental"></p>
+      <div id="forecast"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <p class="muted" data-t="about"></p>
+  <p class="muted" id="build"></p>
+</footer>
+</body>
+</html>

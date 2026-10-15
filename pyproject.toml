@@ -48,13 +48,14 @@ muf = "muf.cli:main"
 # removed in `f94f561`, readable from its parent.
 packages = ["muf", "muf.extractors", "muf.reference", "services",
             "services.agent", "services.api", "services.api.locale",
-            "services.prediction"]
+            "services.prediction", "services.publish"]
 
 # The api service ships its schema and its Jinja templates, which are data, not
 # modules -- without this an installed copy starts and then 500s on the first
 # page render.
 [tool.setuptools.package-data]
 "services.api" = ["schema.sql", "templates/*.html"]
+"services.publish" = ["site/*", "site/**/*"]
 
 [tool.ruff]
 # **The lowest interpreter any of this code actually runs on, which is not
