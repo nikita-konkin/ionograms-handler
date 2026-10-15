@@ -2,7 +2,7 @@
 
 The dechirped voltage of a chirp sounding, kept only around its echoes:
 shifted to the centre of their beat band, low-passed and decimated. About
-1.5 MB a sounding instead of 80, and lossless within the band.
+1.6 MB a sounding instead of 80, and lossless within the band.
 
 This document is the **specification**: the single source of truth for the
 format. `muf/echo_window.py` is the reference implementation. ionozond's
@@ -67,6 +67,7 @@ under `lfs`, not a sounding of its own.
 | Path | Type | Present | Meaning |
 |---|---|---|---|
 | `echo_window/z` | complex64 `[n]` | always | the window samples |
+| `echo_window/taps` | float64 `[N]` | always | the filter `h` the samples were cut with; §3.6 |
 | `echo_window/row_noise` | float64 `[rows]`, attr `window` (int) | `.lfs` only | full-band noise floor per spectrogram row; §3.5 |
 | `echo_window/lfs_header` | uint8 `[512]` | `.lfs` only | the capture's header, byte for byte |
 | `echo_window/params` | — | **reserved** | derived fast-channel parameters, a later task; nothing writes it |
@@ -203,16 +204,24 @@ tone keeps its amplitude. The `filter` JSON:
 
 | Key | Meaning |
 |---|---|
-| `numtaps`, `kaiser_beta`, `cutoff_hz` | regenerate the taps, at `source_sr_hz` |
+| `numtaps`, `kaiser_beta`, `cutoff_hz` | how the taps were designed, at `source_sr_hz` |
 | `passband_edge_hz` | half-width kept at full gain |
 | `stopband_edge_hz` | where ≥ 80 dB attenuation begins |
 | `stopband_attenuation_db`, `passband_ripple_db` | **measured** on the taps, not assumed |
 | `gain`, `type`, `doppler_margin_hz` | descriptive |
 
-The taps are `scipy.signal.firwin(numtaps, cutoff_hz, window=("kaiser",
-kaiser_beta), fs=source_sr_hz, scale=True)`. Written out:
+**The taps themselves are stored** in `echo_window/taps`, and a reader uses
+those, never a filter it designs again. They cost 29 KB at 3595 taps, under
+2 % of a window. Storing them means a reader needs no FIR designer that
+agrees with `scipy.signal.firwin` to the last bit. It also stops the JSON's
+rounded `kaiser_beta` (6 decimals) from drifting away from the filter
+actually applied. Decided 2026-10-16.
+
+A writer designs them as `scipy.signal.firwin(numtaps, cutoff_hz,
+window=("kaiser", kaiser_beta), fs=source_sr_hz, scale=True)`. Written out:
 `h[j] = w_β[j] · sinc(2·cutoff/fs · (j − (N−1)/2))`, then `h /= Σ h`, where
-`w_β` is the Kaiser window and `sinc(x) = sin(πx)/(πx)`.
+`w_β` is the Kaiser window and `sinc(x) = sin(πx)/(πx)`. A v1 reader refuses
+a group without `taps`, or with a length other than `numtaps`.
 
 **How the band and rate are chosen:**
 
@@ -269,8 +278,8 @@ to see it too.
 
 ### 3.8 Reading it back
 
-To reconstruct the window at the source rate, interpolate with the same taps
-and shift back:
+To reconstruct the window at the source rate, interpolate with the stored
+taps and shift back:
 
 ```
 up[i]  = D · Σ_k z[k] · h[i − k·D + (N−1)/2]
@@ -346,15 +355,18 @@ the window directly.
   renamed into place atomically. An interrupted or failed write leaves the
   original exactly as it was and removes the temporary file.
 
-**Verification** (`--verify`, and always for `--drop-raw`) checks four
+**Verification** (`--verify`, and always for `--drop-raw`) checks five
 things:
 
 1. The group reads back with every attribute.
-2. Re-cutting the source with the stored parameters gives the stored samples
+2. The stored taps meet ≥ 80 dB stopband and ≤ 0.01 dB ripple, measured
+   afresh. This check needs no source, so a product whose `z` is gone can
+   still be checked this far.
+3. Re-cutting the source with the stored taps gives the stored samples
    **bit for bit**.
-3. Power re-derived from the window matches the source's own within the
+4. Power re-derived from the window matches the source's own within the
    window: median |Δ| ≤ 0.5 dB over cells 10 dB above noise.
-4. For `--drop-raw`, every other dataset and root attribute came across
+5. For `--drop-raw`, every other dataset and root attribute came across
    unchanged.
 
 HDF5 does not give space back when a dataset is deleted. That is why
@@ -383,7 +395,7 @@ all 11,354 `lfm_ionogram-*.h5` under `/Users/w/data/ionozond_data2`
 (2026-08-04 to 2026-10-14) were opened on 2026-10-15, and none has `z`
 (15 were unreadable). `save_raw_voltage` has never been on at DOB.
 
-### 6.2 Real: cyprus1 → Yoshkar-Ola, 2026-02-04 (measured 2026-10-15)
+### 6.2 Real: cyprus1 → Yoshkar-Ola, 2026-02-04 (measured 2026-10-15; sizes re-measured 2026-10-16 with the taps stored)
 
 Five 80 MB captures at 100 kHz/s and 40 kHz, `/Users/w/data/2026.02.04/`.
 Windows were written to a scratch folder, never beside the captures.
@@ -391,16 +403,17 @@ Windows were written to a scratch folder, never beside the captures.
 
 | Capture | Window, km | `auto_gate` / geometry, km | Rate (D) | Taps | Samples | File | vs `.lfs` |
 |---|---|---|---|---|---|---|---|
-| 03:00 | 2486–4112 | 2681–2886 / 2636–3962 | 888.9 Hz (45) | 3595 | 1.78 MB | 1.55 MB | 1/52 |
-| 06:00 | 2486–4112 | 2666–2827 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.55 MB | 1/52 |
-| 09:00 | 2486–4112 | 2666–2725 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.54 MB | 1/52 |
-| 12:00 | 2486–4112 | 2666–2827 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.54 MB | 1/52 |
-| 18:00 | 2486–4112 | 2695–2769 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.55 MB | 1/52 |
+| 03:00 | 2486–4112 | 2681–2886 / 2636–3962 | 888.9 Hz (45) | 3595 | 1.78 MB | 1.58 MB | 1/51 |
+| 06:00 | 2486–4112 | 2666–2827 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.57 MB | 1/51 |
+| 09:00 | 2486–4112 | 2666–2725 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.57 MB | 1/51 |
+| 12:00 | 2486–4112 | 2666–2827 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.57 MB | 1/51 |
+| 18:00 | 2486–4112 | 2695–2769 / same | 888.9 Hz (45) | 3595 | 1.78 MB | 1.58 MB | 1/51 |
 
-Every capture verified: the re-cut was identical, and the in-window power
-agreed to 0.000 dB. The filter measured 82.6 dB stopband and 0.0006 dB
-ripple. No window was flagged: the edge energies were 36.6–38.1 dB, under the
-43 dB threshold. Writing and verifying took 2.6–3.1 s a capture on this Mac.
+Every capture verified: the stored filter re-measured at 82.6 dB stopband
+and 0.0006 dB ripple, the re-cut was identical, and the in-window power
+agreed to 0.000 dB. No window was flagged: the edge energies were 36.6–38.1 dB, under the
+43 dB threshold. Writing and verifying took 2.9–4.5 s a capture on this Mac.
+The file is the gzip'd samples (§6.3) plus 28,760 bytes of taps.
 
 | Capture | MUF contour, full / window | MUF algo, full / window | Power: median \|Δ\|, cells ≥ 10 dB above noise |
 |---|---|---|---|
@@ -437,7 +450,7 @@ not a measurement; see §7.
 ### 6.3 Compression (2026-10-15)
 
 On the five windows above, gzip-4 with byte shuffle saves **14.4–14.9 %**:
-1.78 → 1.54–1.55 MB. The saving comes from the exponent bytes; the mantissas
+1.78 → 1.54–1.55 MB of samples. The saving comes from the exponent bytes; the mantissas
 of complex noise are incompressible. gzip is in every HDF5 build and every
 reader, so it is on.
 
@@ -454,22 +467,24 @@ two hops would give. The geometry candidate for three hops is what widens the
 band. With one hop the edge check does its job: the 2F mode sits inside the
 upper margin and the window says so.
 
-## 7. Open questions
+## 7. Decisions and what is left
 
-- **Three hops or two.** Two would be 1.07 MB raw (about 0.9 MB stored)
-  instead of 1.78 MB, and would drop the 3F family. Whether the simulator
-  needs 3F decides it. The default stays at three because it is the
-  non-destructive choice.
-- **The Doppler residual.** The 0.56 % on a shared trajectory is attributed
-  above to the block-mean decimation. That could be confirmed by running the
-  estimator on the full capture after the same band-limiting, but it has not
-  been.
-- **The `.lfs` epoch.** `start_epoch` is taken as the time of sample 0
-  because the header has no field for an acquisition delay. If one exists in
-  the recorder, `t_first_s` is off by it.
-- **Taps by formula or stored.** Any reader regenerates the taps from
-  `filter`, with the formula in §3.6. Storing them would add 29 KB a window
-  (3595 × float64) and remove any dependence on matching `firwin` exactly.
+Decided 2026-10-16:
+
+- **Three hops.** The geometry candidate covers 1F–3F, at 1.78 MB of samples
+  rather than the 1.07 MB two hops would give, because the simulator keeps
+  the 3F family.
+- **Taps stored**, not regenerated (§3.6).
+- **The Doppler residual accepted.** The 0.56 % on a shared trajectory is
+  inside the 1 % criterion. It is attributed in §6.2 to the block-mean
+  decimation, but that attribution is unconfirmed: confirming it would mean
+  running the estimator on the full capture after the same band-limiting.
+- **The `.lfs` epoch assumption accepted.** `start_epoch` is the time of
+  sample 0. The header has no field for an acquisition delay; if the
+  recorder has one, `t_first_s` is off by it.
+
+Still open:
+
 - **v2 vertical products.** The window follows the product's own range axis,
   which for vertical v2 is twice `.lfs`'s (`io_chirp.load` warns about this).
   It is untested for want of a vertical v2 product with `z`.

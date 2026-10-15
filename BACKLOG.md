@@ -53,7 +53,7 @@ The row statistics preserve noise-level work (cf. the original
 `median_power_level.py`, "получение уровня шума"), which a signal-only archive
 would throw away.
 
-**The fast channel needs the voltage, not the power.** Doppler, fading and phase do not survive `|FFT|^2`; the echo window keeps them, additively, at ~1.5 MB a sounding -- see [`docs/echo-window.md`](docs/echo-window.md).
+**The fast channel needs the voltage, not the power.** Doppler, fading and phase do not survive `|FFT|^2`; the echo window keeps them, additively, at ~1.6 MB a sounding -- see [`docs/echo-window.md`](docs/echo-window.md).
 
 ### Window is locked at archive time
 

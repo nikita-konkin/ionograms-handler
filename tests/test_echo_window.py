@@ -558,6 +558,69 @@ def test_the_window_follows_the_energy_not_the_geometry(make_lfs_iq, tmp_path):
 
 
 # --------------------------------------------------------------------------
+# The filter travels with the samples
+# --------------------------------------------------------------------------
+
+def _lfs_window(make_lfs_iq, tmp_path):
+    n = int(5 * SR)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(2900.0)))
+    return lfs, echo_window.write(lfs, out_dir=tmp_path).target
+
+
+def test_the_taps_are_stored_as_cut(make_lfs_iq, tmp_path):
+    lfs, target = _lfs_window(make_lfs_iq, tmp_path)
+    window = echo_window.read(target)
+
+    with h5py.File(target, "r") as fh:
+        stored = fh["echo_window/taps"]
+        assert stored.dtype == np.float64
+        assert stored.shape == (window.filter["numtaps"],)
+    taps = window.taps
+    assert taps.sum() == pytest.approx(1.0, abs=1e-12)        # unit DC gain
+    np.testing.assert_array_equal(taps, taps[::-1])          # linear phase
+    designed = echo_window.plan_for(echo_window.source_of(lfs),
+                                    window.range_lo_km, window.range_hi_km)
+    np.testing.assert_array_equal(taps, designed.taps())
+
+
+def test_reading_needs_no_filter_designer(make_lfs_iq, tmp_path, monkeypatch):
+    """What ionozond or any other reader relies on: the file is enough."""
+    lfs, target = _lfs_window(make_lfs_iq, tmp_path)
+
+    def no_designer(*args, **kwargs):
+        raise AssertionError("a reader regenerated the taps")
+
+    monkeypatch.setattr(echo_window, "_design", no_designer)
+    window = echo_window.read(target)
+    assert len(echo_window.reconstruct(window)) == window.source_samples
+    echo_window.reprocess_window(target)
+    check = echo_window.verify_window(target,
+                                      source=echo_window.source_of(lfs))
+    assert check.ok, check.describe()
+    assert "filter" in check.metrics
+
+
+def test_tampered_taps_fail_verification(make_lfs_iq, tmp_path):
+    lfs, target = _lfs_window(make_lfs_iq, tmp_path)
+    with h5py.File(target, "r+") as fh:
+        taps = fh["echo_window/taps"]
+        taps[taps.shape[0] // 2] *= 1.01
+
+    check = echo_window.verify_window(target, source=echo_window.source_of(lfs))
+    assert not check.ok
+    assert any("re-cut differs" in p for p in check.problems)
+
+
+def test_a_window_without_taps_is_refused(make_lfs_iq, tmp_path):
+    _, target = _lfs_window(make_lfs_iq, tmp_path)
+    with h5py.File(target, "r+") as fh:
+        del fh["echo_window/taps"]
+
+    with pytest.raises(ValueError, match="no 'taps'"):
+        echo_window.read(target)
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 

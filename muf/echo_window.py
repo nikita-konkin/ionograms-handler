@@ -12,9 +12,9 @@ Almost none of those 80 MB is echo. After dechirping, an echo at virtual range
 circuit sits within a few hundred km of range: on cyprus1 -> Yoshkar-Ola, 1F
 to 3F is 9.0-10.6 ms, a beat band a few hundred Hz wide out of the 40 kHz
 stored. Shifting that band to zero, low-passing it and decimating keeps
-**everything the echoes contain, losslessly within the band**, at about 1 MB.
-With the power product beside it the ``.lfs`` is no longer needed for
-simulator work.
+**everything the echoes contain, losslessly within the band**, in 1.6 MB
+(measured on cyprus1, ``docs/echo-window.md`` sec. 6.2). With the power
+product beside it the ``.lfs`` is no longer needed for simulator work.
 
 ``docs/echo-window.md`` is the specification -- the one source of truth, which
 ionozond's ``h5_archive.py`` will implement for ``.lfs`` too. This module is
@@ -65,7 +65,7 @@ import os
 import shutil
 import subprocess
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -84,6 +84,12 @@ VERSION = 1
 
 #: Complex64 samples of the window, ``[n]``.
 SAMPLES = "z"
+#: The filter's taps, float64 ``[numtaps]``, exactly as the cut applied them.
+#: Stored rather than regenerated from the design parameters: a reader -- this
+#: one, or ionozond's -- then needs no FIR designer that agrees with
+#: ``scipy.signal.firwin`` to the last bit, and the ``filter`` JSON's rounded
+#: ``kaiser_beta`` cannot drift from what was used. 29 KB at 3595 taps.
+TAPS = "taps"
 #: ``.lfs`` only: the full-band noise per spectrogram row; see the docstring.
 ROW_NOISE = "row_noise"
 #: ``.lfs`` only: the recording's 512-byte header, verbatim.
@@ -417,6 +423,8 @@ class Plan:
     cutoff_hz: float
     attenuation_db: float       # measured on the taps
     ripple_db: float            # measured on the taps
+    #: Taps read from a file. ``None`` while planning, when they are designed.
+    stored: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     @property
     def sr_hz(self) -> float:
@@ -448,7 +456,9 @@ class Plan:
         return (self.numtaps - 1) // 2 + self.decimation
 
     def taps(self) -> np.ndarray:
-        """The FIR, regenerated from its parameters -- deterministic."""
+        """The FIR: as stored, for a window read from a file; else designed."""
+        if self.stored is not None:
+            return self.stored
         return _design(self.numtaps, self.beta, self.cutoff_hz, self.source_sr_hz)
 
     def filter_json(self) -> str:
@@ -468,7 +478,7 @@ class Plan:
 
     @classmethod
     def from_filter_json(cls, text: str, *, source_sr_hz: float, shift_hz: float,
-                         decimation: int) -> Plan:
+                         decimation: int, taps: np.ndarray | None = None) -> Plan:
         spec = json.loads(text)
         return cls(source_sr_hz=float(source_sr_hz), shift_hz=float(shift_hz),
                    decimation=int(decimation),
@@ -477,7 +487,8 @@ class Plan:
                    numtaps=int(spec["numtaps"]), beta=float(spec["kaiser_beta"]),
                    cutoff_hz=float(spec["cutoff_hz"]),
                    attenuation_db=float(spec["stopband_attenuation_db"]),
-                   ripple_db=float(spec["passband_ripple_db"]))
+                   ripple_db=float(spec["passband_ripple_db"]),
+                   stored=taps)
 
 
 def _design(numtaps: int, beta: float, cutoff_hz: float, sr_hz: float) -> np.ndarray:
@@ -665,13 +676,15 @@ class EchoWindow:
     row_noise: np.ndarray | None = None
     noise_window: int = 0
     lfs_header: bytes | None = None
+    taps: np.ndarray | None = None
 
     @property
     def plan(self) -> Plan:
         return Plan.from_filter_json(json.dumps(self.filter),
                                      source_sr_hz=self.source_sr_hz,
                                      shift_hz=self.shift_hz,
-                                     decimation=self.decimation)
+                                     decimation=self.decimation,
+                                     taps=self.taps)
 
     @property
     def nbytes(self) -> int:
@@ -736,6 +749,14 @@ def read(path: str | Path, *, samples: bool = True) -> EchoWindow:
             noise_window = int(g[ROW_NOISE].attrs["window"])
         header = (bytes(np.asarray(g[LFS_HEADER][()], dtype=np.uint8))
                   if LFS_HEADER in g else None)
+        if TAPS not in g:
+            raise ValueError(f"{path}: echo window has no {TAPS!r}; v1 stores "
+                             f"the filter it was cut with")
+        taps = np.asarray(g[TAPS][()], dtype=np.float64)
+        numtaps = int(json.loads(_str(a["filter"]))["numtaps"])
+        if taps.shape != (numtaps,):
+            raise ValueError(f"{path}: {len(taps)} stored taps, filter "
+                             f"records {numtaps}")
         edge = np.asarray(a["edge_energy_db"], dtype=np.float64)
         return EchoWindow(
             path=path, samples=data, n=n, format=FORMAT, version=version,
@@ -756,7 +777,7 @@ def read(path: str | Path, *, samples: bool = True) -> EchoWindow:
             truncated_suspect=bool(a["truncated_suspect"]),
             writer=_str(a["writer"]),
             row_noise=row_noise, noise_window=int(noise_window or 0),
-            lfs_header=header)
+            lfs_header=header, taps=taps)
 
 
 def read_header(path: str | Path,
@@ -820,7 +841,7 @@ def _attrs(source: Source, selection: Selection, plan: Plan) -> dict:
     }
 
 
-def _write_group(fh, samples: np.ndarray, attrs: dict, *,
+def _write_group(fh, samples: np.ndarray, attrs: dict, taps: np.ndarray, *,
                  row_noise: np.ndarray | None = None,
                  noise_window: int = 0,
                  lfs_header: bytes | None = None) -> None:
@@ -834,6 +855,7 @@ def _write_group(fh, samples: np.ndarray, attrs: dict, *,
                          shuffle=COMPRESSION is not None)
     for key, value in attrs.items():
         group.attrs[key] = value
+    group.create_dataset(TAPS, data=np.asarray(taps, dtype=np.float64))
     if row_noise is not None:
         noise = group.create_dataset(ROW_NOISE,
                                      data=np.asarray(row_noise, dtype=np.float64))
@@ -1034,7 +1056,7 @@ def write(path: str | Path, *,
             if mode == "w":
                 for key, value in _standalone_attrs(source).items():
                     fh.attrs[key] = value
-            _write_group(fh, z_win, attrs, **extra)
+            _write_group(fh, z_win, attrs, plan.taps(), **extra)
         if verify:
             report.verification = verify_window(tmp, source=source)
             if not report.verification.ok:
@@ -1074,7 +1096,7 @@ def _drop_raw(source: Source, z_win, attrs, chosen, *, verify: bool,
                     continue
                 src.copy(src[key], dst, name=key)
             if z_win is not None:
-                _write_group(dst, z_win, attrs)
+                _write_group(dst, z_win, attrs, plan.taps())
         problems = _same_except_z(path, tmp)
         check = verify_window(tmp, source=source)
         check.problems.extend(problems)
@@ -1131,12 +1153,13 @@ POWER_CHECK_TOLERANCE_DB = 0.5
 def verify_window(path: str | Path, *, source: Source | None = None) -> Verification:
     """Check a stored window against its source.
 
-    Three things: the group reads back with every attribute; re-cutting the
-    source with the stored parameters gives the stored samples *exactly*; and
-    the power re-derived from the window matches the source's own within the
-    window -- median |difference| at most ``POWER_CHECK_TOLERANCE_DB`` over
-    cells ``POWER_CHECK_ABOVE_NOISE_DB`` above noise. Without a source (a v2
-    product whose ``z`` was dropped) only the first can be checked.
+    Four things: the group reads back with every attribute; the stored taps
+    meet ``STOPBAND_DB`` and ``MAX_RIPPLE_DB``, measured afresh; re-cutting
+    the source with them gives the stored samples *exactly*; and the power
+    re-derived from the window matches the source's own within the window --
+    median |difference| at most ``POWER_CHECK_TOLERANCE_DB`` over cells
+    ``POWER_CHECK_ABOVE_NOISE_DB`` above noise. Without a source (a v2 product
+    whose ``z`` was dropped) only the first two can be checked.
     """
     problems: list = []
     metrics: dict = {}
@@ -1144,15 +1167,26 @@ def verify_window(path: str | Path, *, source: Source | None = None) -> Verifica
         window = read(path)
     except Exception as exc:
         return Verification(False, [f"unreadable: {exc}"], {})
+    plan = window.plan
+    if plan.numtaps > 1:
+        # Measured on the taps as stored, which are the ones every reader uses.
+        attenuation, ripple = _response(plan.taps(), plan.source_sr_hz,
+                                        plan.passband_hz, plan.stopband_hz)
+        metrics["filter"] = f"{attenuation:.1f} dB / {ripple:.4f} dB"
+        if attenuation < STOPBAND_DB or ripple > MAX_RIPPLE_DB:
+            problems.append(f"stored filter gives {attenuation:.1f} dB stopband, "
+                            f"{ripple:.4f} dB ripple")
+
     if source is None or (source.kind == SOURCE_V2
                           and io_chirp.RAW_VOLTAGE_KEY not in _keys(source.path)):
-        return Verification(True, [], {"source": "not available"})
+        metrics["source"] = "not available"
+        return Verification(not problems, problems, metrics)
 
     samples = _source_samples(source)
     if len(samples) != window.source_samples:
         problems.append(f"source has {len(samples)} samples, window records "
                         f"{window.source_samples}")
-    again = cut(samples, window.plan)
+    again = cut(samples, plan)
     if again.shape != window.samples.shape or not np.array_equal(again, window.samples):
         diff = (float(np.max(np.abs(again - window.samples)))
                 if again.shape == window.samples.shape else float("inf"))
