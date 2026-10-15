@@ -14,13 +14,14 @@ zero.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 
 from muf import loader
 from muf.extractors import ALL_METHODS, DEFAULT_METHODS
 
 from . import archives as archives_mod
 from . import db
+from . import missing as missing_mod
 from .auth import Capability, Principal, require
 
 router = APIRouter(tags=["archives"])
@@ -349,6 +350,64 @@ def delete_orphans(archive_id: int, request: Request,
             "note": f"{removed} sounding(s) removed, with their extractions "
                     f"and modelled values. The files are untouched -- widen "
                     f"the format and the next scan reads them again."}
+
+
+@router.get("/archives/{archive_id}/missing")
+def list_missing(archive_id: int, request: Request) -> dict:
+    """This archive's soundings whose file is no longer on disk.
+
+    Open, like the other reads, and it only counts. It does read the storage
+    -- one listing per day folder -- so the page asks for it on demand rather
+    than on every load. A share that does not answer is 503, never "all
+    missing": see :mod:`services.api.missing`.
+    """
+    from .read_routes import _storage_error
+
+    row = _row(request, archive_id)
+    try:
+        found = missing_mod.find(request.app.state.db, row,
+                                 request.app.state.archive_root)
+    except OSError as exc:
+        raise _storage_error(exc) from None
+    return {"id": archive_id, **found.summary()}
+
+
+@router.delete("/archives/{archive_id}/missing")
+def delete_missing(archive_id: int, request: Request,
+                   expect: int = Query(..., ge=0,
+                                       description="the count the operator saw"),
+                   _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
+    """Remove the soundings whose file is gone -- if they are still the ones shown.
+
+    ``expect`` is the count the page displayed. The storage is read again
+    here, and a different answer refuses: a share that came back or went away
+    between the look and the press changes what would go, and the operator
+    agreed to a number, not to whatever the disk says now.
+
+    Their `extraction` and `reference` rows go too, by cascade. Nothing on
+    disk is touched; a file that reappears is read again by the next scan of
+    an enabled archive.
+    """
+    from .read_routes import _storage_error
+
+    row = _row(request, archive_id)
+    conn = request.app.state.db
+    try:
+        found = missing_mod.find(conn, row, request.app.state.archive_root)
+    except OSError as exc:
+        raise _storage_error(exc) from None
+    if found.total != expect:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{found.total} sounding(s) of {row['name']} have no file now, "
+            f"not the {expect} shown -- the storage changed. Check again "
+            f"before removing anything.")
+    removed = missing_mod.delete(conn, found.ids)
+    return {"ok": True, "id": archive_id, "removed": removed,
+            "first": found.first, "last": found.last,
+            "note": f"{removed} sounding(s) whose file was gone removed from "
+                    f"{row['name']}, with their extractions and modelled "
+                    f"values. Nothing on disk was touched."}
 
 
 @router.delete("/archives/{archive_id}")

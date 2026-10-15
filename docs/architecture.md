@@ -819,6 +819,15 @@ That is the same trap `DELETE /archives/{id}/orphans` refuses to walk into --
 it will not run on an archive that admits every format, because the format is
 what keeps the orphans gone.
 
+**Soundings whose file is gone are the one case where deleting is enough.**
+With no file, `find_new` has nothing to read back. The Archives page counts
+them on request: **Check files** under an archive's sounding count lists each
+of its day folders once, and a share that does not answer is a 503, never
+"all missing". `DELETE /archives/{id}/missing?expect=N` then removes exactly
+the N that were shown, with their extractions, and refuses if the storage now
+answers differently (`services/api/missing.py`, 2026-10-16). It was written
+for tesla's August rows from the deleted `ionozond_data2` share.
+
 `muted_circuit` is the equivalent rule for a circuit. `ingest` declines to
 write a muted `(tx, rx)`, so the deletion stays done, and
 `DELETE /circuits/{tx}/{rx}` **refuses unless the circuit is muted first**.

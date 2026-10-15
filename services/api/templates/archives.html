@@ -113,6 +113,10 @@
       {# The count is the point of the page: it links to the numbers rather
          than stopping at "it scanned". #}
       <td>{% if a.soundings %}<a href="/ui/soundings">{{ a.soundings }}</a>
+          {#- On demand, not on load: it lists every day folder of the
+              archive, which on a share is a round trip each. #}
+          <div id="missing-{{ a.id }}" class="note"><a href="#"
+             onclick="checkMissing({{ a.id }}); return false">{{ t('archives.check_files') }}</a></div>
           {%- else %}<span class="muted">0</span>{% endif %}</td>
       <td class="muted">{{ a.last_scan_at or '&mdash;'|safe }}</td>
       {# A scan result is a sentence, and `table {width:100%}` will squeeze
@@ -456,6 +460,62 @@ async function dropOrphans(id) {
   if (!r.ok) { orphanSay(id, ''); say(r.detail, true); return; }
   say(r.body.note);
   setTimeout(() => location.reload(), 1200);
+}
+
+// Soundings whose file is gone. Same two-press shape as the orphans, and the
+// delete carries the count that was shown: if the storage answers
+// differently by then, the server refuses rather than removing a number
+// nobody saw.
+let armedMissing = null, missingTimer = null, shownMissing = {};
+
+function missingSay(id, html) {
+  const box = document.getElementById('missing-' + id);
+  if (box) box.innerHTML = html;
+}
+
+function disarmMissing() {
+  armedMissing = null;
+  clearTimeout(missingTimer);
+}
+
+async function checkMissing(id) {
+  disarmMissing();
+  missingSay(id, T('archives.js.checking'));
+  const r = await fetch('/archives/' + id + '/missing');
+  const m = await r.json().catch(() => null);
+  if (!r.ok || !m) {
+    missingSay(id, '');
+    say((m && m.detail) || T('archives.js.check_failed'), true);
+    return;
+  }
+  shownMissing[id] = m.total;
+  if (!m.total) { missingSay(id, T('archives.js.all_present', {of: m.of})); return; }
+  let html = T('archives.js.missing', {n: m.total, of: m.of,
+                                       first: m.first, last: m.last});
+  // Spelled out, not built: the catalog tests look keys up literally.
+  if (m.folder === 'absent') html += '<br>' + T('archives.js.folder_absent');
+  else if (m.folder === 'empty') html += '<br>' + T('archives.js.folder_empty');
+  missingSay(id, html + ' <button onclick="dropMissing(' + id + ')">'
+                 + T('archives.js.remove') + '</button>');
+}
+
+async function dropMissing(id) {
+  const n = shownMissing[id];
+  if (armedMissing !== id) {
+    armedMissing = id;
+    missingSay(id, T('archives.js.drop_missing_confirm',
+                     {n: n, unit: T.plural(n, 'sounding')})
+      + ' <button onclick="dropMissing(' + id + ')">'
+      + T('archives.js.press_again') + '</button>');
+    clearTimeout(missingTimer);
+    missingTimer = setTimeout(() => { disarmMissing(); checkMissing(id); }, 30000);
+    return;
+  }
+  disarmMissing();
+  const r = await control('/archives/' + id + '/missing?expect=' + n, 'DELETE');
+  if (!r.ok) { missingSay(id, ''); say(r.detail, true); return; }
+  say(r.body.note);
+  setTimeout(() => location.reload(), 1500);
 }
 
 async function remove(id, name) {

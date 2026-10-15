@@ -491,6 +491,7 @@ MESSAGES: dict[str, str] = {
     "archives.col.result": "Result",
     "archives.disabled": "Disabled",
     "archives.any": "Any",
+    "archives.check_files": "Check files",
     "archives.set": "Set",
     "archives.scan_now": "Scan now",
     "archives.disable": "Disable",
@@ -1240,6 +1241,19 @@ MESSAGES: dict[str, str] = {
         "values? The files are not touched \u2014 widening the format reads "
         "them again.",
     "archives.js.press_again": "Press again to confirm",
+    "archives.js.missing": "No file on disk: {n} of {of} ({first} \u2013 {last}).",
+    "archives.js.all_present": "Every file is on disk ({of}).",
+    "archives.js.check_failed": "Could not check the files.",
+    "archives.js.folder_absent":
+        "The folder itself is not there. If this is a share that is down, "
+        "mount it and check again before removing anything.",
+    "archives.js.folder_empty":
+        "The folder is empty. If this is a share that is not mounted, mount "
+        "it and check again before removing anything.",
+    "archives.js.drop_missing_confirm":
+        "Delete {n} sounding(s) whose file is gone, with their extractions "
+        "and modelled values? They cannot be recomputed unless the files "
+        "come back.",
     "archives.js.unregister_confirm":
         "Unregister {name}?\n\nIts soundings and their characteristics stay "
         "in the database; this only stops the indexing.",
