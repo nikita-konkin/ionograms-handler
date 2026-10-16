@@ -180,22 +180,34 @@ def compute(
     n_range_full = cal.n_range_full
 
     win = hanning(window)
-    padded = np.zeros(n_range_full, dtype=np.complex128)
     out = np.empty((n_freq, i_hi - i_lo + 1), dtype=np.float32)
 
     for i in range(n_freq):
-        padded[:window] = win * iq[i * window:(i + 1) * window]
-        spectrum = np.abs(np.fft.fftshift(np.fft.fft(padded))) ** 2
-        # Noise floor from the full spectrum, before gating, so that restricting
-        # the range window does not bias the estimate.
-        floor = NOISE_COEF * np.median(spectrum)
-        row = spectrum[i_lo:i_hi + 1]
-        out[i] = row / floor if floor > 0 else row
+        out[i] = column(iq[i * window:(i + 1) * window], win, n_range_full,
+                        (i_lo, i_hi))
 
     return Ionogram(
         power=out, cal=cal, header=header,
         window=window, zero_periods=zero_periods,
     )
+
+
+def column(iq: np.ndarray, win: np.ndarray, n_range_full: int,
+           gate: tuple[int, int]) -> np.ndarray:
+    """One window of IQ as a range-gated row of median-equalized power.
+
+    The whole of :func:`compute` for a single window, so that something
+    holding one window at a time -- the station agent following a capture as
+    it is written -- forms exactly the row this module would have.
+    """
+    padded = np.zeros(n_range_full, dtype=np.complex128)
+    padded[:len(win)] = win * iq
+    spectrum = np.abs(np.fft.fftshift(np.fft.fft(padded))) ** 2
+    # Noise floor from the full spectrum, before gating, so that restricting
+    # the range window does not bias the estimate.
+    floor = NOISE_COEF * np.median(spectrum)
+    row = spectrum[gate[0]:gate[1] + 1]
+    return row / floor if floor > 0 else row
 
 
 # --- caching -----------------------------------------------------------------
