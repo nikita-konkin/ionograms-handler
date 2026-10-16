@@ -930,6 +930,44 @@ def test_a_failed_stop_does_not_edit_the_config(station):
     assert Path(station.chirp_config).read_text(encoding="utf-8") == original
 
 
+def test_an_atomic_write_of_bytes_leaves_exactly_those_bytes(tmp_path):
+    path = tmp_path / ("settings-%d.ini" % random.randint(1, 9999))
+    data = os.urandom(random.randint(1, 4096)) + b"\r\nkey=value\n"
+    control._atomic_write_bytes(path, data)
+    assert path.read_bytes() == data, "an atomic write changed the bytes it was given"
+
+
+def test_a_failed_atomic_write_of_bytes_keeps_the_old_file(tmp_path, monkeypatch):
+    path = tmp_path / "chirp_config.py"
+    old = os.urandom(random.randint(1, 512))
+    path.write_bytes(old)
+    monkeypatch.setattr(control.os, "replace", lambda *a: (_ for _ in ()).throw(
+        OSError("disk full")))
+    with pytest.raises(OSError):
+        control._atomic_write_bytes(path, os.urandom(64))
+    assert path.read_bytes() == old, "a failed atomic write damaged the old file"
+
+
+def test_a_failed_atomic_write_of_bytes_leaves_no_temporary_file(tmp_path, monkeypatch):
+    path = tmp_path / "schedule.ini"
+    path.write_bytes(b"[cyprus1]\nactive=true\n")
+    monkeypatch.setattr(control.os, "replace", lambda *a: (_ for _ in ()).throw(
+        OSError("disk full")))
+    with pytest.raises(OSError):
+        control._atomic_write_bytes(path, os.urandom(64))
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["schedule.ini"], (
+        "a failed atomic write left its temporary file behind")
+
+
+def test_try_restart_is_a_verb_the_agent_may_send():
+    seen = []
+    control.systemctl("try-restart", "ionozond-sounder.service", no_block=True,
+                      runner=lambda args, **kw: seen.append(args)
+                      or subprocess.CompletedProcess(args, 0, "", ""))
+    assert seen == [["systemctl", "--no-block", "try-restart",
+                     "ionozond-sounder.service"]], "try-restart was not sent"
+
+
 # --------------------------------------------------------------------------
 # Logs
 # --------------------------------------------------------------------------

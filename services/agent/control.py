@@ -29,6 +29,7 @@ refused whole.
 from __future__ import annotations
 
 import configparser
+import io
 import json
 import os
 import re
@@ -71,7 +72,9 @@ class CommandResult:
 #: Verbs the agent will pass to systemctl. An allow-list, not a filter: the
 #: command name arrives over the network, and `systemctl` has verbs like
 #: `mask` and `isolate` that have no business being reachable remotely.
-ALLOWED_VERBS = ("start", "stop", "restart", "status", "is-active")
+#: `try-restart` restarts only a running unit: the ionozond sounder takes up a
+#: schedule change with it, and one stopped on purpose stays stopped.
+ALLOWED_VERBS = ("start", "stop", "restart", "try-restart", "status", "is-active")
 
 
 #: Set ``AGENT_FAKE_SYSTEMCTL=1`` to log verbs instead of running them.
@@ -781,17 +784,26 @@ def _validate(parser: configparser.ConfigParser, changes: dict,
 
 
 def _atomic_write(path: Path, parser: configparser.ConfigParser) -> None:
+    """Write a chirpsounder2 ini through :func:`_atomic_write_bytes`."""
+    text = io.StringIO()
+    parser.write(text)
+    _atomic_write_bytes(path, text.getvalue().encode("utf-8"))
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
     """Write via a temporary file in the same directory, then replace.
 
     Same directory so the replace is on one filesystem and therefore atomic.
-    A half-written config is an outage, not a misconfiguration.
+    A half-written config is an outage, not a misconfiguration. Bytes rather
+    than a parser, because the ionozond console's ``QSettings`` files must come
+    back exactly as edited, and ``chirp_config.py`` is generated text.
     """
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name,
                                suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            parser.write(fh)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
