@@ -891,6 +891,61 @@ whenever the *write* succeeded even if the restart that followed failed —
 the file on the station has already changed, so every sounding after that
 belongs to the new epoch whether or not the process took it up.
 
+### 5.5 Station → server → browser: the live view **[built 2026-10-16, phase 1]**
+
+What the Qt console shows over AnyDesk, in the browser: the sounding being
+captured, column by column, the last complete one, and the day's SNR and PDP.
+Issue #1. Read-only in this phase; Start/Stop reuse §5.4's command queue
+later, with the agent's `target` set to `ionozond-sounder.service`.
+
+```
+ ionozond sounder ──► <live_dir>/<day>/<tx>_<date>_<time>.lfs  (growing)
+        │                         │
+   STATUS lines              services/agent/live.py      own unit, Nice=10
+   (journal)  ──────────────►  every 2 s: POST /stations/{id}/live
+                                          │
+                              services/api/live.py       memory, not the database
+                                          │
+                              GET /stations/{id}/live/events   Server-Sent Events
+                                          │
+                                       /ui/live
+```
+
+**The station still never listens.** The feed is one more outbound push beside
+health, with the agent's token. It is a separate process from the health loop,
+so a capture that fails to parse cannot silence the health push.
+
+**One vocabulary, agent to browser.** The server relays what the agent posts
+and adds one event of its own:
+
+| event | from | carries |
+|---|---|---|
+| `status` | the sounder's `STATUS` line | `tx`, `state`, and `progress`, `overflows`, `t0`, `t1`, `got` where the state has them |
+| `sounding` | the capture's header | `tx`, `t0`, `f_lo_mhz`, `f_step_mhz`, `columns`, `range_lo_km`, `range_step_km`, `rows`, `km_per_ms` |
+| `column` | one FFT window of the capture | `tx`, `t0`, `index`, `db`: one byte per range row, 0.25 dB above the noise per count |
+| `summary` | the server, as a sounding ends | `tx`, `t0`, `snr` per column and `pdp` per row, same encoding |
+
+A column is `muf.spectro.column` on one window -- the same function the
+archive's ionograms are formed with -- gated to the header's default range
+window, so the live picture and the archived one agree cell for cell (tested to
+the 0.125 dB the encoding allows). At 16384 samples, as the Qt console draws
+it, a 250 s sounding is 610 columns, about half a kilobyte a second.
+
+**A sounding ends on its last column, or when the next one starts -- never on
+a status line.** `writing` carries no `t0`, and the agent reads status from the
+journal and columns from the disk, so one batch can carry it ahead of the final
+columns it follows in time. Ending on it once dropped those columns into a
+sounding that no longer existed.
+
+**The server keeps it in memory.** A live column is worth something for the
+four minutes its sounding lasts; the archived product is the record. What
+outlives a sounding is its summary, kept for a day per transmitter. A restart
+loses all of it; the agent puts the sounding in front of every batch that
+carries its columns, so the next batch starts it again.
+
+**The browser reads the stream with `fetch`, not `EventSource`.** The latter
+cannot send an `Authorization` header, and a token in the URL ends up in logs.
+
 ---
 
 ## 6. Release plan

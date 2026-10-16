@@ -35,6 +35,7 @@ MESSAGES: dict[str, str] = {
     "chrome.language": "Language",
 
     "nav.console": "Console",
+    "nav.live": "Live",
     "nav.series": "Series",
     "nav.soundings": "Soundings",
     "nav.sources": "Sources",
@@ -1421,6 +1422,26 @@ MESSAGES: dict[str, str] = {
         "it is collected. The observed row above is how you confirm it landed: "
         "it should move to the new window within one sounding cycle.",
 
+    # -- live ----------------------------------------------------------
+    "live.title": "Live sounding",
+    "live.station": "Station",
+    "live.empty": "Nothing has arrived from this station yet. The view fills in as soon as its agent sends a sounding.",
+    "live.log": "Event stream",
+    "live.ctrl": "Last complete ionogram",
+    "live.current": "Current ionogram",
+    "live.snr": "Signal/noise, 24 h",
+    "live.pdp": "Power-delay profile, 24 h",
+    "live.f_axis": "f, MHz",
+    "live.t_axis": "t, ms",
+    "live.js.connecting": "connecting",
+    "live.js.live": "live",
+    "live.js.lost": "reconnecting",
+    "live.js.waiting": "waiting",
+    "live.js.capturing": "capturing",
+    "live.js.writing": "writing products",
+    "live.js.clean": "clean",
+    "live.js.degraded": "degraded",
+    "live.js.failed": "failed",
 }
 
 #: Noun forms selected by `i18n.plural`. English needs two; the `few`/`many`

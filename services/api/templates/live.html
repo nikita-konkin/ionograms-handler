@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}{{ t('live.title') }} · {{ station }}{% endblock %}
+{% block body %}
+{# The live view of one station: what it is sounding now, column by column,
+   and the last day of summaries. Everything below the header is drawn by the
+   script from the station's event stream -- see `services/api/live.py` for
+   what arrives and `architecture.md` sec. 5.5 for why it arrives this way. #}
+<style>
+  .live-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.6rem 1.2rem; }
+  .live-head h2 { margin:0; }
+  .live-head .clock { margin-left:auto; color:var(--accent); font-size:1.1rem; font-variant-numeric:tabular-nums; }
+  .pill.on { color:var(--ok); border-color:var(--ok); }
+  .pill.off { color:var(--warn); border-color:var(--warn); }
+  .tx-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.3rem 1rem; margin-bottom:.6rem; }
+  .tx-head h2 { margin:0; }
+  .tx-head .meta { color:var(--dim); font-variant-numeric:tabular-nums; }
+  .tx-head .state { margin-left:auto; }
+  .state.capturing, .state.clean { color:var(--ok); border-color:var(--ok); }
+  .state.writing, .state.degraded { color:var(--warn); border-color:var(--warn); }
+  .state.failed { color:var(--fail); border-color:var(--fail); }
+  .bar { height:5px; border-radius:3px; background:var(--line); overflow:hidden; margin-bottom:.8rem; }
+  .bar > i { display:block; height:100%; width:0; background:var(--accent); }
+  .plots { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:.6rem 1rem; }
+  .plots figure { margin:0; min-width:0; }
+  .plots figcaption { display:flex; justify-content:space-between; gap:.6rem; color:var(--dim); flex-wrap:wrap; }
+  .plots figcaption b { color:var(--ink); font-weight:normal; }
+  .plots canvas { display:block; width:100%; aspect-ratio:16 / 10; }
+  .readout { color:var(--dim); min-height:1.5em; font-variant-numeric:tabular-nums; }
+  #log { margin:0; max-height:14rem; overflow:auto; color:var(--dim); white-space:pre; }
+  @media (max-width: 760px) { .plots { grid-template-columns:minmax(0, 1fr); } }
+</style>
+
+<div class="panel live-head" data-station="{{ station }}">
+  <h2>{{ t('live.title') }}</h2>
+  <form method="get" action="/ui/live">
+    <label>{{ t('live.station') }}
+      <select name="station" onchange="this.form.submit()">
+        {% for s in stations %}<option value="{{ s }}" {% if s == station %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        {% if station and station not in stations %}<option value="{{ station }}" selected>{{ station }}</option>{% endif %}
+      </select>
+    </label>
+  </form>
+  <span id="conn" class="pill off"></span>
+  <span class="clock"><span id="clock">--:--:--</span> UTC</span>
+</div>
+
+<p id="empty" class="note">{{ t('live.empty') }}</p>
+<div id="txs"></div>
+
+<div class="panel">
+  <h2>{{ t('live.log') }}</h2>
+  <pre id="log"></pre>
+</div>
+
+<script>
+(() => {
+  const STATION = {{ station|tojson }};
+  const TEXT = {
+    ctrl: {{ t('live.ctrl')|tojson }}, current: {{ t('live.current')|tojson }},
+    snr: {{ t('live.snr')|tojson }}, pdp: {{ t('live.pdp')|tojson }},
+    f: {{ t('live.f_axis')|tojson }}, t: {{ t('live.t_axis')|tojson }},
+  };
+  const STATE = {
+    waiting: T('live.js.waiting'), capturing: T('live.js.capturing'),
+    writing: T('live.js.writing'), clean: T('live.js.clean'),
+    degraded: T('live.js.degraded'), failed: T('live.js.failed'),
+  };
+  const ENDINGS = new Set(['writing', 'clean', 'degraded', 'failed']);
+  const complete = pic => Object.keys(pic.cells).length >= pic.head.columns;
+  const DB_STEP = 0.25, DAY = 288, REP_S = 300;
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  const M = {l: 42, r: 46, t: 6, b: 30};
+  const txs = {};
+  const pad = n => String(n).padStart(2, '0');
+  const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  const MAPS = {
+    iono: {scale: [6, 36], stops: [[0, '#0000ff'], [.1667, '#00ffff'], [.3333, '#adff2f'], [.5, '#ffff00'], [.6667, '#ff9f00'], [.8333, '#ff0000'], [1, '#ff0000']], floor: true},
+    snr: {scale: [0, 40], stops: [[0, '#9b00c8'], [.14, '#1010ff'], [.3, '#00a8ff'], [.45, '#00c84a'], [.62, '#e8ff00'], [.8, '#ff9a00'], [1, '#ff1a00']]},
+    pdp: {scale: [0, 25], stops: [[0, '#5a12b0'], [.2, '#1d2be0'], [.42, '#00b8c8'], [.6, '#33cc33'], [.78, '#ffe600'], [.9, '#ff8a00'], [1, '#ff1a00']]},
+  };
+  const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  for (const map of Object.values(MAPS)) {
+    map.lut = new Uint8ClampedArray(256 * 4);
+    for (let i = 0; i < 256; i++) {
+      const x = i / 255; let j = 1;
+      while (j < map.stops.length - 1 && x > map.stops[j][0]) j++;
+      const [x0, c0] = map.stops[j - 1], [x1, c1] = map.stops[j], a = rgb(c0), b = rgb(c1);
+      const u = Math.max(0, Math.min(1, (x - x0) / ((x1 - x0) || 1)));
+      for (let k = 0; k < 3; k++) map.lut[i * 4 + k] = a[k] + (b[k] - a[k]) * u;
+      map.lut[i * 4 + 3] = 255;
+    }
+  }
+  function paint(img, at, db, map) {
+    const [lo, hi] = map.scale, d = img.data;
+    if (map.floor && db < lo) { d[at + 3] = 0; return; }
+    const i = Math.max(0, Math.min(255, Math.round((db - lo) / (hi - lo) * 255))) * 4;
+    d[at] = map.lut[i]; d[at + 1] = map.lut[i + 1]; d[at + 2] = map.lut[i + 2]; d[at + 3] = 255;
+  }
+  const bytes = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
+
+  function picture(head) {
+    const cv = document.createElement('canvas');
+    cv.width = head.columns; cv.height = head.rows;
+    const ctx = cv.getContext('2d');
+    return {head, cv, ctx, img: ctx.createImageData(head.columns, head.rows), filled: 0, cells: {}};
+  }
+  function put(pic, index, text, flush = true) {
+    const cells = bytes(text), {columns, rows} = pic.head;
+    pic.cells[index] = cells;
+    for (let r = 0; r < rows; r++) paint(pic.img, ((rows - 1 - r) * columns + index) * 4, cells[r] * DB_STEP, MAPS.iono);
+    pic.filled = Math.max(pic.filled, index + 1);
+    if (flush) pic.ctx.putImageData(pic.img, 0, 0);
+  }
+  function fromView(view) {
+    const pic = picture(view);
+    for (const [index, text] of Object.entries(view.data || {})) put(pic, +index, text, false);
+    pic.ctx.putImageData(pic.img, 0, 0);
+    return pic;
+  }
+
+  function panel(tx) {
+    if (txs[tx]) return txs[tx];
+    document.getElementById('empty').hidden = true;
+    const el = document.createElement('section');
+    el.className = 'panel';
+    el.innerHTML = '<div class="tx-head"><h2></h2><span class="meta"></span><span class="pill state"></span></div>'
+      + '<div class="bar"><i></i></div><div class="plots">'
+      + ['ctrl', 'current', 'snr', 'pdp'].map(k => '<figure><figcaption><b></b><span data-m="' + k + '"></span></figcaption>'
+        + '<canvas data-p="' + k + '"></canvas><div class="readout" data-r="' + k + '"></div></figure>').join('') + '</div>';
+    el.querySelector('h2').textContent = tx;
+    ['ctrl', 'current', 'snr', 'pdp'].forEach(k => { el.querySelector('[data-p="' + k + '"]').previousElementSibling.querySelector('b').textContent = TEXT[k]; });
+    document.getElementById('txs').appendChild(el);
+    const one = {el, cur: null, last: null, daily: [], status: null};
+    txs[tx] = one;
+    hover(one);
+    return one;
+  }
+
+  function apply(kind, ev) {
+    if (kind === 'snapshot') {
+      for (const tx of Object.keys(txs)) { txs[tx].el.remove(); delete txs[tx]; }
+      document.getElementById('empty').hidden = false;
+      for (const [tx, view] of Object.entries(ev.last)) panel(tx).last = fromView(view);
+      for (const [tx, view] of Object.entries(ev.current)) panel(tx).cur = fromView(view);
+      for (const [tx, list] of Object.entries(ev.daily)) panel(tx).daily = list.slice(-DAY);
+      for (const [tx, st] of Object.entries(ev.status)) panel(tx).status = st;
+      return;
+    }
+    const one = panel(ev.tx);
+    if (kind === 'status') {
+      one.status = ev;
+      say('STATUS ' + ev.tx + ' ' + ev.state + ['progress', 'overflows', 't0', 't1', 'got'].filter(k => k in ev).map(k => ' ' + ev[k]).join(''));
+    } else if (kind === 'sounding') {
+      if (one.cur && one.cur.head.t0 === ev.t0) return;
+      if (one.cur && !complete(one.cur)) one.last = one.cur;
+      one.cur = picture(ev);
+    } else if (kind === 'column') {
+      if (!one.cur || one.cur.head.t0 !== ev.t0) return;
+      put(one.cur, ev.index, ev.db);
+      if (complete(one.cur)) one.last = one.cur;
+    } else if (kind === 'summary') {
+      one.daily.push(ev);
+      if (one.daily.length > DAY) one.daily.shift();
+    }
+  }
+
+  function axis(head) {
+    const f0 = head.f_lo_mhz, f1 = f0 + head.columns * head.f_step_mhz;
+    const t0 = head.range_lo_km / head.km_per_ms, t1 = (head.range_lo_km + head.rows * head.range_step_km) / head.km_per_ms;
+    return {f: [f0, f1], t: [t0, t1]};
+  }
+  function ticks(a, b, n) {
+    const raw = (b - a) / n, p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(s => s * p).find(s => s >= raw) || p * 10, out = [];
+    for (let v = Math.ceil(a / step) * step; v <= b + 1e-9; v += step) out.push(+v.toFixed(6));
+    return out;
+  }
+  function plot(cv, o) {
+    const W = cv.clientWidth, H = cv.clientHeight;
+    if (cv.width !== Math.round(W * DPR) || cv.height !== Math.round(H * DPR)) { cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); }
+    const g = cv.getContext('2d');
+    g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, W, H);
+    const pl = M.l, pt = M.t, pw = W - M.l - M.r, ph = H - M.t - M.b;
+    cv._g = null;
+    if (pw < 20 || ph < 20) return;
+    g.fillStyle = css('--bg'); g.fillRect(pl, pt, pw, ph);
+    if (!o) return;
+    if (o.img) { g.imageSmoothingEnabled = false; g.drawImage(o.img, pl, pt, pw, ph); }
+    const X = v => pl + (v - o.x[0]) / (o.x[1] - o.x[0]) * pw, Y = v => pt + ph - (v - o.y[0]) / (o.y[1] - o.y[0]) * ph;
+    g.font = '11px ' + getComputedStyle(document.body).fontFamily; g.textBaseline = 'middle';
+    g.strokeStyle = css('--line'); g.fillStyle = css('--dim'); g.lineWidth = 1;
+    g.textAlign = 'center';
+    (o.xticks || ticks(o.x[0], o.x[1], Math.max(2, Math.floor(pw / 70)))).forEach(v => { const x = Math.round(X(v)) + .5; g.globalAlpha = .5; g.beginPath(); g.moveTo(x, pt); g.lineTo(x, pt + ph); g.stroke(); g.globalAlpha = 1; g.fillText(o.xfmt ? o.xfmt(v) : String(v), x, pt + ph + 10); });
+    g.textAlign = 'right';
+    ticks(o.y[0], o.y[1], Math.max(2, Math.floor(ph / 34))).forEach(v => { const y = Math.round(Y(v)) + .5; g.globalAlpha = .5; g.beginPath(); g.moveTo(pl, y); g.lineTo(pl + pw, y); g.stroke(); g.globalAlpha = 1; g.fillText(String(v), pl - 5, y); });
+    g.fillText(o.xlab, pl + pw, pt + ph + 23);
+    g.save(); g.translate(11, pt + ph / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.fillText(o.ylab, 0, 0); g.restore();
+    if (o.cursor != null) { const x = Math.round(X(o.cursor)) + .5; g.strokeStyle = css('--accent'); g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, pt); g.lineTo(x, pt + ph); g.stroke(); }
+    const map = MAPS[o.map], [lo, hi] = map.scale, cb = pl + pw + 8;
+    for (let i = 0; i < ph; i++) { const k = Math.round((1 - i / ph) * 255) * 4; g.fillStyle = 'rgb(' + map.lut[k] + ',' + map.lut[k + 1] + ',' + map.lut[k + 2] + ')'; g.fillRect(cb, pt + i, 8, 1.5); }
+    g.fillStyle = css('--dim'); g.textAlign = 'left';
+    ticks(lo, hi, 4).forEach(v => g.fillText(String(v), cb + 11, pt + ph - (v - lo) / (hi - lo) * ph));
+    cv._g = {pl, pt, pw, ph, x: o.x, y: o.y, read: o.read};
+  }
+
+  function dailyImage(one, key, size, map) {
+    const cv = document.createElement('canvas'); cv.width = DAY; cv.height = size;
+    const ctx = cv.getContext('2d'), img = ctx.createImageData(DAY, size);
+    const end = one.daily[one.daily.length - 1].t0;
+    for (const s of one.daily) {
+      const x = DAY - 1 - Math.round((end - s.t0) / REP_S);
+      if (x < 0 || !s[key]) continue;
+      const cells = bytes(s[key]);
+      for (let r = 0; r < Math.min(size, cells.length); r++) paint(img, ((size - 1 - r) * DAY + x) * 4, cells[r] * DB_STEP, map);
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv;
+  }
+
+  function draw() {
+    for (const one of Object.values(txs)) {
+      const st = one.status, head = (one.cur || one.last || {}).head;
+      const pill = one.el.querySelector('.state');
+      pill.className = 'pill state ' + (st ? st.state : '');
+      pill.textContent = st ? (STATE[st.state] || st.state) : '';
+      one.el.querySelector('.bar > i').style.width = st && st.state === 'capturing' ? (100 * (st.progress || 0)) + '%' : st && ENDINGS.has(st.state) ? '100%' : '0';
+      one.el.querySelector('.meta').textContent = head
+        ? head.f_lo_mhz.toFixed(1) + '–' + (head.f_lo_mhz + head.columns * head.f_step_mhz).toFixed(1) + ' MHz · '
+          + (st && st.state === 'waiting' && st.t0 ? hms(st.t0) + '–' + hms(st.t1) : hms(head.t0)) + ' UTC'
+        : '';
+      const meta = (k, text) => { one.el.querySelector('[data-m="' + k + '"]').textContent = text; };
+      for (const [k, pic] of [['ctrl', one.last], ['current', one.cur || one.last]]) {
+        const cv = one.el.querySelector('[data-p="' + k + '"]');
+        if (!pic) { plot(cv, null); meta(k, ''); continue; }
+        const a = axis(pic.head), live = k === 'current' && pic.filled < pic.head.columns;
+        meta(k, live ? pic.filled + '/' + pic.head.columns : hms(pic.head.t0) + ' UTC');
+        plot(cv, {img: pic.cv, x: a.f, y: a.t, xlab: TEXT.f, ylab: TEXT.t, map: 'iono',
+                  cursor: live ? a.f[0] + pic.filled * pic.head.f_step_mhz : null,
+                  read: (fx, ty) => { const c = Math.floor((fx - a.f[0]) / pic.head.f_step_mhz), r = Math.floor((ty - a.t[0]) * pic.head.km_per_ms / pic.head.range_step_km), cells = pic.cells[c];
+                    return 'f ' + fx.toFixed(2) + ' MHz · t ' + ty.toFixed(3) + ' ms · ' + (cells ? (cells[r] * DB_STEP).toFixed(1) + ' dB' : '—'); }});
+      }
+      for (const k of ['snr', 'pdp']) {
+        const cv = one.el.querySelector('[data-p="' + k + '"]');
+        if (!one.daily.length || !head) { plot(cv, null); meta(k, ''); continue; }
+        const a = axis(head), end = one.daily[one.daily.length - 1].t0 / 3600, start = end - (DAY - 1) * REP_S / 3600;
+        const fit = Math.floor((cv.clientWidth - M.l - M.r) / 52), step = [3, 6, 12].find(s => 24 / s <= fit) || 12, xt = [];
+        for (let h = Math.ceil(start / step) * step; h <= end; h += step) xt.push(h);
+        meta(k, 'dB');
+        plot(cv, {img: dailyImage(one, k, k === 'snr' ? head.columns : head.rows, MAPS[k]), x: [start, end], y: k === 'snr' ? a.f : a.t,
+                  xticks: xt, xfmt: h => pad(((Math.round(h) % 24) + 24) % 24) + ':00', xlab: 'UTC', ylab: k === 'snr' ? TEXT.f : TEXT.t, map: k,
+                  read: (hx, y) => hms(hx * 3600) + ' UTC · ' + (k === 'snr' ? 'f ' + y.toFixed(2) + ' MHz' : 't ' + y.toFixed(3) + ' ms')});
+      }
+    }
+  }
+
+  function hover(one) {
+    one.el.querySelectorAll('canvas').forEach(cv => {
+      const out = cv.nextElementSibling;
+      cv.addEventListener('mousemove', e => {
+        const g = cv._g; if (!g || !g.read) return;
+        const r = cv.getBoundingClientRect(), mx = e.clientX - r.left - g.pl, my = e.clientY - r.top - g.pt;
+        out.textContent = mx < 0 || my < 0 || mx > g.pw || my > g.ph ? '' : g.read(g.x[0] + mx / g.pw * (g.x[1] - g.x[0]), g.y[1] - my / g.ph * (g.y[1] - g.y[0]));
+      });
+      cv.addEventListener('mouseleave', () => { out.textContent = ''; });
+    });
+  }
+
+  const lines = [];
+  function say(text) {
+    lines.push(hms(Date.now() / 1000) + '  ' + text);
+    if (lines.length > 200) lines.shift();
+    const log = document.getElementById('log'), end = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+    log.textContent = lines.join('\n');
+    if (end) log.scrollTop = log.scrollHeight;
+  }
+
+  let dirty = true;
+  const redraw = () => { if (!dirty) return; dirty = false; requestAnimationFrame(draw); };
+  function connection(on) {
+    const el = document.getElementById('conn');
+    el.className = 'pill ' + (on ? 'on' : 'off');
+    el.textContent = on === null ? T('live.js.connecting') : on ? T('live.js.live') : T('live.js.lost');
+  }
+
+  async function listen() {
+    let wait = 1;
+    for (;;) {
+      connection(null);
+      try {
+        const tok = sessionStorage.getItem('tok') || '';
+        const r = await fetch('/stations/' + encodeURIComponent(STATION) + '/live/events', tok ? {headers: {Authorization: 'Bearer ' + tok}} : {});
+        if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+        connection(true); wait = 1;
+        const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buf = '';
+        for (;;) {
+          const {value, done} = await reader.read();
+          if (done) break;
+          buf += value;
+          let cut;
+          while ((cut = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, cut); buf = buf.slice(cut + 2);
+            let kind = 'message', data = '';
+            for (const line of block.split('\n')) {
+              if (line.startsWith('event: ')) kind = line.slice(7);
+              else if (line.startsWith('data: ')) data += line.slice(6);
+            }
+            if (data) { apply(kind, JSON.parse(data)); dirty = true; }
+          }
+          redraw();
+        }
+      } catch (e) {
+        say(String(e.message || e));
+      }
+      connection(false);
+      await new Promise(done => setTimeout(done, wait * 1000));
+      wait = Math.min(30, wait * 2);
+    }
+  }
+
+  setInterval(() => { document.getElementById('clock').textContent = hms(Date.now() / 1000); }, 1000);
+  window.addEventListener('resize', () => { dirty = true; redraw(); });
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { dirty = true; redraw(); });
+  if (STATION) listen(); else connection(false);
+})();
+</script>
+{% endblock %}

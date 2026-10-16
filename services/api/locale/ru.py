@@ -27,6 +27,7 @@ MESSAGES: dict[str, str] = {
     "chrome.language": "Язык",
 
     "nav.console": "Консоль",
+    "nav.live": "Эфир",
     "nav.series": "Ряды",
     "nav.soundings": "Зондирования",
     "nav.sources": "Источники",
@@ -1436,6 +1437,26 @@ MESSAGES: dict[str, str] = {
         "долетело: она должна сдвинуться в новое окно в течение одного цикла "
         "зондирования.",
 
+    # -- live ----------------------------------------------------------
+    "live.title": "Зондирование в эфире",
+    "live.station": "Станция",
+    "live.empty": "От этой станции пока ничего не пришло. Картина появится, как только её агент пришлёт зондирование.",
+    "live.log": "Поток событий",
+    "live.ctrl": "Контрольная ионограмма",
+    "live.current": "Текущая ионограмма",
+    "live.snr": "Сигнал/шум за сутки",
+    "live.pdp": "ПЗМ за сутки",
+    "live.f_axis": "f, МГц",
+    "live.t_axis": "t, мс",
+    "live.js.connecting": "подключение",
+    "live.js.live": "в эфире",
+    "live.js.lost": "переподключение",
+    "live.js.waiting": "ожидание",
+    "live.js.capturing": "приём",
+    "live.js.writing": "запись продуктов",
+    "live.js.clean": "готово",
+    "live.js.degraded": "с потерями",
+    "live.js.failed": "сбой",
 }
 
 #: Three forms, not two: 1 зондирование, 2 зондирования, 5 зондирований.

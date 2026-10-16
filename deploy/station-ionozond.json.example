@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Agent config for a laptop running the ionozond sounder (Yoshkar-Ola).",
+    "Copy it to the station and point AGENT_CONFIG at it, as for DOB:",
+    "",
+    "  scp deploy/station-ionozond.json.example samsung@<laptop>:~/agent.json",
+    "  # edit server_url and live_dir, then:",
+    "  AGENT_TOKEN=... AGENT_CONFIG=~/agent.json python3 -m services.agent live",
+    "",
+    "live_dir is the sounder's data_dir: the folder holding one",
+    "YYYY.MM.DD folder per day of captures. live_unit is the unit whose",
+    "journal carries its STATUS lines. Install services/agent/systemd/",
+    "chirp-live.service to run the feed for good; it reads the token from",
+    "/etc/default/chirp-agent like the health agent does.",
+    "",
+    "The feed needs numpy, which the sounder's own python3 already has."
+  ],
+  "station": "yoshkar-ola",
+  "server_url": "http://<server>:8000",
+  "token": "",
+  "live_dir": "/home/samsung/ionozond_data",
+  "live_unit": "ionozond-sounder.service",
+  "live_window": 16384,
+  "live_interval_s": 2.0
+}
