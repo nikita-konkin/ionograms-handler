@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from . import client, control, health, logs, preview
+from . import client, control, health, ionozond, logs, preview
 from .config import StationConfig
 
 
@@ -66,7 +66,14 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     if name in ("restart", "restart_sounding"):
         return [control.restart(config, no_block=config.no_block)]
 
+    if name == "set_ionozond":
+        return ionozond.apply(config, params)
+
     if name in ("set_config", "configure", "set_params"):
+        if health.runs_ionozond(config):
+            return [control.CommandResult(
+                name, False, "this station runs ionozond, whose schedule and "
+                             "parameters change with set_ionozond, not set_config")]
         changes = params.get("changes", params)
         restart = bool(params.get("restart", True))
         try:
@@ -93,7 +100,8 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
 
     return [control.CommandResult(
         name, False, f"unknown command {command.name!r}; this agent "
-                     f"understands start, stop, restart, set_config, logs, triage")]
+                     f"understands start, stop, restart, set_config, set_ionozond, "
+                     f"logs, triage")]
 
 
 def _push_previews(config: StationConfig, scan, state: PreviewState,

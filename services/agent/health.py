@@ -1393,6 +1393,8 @@ class HealthReport:
     timestamp: float
     metrics: list[Metric] = field(default_factory=list)
     agent_version: str = "0.1.0"
+    #: On an ionozond station, the schedule in force (``ionozond.state``).
+    sounder_config: dict | None = None
 
     @property
     def in_startup_grace(self) -> bool:
@@ -1424,13 +1426,16 @@ class HealthReport:
         return not self.failing
 
     def to_json(self, indent: int | None = None) -> str:
-        return json.dumps({
+        document = {
             "station": self.station,
             "timestamp": self.timestamp,
             "agent_version": self.agent_version,
             "healthy": self.healthy,
             "metrics": [asdict(m) for m in self.metrics],
-        }, indent=indent, sort_keys=False)
+        }
+        if self.sounder_config is not None:
+            document["sounder_config"] = self.sounder_config
+        return json.dumps(document, indent=indent, sort_keys=False)
 
     _grace: float = 300.0
 
@@ -1471,5 +1476,9 @@ def collect(config: StationConfig | None = None, *,
 
     report = HealthReport(station=config.station, timestamp=time.time(),
                           metrics=metrics)
+    if ionozond:
+        from . import ionozond as sounder
+
+        report.sounder_config = sounder.state(config)
     report._grace = config.startup_grace_s
     return report

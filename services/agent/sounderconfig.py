@@ -67,6 +67,19 @@ def parsed(text: str) -> dict:
     too: ``rx_dechirp.main`` exits on it, and systemd would restart the sounder
     into the same exit every minute.
     """
+    config = literals(text)
+    if not [s for thread in config["sounders"] for s in thread]:
+        raise UnreadableConfig("chirp_config.py would have no active transmitter, "
+                               "and the sounder exits at start without one")
+    return config
+
+
+def literals(text: str) -> dict:
+    """The literals the sounder reads from ``text``, even with no active transmitter.
+
+    For a file as it already is on the station, where an empty schedule is a
+    fact to report rather than a change to refuse.
+    """
     if not text.strip():
         raise UnreadableConfig("chirp_config.py would be empty")
     try:
@@ -90,9 +103,6 @@ def parsed(text: str) -> dict:
             "chirp_config.py would define 'sounders' as something other than a "
             "literal list" if "sounders" in opaque
             else "chirp_config.py would have no 'sounders'")
-    if not [s for thread in config["sounders"] for s in thread]:
-        raise UnreadableConfig("chirp_config.py would have no active transmitter, "
-                               "and the sounder exits at start without one")
     return config
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from services.agent.qsettings import Ini
-from services.agent.sounderconfig import UnreadableConfig, build, parsed
+from services.agent.sounderconfig import UnreadableConfig, build, literals, parsed
 
 DATA = Path(__file__).resolve().parent / "ionozond"
 
@@ -83,3 +83,14 @@ def test_sounders_that_are_not_a_literal_are_unreadable_to_the_sounder():
 def test_an_empty_file_is_unreadable_to_the_sounder():
     with pytest.raises(UnreadableConfig):
         parsed(" \n")
+
+
+def test_the_literals_of_a_file_without_an_active_station_can_still_be_read():
+    schedule = golden("fixture_schedule.ini").with_value("cyprus1", "active", "false")
+    config = literals(build(schedule, golden("fixture_config.ini")))
+    assert config["sounders"] == [], "a file without an active station was not read"
+
+
+def test_the_literals_of_a_file_python_cannot_parse_are_unreadable():
+    with pytest.raises(UnreadableConfig):
+        literals("tb = \nsounders = []\n")
