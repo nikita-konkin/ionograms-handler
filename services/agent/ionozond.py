@@ -278,6 +278,18 @@ def flat(read: dict) -> dict:
     return out
 
 
+def diff(before: dict, after: dict) -> dict:
+    """Every key whose value differs between two flat dictionaries, from and to."""
+    return {key: {"from": before.get(key), "to": after.get(key)}
+            for key in sorted(set(before) | set(after))
+            if before.get(key) != after.get(key)}
+
+
+def edits(current: dict, wanted: dict) -> dict:
+    """What an edit changes in the editable document, one line per field."""
+    return diff(_flattened(current), _flattened(wanted))
+
+
 def fingerprint(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                                      default=str).encode("utf-8")).hexdigest()
@@ -394,13 +406,13 @@ def _plan(config: StationConfig, files: Files, params: dict) -> Plan:
         before = {}
     journal = {
         "station": config.station, "config_path": str(files.sounder),
-        "edits": _diff(_flattened(current), _flattened(wanted)),
+        "edits": edits(current, wanted),
         "document_hash": fingerprint(wanted), "config_hash": fingerprint(after),
         "warnings": [_line(i) for i in found if i.level == schedulecheck.WARNING],
         "applied_at": time.time(), "requires_restart": True,
     }
     if fingerprint(after) != fingerprint(before):
-        journal["changes"] = _diff(before, after)
+        journal["changes"] = diff(before, after)
     return Plan(files, (schedule.data, read.data, raw),
                 (schedule_after.data, read_after.data, generated.encode("utf-8")),
                 journal)
@@ -597,12 +609,6 @@ def _flattened(wanted: dict) -> dict:
            for key, value in fields.items()}
     out.update(wanted["general"])
     return out
-
-
-def _diff(before: dict, after: dict) -> dict:
-    return {key: {"from": before.get(key), "to": after.get(key)}
-            for key in sorted(set(before) | set(after))
-            if before.get(key) != after.get(key)}
 
 
 def _line(issue: schedulecheck.Issue) -> str:

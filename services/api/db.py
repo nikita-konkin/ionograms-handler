@@ -139,6 +139,7 @@ ADDED_COLUMNS = (
     ("infer_job", "worker", "TEXT"),
     ("sounding", "chirp_rate", "REAL"),
     ("forecast", "input_measured", "REAL"),
+    ("config_epoch", "config_hash", "TEXT"),
 )
 
 
@@ -464,7 +465,8 @@ def _journal_epoch(conn: sqlite3.Connection, command_id: str,
         return record_epoch(
             conn, row["station"], journal["changes"],
             changed_by=row["issued_by"],
-            note=f"command {command_id}: {result.get('detail', '')}".strip())
+            note=f"command {command_id}: {result.get('detail', '')}".strip(),
+            config_hash=journal.get("config_hash"))
     return None
 
 
@@ -589,7 +591,8 @@ def open_epoch(conn: sqlite3.Connection, station: str) -> dict | None:
 
 def record_epoch(conn: sqlite3.Connection, station: str, changes: dict,
                  changed_by: str | None = None,
-                 note: str | None = None) -> int:
+                 note: str | None = None,
+                 config_hash: str | None = None) -> int:
     """Close the open epoch and start a new one.
 
     Called when a parameter change is *acknowledged*, not when it is queued.
@@ -600,14 +603,19 @@ def record_epoch(conn: sqlite3.Connection, station: str, changes: dict,
     Closing first is what keeps the table readable as intervals. Two open
     epochs for one station is not a worse row, it is a station with two
     current configurations, and every attribution after it is a guess.
+
+    ``config_hash`` is the fingerprint of what the sounder reads under the new
+    epoch, where the station reports one. It is how a change made on the
+    station is told apart from one an acknowledgement has already recorded.
     """
     now = utcnow()
     conn.execute("UPDATE config_epoch SET valid_to = ?"
                  " WHERE station = ? AND valid_to IS NULL", (now, station))
     cur = conn.execute(
         "INSERT INTO config_epoch (station, valid_from, valid_to, changes,"
-        " changed_by, note) VALUES (?, ?, NULL, ?, ?, ?)",
-        (station, now, json.dumps(changes, sort_keys=True), changed_by, note))
+        " changed_by, note, config_hash) VALUES (?, ?, NULL, ?, ?, ?, ?)",
+        (station, now, json.dumps(changes, sort_keys=True), changed_by, note,
+         config_hash))
     conn.commit()
     return int(cur.lastrowid)
 

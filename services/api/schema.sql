@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS config_epoch (
     valid_to    TEXT,
     changes     TEXT,                     -- JSON: what moved, from and to
     changed_by  TEXT,
-    note        TEXT
+    note        TEXT,
+    config_hash TEXT                      -- what the sounder read, where known
 );
 
 CREATE INDEX IF NOT EXISTS config_epoch_station ON config_epoch(station, valid_from);

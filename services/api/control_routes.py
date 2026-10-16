@@ -59,15 +59,16 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, sta
 
 from muf.stations import default_registry
 
-from . import acquisition, auth, db
+from . import acquisition, auth, db, sounder
 from .auth import Capability, Principal, require
 from .read_routes import _age_seconds
 
 router = APIRouter(tags=["control"])
 
 #: What the web interface may queue. A strict subset of the agent's own
-#: ``ALLOWED_VERBS`` plus ``set_config``; see the module docstring.
-QUEUEABLE = ("start", "stop", "restart", "set_config")
+#: ``ALLOWED_VERBS`` plus ``set_config``, and ``set_ionozond`` for the ionozond
+#: schedule (``services/api/sounder.py``); see the module docstring.
+QUEUEABLE = ("start", "stop", "restart", "set_config", "set_ionozond")
 
 #: Settings ``set_config`` may carry from the web. A strict subset of
 #: ``control.EDITABLE`` plus ``control.COMPOSITE`` -- see the module docstring
@@ -108,6 +109,8 @@ def enqueue(station: str, request: Request,
     params = payload.get("params") or {}
     if name == "set_config":
         params = _vet_config(params)
+    if name == "set_ionozond":
+        _vet_ionozond(request.app.state.db, station, params)
 
     command_id = db.enqueue(request.app.state.db, station, name,
                             params=params,
@@ -119,6 +122,23 @@ def enqueue(station: str, request: Request,
                             issued_by=who.name)
     return {"ok": True, "id": command_id, "name": name, "station": station,
             "note": "queued; the station will collect it on its next pull"}
+
+
+def _vet_ionozond(conn: sqlite3.Connection, station: str, params: dict) -> None:
+    """Check a ``set_ionozond`` against the station's last report before it is queued.
+
+    The agent runs the same check again against the files as they are when
+    the command arrives. Warnings do not stop it here: the panel has already
+    shown them and asked once more.
+    """
+    try:
+        result = sounder.checked(conn, station, params)
+    except sounder.Unvetted as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    if not result["ok"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "refused: " + "; ".join(
+            ("%s: %s" % (i["station"], i["text"])) if i["station"] else i["text"]
+            for i in result["issues"] if i["level"] == "error"))
 
 
 def _vet_config(params: dict) -> dict:
