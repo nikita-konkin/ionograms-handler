@@ -366,21 +366,64 @@ def _state(config: StationConfig) -> dict:
     mismatch = _mismatch(read, files)
     if mismatch:
         out["problems"].append(mismatch)
-    out.update(_timing(config, files))
+    since = health._show(config.target, "ActiveEnterTimestampMonotonic")[1]
+    out.update(_timing(config, files, since))
+    try:
+        out["pending"] = _pending(config, "%s:%s" % (_boot(), since), out)
+    except OSError as exc:
+        out["pending"] = None
+        out["problems"].append("could not keep %s: %s" % (config.sounder_seen, exc))
     return out
 
 
-def _timing(config: StationConfig, files: Files) -> dict:
-    written = files.sounder.stat().st_mtime
-    active = health._show(config.target, "ActiveState")[1] or None
-    since = health._show(config.target, "ActiveEnterTimestampMonotonic")[1]
+def _timing(config: StationConfig, files: Files, since: str) -> dict:
     loaded = (time.time() - (time.monotonic() - int(since) / 1e6)
               if since.isdigit() and int(since) > 0 else None)
-    return {"written_at": written, "loaded_at": loaded, "active_state": active,
-            "pending": bool(active == "active" and loaded is not None
-                            and written > loaded),
+    return {"written_at": files.sounder.stat().st_mtime, "loaded_at": loaded,
+            "active_state": health._show(config.target, "ActiveState")[1] or None,
             "timeout_stop_s": _seconds(
                 health._show(config.target, "TimeoutStopUSec")[1])}
+
+
+def _pending(config: StationConfig, run: str, report: dict) -> bool | None:
+    """Whether the running sounder read other than ``chirp_config.py`` now says.
+
+    Not the file's date: the console rewrites the file, unchanged, every time
+    one of its dialogs closes with OK, and a rolled-back edit rewrites it too.
+    So the agent keeps the file's fingerprint as it first sees it during each
+    run of the sounder, and compares with that. A file first seen only after it
+    changed during the run leaves nothing to compare with, and the answer is
+    None rather than a guess either way.
+    """
+    if (report["active_state"] != "active" or report["loaded_at"] is None
+            or report["sounder_hash"] is None):
+        return False
+    path = Path(os.path.expanduser(str(config.sounder_seen)))
+    seen = _seen(path)
+    if seen.get("run") == run:
+        return report["sounder_hash"] != seen.get("hash")
+    if report["written_at"] > report["loaded_at"]:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    control._atomic_write_bytes(path, json.dumps(
+        {"run": run, "hash": report["sounder_hash"]}).encode("utf-8"))
+    return False
+
+
+def _seen(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _boot() -> str:
+    """This boot's id: a start time counted from boot repeats across boots."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(
+            encoding="ascii").strip()
+    except OSError:
+        return ""
 
 
 def _plan(config: StationConfig, files: Files, params: dict) -> Plan:

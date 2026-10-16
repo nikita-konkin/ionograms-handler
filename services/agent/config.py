@@ -220,6 +220,10 @@ class StationConfig:
     #: Where the Qt console keeps ``schedule.ini`` and ``config.ini``; ``~`` is
     #: the agent's own home, which on the laptop is the console's.
     console_settings: Path = Path("~/.config/dsChirp")
+    #: Where the agent keeps the fingerprint of ``chirp_config.py`` as it first
+    #: saw it during the sounder's current run. The file's date cannot say what
+    #: the sounder loaded: the console rewrites it, unchanged, on every dialog OK.
+    sounder_seen: Path = Path("~/.cache/ionograms-handler/sounder-seen.json")
 
     #: How long after boot to suppress alerts. A station coming up looks
     #: exactly like a station that has died.
@@ -300,7 +304,8 @@ class StationConfig:
     def from_dict(cls, data: dict) -> StationConfig:
         known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
         for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir",
-                    "live_dir", "sounder_defaults", "console_settings"):
+                    "live_dir", "sounder_defaults", "console_settings",
+                    "sounder_seen"):
             if key in known:
                 known[key] = Path(known[key])
         for key in ("units", "optional_units", "preview_size"):
