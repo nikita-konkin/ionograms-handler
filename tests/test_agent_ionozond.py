@@ -44,7 +44,8 @@ def laptop(tmp_path) -> StationConfig:
     return StationConfig(station="yoshkar-ola", chirp_config=tmp_path / "absent.ini",
                          live_dir=tmp_path, target="ionozond-sounder.service",
                          units=("ionozond-sounder.service",), no_block=True,
-                         sounder_defaults=defaults, console_settings=console)
+                         sounder_defaults=defaults, console_settings=console,
+                         sounder_seen=tmp_path / "seen.json")
 
 
 def regenerate(console: Path, sounder: Path) -> None:
@@ -154,12 +155,49 @@ def test_switching_a_transmitter_on_changes_the_sounder_hash(tmp_path, monkeypat
         "switching a transmitter on left the sounder hash alone")
 
 
-def test_a_file_written_after_the_sounder_started_is_pending(tmp_path, monkeypatch):
+def test_a_file_rewritten_unchanged_after_the_sounder_started_is_not_pending(
+        tmp_path, monkeypatch):
+    config = laptop(tmp_path)
+    systemd(monkeypatch, ago=600)
+    ionozond.state(config)
+    os.utime(config.live_dir / "chirp_config.py", None)
+    assert ionozond.state(config)["pending"] is False, (
+        "a file the console rewrote unchanged was pending")
+
+
+def test_a_file_changed_after_the_sounder_started_is_pending(tmp_path, monkeypatch):
+    config = laptop(tmp_path)
+    systemd(monkeypatch, ago=600)
+    ionozond.state(config)
+    ini = config.console_settings / "schedule.ini"
+    ini.write_bytes(Ini.read(ini).with_value("norilsk", "active", "true").data)
+    regenerate(config.console_settings, config.live_dir / "chirp_config.py")
+    assert ionozond.state(config)["pending"] is True, (
+        "a file changed after the sounder started was not pending")
+
+
+def test_a_restart_takes_up_a_pending_change(tmp_path, monkeypatch):
+    config = laptop(tmp_path)
+    systemd(monkeypatch, ago=600)
+    ionozond.state(config)
+    ini = config.console_settings / "schedule.ini"
+    ini.write_bytes(Ini.read(ini).with_value("norilsk", "active", "true").data)
+    regenerate(config.console_settings, config.live_dir / "chirp_config.py")
+    then = time.time() - random.uniform(20, 300)
+    os.utime(config.live_dir / "chirp_config.py", (then, then))
+    systemd(monkeypatch, ago=random.uniform(1, 15))
+    assert ionozond.state(config)["pending"] is False, (
+        "a change stayed pending after the sounder restarted on it")
+
+
+def test_a_file_first_seen_newer_than_the_sounder_is_of_unknown_standing(
+        tmp_path, monkeypatch):
     config = laptop(tmp_path)
     os.utime(config.live_dir / "chirp_config.py", None)
     systemd(monkeypatch, ago=600)
-    assert ionozond.state(config)["pending"] is True, (
-        "a file written after the sounder started was not pending")
+    assert ionozond.state(config)["pending"] is None, (
+        "a file first seen after the sounder started was called pending or not "
+        "without anything to compare it with")
 
 
 def test_a_file_older_than_the_running_sounder_is_not_pending(tmp_path, monkeypatch):

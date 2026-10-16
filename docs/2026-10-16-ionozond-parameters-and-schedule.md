@@ -365,10 +365,19 @@ its reports then gains `sounder_config`:
 - `drift` is true when the two halves disagree: the ini files no longer
   generate what `chirp_config.py` holds. The page says so and locks the
   editor until the console regenerates the file.
-- `pending` is true while the unit is active and `chirp_config.py`'s mtime is
-  newer than its `ActiveEnterTimestamp`: the change is written but not yet
-  taken up. This is the console's "every file agreed, the process did not"
-  trap, made visible.
+- `pending` is true while the unit is active and `chirp_config.py` no longer
+  holds what the sounder loaded: the change is written but not yet taken up.
+  This is the console's "every file agreed, the process did not" trap, made
+  visible. The file's date cannot tell, because the Qt console rewrites
+  `chirp_config.py`, unchanged, on every dialog OK. So the agent keeps, in
+  `sounder_seen` (`~/.cache/ionograms-handler/sounder-seen.json`), the
+  `sounder_hash` it first sees during the sounder's current run, keyed by the
+  boot id and `ActiveEnterTimestampMonotonic`. `pending` is then:
+  - true when the current `sounder_hash` differs from that record;
+  - false when it matches, or when the unit is not active;
+  - null when the agent first meets a run whose file is already newer than
+    the unit's start. It cannot know what that run loaded, so the page shows
+    no banner, and the next restart starts a record it can trust.
 - `problems` names what could not be read, for example a `chirp_config.py`
   the sounder could not load, or a `config_file` in `config.ini` that is not
   the file the unit reads.
@@ -477,7 +486,10 @@ opens a `config_epoch` too.
   `chirp_config.py`.
 - The restart goes out as `--no-block try-restart`. A refused restart
   restores the files and journals nothing.
-- `pending` follows the file's mtime against `ActiveEnterTimestamp`.
+- `pending` follows what the sounder loaded, not the file's date: a file
+  rewritten unchanged during the run is not pending, a changed one is, a
+  restart takes the change up, and a file first seen newer than the run is
+  of unknown standing.
 - The server opens an epoch on a hash change no command explains, and not on
   one a command does.
 - `obey` with a fake `systemctl` returns within one live interval.
