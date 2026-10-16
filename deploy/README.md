@@ -544,16 +544,23 @@ polkit.addRule(function(action, subject) {
 });
 ```
 
-polkit rereads its rules when the file changes. Prove the grant without
-touching the radio, and prove it is narrow; the first must exit 0, the second
-must not:
+The folder is readable only by root and polkit, so write the file with `sudo`.
+polkit rereads its rules when the file changes; `journalctl -u polkit` says
+"Finished loading" or names the error, since a broken rule fails as silently as
+an old polkit.
+
+Prove the grant without touching the radio, and prove it is narrow. Run both
+from a shell logged in as `samsung`: polkit refuses `--detail` from anyone but
+root, so root asks, and `$$` -- expanded by that shell before `sudo` runs --
+makes `samsung` the subject. The first must print `exit 0`; the second must
+not, and prints `exit 2` with "Authorization requires authentication":
 
 ```bash
-sudo -u samsung sh -c 'pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ionozond-sounder.service --detail verb stop'
+sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ionozond-sounder.service --detail verb stop; echo "exit $?"
 ```
 
 ```bash
-sudo -u samsung sh -c 'pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ssh.service --detail verb stop'
+sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ssh.service --detail verb stop; echo "exit $?"
 ```
 
 A `sudoers` line naming the three commands would be as narrow, but the agent
