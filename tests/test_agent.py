@@ -1351,20 +1351,23 @@ def serving(commands, acked):
 
 
 def test_a_command_pass_acknowledges_every_command_it_pulls():
-    commands = [{"id": "c%d" % n, "name": random.choice(["start", "stop", "restart"]), "params": {}}
-                for n in range(random.randint(1, 6))]
+    commands = [{"id": "c%d" % n, "name": random.choice(["start", "stop", "restart"]),
+                 "params": {}} for n in range(random.randint(1, 6))]
     acked = []
     runner.obey(StationConfig(station="TST", target="", server_url="http://server/api"),
                 runner.PassResult(), opener=serving(commands, acked))
-    assert acked == [c["id"] for c in commands], "a command pass left a pulled command unacknowledged"
+    assert acked == [c["id"] for c in commands], (
+        "a command pass left a pulled command unacknowledged")
 
 
 def test_a_command_pass_counts_the_commands_it_ran():
-    commands = [{"id": "c%d" % n, "name": "stop", "params": {}} for n in range(random.randint(1, 6))]
+    commands = [{"id": "c%d" % n, "name": "stop", "params": {}}
+                for n in range(random.randint(1, 6))]
     result = runner.PassResult()
     runner.obey(StationConfig(station="TST", target="", server_url="http://server/api"),
                 result, opener=serving(commands, []))
-    assert result.commands_run == len(commands), "a command pass did not count the commands it ran"
+    assert result.commands_run == len(commands), (
+        "a command pass did not count the commands it ran")
 
 
 def test_a_command_pass_against_an_unreachable_server_says_so():
@@ -1373,8 +1376,10 @@ def test_a_command_pass_against_an_unreachable_server_says_so():
     def refuse(request, timeout=None):
         raise OSError("connection refused")
 
-    runner.obey(StationConfig(station="TST", target="", server_url="http://server/api"), result, opener=refuse)
-    assert any(e.startswith("pull:") for e in result.errors), "a command pass hid that the server could not be reached"
+    runner.obey(StationConfig(station="TST", target="", server_url="http://server/api"),
+                result, opener=refuse)
+    assert any(e.startswith("pull:") for e in result.errors), (
+        "a command pass hid that the server could not be reached")
 
 
 # --------------------------------------------------------------------------
@@ -2509,176 +2514,234 @@ def test_the_agent_stays_within_python_38():
 # --------------------------------------------------------------------------
 
 def ionozond(tmp_path) -> StationConfig:
-    return StationConfig(station="YOS", chirp_config=tmp_path / "absent.ini", live_dir=tmp_path,
-                         target="ionozond-sounder.service", units=("ionozond-sounder.service",))
+    return StationConfig(station="YOS", chirp_config=tmp_path / "absent.ini",
+                         live_dir=tmp_path, target="ionozond-sounder.service",
+                         units=("ionozond-sounder.service",))
 
 
 def product(tmp_path, age, kind):
     start = time.time() - age
     day = tmp_path / time.strftime("%Y.%m.%d", time.gmtime(start))
     day.mkdir(exist_ok=True)
-    name = ("cyprus1_%s.lfp" % time.strftime("%Y%m%d_%H%M%S", time.gmtime(start)) if kind == "lfp"
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime(start))
+    name = ("cyprus1_%s.lfp" % stamp if kind == "lfp"
             else "lfm_ionogram-cyprus1-yoshkar-ola-ch0-000-%.2f.h5" % start)
     (day / name).write_bytes(os.urandom(random.randint(1, 64)))
 
 
 def journal(monkeypatch, *texts):
-    lines = ["%s yos-laptop bash[%d]: %s" % (time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime(time.time() - 10 * (len(texts) - n))),
-                                              random.randint(100, 9999), text) for n, text in enumerate(texts)]
-    monkeypatch.setattr(logs, "read_unit", lambda unit, **kw: logs.LogChunk(unit, lines=lines))
+    lines = ["%s yos-laptop bash[%d]: %s" % (
+        time.strftime("%Y-%m-%dT%H:%M:%S+0000",
+                      time.gmtime(time.time() - 10 * (len(texts) - n))),
+        random.randint(100, 9999), text) for n, text in enumerate(texts)]
+    monkeypatch.setattr(logs, "read_unit",
+                        lambda unit, **kw: logs.LogChunk(unit, lines=lines))
 
 
 def answering(monkeypatch):
-    monkeypatch.setattr(health, "_run", lambda args, timeout=5.0: (0, "active") if args[:2] == ["systemctl", "is-active"]
-                        else (127, "%s: not found" % args[0]))
+    monkeypatch.setattr(health, "_run", lambda args, timeout=5.0: (
+        (0, "active") if args[:2] == ["systemctl", "is-active"]
+        else (127, "%s: not found" % args[0])))
 
 
 def test_an_ionozond_station_ages_its_newest_sidecar_by_its_name(tmp_path):
     age = random.uniform(60, 1500)
     product(tmp_path, age, "lfp")
-    assert abs(health.newest_sidecar_age(ionozond(tmp_path)).value - age) < 5, "the sidecar's age was not read from its name"
+    assert abs(health.newest_sidecar_age(ionozond(tmp_path)).value - age) < 5, (
+        "the sidecar's age was not read from its name")
 
 
 def test_a_sidecar_older_than_the_threshold_is_a_failure(tmp_path):
     product(tmp_path, health.STALE_PRODUCT_S + random.uniform(60, 9000), "lfp")
-    assert health.newest_sidecar_age(ionozond(tmp_path)).ok is False, "a stale sidecar was not a failure"
+    assert health.newest_sidecar_age(ionozond(tmp_path)).ok is False, (
+        "a stale sidecar was not a failure")
 
 
 def test_an_ionozond_station_with_no_sidecar_at_all_is_failing(tmp_path):
     product(tmp_path, random.uniform(60, 600), "h5")
-    assert health.newest_sidecar_age(ionozond(tmp_path)).ok is False, "a station writing no sidecars was not failing"
+    assert health.newest_sidecar_age(ionozond(tmp_path)).ok is False, (
+        "a station writing no sidecars was not failing")
 
 
 def test_an_ionozond_station_ages_its_newest_archive_by_its_epoch(tmp_path):
     age = random.uniform(60, 1500)
     product(tmp_path, age, "h5")
-    assert abs(health.newest_archive_age(ionozond(tmp_path)).value - age) < 5, "the archive's age was not read from its epoch"
+    assert abs(health.newest_archive_age(ionozond(tmp_path)).value - age) < 5, (
+        "the archive's age was not read from its epoch")
 
 
 def test_an_archive_older_than_the_threshold_is_a_failure(tmp_path):
     product(tmp_path, health.STALE_PRODUCT_S + random.uniform(60, 9000), "h5")
-    assert health.newest_archive_age(ionozond(tmp_path)).ok is False, "a stale archive was not a failure"
+    assert health.newest_archive_age(ionozond(tmp_path)).ok is False, (
+        "a stale archive was not a failure")
 
 
 def test_the_sounder_state_is_its_last_status_line(tmp_path, monkeypatch):
     state = random.choice(["waiting", "capturing", "writing", "clean", "degraded"])
-    journal(monkeypatch, "STATUS cyprus1 failed 0 0", "  sidecar cyprus1_20261016_143000.lfp 213 kB", "STATUS cyprus1 %s" % state)
-    assert health.sounder_status(ionozond(tmp_path))[0].value == state, "the sounder state was not its last STATUS line"
+    journal(monkeypatch, "STATUS cyprus1 failed 0 0",
+            "  sidecar cyprus1_20261016_143000.lfp 213 kB",
+            "STATUS cyprus1 %s" % state)
+    assert health.sounder_status(ionozond(tmp_path))[0].value == state, (
+        "the sounder state was not its last STATUS line")
 
 
 def test_a_failed_sounding_is_a_failure(tmp_path, monkeypatch):
-    journal(monkeypatch, "STATUS cyprus1 clean 0 %d" % random.randint(9000000, 10000000), "STATUS cyprus1 failed 0 0")
-    assert health.sounder_status(ionozond(tmp_path))[0].ok is False, "a failed sounding was not a failure"
+    journal(monkeypatch,
+            "STATUS cyprus1 clean 0 %d" % random.randint(9000000, 10000000),
+            "STATUS cyprus1 failed 0 0")
+    assert health.sounder_status(ionozond(tmp_path))[0].ok is False, (
+        "a failed sounding was not a failure")
 
 
 def test_a_degraded_sounding_is_not_a_failure(tmp_path, monkeypatch):
-    journal(monkeypatch, "STATUS cyprus1 degraded %d %d" % (random.randint(6, 400), random.randint(9000000, 10000000)))
-    assert health.sounder_status(ionozond(tmp_path))[0].ok is True, "a degraded sounding, which the sounder keeps, was called a failure"
+    journal(monkeypatch, "STATUS cyprus1 degraded %d %d"
+            % (random.randint(6, 400), random.randint(9000000, 10000000)))
+    assert health.sounder_status(ionozond(tmp_path))[0].ok is True, (
+        "a degraded sounding, which the sounder keeps, was called a failure")
 
 
 def test_the_overflow_count_is_the_last_one_the_sounder_gave(tmp_path, monkeypatch):
     count = random.randint(1, 400)
-    journal(monkeypatch, "STATUS cyprus1 clean 0 10000000", "STATUS cyprus1 capturing 0.5000 %d" % count, "STATUS cyprus1 writing")
-    assert health.sounder_status(ionozond(tmp_path))[1].value == count, "the overflow count was not the last one the sounder gave"
+    journal(monkeypatch, "STATUS cyprus1 clean 0 10000000",
+            "STATUS cyprus1 capturing 0.5000 %d" % count, "STATUS cyprus1 writing")
+    assert health.sounder_status(ionozond(tmp_path))[1].value == count, (
+        "the overflow count was not the last one the sounder gave")
 
 
 def test_a_sounding_without_overflows_reports_them_fine(tmp_path, monkeypatch):
-    journal(monkeypatch, "STATUS cyprus1 clean 0 %d" % random.randint(9000000, 10000000))
-    assert health.sounder_status(ionozond(tmp_path))[1].ok is True, "a sounding without overflows was not reported fine"
+    journal(monkeypatch,
+            "STATUS cyprus1 clean 0 %d" % random.randint(9000000, 10000000))
+    assert health.sounder_status(ionozond(tmp_path))[1].ok is True, (
+        "a sounding without overflows was not reported fine")
 
 
 def test_a_sounding_with_overflows_is_not_reported_fine(tmp_path, monkeypatch):
-    journal(monkeypatch, "STATUS cyprus1 capturing 0.%04d %d" % (random.randint(0, 9999), random.randint(1, 400)))
-    assert health.sounder_status(ionozond(tmp_path))[1].ok is not True, "a sounding that lost samples was reported fine"
+    journal(monkeypatch, "STATUS cyprus1 capturing 0.%04d %d"
+            % (random.randint(0, 9999), random.randint(1, 400)))
+    assert health.sounder_status(ionozond(tmp_path))[1].ok is not True, (
+        "a sounding that lost samples was reported fine")
 
 
-def test_a_journal_without_a_status_line_leaves_the_state_unknown(tmp_path, monkeypatch):
+def test_a_journal_with_no_status_line_leaves_the_state_unknown(tmp_path, monkeypatch):
     journal(monkeypatch, "  sidecar cyprus1_20261016_143000.lfp 213 kB")
-    assert health.sounder_status(ionozond(tmp_path))[0].ok is None, "a journal without a STATUS line produced a verdict"
+    assert health.sounder_status(ionozond(tmp_path))[0].ok is None, (
+        "a journal without a STATUS line produced a verdict")
 
 
 def test_an_unreadable_journal_leaves_the_state_unknown(tmp_path, monkeypatch):
-    monkeypatch.setattr(logs, "read_unit", lambda unit, **kw: logs.LogChunk(unit, error="journalctl: not found"))
-    assert health.sounder_status(ionozond(tmp_path))[0].ok is None, "an unreadable journal produced a verdict"
+    monkeypatch.setattr(logs, "read_unit", lambda unit, **kw: logs.LogChunk(
+        unit, error="journalctl: not found"))
+    assert health.sounder_status(ionozond(tmp_path))[0].ok is None, (
+        "an unreadable journal produced a verdict")
 
 
 def test_an_ionozond_station_measures_free_space_where_its_sounder_writes(tmp_path):
-    assert health.product_root(ionozond(tmp_path)) == tmp_path, "an ionozond station measured somewhere other than its live_dir"
+    assert health.product_root(ionozond(tmp_path)) == tmp_path, (
+        "an ionozond station measured somewhere other than its live_dir")
 
 
 def test_an_ionozond_station_reports_its_sounder_state(tmp_path, monkeypatch):
     answering(monkeypatch)
     journal(monkeypatch, "STATUS cyprus1 writing")
-    assert "sounder_state" in [m.name for m in health.collect(ionozond(tmp_path)).metrics], "an ionozond station did not report its sounder state"
+    names = [m.name for m in health.collect(ionozond(tmp_path)).metrics]
+    assert "sounder_state" in names, (
+        "an ionozond station did not report its sounder state")
 
 
 def test_an_ionozond_station_reports_no_chirpsounder2_band(tmp_path, monkeypatch):
     answering(monkeypatch)
     journal(monkeypatch, "STATUS cyprus1 writing")
-    assert "center_freq_hz" not in [m.name for m in health.collect(ionozond(tmp_path)).metrics], "an ionozond station reported a chirpsounder2 band"
+    names = [m.name for m in health.collect(ionozond(tmp_path)).metrics]
+    assert "center_freq_hz" not in names, (
+        "an ionozond station reported a chirpsounder2 band")
 
 
-def test_nothing_fails_on_an_ionozond_station_for_want_of_a_chirpsounder2_ini(tmp_path, monkeypatch):
+def test_a_missing_chirpsounder2_ini_fails_nothing_on_ionozond(tmp_path, monkeypatch):
     answering(monkeypatch)
     product(tmp_path, random.uniform(60, 600), "lfp")
     product(tmp_path, random.uniform(60, 600), "h5")
-    journal(monkeypatch, "STATUS cyprus1 clean 0 %d" % random.randint(9000000, 10000000))
-    assert [m.name for m in health.collect(ionozond(tmp_path)).failing if not m.name.startswith("disk_")] == [], "a healthy ionozond station reported a failure"
+    journal(monkeypatch,
+            "STATUS cyprus1 clean 0 %d" % random.randint(9000000, 10000000))
+    failing = [m.name for m in health.collect(ionozond(tmp_path)).failing
+               if not m.name.startswith("disk_")]
+    assert failing == [], "a healthy ionozond station reported a failure"
 
 
 def test_a_chirpsounder2_station_still_reports_its_band(station):
-    assert "center_freq_hz" in [m.name for m in health.collect(station, include_epoch=False).metrics], "a chirpsounder2 station lost its band"
+    names = [m.name for m in health.collect(station, include_epoch=False).metrics]
+    assert "center_freq_hz" in names, "a chirpsounder2 station lost its band"
 
 
 def example(name) -> StationConfig:
-    return StationConfig.from_json(Path(__file__).resolve().parent.parent / "deploy" / name)
+    return StationConfig.from_json(
+        Path(__file__).resolve().parent.parent / "deploy" / name)
 
 
 def test_the_ionozond_example_starts_and_stops_its_sounder():
-    assert example("station-ionozond.json.example").target == "ionozond-sounder.service", "the ionozond example points Start and Stop somewhere other than its sounder"
+    target = example("station-ionozond.json.example").target
+    assert target == "ionozond-sounder.service", (
+        "the ionozond example points Start and Stop somewhere other than its sounder")
 
 
 def test_the_ionozond_example_watches_its_sounder_unit():
-    assert example("station-ionozond.json.example").units == ("ionozond-sounder.service",), "the ionozond example does not watch exactly its sounder's unit"
+    units = example("station-ionozond.json.example").units
+    assert units == ("ionozond-sounder.service",), (
+        "the ionozond example does not watch exactly its sounder's unit")
 
 
 def test_the_ionozond_example_is_read_as_an_ionozond_station():
-    assert health.runs_ionozond(example("station-ionozond.json.example")), "the ionozond example is not read as an ionozond station"
+    assert health.runs_ionozond(example("station-ionozond.json.example")), (
+        "the ionozond example is not read as an ionozond station")
 
 
 def test_the_ionozond_example_watches_no_chirpsounder2_archive_job():
-    assert example("station-ionozond.json.example").job_units == [], "the ionozond example watches chirpsounder2's archive jobs, which its laptop does not have"
+    assert example("station-ionozond.json.example").job_units == [], (
+        "the ionozond example watches chirpsounder2's archive jobs, which its laptop "
+        "does not have")
 
 
 def test_the_dob_example_is_not_read_as_an_ionozond_station():
-    assert not health.runs_ionozond(example("station-dob.json.example")), "the DOB example is read as an ionozond station"
+    assert not health.runs_ionozond(example("station-dob.json.example")), (
+        "the DOB example is read as an ionozond station")
 
 
-def test_a_command_to_a_station_that_does_not_wait_is_queued_without_waiting(station, monkeypatch):
+def test_a_station_that_does_not_wait_queues_its_command(station, monkeypatch):
     seen = {}
-    monkeypatch.setattr(control, "systemctl", lambda v, t, **kw: seen.update(kw) or control.CommandResult(v, True))
-    runner._dispatch(replace(station, no_block=True), client.Command("1", random.choice(["start", "stop", "restart"]), {}))
-    assert seen.get("no_block") is True, "a station that does not wait had its command waited for"
+    monkeypatch.setattr(control, "systemctl", lambda v, t, **kw: (
+        seen.update(kw) or control.CommandResult(v, True)))
+    verb = random.choice(["start", "stop", "restart"])
+    runner._dispatch(replace(station, no_block=True), client.Command("1", verb, {}))
+    assert seen.get("no_block") is True, (
+        "a station that does not wait had its command waited for")
 
 
 def test_a_command_to_a_station_that_waits_is_waited_for(station, monkeypatch):
     seen = {}
-    monkeypatch.setattr(control, "systemctl", lambda v, t, **kw: seen.update(kw) or control.CommandResult(v, True))
-    runner._dispatch(station, client.Command("1", random.choice(["start", "stop", "restart"]), {}))
-    assert seen.get("no_block") is False, "a station that waits had its command queued without waiting"
+    monkeypatch.setattr(control, "systemctl", lambda v, t, **kw: (
+        seen.update(kw) or control.CommandResult(v, True)))
+    verb = random.choice(["start", "stop", "restart"])
+    runner._dispatch(station, client.Command("1", verb, {}))
+    assert seen.get("no_block") is False, (
+        "a station that waits had its command queued without waiting")
 
 
 def test_systemctl_without_waiting_asks_for_no_block():
     seen = []
     verb = random.choice(["start", "stop", "restart"])
-    control.systemctl(verb, "ionozond-sounder.service", no_block=True, runner=lambda args, **kw: seen.append(args) or subprocess.CompletedProcess(args, 0, "", ""))
-    assert seen == [["systemctl", "--no-block", verb, "ionozond-sounder.service"]], "systemctl was not asked to skip waiting"
+    control.systemctl(verb, "ionozond-sounder.service", no_block=True,
+                      runner=lambda args, **kw: seen.append(args)
+                      or subprocess.CompletedProcess(args, 0, "", ""))
+    assert seen == [["systemctl", "--no-block", verb, "ionozond-sounder.service"]], (
+        "systemctl was not asked to skip waiting")
 
 
 def test_a_request_not_waited_for_says_its_outcome_comes_later():
-    result = control.systemctl("stop", "ionozond-sounder.service", no_block=True, runner=fake_runner())
-    assert "--no-block" in result.detail, "a stop not waited for read as one that had finished"
+    result = control.systemctl("stop", "ionozond-sounder.service", no_block=True,
+                               runner=fake_runner())
+    assert "--no-block" in result.detail, (
+        "a stop not waited for read as one that had finished")
 
 
 def test_the_ionozond_example_does_not_wait_for_its_sounder_to_stop():
-    assert example("station-ionozond.json.example").no_block is True, "the ionozond example waits out a stop the agent gives up on after 120 s"
+    assert example("station-ionozond.json.example").no_block is True, (
+        "the ionozond example waits out a stop the agent gives up on after 120 s")

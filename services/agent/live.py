@@ -1,10 +1,11 @@
 """The live view, from the station's side: a sounding as it is captured.
 
-An ionozond sounder writes each capture to ``<live_dir>/<YYYY.MM.DD>/<tx>_<date>_<time>.lfs``
-while it records, and prints ``STATUS`` lines to the journal as it goes. This
-process follows both and posts what it sees to the server every couple of
-seconds (``architecture.md`` sec. 5.5): the station still never listens, and
-the sounder is not changed to make it possible.
+An ionozond sounder writes each capture to
+``<live_dir>/<YYYY.MM.DD>/<tx>_<date>_<time>.lfs`` while it records, and prints
+``STATUS`` lines to the journal as it goes. This process follows both and posts
+what it sees to the server every couple of seconds (``architecture.md``
+sec. 5.5): the station still never listens, and the sounder is not changed to
+make it possible.
 
 A column is one FFT window of the capture formed exactly as ``muf.spectro``
 forms it, gated to the ranges an echo on the path can occupy, folded to at
@@ -33,7 +34,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 
@@ -63,7 +64,7 @@ FRESH_S = 60.0
 ROWS = 400
 
 
-def newest(root: Path) -> Optional[Path]:
+def newest(root: Path) -> Path | None:
     """The capture written last, from the two newest day folders only.
 
     Two, not one, so the first capture after midnight is found while the last
@@ -130,7 +131,8 @@ class Capture:
         for k in range(ready - self.done):
             row = spectro.column(iq[k * self.window:(k + 1) * self.window], self.taper,
                                  self.cal.n_range_full, self.cal.gate_idx)
-            db = np.maximum.reduceat(spectro.to_db(row)[::-1] - spectro.NOISE_FLOOR_DB, self.blocks)
+            db = np.maximum.reduceat(spectro.to_db(row)[::-1] - spectro.NOISE_FLOOR_DB,
+                                     self.blocks)
             cells = np.clip(np.round(db / DB_STEP), 0, 255).astype(np.uint8)
             out.append({"type": "column", "tx": self.head["tx"], "t0": self.head["t0"],
                         "index": self.done + k,
@@ -154,7 +156,8 @@ class Journal:
         self._start()
 
     def lines(self) -> list:
-        if self.process is not None and self.process.poll() is not None and self.queue.empty():
+        if (self.process is not None and self.process.poll() is not None
+                and self.queue.empty()):
             self._start()
         out = []
         while not self.queue.empty():
@@ -164,7 +167,8 @@ class Journal:
     def _start(self) -> None:
         try:
             self.process = subprocess.Popen(self.command, stdout=subprocess.PIPE,
-                                            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                            stderr=subprocess.DEVNULL, text=True,
+                                            bufsize=1)
         except OSError:
             self.process = None
             return
@@ -180,13 +184,13 @@ class Feed:
 
     def __init__(self, config: StationConfig, lines: Callable[[], list],
                  post: Callable[[list], object], clock: Callable[[], float] = time.time,
-                 obey: Optional[Callable[[], None]] = None):
+                 obey: Callable[[], None] | None = None):
         self.config = config
         self.lines = lines
         self.post = post
         self.clock = clock
         self.obey = obey or (lambda: _obey(config))
-        self.capture: Optional[Capture] = None
+        self.capture: Capture | None = None
         self.backlog: collections.deque = collections.deque(maxlen=BACKLOG)
 
     def step(self) -> None:
@@ -211,8 +215,8 @@ class Feed:
             reply = self.post(batch)
         except client.TransportError as exc:
             refused = exc.status is not None and 400 <= exc.status < 500
-            print("live: %s%s" % (exc, ", dropping %d events" % len(batch) if refused else ""),
-                  file=sys.stderr, flush=True)
+            print("live: %s%s" % (exc, ", dropping %d events" % len(batch)
+                                  if refused else ""), file=sys.stderr, flush=True)
             if refused:
                 self.backlog.clear()
             return
@@ -242,7 +246,8 @@ class Feed:
         if found.ends < self.clock() - FRESH_S:
             found.done = found.head["columns"]
         self.capture = found
-        kept = [e for e in self.backlog if e["type"] != "column" or e["t0"] == found.head["t0"]]
+        kept = [e for e in self.backlog
+                if e["type"] != "column" or e["t0"] == found.head["t0"]]
         self.backlog.clear()
         self.backlog.extend(kept)
 
@@ -257,7 +262,8 @@ def _obey(config: StationConfig) -> None:
 
 def run(config: StationConfig, sleep: Callable[[float], None] = time.sleep) -> None:
     """Follow the sounder for as long as the process lives."""
-    journal = Journal(["journalctl", "-u", config.live_unit, "-f", "-n", "0", "-o", "cat"])
+    journal = Journal(["journalctl", "-u", config.live_unit, "-f", "-n", "0",
+                       "-o", "cat"])
     feed = Feed(config, journal.lines, lambda events: client.push_live(config, events))
     while True:
         started = time.time()

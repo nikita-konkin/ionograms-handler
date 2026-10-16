@@ -35,8 +35,9 @@ async def push_live(station: str, request: Request,
     if not isinstance(events, list):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "expected {\"events\": [...]}")
     if len(events) > MAX_EVENTS:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE,
-                            f"{len(events)} events in one batch, more than {MAX_EVENTS}")
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"{len(events)} events in one batch, more than {MAX_EVENTS}")
     try:
         accepted = request.app.state.live.publish(station, events)
     except live.Refused as exc:

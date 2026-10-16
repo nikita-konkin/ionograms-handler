@@ -1425,7 +1425,9 @@ MESSAGES: dict[str, str] = {
     # -- live ----------------------------------------------------------
     "live.title": "Live sounding",
     "live.station": "Station",
-    "live.empty": "Nothing has arrived from this station yet. The view fills in as soon as its agent sends a sounding.",
+    "live.empty":
+        "Nothing has arrived from this station yet. The view fills in as soon as its "
+        "agent sends a sounding.",
     "live.log": "Event stream",
     "live.ctrl": "Last complete ionogram",
     "live.current": "Current ionogram",
@@ -1444,10 +1446,17 @@ MESSAGES: dict[str, str] = {
     "live.js.failed": "failed",
     "live.start": "Start",
     "live.stop": "Stop",
-    "live.js.stop_confirm": "Stop the sounder on {station}? It finishes the sounding in progress and then stops, and nothing is recorded until it is started again. Press Stop again to confirm.",
+    "live.js.stop_confirm":
+        "Stop the sounder on {station}? It finishes the sounding in progress and then "
+        "stops, and nothing is recorded until it is started again. Press Stop again to "
+        "confirm.",
     "live.js.stop_cancelled": "Stop was not confirmed, so nothing was sent.",
-    "live.js.queued": "{name} queued as {id}. The station collects it within seconds while its live feed runs, and within a minute otherwise.",
-    "live.js.stop_queued": "Stop queued as {id}. The sounder finishes the sounding in progress and then stops, which can take up to five minutes; its status line here says when.",
+    "live.js.queued":
+        "{name} queued as {id}. The station collects it within seconds while its live "
+        "feed runs, and within a minute otherwise.",
+    "live.js.stop_queued":
+        "Stop queued as {id}. The sounder finishes the sounding in progress and then "
+        "stops, which can take up to five minutes; its status line here says when.",
     "live.js.refused": "Refused: {detail}",
 }
 

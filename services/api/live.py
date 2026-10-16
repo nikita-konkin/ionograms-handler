@@ -156,7 +156,8 @@ class Hub:
 
 
 def frame(kind: str, payload: dict) -> str:
-    return "event: %s\ndata: %s\n\n" % (kind, json.dumps(payload, separators=(",", ":")))
+    body = json.dumps(payload, separators=(",", ":"))
+    return "event: %s\ndata: %s\n\n" % (kind, body)
 
 
 async def stream(hub: Hub, station: str,
@@ -202,17 +203,18 @@ def _apply(board: Board, event: dict) -> list[dict]:
         return [event]
     held = board.current.get(tx)
     if event["type"] == "sounding":
-        if any(s is not None and s.head["t0"] == event["t0"] for s in (held, board.last.get(tx))):
+        if any(s is not None and s.head["t0"] == event["t0"]
+               for s in (held, board.last.get(tx))):
             return []
         out = _finish(board, tx)
         board.current[tx] = Sounding(event)
-        return out + [event]
+        return [*out, event]
     if held is None or held.head["t0"] != event["t0"]:
         return []
     held.data[str(event["index"])] = event["db"]
     if len(held.data) < held.head["columns"]:
         return [event]
-    return [event] + _finish(board, tx)
+    return [event, *_finish(board, tx)]
 
 
 def _finish(board: Board, tx: str) -> list[dict]:
@@ -274,10 +276,11 @@ def _sounding(n: int, event: dict) -> dict:
         head[name] = _finite(n, event, name)
     for name, top in (("columns", MAX_COLUMNS), ("rows", MAX_ROWS)):
         value = event.get(name)
-        if not isinstance(value, int) or isinstance(value, bool) or not 0 < value <= top:
+        if (not isinstance(value, int) or isinstance(value, bool)
+                or not 0 < value <= top):
             raise Refused("sounding %d has `%s` outside 1..%d" % (n, name, top))
         head[name] = value
-    if head["f_step_mhz"] <= 0 or head["range_step_km"] <= 0 or head["km_per_ms"] <= 0:
+    if min(head["f_step_mhz"], head["range_step_km"], head["km_per_ms"]) <= 0:
         raise Refused("sounding %d has a step that is not positive" % n)
     return head
 
@@ -286,8 +289,10 @@ def _column(n: int, event: dict, head: dict | None) -> dict:
     if head is None:
         raise Refused("column %d belongs to no sounding this station has sent" % n)
     index = event.get("index")
-    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < head["columns"]:
-        raise Refused("column %d has index %r outside 0..%d" % (n, index, head["columns"] - 1))
+    if (not isinstance(index, int) or isinstance(index, bool)
+            or not 0 <= index < head["columns"]):
+        raise Refused("column %d has index %r outside 0..%d"
+                      % (n, index, head["columns"] - 1))
     text = event.get("db")
     try:
         size = len(base64.b64decode(text, validate=True))
@@ -295,15 +300,18 @@ def _column(n: int, event: dict, head: dict | None) -> dict:
         raise Refused("column %d has `db` that is not base64" % n) from None
     if size != head["rows"]:
         raise Refused("column %d has %d cells for %d rows" % (n, size, head["rows"]))
-    return {"type": "column", "tx": event["tx"], "t0": head["t0"], "index": index, "db": text}
+    return {"type": "column", "tx": event["tx"], "t0": head["t0"], "index": index,
+            "db": text}
 
 
 def _finite(n: int, event: dict, name: str) -> float:
     value = event.get(name)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value)):
         raise Refused("event %d has `%s` that is not a finite number" % (n, name))
     return value
 
 
 def _pack(values: np.ndarray) -> str:
-    return base64.b64encode(np.clip(np.round(values), 0, 255).astype(np.uint8).tobytes()).decode("ascii")
+    cells = np.clip(np.round(values), 0, 255).astype(np.uint8)
+    return base64.b64encode(cells.tobytes()).decode("ascii")
