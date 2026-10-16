@@ -82,6 +82,36 @@ KNOWN_SIGNATURES = (
 #: because the number is the diagnosis.
 PC_TIME_LINE = re.compile(r"PC time now:\s*(\d+)")
 
+#: An ionozond sounder's progress line, ``STATUS <tx> <state> [numbers]``.
+#: Here rather than in ``live``, which needs numpy, because the health agent
+#: reads the same lines for the sounder's own verdict and must stay stdlib-only.
+STATUS = re.compile(r"^STATUS\s+(\S+)\s+([a-z]+)((?:\s+\S+)*)\s*$")
+
+#: What the numbers after each state mean, as ``rx_dechirp.py`` prints them.
+FIELDS = {
+    "waiting": ("t0", "t1"),
+    "capturing": ("progress", "overflows"),
+    "clean": ("overflows", "got"),
+    "degraded": ("overflows", "got"),
+    "failed": ("overflows", "got"),
+}
+
+
+def status_event(line: str) -> dict | None:
+    """One ``STATUS`` line as an event, or None for any other line."""
+    match = STATUS.match(line.strip())
+    if match is None:
+        return None
+    tx, state, rest = match.groups()
+    event = {"type": "status", "tx": tx, "state": state}
+    for name, text in zip(FIELDS.get(state, ()), rest.split()):
+        try:
+            value = float(text)
+        except ValueError:
+            continue
+        event[name] = int(value) if value.is_integer() and name != "progress" else value
+    return event
+
 
 @dataclass
 class LogChunk:

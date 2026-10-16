@@ -171,6 +171,17 @@ class StationConfig:
     job_units: tuple[str, ...] = DEFAULT_JOB_UNITS
 
     target: str = DEFAULT_TARGET
+    #: Ask systemd to start, stop or restart ``target`` and acknowledge at once,
+    #: rather than waiting for the job to finish (``systemctl --no-block``).
+    #: For a target whose stop outlasts the agent's 120 s wait: the ionozond
+    #: sounder finishes the sounding in progress on SIGTERM, which its unit
+    #: allows 300 s for, so a waited stop was cut off and acknowledged as a
+    #: failure systemd then went on to complete. The outcome arrives with the
+    #: next status line and health pass instead. Off by default: DOB's stop is
+    #: quick, and an acknowledgement saying the recorder really stopped is
+    #: worth waiting for. Parameter changes always wait, since they edit the
+    #: ini between the stop and the start.
+    no_block: bool = False
 
     #: Where health goes. Push, per sec. 5.4 -- the station never listens.
     server_url: str = ""
@@ -189,6 +200,19 @@ class StationConfig:
     preview_size: tuple[int, int] = (128, 96)
 
     push_interval_s: float = 60.0
+
+    #: Where an ionozond sounder writes its captures, one folder per day. Set
+    #: on a station that runs one; ``services.agent live`` follows the newest
+    #: capture there and posts it column by column (``architecture.md`` sec.
+    #: 5.5). None means the station has no live view to give.
+    live_dir: Path | None = None
+    #: The unit whose journal carries the sounder's ``STATUS`` lines.
+    live_unit: str = "ionozond-sounder.service"
+    #: Samples per live column: 16384 at 40 kHz is one column every 0.41 s,
+    #: as the Qt console draws it.
+    live_window: int = 16384
+    live_interval_s: float = 2.0
+
     #: How long after boot to suppress alerts. A station coming up looks
     #: exactly like a station that has died.
     startup_grace_s: float = 300.0
@@ -267,7 +291,8 @@ class StationConfig:
     @classmethod
     def from_dict(cls, data: dict) -> StationConfig:
         known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
-        for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir"):
+        for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir",
+                    "live_dir"):
             if key in known:
                 known[key] = Path(known[key])
         for key in ("units", "optional_units", "preview_size"):

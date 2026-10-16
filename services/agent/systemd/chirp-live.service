@@ -1,0 +1,34 @@
+# The live view of an ionozond sounder: follows each capture as it is written
+# and posts it column by column (architecture.md sec. 5.5).
+#
+# For a station running ionozond, not chirpsounder2: it reads the captures in
+# `live_dir` and the STATUS lines of `live_unit` from agent.json. User= and the
+# paths below are the ionozond laptop's; edit them to match before installing.
+#
+# Its own unit rather than a thread of chirp-agent: a capture that fails to
+# parse must not be able to stop the health push. Low priority, because the
+# sounder shares this CPU and a late sample is lost for good while a late
+# column is merely late.
+[Unit]
+Description=ionograms-handler live view of the sounder
+After=network-online.target
+
+[Service]
+Type=simple
+User=samsung
+WorkingDirectory=/home/samsung/ionograms-handler
+Environment=AGENT_CONFIG=/home/samsung/agent.json
+EnvironmentFile=-/etc/default/chirp-agent
+# The journal of a system unit is readable by this group and not otherwise;
+# without it the feed sends columns and never a status.
+SupplementaryGroups=systemd-journal
+# The sounder's own interpreter: it already has numpy, which this needs and
+# the health agent does not.
+ExecStart=/usr/bin/python3 -m services.agent live
+Nice=10
+IOSchedulingClass=idle
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

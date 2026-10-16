@@ -94,12 +94,16 @@ def _fake_runner(args, **kwargs):
 
 
 def systemctl(verb: str, target: str, *, timeout: float = 120.0,
-              runner=None) -> CommandResult:
+              runner=None, no_block: bool = False) -> CommandResult:
     """One systemctl verb against one unit or target.
 
     ``runner`` exists so a test can drive this without systemd; it defaults to
     :func:`subprocess.run` and is never something a caller supplies in
     production.
+
+    ``no_block`` queues the job and returns once systemd has accepted it, so
+    success means "requested", not "done"; see ``StationConfig.no_block``.
+    A refusal, polkit's included, still fails here.
     """
     if verb not in ALLOWED_VERBS:
         raise ControlError(
@@ -124,7 +128,7 @@ def systemctl(verb: str, target: str, *, timeout: float = 120.0,
             FAKE_SYSTEMCTL_ENV, "").strip() not in ("", "0")):
         runner = _fake_runner
     runner = runner or subprocess.run
-    args = ["systemctl", verb, target]
+    args = ["systemctl"] + (["--no-block"] if no_block else []) + [verb, target]
     try:
         proc = runner(args, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -142,8 +146,12 @@ def systemctl(verb: str, target: str, *, timeout: float = 120.0,
         return CommandResult(f"{verb} {target}", False,
                              f"{type(exc).__name__}: {exc}")
 
-    text = (proc.stdout or "") + (proc.stderr or "")
-    return CommandResult(f"{verb} {target}", proc.returncode == 0, text.strip())
+    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if no_block and proc.returncode == 0:
+        text = (f"requested with --no-block: systemd carries it out without "
+                f"the agent waiting, and the next status and health pass say "
+                f"how it went. {text}").strip()
+    return CommandResult(f"{verb} {target}", proc.returncode == 0, text)
 
 
 def start(config: StationConfig, **kw) -> CommandResult:

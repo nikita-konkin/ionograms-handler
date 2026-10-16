@@ -19,6 +19,7 @@ them pages you for the wrong thing.
 
 from __future__ import annotations
 
+import calendar
 import configparser
 import json
 import math
@@ -28,9 +29,11 @@ import shutil
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import logs
 from .config import StationConfig
 
 #: Anything older than this and the station is not producing, whatever the
@@ -615,7 +618,12 @@ def product_root(config: StationConfig) -> Path:
     is producing normally, the preview finding nothing to encode, and the
     mirror reporting success over an empty tree. All three are this function
     reading one folder while the recorder writes to another.
+
+    An ionozond station has no ini to ask, and its sounder writes captures,
+    sidecars and archives into ``live_dir``, so that is where they are.
     """
+    if runs_ionozond(config):
+        return Path(config.live_dir)
     return Path(effective_output_dir(config))
 
 def archive_local(config: StationConfig) -> Path | None:
@@ -753,6 +761,155 @@ def newest_product_age(config: StationConfig, scan=None) -> Metric:
                   detail=f"{source}; threshold {STALE_PRODUCT_S:.0f}s")
 
 
+# --------------------------------------------------------------------------
+# An ionozond station
+# --------------------------------------------------------------------------
+
+#: ``<tx>_<YYYYMMDD>_<HHMMSS>.lfp``: an ionozond sidecar, named for the UTC
+#: wall clock its capture started at.
+_SIDECAR_T0_RE = re.compile(r"_(\d{8}_\d{6})\.lfp$")
+
+#: Journal lines searched for the sounder's last ``STATUS``. It prints one a
+#: second while capturing, so this reaches back past the busiest stretch.
+STATUS_LINES = 500
+
+#: One line as ``journalctl -o short-iso`` prints it: time, host, identifier.
+_JOURNAL_LINE_RE = re.compile(r"^(\S+) \S+ [^\s:]+: (.*)$")
+
+
+def runs_ionozond(config: StationConfig) -> bool:
+    """Is this an ionozond station: a ``live_dir`` to follow and no chirpsounder2 ini.
+
+    Both, not either. A chirpsounder2 station whose ini has gone missing keeps
+    reporting its band and sample rate as unknown, which is how anyone learns
+    the ini went missing; ``live_dir`` alone says where captures land, not
+    what the station lacks.
+    """
+    return config.live_dir is not None and not Path(config.chirp_config).is_file()
+
+
+def _sidecar_t0(name: str) -> float | None:
+    match = _SIDECAR_T0_RE.search(name)
+    if match is None:
+        return None
+    try:
+        return float(calendar.timegm(time.strptime(match.group(1), "%Y%m%d_%H%M%S")))
+    except ValueError:
+        return None
+
+
+def _newest_age(name: str, root: Path | None, pattern: str, t0_of) -> Metric:
+    """Age of the newest ``pattern`` in the two newest day folders under ``root``.
+
+    From the start time in the name, for the reasons
+    :func:`newest_product_age` gives, and from mtime where the name has none.
+    Two day folders rather than a walk of ``root``, which holds the whole local
+    archive: the newest product is always in one of them, the first one after
+    midnight included.
+    """
+    if root is None:
+        return Metric.unknown(name, "no live_dir configured")
+    if not Path(root).is_dir():
+        return Metric.unknown(name, f"{root}: no such directory")
+    try:
+        days = sorted(p for p in Path(root).glob("????.??.??") if p.is_dir())
+        found = [t0_of(p.name) or p.stat().st_mtime
+                 for day in days[-2:] for p in day.glob(pattern)]
+    except OSError as exc:
+        return Metric.unknown(name, f"{type(exc).__name__}: {exc}")
+    if not found:
+        return Metric(name, None, ok=False,
+                      detail=f"no {pattern} in the two newest day folders of {root}")
+    age = time.time() - max(found)
+    if age < -FUTURE_PRODUCT_TOLERANCE_S:
+        return Metric.unknown(
+            name, f"the newest {pattern} is {-age:.0f}s in the future, so its age "
+                  f"cannot be measured -- see system_clock_s")
+    return Metric(name, round(age, 1), ok=(age < STALE_PRODUCT_S),
+                  detail=f"{pattern} under {root}; threshold {STALE_PRODUCT_S:.0f}s")
+
+
+def newest_sidecar_age(config: StationConfig) -> Metric:
+    """Age of the newest ``.lfp``, the sidecar written after every sounding."""
+    return _newest_age("newest_lfp_age_s", config.live_dir, "*.lfp", _sidecar_t0)
+
+
+def newest_archive_age(config: StationConfig) -> Metric:
+    """Age of the newest ``.h5``, the archive bound for the NAS and this server.
+
+    A separate metric from the sidecar because it can stop on its own: the
+    sounder writes it only with ``h5_archive`` on. The NAS sync deletes local
+    copies older than ``nas_keep_h5_days`` once they are proven remote, so a
+    station keeping none locally reads stale here between syncs.
+    """
+    return _newest_age("newest_h5_age_s", config.live_dir, "*.h5", _t0_from_name)
+
+
+def _journal_status(line: str) -> tuple:
+    """A ``short-iso`` journal line as ``(when, STATUS event)``, None where absent."""
+    match = _JOURNAL_LINE_RE.match(line)
+    if match is None:
+        return None, None
+    try:
+        when = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except ValueError:
+        when = None
+    return when, logs.status_event(match.group(2))
+
+
+def _seen(event: dict, when: float | None) -> str:
+    """Which line a sounder metric was read from: transmitter, state and age."""
+    ago = f", {time.time() - when:.0f}s ago" if when is not None else ""
+    return f"STATUS {event['tx']} {event['state']}{ago}"
+
+
+def sounder_status(config: StationConfig) -> list[Metric]:
+    """The sounder's own verdict: its last ``STATUS`` state and overflow count.
+
+    Read from the journal of ``live_unit``, the lines the live feed relays, so
+    the console's health and its live view describe one sounder from one
+    source.
+    """
+    chunk = logs.read_unit(config.live_unit, lines=STATUS_LINES)
+    if chunk.error:
+        return [Metric.unknown("sounder_state", chunk.error),
+                Metric.unknown("sounder_overflows", chunk.error)]
+    seen = [(when, event) for when, event in map(_journal_status, chunk.lines)
+            if event is not None]
+    where = f"the last {STATUS_LINES} lines of {config.live_unit}'s journal"
+    return [_sounder_state(seen, where),
+            _sounder_overflows([(when, event) for when, event in seen
+                                if "overflows" in event], where)]
+
+
+def _sounder_state(seen: list, where: str) -> Metric:
+    """Only ``failed`` is a failure.
+
+    ``degraded`` is a whole sounding with samples lost to overflows and
+    zero-filled so the sweep stays aligned. The sounder keeps it, and so does
+    this; ``sounder_overflows`` says how much was lost.
+    """
+    if not seen:
+        return Metric.unknown("sounder_state", f"no STATUS line in {where}")
+    when, event = seen[-1]
+    return Metric("sounder_state", event["state"], ok=event["state"] != "failed",
+                  detail=_seen(event, when))
+
+
+def _sounder_overflows(counted: list, where: str) -> Metric:
+    """The last count the sounder gave: reported, and never green above zero."""
+    if not counted:
+        return Metric.unknown("sounder_overflows",
+                              f"no STATUS line with an overflow count in {where}")
+    when, event = counted[-1]
+    if event["overflows"] == 0:
+        return Metric("sounder_overflows", 0, ok=True, detail=_seen(event, when))
+    return Metric("sounder_overflows", event["overflows"], ok=None,
+                  detail=f"{_seen(event, when)}; samples were lost and zero-filled. "
+                         f"Not a failure while the sounder keeps the sounding -- "
+                         f"sounder_state says whether it did")
+
+
 #: ``-z 14000MB`` in the unit's ExecStart. Decimal multipliers, which is what
 #: ``drf`` means by MB and what the size-to-seconds arithmetic in
 #: ``chirp-ringbuffer.service`` assumes: 12000MB / 100 MB/s = 120 s, measured
@@ -806,7 +963,8 @@ def disk_free(config: StationConfig) -> list[Metric]:
 
     Two separate failures. A full data volume stops the archive; a full
     ringbuffer stops acquisition within seconds and is usually a
-    `ringbuffer_max_age_min` set too high rather than a disk problem.
+    `ringbuffer_max_age_min` set too high rather than a disk problem. An
+    ionozond station has no ringbuffer, so it reports the data volume alone.
     """
     out = []
 
@@ -820,7 +978,8 @@ def disk_free(config: StationConfig) -> list[Metric]:
                           detail=f"{usage.free / 1e9:.1f} GB free of "
                                  f"{usage.total / 1e9:.1f} GB"))
 
-    out.append(_ringbuffer_metric(config))
+    if not runs_ionozond(config):
+        out.append(_ringbuffer_metric(config))
     return out
 
 
@@ -1281,21 +1440,33 @@ def collect(config: StationConfig | None = None, *,
     """Every metric, in one document. Never raises.
 
     ``scan`` is passed straight to :func:`newest_product_age`; see there.
+
+    An ionozond station (:func:`runs_ionozond`) reports its sidecar and
+    archive ages and the sounder's own STATUS in place of what only a
+    chirpsounder2 ini or its products can answer: the product age by
+    chirpsounder2's naming, the sample rate, the band and the epoch offset.
     """
     config = config or StationConfig()
+    ionozond = runs_ionozond(config)
     metrics: list[Metric] = []
     metrics.extend(unit_states(config))
     metrics.extend(job_states(config))
-    metrics.append(newest_product_age(config, scan))
+    if ionozond:
+        metrics.append(newest_sidecar_age(config))
+        metrics.append(newest_archive_age(config))
+        metrics.extend(sounder_status(config))
+    else:
+        metrics.append(newest_product_age(config, scan))
     metrics.extend(disk_free(config))
     metrics.extend(archive_remote_free(config))
     metrics.append(archive_paths_agree(config))
     metrics.append(units_match_repo(config))
-    metrics.append(sample_rate(config))
-    metrics.extend(band(config))
+    if not ionozond:
+        metrics.append(sample_rate(config))
+        metrics.extend(band(config))
     metrics.append(uptime_s())
     metrics.append(system_clock(config))
-    if include_epoch:
+    if include_epoch and not ionozond:
         metrics.append(epoch_offset(config))
 
     report = HealthReport(station=config.station, timestamp=time.time(),

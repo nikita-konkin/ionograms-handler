@@ -33,7 +33,15 @@ USER_AGENT = "ionograms-handler-agent/0.1.0"
 
 
 class TransportError(RuntimeError):
-    """The server could not be reached, or refused what was sent."""
+    """The server could not be reached, or refused what was sent.
+
+    ``status`` is the HTTP code when the server answered, and None when it
+    could not be reached: a refusal will not change on retry, an outage will.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -68,7 +76,8 @@ def _request(url: str, *, token: str = "", method: str = "GET",
         with opener(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
-        raise TransportError(f"{method} {url}: HTTP {exc.code} {exc.reason}") from None
+        raise TransportError(f"{method} {url}: HTTP {exc.code} {exc.reason}",
+                             status=exc.code) from None
     except urllib.error.URLError as exc:
         raise TransportError(f"{method} {url}: {exc.reason}") from None
     except Exception as exc:
@@ -129,6 +138,16 @@ def push_preview(config: StationConfig, preview, *, opener=None,
     }
     return _request(url, token=config.token, method="POST", payload=payload,
                     timeout=timeout, opener=opener)
+
+
+def push_live(config: StationConfig, events: list, *, opener=None,
+              timeout: float = 15.0) -> dict:
+    """POST one batch of live events. See :mod:`services.agent.live`."""
+    if not config.server_url:
+        raise TransportError("no server_url configured")
+    url = config.server_url.rstrip("/") + f"/stations/{config.station}/live"
+    return _request(url, token=config.token, method="POST",
+                    payload={"events": events}, timeout=timeout, opener=opener)
 
 
 def pull_commands(config: StationConfig, *, opener=None,

@@ -121,6 +121,18 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_live(args) -> int:
+    config = _config(args)
+    if not config.server_url or config.live_dir is None:
+        print("the live feed needs server_url and live_dir in the station config",
+              file=sys.stderr)
+        return 2
+    from . import live
+
+    live.run(config)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="services.agent",
@@ -171,6 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--json", action="store_true")
     r.add_argument("--no-epoch", action="store_true")
     r.set_defaults(func=cmd_run)
+
+    sub.add_parser("live", help="follow the sounder and post its captures as they grow"
+                   ).set_defaults(func=cmd_live)
 
     return parser
 

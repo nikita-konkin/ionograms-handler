@@ -32,6 +32,8 @@ from . import (
     control_routes,
     db,
     i18n,
+    live,
+    live_routes,
     net,
     read_routes,
     sources,
@@ -81,6 +83,9 @@ def _warm(app: FastAPI, roots: list) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = db.init(db.connect())
+    # The live view, in memory: see `live`. Closed at shutdown so that every
+    # open event stream ends and the server is not left waiting on browsers.
+    app.state.live = live.Hub()
     app.state.archive_root = Path(os.environ.get("ARCHIVE_ROOT", "."))
     stamp = build.info()
     print(f"api {VERSION}{' ' + stamp['sha'] if stamp['sha'] else ''}"
@@ -128,6 +133,7 @@ async def lifespan(app: FastAPI):
             target=_warm, args=(app, roots), daemon=True, name="census-warm")
         app.state.census_warm.start()
     yield
+    app.state.live.close()
     app.state.db.close()
 
 
@@ -154,6 +160,7 @@ app.add_middleware(i18n.LocaleMiddleware)
 app.include_router(agent_routes.router)
 app.include_router(archive_routes.router)
 app.include_router(control_routes.router)
+app.include_router(live_routes.router)
 app.include_router(read_routes.router)
 app.include_router(web_routes.router)
 
