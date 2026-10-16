@@ -31,6 +31,16 @@
   .readout { color:var(--dim); min-height:1.5em; font-variant-numeric:tabular-nums; }
   #log { margin:0; max-height:14rem; overflow:auto; color:var(--dim); white-space:pre; }
   @media (max-width: 760px) { .plots { grid-template-columns:minmax(0, 1fr); } }
+  #sched .wide { overflow-x:auto; }
+  #sched table { border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  #sched th, #sched td { padding:.15rem .45rem; text-align:right; white-space:nowrap; }
+  #sched th:first-child, #sched td:first-child { text-align:left; }
+  #sched input:not([type=checkbox]) { width:6.5em; }
+  #sched .general { display:flex; flex-wrap:wrap; gap:.4rem 1.2rem; margin:.8rem 0; }
+  #sched .warn, #sched .warning { color:var(--warn); }
+  #sched .fail, #sched .error { color:var(--fail); }
+  #sched .actions { display:flex; flex-wrap:wrap; align-items:baseline; gap:.4rem .8rem; }
+  #sched ul, #sched ol { margin:.3rem 0 .8rem; padding-left:1.4rem; }
 </style>
 
 <div class="panel live-head" data-station="{{ station }}">
@@ -57,6 +67,47 @@
 
 <p id="empty" class="note">{{ t('live.empty') }}</p>
 <div id="txs"></div>
+
+{# The ionozond schedule (issue #4): what the sounder reads, from the station's
+   last health report, and an editor for whoever may control the station.
+   Every edit is checked by the server with the agent's own checker before it
+   can be queued; see `services/api/sounder.py`. #}
+<section class="panel" id="sched" hidden>
+  <h2>{{ t('live.sched.title') }}</h2>
+  <p id="sched-state" class="note"></p>
+  <p id="sched-pending" class="note warn" hidden></p>
+  <p id="sched-drift" class="note fail" hidden></p>
+  <p id="sched-problems" class="note fail" hidden></p>
+  <div class="wide"><table>
+    <thead><tr>
+      <th>{{ t('live.sched.tx') }}</th><th>{{ t('live.sched.active') }}</th>
+      <th>{{ t('live.sched.cf') }}</th><th>{{ t('live.sched.rate') }}</th>
+      <th>{{ t('live.sched.chirpt') }}</th><th>{{ t('live.sched.rep') }}</th>
+      <th>{{ t('live.sched.dur') }}</th><th>{{ t('live.sched.fft_count') }}</th>
+      <th>{{ t('live.sched.lat') }}</th><th>{{ t('live.sched.lon') }}</th>
+      <th>{{ t('live.sched.band') }}</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="general">
+    <label>{{ t('live.sched.fft_count_index') }}
+      <select data-general="fft_count_index">
+        {% for n in fft_sizes %}<option value="{{ loop.index0 }}">{{ n }}</option>{% endfor %}
+      </select></label>
+    <label><input type="checkbox" data-general="keep_lfs"> {{ t('live.sched.keep_lfs') }}</label>
+    <label>{{ t('live.sched.keep_lfs_hours') }} <input data-general="keep_lfs_hours"></label>
+    <label><input type="checkbox" data-general="save_raw_voltage"> {{ t('live.sched.save_raw_voltage') }}</label>
+  </div>
+  <h3>{{ t('live.sched.next') }}</h3>
+  <ol id="sched-next"></ol>
+  <ul id="sched-issues"></ul>
+  <div class="actions">
+    <button data-needs="station" id="sched-apply" disabled>{{ t('live.sched.apply') }}</button>
+    <button data-needs="station" id="sched-reset" disabled>{{ t('live.sched.reset') }}</button>
+    <button data-needs="station" id="sched-add">{{ t('live.sched.add') }}</button>
+    <span id="sched-said" class="note"></span>
+  </div>
+</section>
 
 <div class="panel">
   <h2>{{ t('live.log') }}</h2>
@@ -358,6 +409,171 @@
   window.addEventListener('resize', () => { dirty = true; redraw(); });
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { dirty = true; redraw(); });
   if (STATION) listen(); else connection(false);
+})();
+</script>
+
+<script>
+(() => {
+  const STATION = {{ station|tojson }};
+  const FIELDS = ['cf', 'rate', 'chirpt', 'rep', 'dur', 'fft_count', 'lat', 'lon'];
+  const LEVEL = {error: T('live.js.sched_error'), warning: T('live.js.sched_warning'), info: T('live.js.sched_info')};
+  const FLAGS = new Set(['keep_lfs', 'save_raw_voltage']);
+  const box = document.getElementById('sched'), body = box.querySelector('tbody');
+  const $ = id => document.getElementById(id);
+  const pad = n => String(n).padStart(2, '0');
+  const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
+  const stamp = text => String(text || '').replace('T', ' ').replace('Z', '');
+  const on = v => !['', '0', 'false'].includes(String(v === undefined ? '' : v).toLowerCase());
+  const copy = v => JSON.parse(JSON.stringify(v));
+  // `origin` is the document the draft started from and `base` its hash: an
+  // edit is checked and queued against the schedule it was made on, so a
+  // change on the station meanwhile is refused rather than overwritten.
+  let shown = null, origin = null, base = null, draft = null, sent = false, may = false;
+  let verdict = null, armed = false, timer = null, asked = 0;
+  const dirty = () => draft !== null && JSON.stringify(draft) !== JSON.stringify(origin);
+  const params = () => ({base, schedule: draft.schedule, general: draft.general});
+  const say = text => { $('sched-said').textContent = text; };
+  const locked = () => !may || !shown || Boolean(shown.sounder_config.drift);
+
+  function band(row) {
+    const s = shown.sounder_config.settings || {}, sr = s.dec > 0 ? s.sample_rate_khz / s.dec : NaN;
+    const lo = (parseFloat(row.cf) - sr / 2) / 1e3, hi = lo + parseFloat(row.dur) * parseFloat(row.rate) / 1e3;
+    return isFinite(lo) && isFinite(hi) ? lo.toFixed(2) + '–' + hi.toFixed(2) : '—';
+  }
+
+  function table() {
+    body.textContent = '';
+    for (const name of Object.keys(draft.schedule).sort()) {
+      const row = draft.schedule[name], was = origin.schedule[name] || {}, tr = body.insertRow();
+      tr.insertCell().textContent = name;
+      const flag = document.createElement('input');
+      flag.type = 'checkbox'; flag.checked = on(row.active); flag.disabled = locked();
+      flag.onchange = () => { row.active = flag.checked ? 'true' : 'false'; edited(); };
+      tr.insertCell().appendChild(flag);
+      const inputs = FIELDS.map(key => {
+        const input = document.createElement('input');
+        input.value = row[key] === undefined ? '' : row[key]; input.disabled = locked();
+        tr.insertCell().appendChild(input);
+        return [key, input];
+      });
+      const last = tr.insertCell();
+      last.textContent = band(row);
+      for (const [key, input] of inputs) input.oninput = () => {
+        const text = input.value.trim();
+        if (text === '' && !(key in was)) delete row[key]; else row[key] = text;
+        last.textContent = band(row); edited();
+      };
+    }
+    box.querySelectorAll('[data-general]').forEach(el => {
+      const key = el.dataset.general, value = draft.general[key];
+      if (FLAGS.has(key)) el.checked = on(value);
+      else if (value !== undefined) el.value = value;
+      else el.value = key === 'fft_count_index' ? String(shown.sounder_config.settings.fft_count_index) : '';
+      el.disabled = locked();
+    });
+    $('sched-add').disabled = locked();
+  }
+  box.querySelectorAll('[data-general]').forEach(el => {
+    const key = el.dataset.general;
+    el.addEventListener(el.tagName === 'SELECT' || FLAGS.has(key) ? 'change' : 'input', () => {
+      draft.general[key] = FLAGS.has(key) ? (el.checked ? 'true' : 'false') : el.value.trim();
+      if (draft.general[key] === '' && !(key in origin.general)) delete draft.general[key];
+      edited();
+    });
+  });
+
+  function captures(list) {
+    const out = $('sched-next');
+    out.textContent = '';
+    for (const c of list || []) out.appendChild(document.createElement('li')).textContent = hms(c.start) + ' UTC  ' + c.tx;
+  }
+  function findings(issues, edits, refusal) {
+    const out = $('sched-issues');
+    out.textContent = '';
+    const line = (level, text) => { const li = out.appendChild(document.createElement('li')); li.className = level; li.textContent = text; };
+    const value = v => v === null || v === undefined ? '—' : v;
+    if (refusal) line('error', T('live.js.refused', {detail: refusal}));
+    if (edits && Object.keys(edits).length)
+      line('', T('live.js.sched_edits', {list: Object.entries(edits).map(([k, v]) => k + ' ' + value(v.from) + ' → ' + value(v.to)).join('; ')}));
+    for (const i of issues || []) line(i.level, (LEVEL[i.level] || i.level) + ': ' + (i.station ? i.station + ': ' : '') + i.text);
+    if (issues && !issues.length) line('', T('live.js.sched_clean'));
+  }
+
+  function edited() {
+    armed = false; verdict = null; say('');
+    clearTimeout(timer);
+    $('sched-reset').disabled = !may || !dirty();
+    $('sched-apply').disabled = true;
+    findings(null, null, null);
+    if (!dirty()) { captures(shown.next); return; }
+    say(T('live.js.sched_checking'));
+    timer = setTimeout(check, 400);
+  }
+  async function check() {
+    const mine = ++asked;
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/ionozond/check', 'POST', params());
+    if (mine !== asked) return;
+    say('');
+    if (!r.ok) { findings(null, null, r.detail); return; }
+    verdict = r.body;
+    captures(verdict.next);
+    findings(verdict.issues, verdict.edits, null);
+    $('sched-apply').disabled = !may || !verdict.ok;
+  }
+
+  // Twice when the checks warn, as Stop is: a warning is a lost session, and
+  // the operator has to have read it.
+  async function commit() {
+    if (!verdict || !verdict.ok) return;
+    if (verdict.issues.some(i => i.level === 'warning') && !armed) { armed = true; say(T('live.js.sched_confirm')); return; }
+    armed = false;
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/commands', 'POST', {name: 'set_ionozond', params: params()});
+    if (!r.ok) { say(r.needsToken ? r.detail : T('live.js.refused', {detail: r.detail})); return; }
+    sent = true;
+    $('sched-apply').disabled = true;
+    say(T('live.js.sched_queued', {id: (r.body.id || '').slice(0, 8)}));
+  }
+
+  function state() {
+    const cfg = shown.sounder_config, epoch = shown.epoch, problems = cfg.problems || [];
+    $('sched-state').textContent = T('live.js.sched_reported', {when: stamp(shown.reported_at)}) + ' '
+      + (epoch ? T('live.js.sched_changed', {who: epoch.changed_by || '—', when: stamp(epoch.valid_from)}) : T('live.js.sched_never'));
+    $('sched-pending').hidden = !cfg.pending;
+    $('sched-pending').textContent = T('live.js.sched_pending');
+    $('sched-drift').hidden = !cfg.drift;
+    $('sched-drift').textContent = T('live.js.sched_drift');
+    $('sched-problems').hidden = !problems.length;
+    $('sched-problems').textContent = T('live.js.sched_problems', {detail: problems.join('; ')});
+  }
+
+  async function load() {
+    const tok = sessionStorage.getItem('tok') || '';
+    let r;
+    try { r = await fetch('/stations/' + encodeURIComponent(STATION) + '/ionozond', tok ? {headers: {Authorization: 'Bearer ' + tok}} : {}); }
+    catch (e) { return; }
+    if (!r.ok) { box.hidden = true; return; }
+    shown = await r.json();
+    box.hidden = false;
+    state();
+    const cfg = shown.sounder_config;
+    if (!cfg.document) { body.textContent = ''; draft = null; return; }
+    if (draft === null || !dirty() || (sent && cfg.base !== base)) {
+      origin = copy(cfg.document); draft = copy(cfg.document); base = cfg.base; sent = false;
+      table(); edited();
+    }
+  }
+
+  $('sched-apply').addEventListener('click', commit);
+  $('sched-reset').addEventListener('click', () => { if (!draft) return; draft = copy(origin); table(); edited(); });
+  $('sched-add').addEventListener('click', () => {
+    if (!draft || locked()) return;
+    const name = (prompt(T('live.js.sched_name')) || '').trim();
+    if (!name || name in draft.schedule) return;
+    draft.schedule[name] = {active: 'false', cf: '', rate: '', chirpt: '', rep: '', dur: '', lat: '', lon: ''};
+    table(); edited();
+  });
+  ME.then(me => { may = me.capabilities.includes('station'); if (draft) { table(); edited(); } });
+  if (STATION) { load(); setInterval(load, 30000); }
 })();
 </script>
 {% endblock %}

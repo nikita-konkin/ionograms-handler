@@ -186,3 +186,49 @@ def test_what_the_agent_sends_the_server_accepts(client, make_lfs, tmp_path):
 def test_live_page_says_a_stop_waits_for_the_sounding_in_progress(client):
     assert "T('live.js.stop_queued'" in page(client), (
         "the live page does not say a queued stop waits for the sounding in progress")
+
+
+def test_live_page_carries_a_schedule_panel(client):
+    assert '<section class="panel" id="sched" hidden>' in page(client), (
+        "the live page has no schedule panel")
+
+
+def test_live_page_reads_the_schedule_in_force(client):
+    assert "'/stations/' + encodeURIComponent(STATION) + '/ionozond'" in page(client), (
+        "the live page does not read GET /stations/{id}/ionozond")
+
+
+def test_live_page_checks_each_edit_without_queueing_it(client):
+    assert ("control('/stations/' + encodeURIComponent(STATION) + '/ionozond/check', "
+            "'POST'") in page(client), (
+        "the live page does not check an edit through /ionozond/check")
+
+
+def test_live_page_queues_a_schedule_change_as_set_ionozond(client):
+    assert "name: 'set_ionozond'" in page(client), (
+        "the live page does not queue a schedule change as set_ionozond")
+
+
+def test_live_page_offers_apply_to_whoever_may_control_a_station(client):
+    assert '<button data-needs="station" id="sched-apply"' in page(client), (
+        "the live page offers no Apply gated on the station capability")
+
+
+def test_live_page_asks_once_more_before_applying_over_warnings(client):
+    assert "T('live.js.sched_confirm'" in page(client), (
+        "the live page does not ask again before applying over warnings")
+
+
+def test_live_page_says_a_written_change_waits_for_the_sounding(client):
+    assert "T('live.js.sched_pending'" in page(client), (
+        "the live page does not say a written change awaits the sounding in progress")
+
+
+def test_live_page_says_when_the_sounder_file_has_drifted(client):
+    assert "T('live.js.sched_drift'" in page(client), (
+        "the live page does not say when chirp_config.py has drifted")
+
+
+def test_live_page_names_the_schedule_in_russian(client):
+    assert "Расписание</h2>" in page(client, "?station=YOS&lang=ru"), (
+        "the live page's schedule panel is not named in Russian")
