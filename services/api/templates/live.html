@@ -9,6 +9,9 @@
   .live-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.6rem 1.2rem; }
   .live-head h2 { margin:0; }
   .live-head .clock { margin-left:auto; color:var(--accent); font-size:1.1rem; font-variant-numeric:tabular-nums; }
+  .live-head .controls { display:flex; gap:.4rem; }
+  .live-head #said { flex-basis:100%; }
+  .live-head #said:empty { display:none; }
   .pill.on { color:var(--ok); border-color:var(--ok); }
   .pill.off { color:var(--warn); border-color:var(--warn); }
   .tx-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.3rem 1rem; margin-bottom:.6rem; }
@@ -41,7 +44,15 @@
     </label>
   </form>
   <span id="conn" class="pill off"></span>
+  {# Start and Stop go through the same queue as the console's buttons
+     (`architecture.md` sec. 5.4); the live feed collects them within one
+     interval because its reply says they are waiting. #}
+  <span class="controls">
+    <button data-needs="station" data-command="start">{{ t('live.start') }}</button>
+    <button data-needs="station" data-command="stop">{{ t('live.stop') }}</button>
+  </span>
   <span class="clock"><span id="clock">--:--:--</span> UTC</span>
+  <span id="said" class="note"></span>
 </div>
 
 <p id="empty" class="note">{{ t('live.empty') }}</p>
@@ -319,6 +330,29 @@
       wait = Math.min(30, wait * 2);
     }
   }
+
+  // Two clicks for Stop, as on the console: a stopped sounder records nothing
+  // until someone starts it again. The question expires rather than waiting
+  // for an answer that may never come.
+  let armed = null, armedTimer = null;
+  async function send(button) {
+    const name = button.dataset.command, label = button.textContent, said = document.getElementById('said');
+    if (name === 'stop' && armed !== name) {
+      armed = name;
+      said.textContent = T('live.js.stop_confirm', {station: STATION});
+      clearTimeout(armedTimer);
+      armedTimer = setTimeout(() => { armed = null; said.textContent = T('live.js.stop_cancelled'); }, 30000);
+      return;
+    }
+    armed = null; clearTimeout(armedTimer);
+    said.textContent = label + ' …';
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/commands', 'POST', {name});
+    const id = r.ok ? (r.body.id || '').slice(0, 8) : '';
+    said.textContent = !r.ok ? (r.needsToken ? r.detail : T('live.js.refused', {detail: r.detail}))
+      : name === 'stop' ? T('live.js.stop_queued', {id}) : T('live.js.queued', {name: label, id});
+  }
+  document.querySelectorAll('[data-command]').forEach(b => { b.disabled = !STATION; b.addEventListener('click', () => send(b)); });
+  gate('station');
 
   setInterval(() => { document.getElementById('clock').textContent = hms(Date.now() / 1000); }, 1000);
   window.addEventListener('resize', () => { dirty = true; redraw(); });

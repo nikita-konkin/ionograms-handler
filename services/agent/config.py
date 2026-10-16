@@ -171,6 +171,17 @@ class StationConfig:
     job_units: tuple[str, ...] = DEFAULT_JOB_UNITS
 
     target: str = DEFAULT_TARGET
+    #: Ask systemd to start, stop or restart ``target`` and acknowledge at once,
+    #: rather than waiting for the job to finish (``systemctl --no-block``).
+    #: For a target whose stop outlasts the agent's 120 s wait: the ionozond
+    #: sounder finishes the sounding in progress on SIGTERM, which its unit
+    #: allows 300 s for, so a waited stop was cut off and acknowledged as a
+    #: failure systemd then went on to complete. The outcome arrives with the
+    #: next status line and health pass instead. Off by default: DOB's stop is
+    #: quick, and an acknowledgement saying the recorder really stopped is
+    #: worth waiting for. Parameter changes always wait, since they edit the
+    #: ini between the stop and the start.
+    no_block: bool = False
 
     #: Where health goes. Push, per sec. 5.4 -- the station never listens.
     server_url: str = ""

@@ -60,11 +60,11 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     params = command.params or {}
 
     if name in ("start", "start_sounding"):
-        return [control.start(config)]
+        return [control.start(config, no_block=config.no_block)]
     if name in ("stop", "stop_sounding"):
-        return [control.stop(config)]
+        return [control.stop(config, no_block=config.no_block)]
     if name in ("restart", "restart_sounding"):
-        return [control.restart(config)]
+        return [control.restart(config, no_block=config.no_block)]
 
     if name in ("set_config", "configure", "set_params"):
         changes = params.get("changes", params)
@@ -136,6 +136,33 @@ def _push_previews(config: StationConfig, scan, state: PreviewState,
         result.previews_sent += 1
 
 
+def obey(config: StationConfig, result: PassResult, *,
+         opener: Callable | None = None) -> None:
+    """Pull pending commands, carry each out, and acknowledge it. Never raises.
+
+    One pass of the control half of sec. 5.4, shared by the health loop and the
+    live feed: the feed runs it as soon as its reply says something is queued,
+    so a start or stop pressed in the console lands in seconds rather than on
+    this loop's next minute.
+    """
+    try:
+        commands = client.pull_commands(config, opener=opener)
+    except client.TransportError as exc:
+        result.errors.append(f"pull: {exc}")
+        return
+    for command in commands:
+        try:
+            results = _dispatch(config, command)
+        except Exception as exc:
+            results = [control.CommandResult(
+                command.name, False, f"{type(exc).__name__}: {exc}")]
+        result.commands_run += 1
+        try:
+            client.acknowledge(config, command, results, opener=opener)
+        except client.TransportError as exc:
+            result.errors.append(f"ack {command.id}: {exc}")
+
+
 def run_once(config: StationConfig, *, opener: Callable | None = None,
              include_epoch: bool = True,
              previews: PreviewState | None = None) -> PassResult:
@@ -177,23 +204,7 @@ def run_once(config: StationConfig, *, opener: Callable | None = None,
             _push_previews(config, scan, previews or PreviewState(),
                            result, opener)
 
-        try:
-            commands = client.pull_commands(config, opener=opener)
-        except client.TransportError as exc:
-            result.errors.append(f"pull: {exc}")
-            commands = []
-
-        for command in commands:
-            try:
-                results = _dispatch(config, command)
-            except Exception as exc:
-                results = [control.CommandResult(
-                    command.name, False, f"{type(exc).__name__}: {exc}")]
-            result.commands_run += 1
-            try:
-                client.acknowledge(config, command, results, opener=opener)
-            except client.TransportError as exc:
-                result.errors.append(f"ack {command.id}: {exc}")
+        obey(config, result, opener=opener)
 
     return result
 

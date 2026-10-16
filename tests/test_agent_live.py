@@ -165,6 +165,37 @@ def test_new_capture_drops_columns_of_the_old_one(make_lfs, tmp_path):
     assert {e["t0"] for e in sent[0] if e["type"] == "column"} <= {1770163510}, "columns of a finished capture were sent with the next one"
 
 
+def test_feed_runs_a_command_pass_when_the_server_says_commands_wait(tmp_path):
+    passes = []
+    live.Feed(StationConfig(station="YOS", live_dir=tmp_path), lambda: ["STATUS cyprus1 writing"],
+              lambda events: {"ok": True, "queued": random.randint(1, 9)}, time.time, lambda: passes.append(1)).step()
+    assert passes == [1], "the feed ran no command pass while commands waited"
+
+
+def test_feed_runs_no_command_pass_when_none_wait(tmp_path):
+    passes = []
+    live.Feed(StationConfig(station="YOS", live_dir=tmp_path), lambda: ["STATUS cyprus1 writing"],
+              lambda events: {"ok": True, "queued": 0}, time.time, lambda: passes.append(1)).step()
+    assert passes == [], "the feed ran a command pass with nothing queued"
+
+
+def test_feed_runs_no_command_pass_when_its_post_fails(tmp_path):
+    passes = []
+
+    def post(events):
+        raise TransportError("server away")
+
+    live.Feed(StationConfig(station="YOS", live_dir=tmp_path), lambda: ["STATUS cyprus1 writing"],
+              post, time.time, lambda: passes.append(1)).step()
+    assert passes == [], "the feed ran a command pass on a post that never arrived"
+
+
+def test_feed_asks_the_server_even_with_nothing_to_send(tmp_path):
+    sent = []
+    feed(tmp_path, sent.append, time.time).step()
+    assert sent == [[]], "the feed stayed silent with nothing to send, so a queued start could wait a minute"
+
+
 def test_journal_lines_reach_the_feed():
     journal = live.Journal([sys.executable, "-c", "print('STATUS cyprus1 writing', flush=True)"])
     got = []

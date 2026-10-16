@@ -14,6 +14,12 @@ samples that is one column every 0.41 s and about half a kilobyte a second.
 Runs as its own process, under its own unit and at low priority, rather than
 inside the health loop: a capture that fails to parse must not be able to stop
 the health push, whose silence is the alert.
+
+It is also the fast half of the command path. Every reply says how many
+commands wait for this station, and when any do the feed pulls, carries out
+and acknowledges them at once, as the health loop does once a minute. So a
+start or stop pressed in the console lands within one interval, and the
+station still only ever asks.
 """
 
 from __future__ import annotations
@@ -21,7 +27,6 @@ from __future__ import annotations
 import base64
 import collections
 import queue
-import re
 import subprocess
 import sys
 import threading
@@ -33,8 +38,9 @@ import numpy as np
 
 from muf import calibrate, io_lfs, spectro
 
-from . import client
+from . import client, runner
 from .config import StationConfig
+from .logs import status_event
 
 #: dB per count in a column's bytes, and so the largest value one can carry is
 #: 63.75 dB above the noise.
@@ -48,34 +54,6 @@ BACKLOG = 4096
 #: How long after its end a capture found at start-up is still worth sending.
 #: An older one is history, and history is the archive's job.
 FRESH_S = 60.0
-
-STATUS = re.compile(r"^STATUS\s+(\S+)\s+([a-z]+)((?:\s+\S+)*)\s*$")
-
-#: What the numbers after each state mean, as ``rx_dechirp.py`` prints them.
-FIELDS = {
-    "waiting": ("t0", "t1"),
-    "capturing": ("progress", "overflows"),
-    "clean": ("overflows", "got"),
-    "degraded": ("overflows", "got"),
-    "failed": ("overflows", "got"),
-}
-
-
-def status_event(line: str) -> Optional[dict]:
-    """One ``STATUS`` line as an event, or None for any other line."""
-    match = STATUS.match(line.strip())
-    if match is None:
-        return None
-    tx, state, rest = match.groups()
-    event = {"type": "status", "tx": tx, "state": state}
-    for name, text in zip(FIELDS.get(state, ()), rest.split()):
-        try:
-            value = float(text)
-        except ValueError:
-            continue
-        event[name] = int(value) if value.is_integer() and name != "progress" else value
-    return event
-
 
 def newest(root: Path) -> Optional[Path]:
     """The capture written last, from the two newest day folders only.
@@ -177,14 +155,16 @@ class Journal:
 
 
 class Feed:
-    """The live process: follows the sounder and posts what it sees."""
+    """The live process: follows the sounder, posts what it sees, runs what waits."""
 
     def __init__(self, config: StationConfig, lines: Callable[[], list],
-                 post: Callable[[list], object], clock: Callable[[], float] = time.time):
+                 post: Callable[[list], object], clock: Callable[[], float] = time.time,
+                 obey: Optional[Callable[[], None]] = None):
         self.config = config
         self.lines = lines
         self.post = post
         self.clock = clock
+        self.obey = obey or (lambda: _obey(config))
         self.capture: Optional[Capture] = None
         self.backlog: collections.deque = collections.deque(maxlen=BACKLOG)
 
@@ -196,16 +176,18 @@ class Feed:
         server restarted mid-sounding learns its shape from the next batch; and
         it goes immediately before the first of them, so nothing read earlier
         is reordered behind it.
+
+        A step with nothing to send still posts, empty. Its reply is how the
+        feed learns that commands wait, and a stopped sounder -- the one
+        waiting for Start -- has nothing else to say.
         """
         self.backlog.extend(self._events())
-        if not self.backlog:
-            return
         batch = list(self.backlog)
         first = next((i for i, e in enumerate(batch) if e["type"] == "column"), None)
         if first is not None and self.capture is not None:
             batch.insert(first, self.capture.head)
         try:
-            self.post(batch)
+            reply = self.post(batch)
         except client.TransportError as exc:
             refused = exc.status is not None and 400 <= exc.status < 500
             print("live: %s%s" % (exc, ", dropping %d events" % len(batch) if refused else ""),
@@ -214,6 +196,9 @@ class Feed:
                 self.backlog.clear()
             return
         self.backlog.clear()
+        queued = reply.get("queued") if isinstance(reply, dict) else 0
+        if isinstance(queued, int) and queued > 0:
+            self.obey()
 
     def _events(self) -> list:
         events = [e for e in map(status_event, self.lines()) if e is not None]
@@ -239,6 +224,14 @@ class Feed:
         kept = [e for e in self.backlog if e["type"] != "column" or e["t0"] == found.head["t0"]]
         self.backlog.clear()
         self.backlog.extend(kept)
+
+
+def _obey(config: StationConfig) -> None:
+    """One command pass, saying on stderr what went wrong in it."""
+    result = runner.PassResult()
+    runner.obey(config, result)
+    for problem in result.errors:
+        print("live: %s" % problem, file=sys.stderr, flush=True)
 
 
 def run(config: StationConfig, sleep: Callable[[float], None] = time.sleep) -> None:

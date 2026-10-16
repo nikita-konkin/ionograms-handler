@@ -41,7 +41,8 @@ async def push_live(station: str, request: Request,
         accepted = request.app.state.live.publish(station, events)
     except live.Refused as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
-    return {"ok": True, "accepted": accepted}
+    return {"ok": True, "accepted": accepted,
+            "queued": db.count_pending(request.app.state.db, station)}
 
 
 @router.get("/stations/{station}/live", dependencies=[Depends(require_read)])

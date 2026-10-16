@@ -891,12 +891,13 @@ whenever the *write* succeeded even if the restart that followed failed —
 the file on the station has already changed, so every sounding after that
 belongs to the new epoch whether or not the process took it up.
 
-### 5.5 Station → server → browser: the live view **[built 2026-10-16, phase 1]**
+### 5.5 Station → server → browser: the live view **[built 2026-10-16, phases 1 and 2]**
 
 What the Qt console shows over AnyDesk, in the browser: the sounding being
 captured, column by column, the last complete one, and the day's SNR and PDP.
-Issue #1. Read-only in this phase; Start/Stop reuse §5.4's command queue
-later, with the agent's `target` set to `ionozond-sounder.service`.
+Issue #1. Phase 1 is the picture; phase 2 adds Start and Stop, through §5.4's
+command queue with the agent's `target` set to `ionozond-sounder.service`, and
+health for a station that runs ionozond rather than chirpsounder2.
 
 ```
  ionozond sounder ──► <live_dir>/<day>/<tx>_<date>_<time>.lfs  (growing)
@@ -945,6 +946,58 @@ carries its columns, so the next batch starts it again.
 
 **The browser reads the stream with `fetch`, not `EventSource`.** The latter
 cannot send an `Authorization` header, and a token in the URL ends up in logs.
+
+#### Start and Stop: the same queue, collected within one interval
+
+```
+ /ui/live   Start ──► POST /stations/{id}/commands         queued; needs `station`
+                                    │
+ live.py    POST /stations/{id}/live ◄── reply {"queued": 1}       within 2 s
+            GET  /stations/{id}/commands                   taken: marked delivered
+            systemctl start ionozond-sounder.service       polkit: one unit, 3 verbs
+            POST /stations/{id}/commands/{cmd}/ack         acknowledged
+```
+
+**Nothing new reaches the station.** `/ui/live` queues `start` and `stop`
+through `POST /stations/{id}/commands`, gated on the `station` capability as
+the console's own buttons are, and Stop asks twice. The commands wait in the
+queue of §5.4 and are carried out by the code that already carries out every
+other: `runner.obey` pulls, `runner._dispatch` maps each command onto
+`systemctl`, and every one is acknowledged, failed or not.
+
+**The live reply says when to look.** The reply to every live post carries
+`queued`, the number of commands waiting for the station. It is a count, not a
+delivery -- `take_pending` marks what it returns delivered, and the reply to a
+batch of columns is no place to hand out a stop. When the count is above zero
+the feed runs one command pass at once, so a press lands within one 2 s
+interval instead of on the health loop's next minute. A feed with nothing to
+send still posts an empty batch, because the sounder waiting for Start is the
+one with nothing else to say. The health loop still pulls once a minute, so a
+command is collected even with the feed down; whichever pulls first takes it.
+
+**The grant is narrow.** The agent runs `systemctl` without `sudo`, so polkit
+decides, and one rule on the laptop lets its user start, stop and restart
+`ionozond-sounder.service` and nothing else (`deploy/README.md`, "An ionozond
+station").
+
+**Stop is slow, so the agent does not wait for it.** The sounder finishes the
+sounding in progress on `SIGTERM`, which its unit allows 300 s for, and
+`control.systemctl` gives up on a waiting `systemctl` after 120 s. Waited for,
+a Stop was acknowledged as a timeout that systemd went on to complete, and the
+feed stood still meanwhile. The station's `no_block` makes the remote start,
+stop and restart `systemctl --no-block`: acknowledged once systemd accepts the
+job, refused as before when polkit says no, and followed by the sounder's own
+`STATUS` lines. `/ui/live` says a stop waits for the sounding in progress.
+Parameter changes still wait, because they edit the ini between their stop
+and their start.
+
+**Health on the same station.** A station with a `live_dir` and no
+chirpsounder2 ini is read as an ionozond station. It reports the ages of the
+newest `.lfp` and `.h5` in its two newest day folders, the state of the
+sounder's last `STATUS` line (red only on `failed`) and its last overflow
+count (never green above zero), in place of the metrics only a chirpsounder2
+ini or its products can answer: the product age by chirpsounder2's naming, the
+ringbuffer, the sample rate, the band and the epoch offset.
 
 ---
 

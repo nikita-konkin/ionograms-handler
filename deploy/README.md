@@ -497,6 +497,80 @@ the checks to do while still on air (including the polkit one, which decides
 whether any of it works), the ordered cutover, what regresses, and how to roll
 back. Do not set `target` before following it.
 
+### An ionozond station: Start and Stop from `/ui/live`
+
+The Yoshkar-Ola laptop runs the ionozond sounder, not chirpsounder2. systemd
+already supervises it as `ionozond-sounder.service`, so it needs no migration:
+copy [station-ionozond.json.example](station-ionozond.json.example) to
+`~/agent.json`, edit `server_url` and `live_dir`, and `target` is already
+right. Two processes then act on the sounder, both as `samsung`:
+`chirp-live.service`, which runs a command within one 2 s interval of its
+reply saying one waits, and the health loop, which pulls once a minute. For
+the health loop, install `chirp-agent.service` with `User=samsung`, the
+`samsung` paths, and `ExecStart=/usr/bin/python3 -m services.agent run`.
+
+Both read the sounder's journal -- the live feed for its `STATUS` lines, the
+health loop for `sounder_state` and `sounder_overflows` -- so `samsung` must be
+in `systemd-journal` or `adm`. `chirp-live.service` adds the group itself;
+`id samsung` shows whether the health loop has it.
+
+Both call `systemctl` bare, with no `sudo` (`services/agent/control.py`). A
+non-root `systemctl start` asks polkit, whose default for managing units is an
+administrator's password, and a service has nobody to type one: the console's
+button fails with `Interactive authentication required`. Ubuntu 24.04 ships
+polkit 124, which reads JavaScript rules
+and can name one unit and three verbs -- unlike DOB's 0.105, where the only
+grant is every unit on the host (see `migrate-dob-to-systemd.md` step 0.6).
+Check the version first, since an older polkit ignores this file silently:
+
+```bash
+pkaction --version
+```
+
+Then create `/etc/polkit-1/rules.d/50-ionozond-sounder.rules`:
+
+```js
+// Lets the ionograms-handler agent start, stop and restart the sounder, and
+// nothing else: no other unit, and no enable, mask or edit of this one.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "ionozond-sounder.service" &&
+        subject.user == "samsung") {
+        var verb = action.lookup("verb");
+        if (verb == "start" || verb == "stop" || verb == "restart") {
+            return polkit.Result.YES;
+        }
+    }
+});
+```
+
+polkit rereads its rules when the file changes. Prove the grant without
+touching the radio, and prove it is narrow; the first must exit 0, the second
+must not:
+
+```bash
+sudo -u samsung sh -c 'pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ionozond-sounder.service --detail verb stop'
+```
+
+```bash
+sudo -u samsung sh -c 'pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ssh.service --detail verb stop'
+```
+
+A `sudoers` line naming the three commands would be as narrow, but the agent
+would have to run `sudo systemctl`, which it does not; that is a code change,
+not a configuration. The definitive test is Start on `/ui/live`: the command
+row on `/ui` turns acknowledged within seconds, and the sounder's `waiting`
+line appears in the event stream.
+
+**Keep `"no_block": true` in `agent.json`.** The sounder finishes the sounding
+in progress on `SIGTERM`, which its unit allows 300 s for, and the agent gives
+up on a waiting `systemctl` after 120 s. Without the flag a Stop pressed
+mid-sounding was acknowledged as a timeout that systemd then completed, and
+the live feed stood still for those 120 s. With it the agent runs
+`systemctl --no-block`, acknowledges once systemd accepts the job, and the
+sounder's next `STATUS` line and the health pass say how it went. A polkit
+refusal is still reported, since systemd refuses before it queues anything.
+
 ### Case B — different networks
 
 **Do not port-forward this over the internet.** It is plain HTTP and one

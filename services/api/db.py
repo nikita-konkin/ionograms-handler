@@ -410,6 +410,18 @@ def take_pending(conn: sqlite3.Connection, station: str,
     return pending
 
 
+def count_pending(conn: sqlite3.Connection, station: str) -> int:
+    """How many commands wait for one station, handing none of them out.
+
+    The live feed's reply carries this so the agent can pull within seconds
+    instead of on the health loop's minute. Counting rather than taking is the
+    point: :func:`take_pending` marks what it returns delivered, and the reply
+    to a post of columns is no place to deliver a stop.
+    """
+    return one(conn, "SELECT COUNT(*) AS n FROM command"
+                     " WHERE station = ? AND delivered_at IS NULL", (station,))["n"]
+
+
 def acknowledge(conn: sqlite3.Connection, command_id: str, results: list) -> bool:
     ok = all(bool(r.get("ok")) for r in results) if results else False
     cur = conn.execute(
