@@ -229,6 +229,11 @@ def test_live_page_says_when_the_sounder_file_has_drifted(client):
         "the live page does not say when chirp_config.py has drifted")
 
 
+def test_live_page_starts_each_band_half_the_full_sample_rate_below_cf(client):
+    assert "const sr = (shown.sounder_config.settings || {}).sample_rate_khz;" in page(
+        client), "the live page starts a band half the decimated sample rate below cf"
+
+
 def test_live_page_names_the_schedule_in_russian(client):
     assert "Расписание</h2>" in page(client, "?station=YOS&lang=ru"), (
         "the live page's schedule panel is not named in Russian")

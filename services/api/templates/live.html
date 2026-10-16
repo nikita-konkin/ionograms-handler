@@ -436,7 +436,7 @@
   const locked = () => !may || !shown || Boolean(shown.sounder_config.drift);
 
   function band(row) {
-    const s = shown.sounder_config.settings || {}, sr = s.dec > 0 ? s.sample_rate_khz / s.dec : NaN;
+    const sr = (shown.sounder_config.settings || {}).sample_rate_khz;
     const lo = (parseFloat(row.cf) - sr / 2) / 1e3, hi = lo + parseFloat(row.dur) * parseFloat(row.rate) / 1e3;
     return isFinite(lo) && isFinite(hi) ? lo.toFixed(2) + '–' + hi.toFixed(2) : '—';
   }
