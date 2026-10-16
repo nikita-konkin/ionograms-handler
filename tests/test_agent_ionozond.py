@@ -7,6 +7,7 @@ import os
 import random
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,11 +53,14 @@ def regenerate(console: Path, sounder: Path) -> None:
 
 
 def systemd(monkeypatch, state="active", accept=True, timeout="5min",
-            started=None) -> list:
+            ago=3600.0) -> list:
     calls = []
+    uptime = time.monotonic() + 86400.0
+    monkeypatch.setattr(ionozond, "time", SimpleNamespace(
+        time=time.time, gmtime=time.gmtime, strftime=time.strftime,
+        monotonic=lambda: time.monotonic() + 86400.0))
     props = {"ActiveState": state, "TimeoutStopUSec": timeout,
-             "ActiveEnterTimestampMonotonic": str(int(
-                 (time.monotonic() - 3600 if started is None else started) * 1e6))}
+             "ActiveEnterTimestampMonotonic": str(int((uptime - ago) * 1e6))}
     monkeypatch.setattr(health, "_show", lambda unit, prop: (
         (0, props[prop]) if prop in props else (1, "")))
     monkeypatch.setattr(control, "systemctl", lambda verb, target, **kw: (
@@ -153,13 +157,13 @@ def test_switching_a_transmitter_on_changes_the_sounder_hash(tmp_path, monkeypat
 def test_a_file_written_after_the_sounder_started_is_pending(tmp_path, monkeypatch):
     config = laptop(tmp_path)
     os.utime(config.live_dir / "chirp_config.py", None)
-    systemd(monkeypatch, started=time.monotonic() - 600)
+    systemd(monkeypatch, ago=600)
     assert ionozond.state(config)["pending"] is True, (
         "a file written after the sounder started was not pending")
 
 
 def test_a_file_older_than_the_running_sounder_is_not_pending(tmp_path, monkeypatch):
-    systemd(monkeypatch, started=time.monotonic() - 60)
+    systemd(monkeypatch, ago=60)
     assert ionozond.state(laptop(tmp_path))["pending"] is False, (
         "a file the running sounder already read was pending")
 
