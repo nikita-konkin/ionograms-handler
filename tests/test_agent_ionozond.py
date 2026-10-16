@@ -416,6 +416,22 @@ def test_the_agent_dispatches_set_ionozond_to_the_sounder(tmp_path, monkeypatch)
     assert seen == [{"base": "x"}], "set_ionozond did not reach the sounder's apply"
 
 
+def test_a_pass_that_applies_a_change_returns_within_one_live_interval(
+        tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    change = request(config, lambda d: d["schedule"]["cyprus1"].update(
+        chirpt=str(random.randint(11, 40))))
+    monkeypatch.setattr(client, "pull_commands", lambda config, **kw: [
+        client.Command("1", "set_ionozond", change)])
+    monkeypatch.setattr(client, "acknowledge", lambda *args, **kw: None)
+    started = time.monotonic()
+    runner.obey(config, runner.PassResult())
+    assert time.monotonic() - started < 2.0, (
+        "a pass applying a schedule change did not return within the live "
+        "feed's two-second interval")
+
+
 def test_set_config_on_an_ionozond_station_is_refused_by_name(tmp_path):
     results = runner._dispatch(laptop(tmp_path), client.Command(
         "1", "set_config", {"changes": {"mode": "search"}}))
