@@ -182,11 +182,26 @@ return in well under a second, and it never waits on the sounder.
 
 1. **Read.** Read `IONOZOND_CONFIG` from `/etc/default/ionozond`, then the two
    ini files and `chirp_config.py`.
-2. **Compare.** The document parsed from `chirp_config.py` must hash to
-   `base`. Also, the ini files regenerated *without* the change must give that
-   same document. If they do not, someone edited the ini files without the
-   console regenerating, and the agent refuses rather than ship that edit
-   along with this one.
+2. **Compare.** Two fingerprints answer two questions, and a third check
+   guards both.
+   - **`base`** hashes the *editable document*, read from the ini files:
+     every transmitter group except the receiver, switched on or not, and the
+     four parameters. It is read from the ini files because `chirp_config.py`
+     leaves switched-off transmitters out, and the web must be able to switch
+     one on. The command carries the `base` it was edited from. A different
+     one means the schedule changed on the station meanwhile, and the agent
+     refuses rather than overwrite it. That is all `base` is for.
+   - **`sounder_hash`** hashes what the sounder reads: the parsed literals of
+     `chirp_config.py`, flattened to keys such as `sounders.cyprus1.cf`. It
+     alone drives the configuration history (section 7). Editing a
+     switched-off transmitter changes `base` but not `sounder_hash`, so it
+     opens no epoch; switching one on changes both.
+   - **Drift.** The ini files, regenerated in memory without the change, must
+     give the literals `chirp_config.py` holds. If they do not, one was edited
+     without the console regenerating the other, and the agent refuses with
+     "the console must regenerate it" rather than ship that edit along with
+     this one. The same comparison runs on every health pass and is reported
+     as `drift`, so the page says so before anyone tries.
 3. **Validate** the new document with a port of ionozond's
    `src/schedulecheck.cpp`, keeping its two levels.
    - **Its errors refuse the whole change**: a malformed name; a number Python
@@ -223,7 +238,7 @@ return in well under a second, and it never waits on the sounder.
      dialect differs from configparser's in escaping, list values, `@Variant`
      values, the `%General` group and key handling, so a configparser round
      trip could change what the console reads back. Instead, a small line
-     editor in `services/agent/ionozond.py` changes only the lines of the
+     editor in `services/agent/qsettings.py` changes only the lines of the
      keys being edited. It adds a new key at the end of its group and a new
      group at the end of the file, and leaves every other byte as the console
      wrote it. It writes only values that need no QSettings escaping, which
@@ -244,9 +259,14 @@ return in well under a second, and it never waits on the sounder.
      as UTF-8 text, the encoding `rx_dechirp.load_config` reads.
 6. **Restart**: `systemctl --no-block try-restart ionozond-sounder.service`.
 7. **Acknowledge** with one result for the write and one for the restart. The
-   write's result carries `journal`: the changes as `{key: {from, to}}`, with
-   keys such as `cyprus1.chirpt` and `keep_lfs`, plus the new `config_hash` and
-   the warnings. The existing `_journal_epoch` then opens the epoch.
+   write's result carries `journal`. Its `edits` are the document's changes as
+   `{key: {from, to}}`, with keys such as `cyprus1.chirpt` and `keep_lfs`. Its
+   `changes` are the same for what the sounder reads, with keys such as
+   `sounders.cyprus1.chirpt`, and are present only when that changed. It also
+   carries `config_hash` (the new `sounder_hash`), `document_hash` and the
+   warnings. The existing `_journal_epoch` opens an epoch only when `changes`
+   is there, so an edit to a switched-off transmitter is written and
+   acknowledged but opens none.
 
 **`try-restart`, not `restart`.** `restart` starts a stopped unit. An operator
 who stopped the sounder, for example to use the console's START, which needs
@@ -324,30 +344,56 @@ feed's station name (section 2, "What the laptop does not run yet"). Each of
 its reports then gains `sounder_config`:
 
 ```json
-"sounder_config": {"hash": "…", "written_at": 1760630000, "loaded_at": 1760620000,
-                   "pending": false, "schedule": {…}, "general": {…},
-                   "receiver": {"name": "yoshkar-ola", "lat": 56.38, "lon": 47.53},
-                   "sample_rate_hz": 25000000, "dec": 625, "timeout_stop_s": 300}
+"sounder_config": {"document": {"schedule": {…}, "general": {…}}, "base": "…",
+                   "sounder": {"sounders.cyprus1.cf": 20000000.0, …},
+                   "sounder_hash": "…", "drift": false,
+                   "receivers": [{"name": "yoshkar-ola", "lat": "56.38", …}],
+                   "settings": {"sample_rate_khz": 25000.0, "dec": 625.0, …},
+                   "problems": [], "config_path": "…/chirp_config.py",
+                   "written_at": 1760630000, "loaded_at": 1760620000,
+                   "active_state": "active", "pending": false,
+                   "timeout_stop_s": 300}
 ```
 
-- It is read from `chirp_config.py`, the file the sounder reads. It is not
-  read from the ini files or from the journal. DOB's panel shows the schedule
-  from the open epoch (`acquisition.current`), and that view cannot see a
-  change made in the Qt console, which is still the ordinary way to edit
-  ionozond.
-- `pending` is true while `chirp_config.py` is newer than the unit's
-  `ActiveEnterTimestamp`: the change is written but not yet taken up. This is
-  the console's "every file agreed, the process did not" trap, made visible.
-- The block is under a kilobyte. Every report is kept verbatim, so at one a
-  minute that is about 1.3 MB a day. If that is too much, send the block only
-  when the hash changes.
+- It has two halves, as section 5 has two fingerprints. `document` and
+  `base` are read from the ini files, which is what the console edits and the
+  only place a switched-off transmitter exists. `sounder` and `sounder_hash`
+  are read from `chirp_config.py`, the file the sounder reads. Neither is read
+  from the journal. DOB's panel shows the schedule from the open epoch
+  (`acquisition.current`), and that view cannot see a change made in the Qt
+  console, which is still the ordinary way to edit ionozond.
+- `drift` is true when the two halves disagree: the ini files no longer
+  generate what `chirp_config.py` holds. The page says so and locks the
+  editor until the console regenerates the file.
+- `pending` is true while the unit is active and `chirp_config.py`'s mtime is
+  newer than its `ActiveEnterTimestamp`: the change is written but not yet
+  taken up. This is the console's "every file agreed, the process did not"
+  trap, made visible.
+- `problems` names what could not be read, for example a `chirp_config.py`
+  the sounder could not load, or a `config_file` in `config.ini` that is not
+  the file the unit reads.
+- The block is about 1.7 KB for two transmitters. Every report is kept
+  verbatim, so at one a minute that is about 2.5 MB a day, more with more
+  transmitters. If that is too much, send the block only when a hash
+  changes.
 
-**A change made on the station still opens an epoch.** When the reported hash
-changes and no acknowledged `set_ionozond` produced it, the server opens a
-`config_epoch` with `changed_by` set to `station` and the diff as `changes`.
-Without that, a schedule edited in the console leaves later soundings
-attributed to a configuration that no longer exists, which is the failure
-`config_epoch` exists to prevent.
+**A change made on the station still opens an epoch.** When `sounder_hash`
+differs between two consecutive reports, the server opens a `config_epoch`
+with `changed_by` set to `station` and, as `changes`, the diff of `sounder`
+between the two reports. Without that, a schedule edited in the console leaves
+later soundings attributed to a configuration that no longer exists, which is
+the failure `config_epoch` exists to prevent. Two cases open nothing:
+
+- the new hash is already recorded. `config_epoch` gains a `config_hash`
+  column, filled from the journal's `config_hash` when an acknowledgement
+  opens an epoch, so the report that follows a queued change finds it there;
+- a delivered `set_ionozond` still awaits its acknowledgement. The live feed
+  and the health loop are separate processes, so a report can be collected
+  between the write and the acknowledgement, and the acknowledgement opens the
+  epoch itself.
+
+A change to `base` alone, such as an edit to a switched-off transmitter,
+changes nothing the sounder reads and opens nothing.
 
 **`/ui/live` gains a Schedule panel**, for anyone who can read:
 
@@ -375,7 +421,12 @@ Russian.
   for this, or a laptop with no health loop. The refusal names which one, so
   the last case does not read as a bad edit.
 - `POST /stations/{id}/ionozond/check` does the same vetting and returns the
-  errors, the warnings and the next captures, queuing nothing.
+  errors, the warnings, the edits and the next captures, queuing nothing.
+- `GET /stations/{id}/ionozond`, for anyone who can read, returns the last
+  `sounder_config`, its next captures and the open epoch, for the panel.
+- A missing or unreadable `sounder_config` is a 409, a refused change a 400.
+  `services/api/sounder.py` holds the vetting and the station epochs, and
+  `push_health` calls it after storing each report.
 
 ## 9. Decisions
 

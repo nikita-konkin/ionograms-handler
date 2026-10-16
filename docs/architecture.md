@@ -891,6 +891,16 @@ whenever the *write* succeeded even if the restart that followed failed —
 the file on the station has already changed, so every sounding after that
 belongs to the new epoch whether or not the process took it up.
 
+**An epoch can also open without a command** (issue #4). An ionozond station's
+schedule is still edited in the Qt console as well as from the web. Its health
+report carries `sounder_hash`, a fingerprint of what the sounder reads, and
+when that changes between two reports with no acknowledgement behind it, the
+server opens an epoch with `changed_by` "station". Each epoch records its
+`config_hash`, so the report that follows a queued change opens no second one.
+On that station the write also comes before the restart, so the rule above
+narrows: a refused restart rolls the write back, and no epoch opens. See
+`docs/2026-10-16-ionozond-parameters-and-schedule.md`.
+
 ### 5.5 Station → server → browser: the live view **[built 2026-10-16, phases 1 and 2]**
 
 What the Qt console shows over AnyDesk, in the browser: the sounding being
@@ -1010,6 +1020,44 @@ sounder's last `STATUS` line (red only on `failed`) and its last overflow
 count (never green above zero), in place of the metrics only a chirpsounder2
 ini or its products can answer: the product age by chirpsounder2's naming, the
 ringbuffer, the sample rate, the band and the epoch offset.
+
+#### The schedule and parameters **[phase 3, built 2026-10-16; not yet run on the laptop]**
+
+```
+ /ui/live  edit  ──► POST /stations/{id}/ionozond/check    issues, next captures; queues nothing
+           Apply ──► POST /stations/{id}/commands          set_ionozond, vetted first; needs `station`
+ agent     lock · edit schedule.ini and config.ini · regenerate chirp_config.py
+           systemctl --no-block try-restart                polkit: a fourth verb
+ health    sounder_config each pass ──► GET /stations/{id}/ionozond, station epochs
+```
+
+**The console's files stay the source of truth.** The Qt console regenerates
+`chirp_config.py` from `schedule.ini` and `config.ini` whenever one of its
+dialogs closes, so a web edit goes into those two files and `chirp_config.py`
+is regenerated as the console would. The ini files are edited as bytes, one
+line per changed key, in QSettings' own dialect (`services/agent/qsettings.py`),
+and the generator is byte-equal to ionozond's golden file
+(`services/agent/sounderconfig.py`).
+
+**One checker, run twice.** `services/agent/schedulecheck.py` ports the
+console's `schedulecheck.cpp`. The server runs it against the station's last
+report while the operator types, and the agent runs it again against the files
+when the command arrives. Errors refuse the change; warnings of lost sessions
+make Apply ask twice.
+
+**Two fingerprints.** `base` hashes the editable document and refuses an edit
+made against a schedule that has since changed. `sounder_hash` hashes what the
+sounder reads and alone opens epochs (§5.4). When the ini files no longer
+generate `chirp_config.py`, the report says `drift`, and edits are refused
+until the console regenerates the file.
+
+**`try-restart`, not `restart`.** A running sounder finishes its sounding and
+starts again on the new file; a stopped one stays stopped. A refused restart
+puts every file back.
+
+**It needs the health loop on the laptop**, under the live feed's station
+(`deploy/README.md`). Without it the server has no `sounder_config` to vet
+against and refuses the change, saying so.
 
 ---
 
