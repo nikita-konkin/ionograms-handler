@@ -449,3 +449,47 @@ def test_a_quoted_value_in_the_defaults_file_reads_without_quotes(tmp_path):
     named = ionozond._defaults(path)["IONOZOND_CONFIG"]
     assert named == "/home/samsung/chirp_config.py", (
         "a quoted value in the defaults file kept its quotes")
+
+
+def described(schedule: bytes = SCHEDULE) -> dict:
+    read = Ini((DATA / "fixture_config.ini").read_bytes())
+    return ionozond.described(Ini(schedule), read, build(Ini(schedule), read))
+
+
+def test_a_described_station_has_not_drifted():
+    assert described()["drift"] is False, "a freshly generated station read as drifted"
+
+
+def test_vetting_refuses_a_drifted_station():
+    reported = dict(described(), drift=True)
+    with pytest.raises(control.ControlError, match="regenerate"):
+        ionozond.vetted(dict(reported["document"], base=reported["base"]), reported)
+
+
+def test_vetting_refuses_a_stale_base():
+    reported = described()
+    with pytest.raises(control.ControlError, match="changed on the station"):
+        ionozond.vetted(dict(reported["document"], base="0" * 64), dict(
+            reported, timeout_stop_s=300.0))
+
+
+def test_vetting_returns_the_checkers_warnings():
+    reported = dict(described(), timeout_stop_s=300.0)
+    wanted = copy.deepcopy(reported["document"])
+    wanted["schedule"]["norilsk"].update(active="true", chirpt="100")
+    found = ionozond.vetted(dict(wanted, base=reported["base"]), reported)[1]
+    assert any(i.station == "norilsk" and "loses" in i.text for i in found), (
+        "vetting did not return the collision the checker finds")
+
+
+def test_the_next_captures_are_of_switched_on_transmitters_only():
+    midnight = 86400.0 * random.randint(20000, 21000)
+    names = {c["tx"] for c in ionozond.captures(described()["document"], midnight, 6)}
+    assert names == {"cyprus1"}, "a switched-off transmitter was given captures"
+
+
+def test_the_first_capture_after_midnight_is_at_its_chirptime():
+    midnight = 86400.0 * random.randint(20000, 21000)
+    first = ionozond.captures(described()["document"], midnight, 1)[0]
+    assert first["start"] == midnight + 10, (
+        "the first capture after midnight was not at its chirptime")

@@ -283,17 +283,17 @@ def fingerprint(value) -> str:
                                      default=str).encode("utf-8")).hexdigest()
 
 
-def _state(config: StationConfig) -> dict:
-    files = _files(config)
-    schedule, read = Ini.read(files.schedule), Ini.read(files.config)
+def described(schedule: Ini, read: Ini, text: str) -> dict:
+    """The console's two files and ``chirp_config.py``, as the health report shows them.
+
+    ``document`` and ``base`` are what the web edits; ``sounder`` and
+    ``sounder_hash`` are what the sounder reads; ``drift`` says whether the
+    second is still what the first generates.
+    """
     current = document(schedule, read)
-    out = {"config_path": str(files.sounder), "document": current,
-           "base": fingerprint(current), "receivers": receivers(schedule),
-           "settings": settings(read), "problems": []}
-    mismatch = _mismatch(read, files)
-    if mismatch:
-        out["problems"].append(mismatch)
-    text = files.sounder.read_text(encoding="utf-8")
+    out = {"document": current, "base": fingerprint(current),
+           "receivers": receivers(schedule), "settings": settings(read),
+           "problems": []}
     try:
         out["sounder"] = flat(literals(text))
         out["sounder_hash"] = fingerprint(out["sounder"])
@@ -301,6 +301,59 @@ def _state(config: StationConfig) -> dict:
         out["sounder"], out["sounder_hash"] = None, None
         out["problems"].append(str(exc))
     out["drift"] = _drifted(schedule, read, text)
+    return out
+
+
+def vetted(params: dict, reported: dict) -> tuple:
+    """A ``set_ionozond`` laid over what a station reported, and its issues.
+
+    The one check, made by the server while the operator is looking and again
+    by the agent against the files as they are when the command arrives.
+    Refused outright on drift, on a stale ``base``, on a malformed document and
+    on a change that changes nothing; the issues are for the caller to weigh.
+    """
+    if reported.get("drift"):
+        raise control.ControlError(
+            "chirp_config.py no longer matches the console's schedule.ini and "
+            "config.ini, so one was changed without the other. The console must "
+            "regenerate it: open its parameters dialog on the laptop and press OK, "
+            "then make the change again.")
+    if params.get("base") != reported.get("base"):
+        raise control.ControlError(
+            "the schedule changed on the station after this edit was made; reload "
+            "it and make the change again")
+    sites = reported.get("receivers") or []
+    wanted = merged(reported["document"], params, sites)
+    if wanted == reported["document"]:
+        raise control.ControlError("this change changes nothing")
+    return wanted, issues(wanted, sites, reported["settings"],
+                          reported.get("timeout_stop_s"))
+
+
+def captures(wanted: dict, now: float, count: int) -> list:
+    """The next ``count`` captures a document would make, as the sounder picks them."""
+    names, stations = [], []
+    for name in sorted(wanted["schedule"]):
+        fields = wanted["schedule"][name]
+        rep, chirpt, dur = (_float(fields.get(k)) for k in ("rep", "chirpt", "dur"))
+        if (fields.get("active", "").lower() in ("", "0", "false")
+                or None in (rep, chirpt, dur) or rep <= 0):
+            continue
+        names.append(name)
+        stations.append(schedulecheck.SimStation(
+            rep, chirpt, dur, schedulecheck.processing_estimate_s(dur)))
+    return [{"tx": names[c.station], "start": c.start}
+            for c in schedulecheck.upcoming(stations, now, count)]
+
+
+def _state(config: StationConfig) -> dict:
+    files = _files(config)
+    schedule, read = Ini.read(files.schedule), Ini.read(files.config)
+    out = described(schedule, read, files.sounder.read_text(encoding="utf-8"))
+    out["config_path"] = str(files.sounder)
+    mismatch = _mismatch(read, files)
+    if mismatch:
+        out["problems"].append(mismatch)
     out.update(_timing(config, files))
     return out
 
@@ -325,23 +378,10 @@ def _plan(config: StationConfig, files: Files, params: dict) -> Plan:
     mismatch = _mismatch(read, files)
     if mismatch:
         raise control.ControlError(mismatch)
-    if _drifted(schedule, read, text):
-        raise control.ControlError(
-            "%s no longer matches the console's schedule.ini and config.ini, so one "
-            "was changed without the other. The console must regenerate it: open "
-            "its parameters dialog on the laptop and press OK, then make the change "
-            "again." % files.sounder)
-    current = document(schedule, read)
-    if params.get("base") != fingerprint(current):
-        raise control.ControlError(
-            "the schedule changed on the station after this edit was made; reload "
-            "it and make the change again")
-    sites = receivers(schedule)
-    wanted = merged(current, params, sites)
-    if wanted == current:
-        raise control.ControlError("this change changes nothing")
-    found = issues(wanted, sites, settings(read), _seconds(
+    reported = dict(described(schedule, read, text), timeout_stop_s=_seconds(
         health._show(config.target, "TimeoutStopUSec")[1]))
+    current = reported["document"]
+    wanted, found = vetted(params, reported)
     errors = [i for i in found if i.level == schedulecheck.ERROR]
     if errors:
         raise control.ControlError("refused: " + "; ".join(_line(i) for i in errors))
