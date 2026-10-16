@@ -927,10 +927,22 @@ and adds one event of its own:
 | `summary` | the server, as a sounding ends | `tx`, `t0`, `snr` per column and `pdp` per row, same encoding |
 
 A column is `muf.spectro.column` on one window -- the same function the
-archive's ionograms are formed with -- gated to the header's default range
-window, so the live picture and the archived one agree cell for cell (tested to
-the 0.125 dB the encoding allows). At 16384 samples, as the Qt console draws
-it, a 250 s sounding is 610 columns, about half a kilobyte a second.
+archive's ionograms are formed with -- gated by `calibrate.geometry_gate`, the
+ranges an echo on the path can occupy, so the live picture and an archived one
+formed with that gate agree cell for cell (tested to the 0.125 dB the encoding
+allows). Not the header's default window: ionozond writes `rmax` from a
+schedule that rarely sets it, so that window ends at 5000 km, and for Magadan,
+5470 km away, it was 4923-5000 km and held no echo. Where the header has no
+usable coordinates, the default window is the fallback.
+
+**A column carries at most 400 rows.** Range resolution follows the sweep
+rate, 7.32 km a cell at 100 kHz/s and 1.46 km at 500, so a fast sweep gated to
+a long path runs past a thousand cells. The agent folds each block of
+`ceil(rows / 400)` cells to its maximum -- the maximum, as the preview does,
+because a trace is one bright cell and an average would lose it -- and the
+sounding's `rows` and `range_step_km` describe the folded axis. cyprus1 at
+100 kHz/s is 208 rows and is not folded. At 16384 samples, as the Qt console
+draws it, a 250 s sounding is 610 columns, at most a kilobyte a second.
 
 **A sounding ends on its last column, or when the next one starts -- never on
 a status line.** `writing` carries no `t0`, and the agent reads status from the

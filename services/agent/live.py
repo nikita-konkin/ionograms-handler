@@ -7,9 +7,10 @@ seconds (``architecture.md`` sec. 5.5): the station still never listens, and
 the sounder is not changed to make it possible.
 
 A column is one FFT window of the capture formed exactly as ``muf.spectro``
-forms it, gated to the header's range window, and sent as one byte per range
-row at a quarter of a dB per count above the noise floor. At the default 16384
-samples that is one column every 0.41 s and about half a kilobyte a second.
+forms it, gated to the ranges an echo on the path can occupy, folded to at
+most :data:`ROWS` rows, and sent as one byte per row at a quarter of a dB per
+count above the noise floor. At the default 16384 samples that is one column
+every 0.41 s and at most a kilobyte a second.
 
 Runs as its own process, under its own unit and at low priority, rather than
 inside the health loop: a capture that fails to parse must not be able to stop
@@ -55,6 +56,13 @@ BACKLOG = 4096
 #: An older one is history, and history is the archive's job.
 FRESH_S = 60.0
 
+#: Rows a column may carry. Range resolution follows the sweep rate -- 7.32 km a
+#: cell at 100 kHz/s, 1.46 km at 500 -- so a fast sweep gated to a long path is
+#: over a thousand cells where a screen shows a few hundred and the server
+#: takes at most 4096. cyprus1 at 100 kHz/s is 208 rows and is never folded.
+ROWS = 400
+
+
 def newest(root: Path) -> Optional[Path]:
     """The capture written last, from the two newest day folders only.
 
@@ -68,14 +76,27 @@ def newest(root: Path) -> Optional[Path]:
 
 
 class Capture:
-    """One capture file as it grows: its axes once, then each new window as a column."""
+    """One capture file as it grows: its axes once, then each new window as a column.
+
+    Gated by the path, not by the header. ionozond writes ``rmax`` from a
+    schedule that rarely sets it, so the default gate ends at 5000 km and
+    Magadan, 5470 km away, fell outside it entirely. ``geometry_gate`` asks
+    what the path allows, and the header's own window is the fallback when the
+    coordinates are unusable.
+
+    Folded by the maximum of each block of rows, as the preview is: a trace is
+    one bright cell, and averaging it with its neighbours would lose it.
+    """
 
     def __init__(self, path: Path, window: int = 16384):
         header = io_lfs.read_header(path)
         total = int(header.dur * header.sample_rate / header.dec) // window
         self.path = Path(path)
         self.window = window
-        self.cal = calibrate.build(header, n_freq=max(total, 1), window=window)
+        self.cal = calibrate.build(header, n_freq=max(total, 1), window=window,
+                                   gate_km=calibrate.geometry_gate(header))
+        fold = -(-self.cal.n_range // ROWS)
+        self.blocks = np.arange(0, self.cal.n_range, fold)
         self.taper = spectro.hanning(window)
         self.done = 0
         self.ends = header.start_epoch + header.dur
@@ -87,8 +108,8 @@ class Capture:
             "f_step_mhz": float(calibrate.sweep_step_mhz(header, window)),
             "columns": total,
             "range_lo_km": float(self.cal.vrange[-1]),
-            "range_step_km": float(self.cal.range_step),
-            "rows": int(self.cal.n_range),
+            "range_step_km": float(self.cal.range_step * fold),
+            "rows": int(self.blocks.size),
             "km_per_ms": calibrate.C_KM_S / 1e3 * 2.0 / header.div_coef,
         }
 
@@ -109,7 +130,7 @@ class Capture:
         for k in range(ready - self.done):
             row = spectro.column(iq[k * self.window:(k + 1) * self.window], self.taper,
                                  self.cal.n_range_full, self.cal.gate_idx)
-            db = spectro.to_db(row)[::-1] - spectro.NOISE_FLOOR_DB
+            db = np.maximum.reduceat(spectro.to_db(row)[::-1] - spectro.NOISE_FLOOR_DB, self.blocks)
             cells = np.clip(np.round(db / DB_STEP), 0, 255).astype(np.uint8)
             out.append({"type": "column", "tx": self.head["tx"], "t0": self.head["t0"],
                         "index": self.done + k,

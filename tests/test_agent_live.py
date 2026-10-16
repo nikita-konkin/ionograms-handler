@@ -10,7 +10,7 @@ import time
 
 import numpy as np
 
-from muf import spectro
+from muf import calibrate, io_lfs, spectro
 from services.agent import live
 from services.agent.client import TransportError
 from services.agent.config import StationConfig
@@ -89,9 +89,46 @@ def test_echo_lands_on_the_row_of_its_range(make_lfs, tmp_path):
 
 def test_live_column_agrees_with_the_archive_ionogram(make_lfs, tmp_path):
     path = capture(make_lfs, tmp_path, 4)
-    archived = np.clip(spectro.compute(path, window=16384).db[:, ::-1] - spectro.NOISE_FLOOR_DB, 0, 63.75)
+    gate = calibrate.geometry_gate(io_lfs.read_header(path))
+    archived = np.clip(spectro.compute(path, window=16384, gate_km=gate).db[:, ::-1] - spectro.NOISE_FLOOR_DB, 0, 63.75)
     sent = np.array([cells(e) * 0.25 for e in live.Capture(path).columns()])
     assert np.abs(sent - archived).max() <= 0.125 + 1e-4, "the live columns differ from the archive's ionogram"
+
+
+def magadan(make_lfs, tmp_path, windows, iq=None, **header):
+    return capture(make_lfs, tmp_path, windows, name="magadan_20260204_000010.lfs", iq=iq,
+                   **{"cf": 16500000, "dur": 50, "rate": 500000, "rmax": 5000,
+                      "tx_latitude": 59.56, "tx_longitude": 150.80, **header})
+
+
+def test_echo_on_a_long_fast_path_lands_within_one_row_of_its_range(make_lfs, tmp_path):
+    step = 24000.0 / 16384
+    target = round(random.uniform(5450.0, 6250.0) / step)
+    n = np.arange(3 * 16384)
+    iq = np.random.normal(0, 1, n.size) + 1j * np.random.normal(0, 1, n.size) + 40 * np.exp(-2j * np.pi * target * n / 16384)
+    follow = live.Capture(magadan(make_lfs, tmp_path, 3, iq=iq))
+    found = follow.head["range_lo_km"] + follow.head["range_step_km"] * int(np.argmax(cells(follow.columns()[1])))
+    assert abs(found - target * step) < follow.head["range_step_km"], "an echo at %.1f km on a long fast path came back at %.1f km" % (target * step, found)
+
+
+def test_no_capture_sends_more_rows_than_the_limit(make_lfs, tmp_path):
+    follow = live.Capture(magadan(make_lfs, tmp_path, 2, rate=random.choice([100000, 250000, 500000]),
+                                  tx_latitude=random.uniform(45.0, 70.0), tx_longitude=random.uniform(60.0, 170.0)))
+    assert max(cells(e).size for e in follow.columns()) <= live.ROWS, "a capture sent more rows than the limit"
+
+
+def test_a_folded_column_carries_the_rows_its_sounding_declares(make_lfs, tmp_path):
+    follow = live.Capture(magadan(make_lfs, tmp_path, 1))
+    assert cells(follow.columns()[0]).size == follow.head["rows"], "a folded column disagrees with its sounding about how many rows it has"
+
+
+def test_a_capture_at_100_khz_per_second_is_not_folded(make_lfs, tmp_path):
+    assert abs(live.Capture(capture(make_lfs, tmp_path, 1)).head["range_step_km"] - 120000.0 / 16384) < 1e-9, "a cyprus1 capture at 100 kHz/s was folded"
+
+
+def test_a_capture_without_usable_coordinates_is_gated_as_recorded(make_lfs, tmp_path):
+    follow = live.Capture(capture(make_lfs, tmp_path, 1, tx_latitude=56.38, tx_longitude=47.53))
+    assert abs(follow.head["range_lo_km"] - calibrate.FALLBACK_MIN_RANGE_KM) < follow.head["range_step_km"], "a capture without a path was not gated as its header recorded"
 
 
 def test_newest_capture_is_the_one_written_last(make_lfs, tmp_path):
