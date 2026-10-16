@@ -519,8 +519,11 @@ non-root `systemctl start` asks polkit, whose default for managing units is an
 administrator's password, and a service has nobody to type one: the console's
 button fails with `Interactive authentication required`. Ubuntu 24.04 ships
 polkit 124, which reads JavaScript rules
-and can name one unit and three verbs -- unlike DOB's 0.105, where the only
+and can name one unit and four verbs -- unlike DOB's 0.105, where the only
 grant is every unit on the host (see `migrate-dob-to-systemd.md` step 0.6).
+The fourth, `try-restart`, is how a schedule change from `/ui/live` takes
+effect: it restarts the sounder only when it is running, so one stopped on
+purpose stays stopped.
 Check the version first, since an older polkit ignores this file silently:
 
 ```bash
@@ -531,13 +534,15 @@ Then create `/etc/polkit-1/rules.d/50-ionozond-sounder.rules`:
 
 ```js
 // Lets the ionograms-handler agent start, stop and restart the sounder, and
-// nothing else: no other unit, and no enable, mask or edit of this one.
+// restart it only if it is running after a schedule change; nothing else: no
+// other unit, and no enable, mask or edit of this one.
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         action.lookup("unit") == "ionozond-sounder.service" &&
         subject.user == "samsung") {
         var verb = action.lookup("verb");
-        if (verb == "start" || verb == "stop" || verb == "restart") {
+        if (verb == "start" || verb == "stop" || verb == "restart" ||
+            verb == "try-restart") {
             return polkit.Result.YES;
         }
     }
@@ -552,7 +557,7 @@ an old polkit.
 Prove the grant without touching the radio, and prove it is narrow. Run both
 from a shell logged in as `samsung`: polkit refuses `--detail` from anyone but
 root, so root asks, and `$$` -- expanded by that shell before `sudo` runs --
-makes `samsung` the subject. The first must print `exit 0`; the second must
+makes `samsung` the subject. The first two must print `exit 0`; the third must
 not, and prints `exit 2` with "Authorization requires authentication":
 
 ```bash
@@ -560,10 +565,19 @@ sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --de
 ```
 
 ```bash
+sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ionozond-sounder.service --detail verb try-restart; echo "exit $?"
+```
+
+```bash
 sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ssh.service --detail verb stop; echo "exit $?"
 ```
 
-A `sudoers` line naming the three commands would be as narrow, but the agent
+The `try-restart` probe passes whatever systemd calls the verb, since `pkcheck`
+sends the name it is given. Proof that systemd sends `try-restart` is a
+schedule change on `/ui/live` acknowledged with its restart accepted; a
+refusal there, with the probe passing, means systemd names it otherwise.
+
+A `sudoers` line naming the four commands would be as narrow, but the agent
 would have to run `sudo systemctl`, which it does not; that is a code change,
 not a configuration. The definitive test is Start on `/ui/live`: the command
 row on `/ui` turns acknowledged within seconds, and the sounder's `waiting`
@@ -577,6 +591,58 @@ the live feed stood still for those 120 s. With it the agent runs
 `systemctl --no-block`, acknowledges once systemd accepts the job, and the
 sounder's next `STATUS` line and the health pass say how it went. A polkit
 refusal is still reported, since systemd refuses before it queues anything.
+
+### An ionozond station: the health loop, under the live feed's station
+
+The schedule panel on `/ui/live` reads the schedule in force from the health
+reports, and the server checks an edit against the latest one. The live feed
+sends none, so an ionozond laptop needs the health loop as well, and it must
+report under the **same station name as the live feed** -- the one Start, Stop
+and schedule changes are queued for. Using the live feed's own
+`~/agent.json` guarantees that.
+
+First look for an agent already on the laptop. A chirpsounder2 agent reporting
+as `Yoshkar-Ola`, with capital letters, is a different station to the server:
+
+```bash
+systemctl status chirp-agent.service --no-pager
+```
+
+If none exists, install the repo's unit edited for `samsung` under its own
+name. If one does, install this copy as `chirp-agent-ionozond.service`
+instead, and leave the other alone. It runs from the checkout
+`chirp-live.service` uses, which `WD` reads from that unit:
+
+```bash
+UNIT=chirp-agent.service
+```
+
+```bash
+WD=$(systemctl show chirp-live.service -p WorkingDirectory | cut -d= -f2)
+```
+
+```bash
+sed -e "s#^User=.*#User=samsung#" -e "s#^WorkingDirectory=.*#WorkingDirectory=$WD#" -e "s#^Environment=AGENT_CONFIG=.*#Environment=AGENT_CONFIG=/home/samsung/agent.json#" -e "s#^ExecStart=.*#ExecStart=/usr/bin/python3 -m services.agent run\nSupplementaryGroups=systemd-journal#" "$WD/services/agent/systemd/chirp-agent.service" | sudo tee /etc/systemd/system/$UNIT
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now $UNIT
+```
+
+`/usr/bin/python3` is right here, unlike on DOB: Ubuntu 24.04's is 3.12, and
+the token comes from the same `/etc/default/chirp-agent` the live feed reads.
+To read and change the schedule the agent also reads `/etc/default/ionozond`
+(0644) for `IONOZOND_CONFIG`, and edits the console's
+`~/.config/dsChirp/schedule.ini` and `config.ini` and the sounder's
+`chirp_config.py`, all of which belong to `samsung`. It needs no permission
+beyond the polkit rule above.
+
+Check it within a minute: the station's row on `/ui` shows a fresh report for
+`yoshkar-ola`, and that report carries `sounder_config`:
+
+```bash
+journalctl -u $UNIT -n 20 --no-pager
+```
 
 ### Case B — different networks
 
