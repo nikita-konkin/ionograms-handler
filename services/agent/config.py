@@ -213,6 +213,14 @@ class StationConfig:
     live_window: int = 16384
     live_interval_s: float = 2.0
 
+    #: The ionozond unit's ``EnvironmentFile=``, read for ``IONOZOND_CONFIG``:
+    #: the ``chirp_config.py`` the sounder is actually handed, rather than the
+    #: one anybody believes it reads.
+    sounder_defaults: Path = Path("/etc/default/ionozond")
+    #: Where the Qt console keeps ``schedule.ini`` and ``config.ini``; ``~`` is
+    #: the agent's own home, which on the laptop is the console's.
+    console_settings: Path = Path("~/.config/dsChirp")
+
     #: How long after boot to suppress alerts. A station coming up looks
     #: exactly like a station that has died.
     startup_grace_s: float = 300.0
@@ -292,7 +300,7 @@ class StationConfig:
     def from_dict(cls, data: dict) -> StationConfig:
         known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
         for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir",
-                    "live_dir"):
+                    "live_dir", "sounder_defaults", "console_settings"):
             if key in known:
                 known[key] = Path(known[key])
         for key in ("units", "optional_units", "preview_size"):

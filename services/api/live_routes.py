@@ -15,6 +15,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from services.agent import schedulecheck
+
 from . import db, live
 from .auth import Capability, Principal, require, require_read
 from .web_routes import templates
@@ -65,4 +67,5 @@ def live_page(request: Request, station: str | None = None):
     known = sorted(set(hub.boards) | set(db.stations(request.app.state.db)))
     chosen = station or next(iter(sorted(hub.boards)), None) or next(iter(known), "")
     return templates.TemplateResponse(request, "live.html", {
-        "station": chosen, "stations": known})
+        "station": chosen, "stations": known,
+        "fft_sizes": schedulecheck.FFT_COUNT_LIST})

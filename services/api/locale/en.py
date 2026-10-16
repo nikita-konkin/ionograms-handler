@@ -1458,6 +1458,51 @@ MESSAGES: dict[str, str] = {
         "Stop queued as {id}. The sounder finishes the sounding in progress and then "
         "stops, which can take up to five minutes; its status line here says when.",
     "live.js.refused": "Refused: {detail}",
+    "live.sched.title": "Schedule",
+    "live.sched.tx": "Transmitter",
+    "live.sched.active": "On",
+    "live.sched.cf": "cf, kHz",
+    "live.sched.rate": "Rate, kHz/s",
+    "live.sched.chirpt": "Offset, s",
+    "live.sched.rep": "Period, s",
+    "live.sched.dur": "Duration, s",
+    "live.sched.fft_count": "FFT",
+    "live.sched.lat": "Lat., °",
+    "live.sched.lon": "Lon., °",
+    "live.sched.band": "Band, MHz",
+    "live.sched.fft_count_index": "General FFT size",
+    "live.sched.keep_lfs": "Keep LFS files",
+    "live.sched.keep_lfs_hours": "Keep them for, h",
+    "live.sched.save_raw_voltage": "Save raw voltage",
+    "live.sched.next": "Next captures",
+    "live.sched.apply": "Apply",
+    "live.sched.reset": "Discard edits",
+    "live.sched.add": "Add transmitter",
+    "live.js.sched_error": "error",
+    "live.js.sched_warning": "warning",
+    "live.js.sched_info": "note",
+    "live.js.sched_edits": "Changes: {list}",
+    "live.js.sched_clean": "The checks find nothing wrong.",
+    "live.js.sched_checking": "Checking…",
+    "live.js.sched_confirm":
+        "The checks warn of lost sessions. Press Apply again to queue the change "
+        "anyway.",
+    "live.js.sched_queued":
+        "Queued as {id}. The station writes it on its next pull, and a running "
+        "sounder takes it up after the sounding in progress.",
+    "live.js.sched_reported": "As reported at {when} UTC.",
+    "live.js.sched_changed": "Last changed by {who} at {when} UTC.",
+    "live.js.sched_never": "No change has been recorded yet.",
+    "live.js.sched_pending": "Written; takes effect after the sounding in progress.",
+    "live.js.sched_drift":
+        "chirp_config.py no longer matches the console's schedule.ini and "
+        "config.ini, so one was changed without the other. Open the console's "
+        "parameters dialog on the laptop and press OK to regenerate it; until then "
+        "the schedule cannot be changed from here.",
+    "live.js.sched_problems": "The station could not read its schedule: {detail}",
+    "live.js.sched_name":
+        "Name of the new transmitter: Latin letters, digits, underscores or dots, "
+        "and no dash.",
 }
 
 #: Noun forms selected by `i18n.plural`. English needs two; the `few`/`many`

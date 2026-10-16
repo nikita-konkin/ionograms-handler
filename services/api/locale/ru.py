@@ -1475,6 +1475,51 @@ MESSAGES: dict[str, str] = {
         "конца и остановится, на это может уйти до пяти минут; когда это случится, "
         "покажет его строка состояния здесь.",
     "live.js.refused": "Отказано: {detail}",
+    "live.sched.title": "Расписание",
+    "live.sched.tx": "Передатчик",
+    "live.sched.active": "Вкл.",
+    "live.sched.cf": "cf, кГц",
+    "live.sched.rate": "Скорость, кГц/с",
+    "live.sched.chirpt": "Сдвиг, с",
+    "live.sched.rep": "Период, с",
+    "live.sched.dur": "Длительность, с",
+    "live.sched.fft_count": "БПФ",
+    "live.sched.lat": "Шир., °",
+    "live.sched.lon": "Долг., °",
+    "live.sched.band": "Полоса, МГц",
+    "live.sched.fft_count_index": "Общий размер БПФ",
+    "live.sched.keep_lfs": "Хранить файлы LFS",
+    "live.sched.keep_lfs_hours": "Хранить их, ч",
+    "live.sched.save_raw_voltage": "Сохранять сырые отсчёты",
+    "live.sched.next": "Ближайшие приёмы",
+    "live.sched.apply": "Применить",
+    "live.sched.reset": "Отменить правки",
+    "live.sched.add": "Добавить передатчик",
+    "live.js.sched_error": "ошибка",
+    "live.js.sched_warning": "предупреждение",
+    "live.js.sched_info": "замечание",
+    "live.js.sched_edits": "Изменения: {list}",
+    "live.js.sched_clean": "Проверка ничего не нашла.",
+    "live.js.sched_checking": "Проверка…",
+    "live.js.sched_confirm":
+        "Проверка предупреждает о потерянных сеансах. Нажмите «Применить» ещё раз, "
+        "чтобы всё же поставить изменение в очередь.",
+    "live.js.sched_queued":
+        "Поставлено в очередь как {id}. Станция запишет изменение при следующем "
+        "опросе, а работающий зонд примет его после текущего зондирования.",
+    "live.js.sched_reported": "По отчёту от {when} UTC.",
+    "live.js.sched_changed": "Последнее изменение: {who}, {when} UTC.",
+    "live.js.sched_never": "Изменений пока не записано.",
+    "live.js.sched_pending": "Записано; вступит в силу после текущего зондирования.",
+    "live.js.sched_drift":
+        "chirp_config.py больше не совпадает с schedule.ini и config.ini консоли: "
+        "один из файлов изменили без другого. Откройте на ноутбуке диалог "
+        "параметров консоли и нажмите OK, чтобы пересоздать его; до этого "
+        "расписание отсюда не изменить.",
+    "live.js.sched_problems": "Станция не смогла прочитать своё расписание: {detail}",
+    "live.js.sched_name":
+        "Имя нового передатчика: латинские буквы, цифры, подчёркивания или точки, "
+        "без дефиса.",
 }
 
 #: Three forms, not two: 1 зондирование, 2 зондирования, 5 зондирований.

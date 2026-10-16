@@ -36,6 +36,7 @@ from . import (
     live_routes,
     net,
     read_routes,
+    sounder_routes,
     sources,
     web_routes,
 )
@@ -162,6 +163,7 @@ app.include_router(archive_routes.router)
 app.include_router(control_routes.router)
 app.include_router(live_routes.router)
 app.include_router(read_routes.router)
+app.include_router(sounder_routes.router)
 app.include_router(web_routes.router)
 
 # The one vendored asset: plotly.min.js, served from the image. Not a CDN,
