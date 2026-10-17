@@ -744,3 +744,55 @@ def test_the_agent_dispatches_regenerate_to_the_sounder(tmp_path, monkeypatch):
     runner._dispatch(laptop(tmp_path), client.Command(
         "1", "regenerate_ionozond", {"base": "x"}))
     assert seen == [{"base": "x"}], "regenerate_ionozond did not reach regenerate"
+
+
+def general(value, key="nas_keep_h5_days") -> dict:
+    reported = described()
+    wanted = copy.deepcopy(reported["document"])
+    wanted["general"][key] = value
+    return ionozond.merged(reported["document"], wanted, reported["receivers"])
+
+
+@pytest.mark.parametrize("days", ["-1", "1", "21", "3650", 21])
+def test_the_local_h5_retention_takes_minus_one_or_a_day_count(days):
+    assert general(days)["general"]["nas_keep_h5_days"] == str(days), (
+        "a valid local .h5 retention was not accepted")
+
+
+@pytest.mark.parametrize("days", ["0", "-2", "3651", "1.5", "x", True])
+def test_the_local_h5_retention_refuses_anything_else(days):
+    with pytest.raises(control.ControlError, match="nas_keep_h5_days"):
+        general(days)
+
+
+def test_the_h5_archive_switch_can_be_set_from_the_web():
+    assert general("false", "h5_archive")["general"]["h5_archive"] == "false", (
+        "the .h5 archive switch could not be set from the web")
+
+
+def test_the_h5_archive_switch_takes_only_true_or_false():
+    with pytest.raises(control.ControlError, match="h5_archive"):
+        general("off", "h5_archive")
+
+
+def test_a_retention_change_is_written_into_the_console_settings(
+        tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    days = random.randint(1, 3650)
+    ionozond.apply(config, request(config, lambda d: d["general"].update(
+        nas_keep_h5_days=str(days))))
+    assert b"nas_keep_h5_days=%d" % days in (
+        config.console_settings / "config.ini").read_bytes(), (
+        "the local .h5 retention did not reach config.ini")
+
+
+def test_the_editable_document_carries_the_local_h5_retention(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    path = config.console_settings / "config.ini"
+    path.write_bytes(path.read_bytes().replace(
+        b"[General]\n", b"[General]\nnas_keep_h5_days=21\n"))
+    regenerate(config.console_settings, config.live_dir / "chirp_config.py")
+    assert ionozond.state(config)["document"]["general"]["nas_keep_h5_days"] == "21", (
+        "the editable document left out the local .h5 retention")

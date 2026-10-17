@@ -10,9 +10,9 @@ the console would, or the next dialog closed on the laptop would undo it.
 Two fingerprints, for two questions:
 
 * ``base`` hashes the **editable document** -- every transmitter in
-  ``schedule.ini`` but the receiver, switched on or not, and the four
-  parameters. A queued edit carries the ``base`` it was made against, and is
-  refused if the schedule has changed since.
+  ``schedule.ini`` but the receiver, switched on or not, and the
+  parameters the web may set. A queued edit carries the ``base`` it was
+  made against, and is refused if the schedule has changed since.
 * ``sounder_hash`` hashes **what the sounder reads**: the literals of
   ``chirp_config.py``. It alone drives the configuration history; editing a
   transmitter that is switched off changes nothing the sounder reads, and
@@ -59,9 +59,11 @@ REQUIRED = ("active", "cf", "chirpt", "dur", "lat", "lon", "rate", "rep")
 
 #: The parameters the web may set, from ``[General]`` in ``config.ini``.
 #: ``nas_dest``, ``data_dir``, the receive chain and the processing internals
-#: are left out on purpose; see the design document, section 3.
-GENERAL = ("fft_count_index", "keep_lfs", "keep_lfs_hours", "save_raw_voltage")
-FLAGS = ("active", "keep_lfs", "save_raw_voltage")
+#: are left out on purpose: they are hand edits plus Regenerate. See the
+#: phase 3 design, section 3, and the phase 4 design, section 2.
+GENERAL = ("fft_count_index", "h5_archive", "keep_lfs", "keep_lfs_hours",
+           "nas_keep_h5_days", "save_raw_voltage")
+FLAGS = ("active", "h5_archive", "keep_lfs", "save_raw_voltage")
 
 #: A new transmitter's name: ``services/api/control_routes.py``'s ``CODE_RE``.
 #: It becomes the dash-delimited ``txname`` of the ``.h5`` archive, so no dash.
@@ -728,6 +730,11 @@ def _written_as(key: str, value) -> str:
         raise control.ControlError("fft_count_index must be 0 to 7")
     if key == "keep_lfs_hours" and (_float(text) is None or _float(text) < 0):
         raise control.ControlError("keep_lfs_hours must be zero or more")
+    if key == "nas_keep_h5_days" and not (
+            _int(text, 0) == -1 or 1 <= _int(text, 0) <= 3650):
+        raise control.ControlError(
+            "nas_keep_h5_days must be -1, to keep every .h5 locally, or 1 to 3650 "
+            "days")
     return text
 
 
