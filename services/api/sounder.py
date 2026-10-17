@@ -24,13 +24,20 @@ epoch's changes are worked out against the configuration it replaces.
 sends the block whole only when the summary changes, and hourly otherwise. The
 server keeps the last whole block, and :func:`latest` hands it out, marked
 ``stale`` when the latest summary no longer matches it.
+
+**Seeding** (phase 4, decision 7) turns one verified slot of any station's
+transmitter table into a group for the schedule, switched off, which then goes
+through the ordinary check and Apply. Here rather than on the page, so the
+conversion the page offers is the one the tests check.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 
+from muf.stations import default_registry
 from services.agent import control, ionozond, schedulecheck, siteconfig
 
 from . import db
@@ -129,6 +136,62 @@ def vet_site(conn: sqlite3.Connection, station: str, params: dict) -> None:
         raise Unvetted(400, "refused: " + "; ".join(problems))
 
 
+def seeded(conn: sqlite3.Connection, station: str, params: dict) -> dict:
+    """A slot verified at ``params["from"]`` as a group for this station's draft.
+
+    Raises :class:`Unvetted` for a transmitter or slot nobody verified, a low
+    edge that is not a frequency, or a station with no report to size it by.
+    """
+    if not isinstance(params, dict):
+        raise Unvetted(400, "seeding takes an object of 'from', 'code', 'slot' and "
+                            "'low_edge_khz'")
+    found = db.transmitter(conn, str(params.get("from") or ""),
+                           str(params.get("code") or ""))
+    if found is None:
+        raise Unvetted(404, "%s has verified no transmitter %r" % (
+            params.get("from"), params.get("code")))
+    index, timings = params.get("slot"), found["timings"]
+    if not isinstance(index, int) or not 0 <= index < len(timings):
+        raise Unvetted(404, "%s's %s has no slot %s: it was verified with %d" % (
+            found["station"], found["code"], index, len(timings)))
+    try:
+        edge = float(params.get("low_edge_khz"))
+        if not math.isfinite(edge) or edge < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise Unvetted(400, "the band's low edge must be a frequency of 0 kHz or "
+                            "more, not %r" % params.get("low_edge_khz")) from None
+    return seed(found["code"], timings[index], edge, reported(conn, station))
+
+
+def seed(code: str, slot: dict, edge: float, config: dict) -> dict:
+    """One verified ``{chirp-rate, rep, chirpt}`` slot as a group, switched off.
+
+    The phase 4 design, section 6. A verified ``chirpt`` is the second the
+    sweep is at 0 Hz, chirpsounder2's convention; ionozond's is the second it
+    reaches the band's low edge, ``cf`` less half the sample rate, so the edge's
+    sweep time is added within the cycle. Confirmed on 2026-10-17 against the
+    hand-made Cyprus groups: NIC1, verified at 235 s, is chirpt 10 at a 7.5 MHz
+    edge and 100 kHz/s. The sounding spans the whole receive band, shortened to
+    whole seconds when it and its products would outlast the unit's
+    ``TimeoutStopSec``.
+    """
+    rate, rep = float(slot["chirp-rate"]) / 1e3, float(slot["rep"])
+    sample = float(config["settings"]["sample_rate_khz"])
+    full = sample / rate
+    dur = _fitted(full, config.get("timeout_stop_s"))
+    site = default_registry().station(code)
+    return {"name": code, "located": site is not None, "capped": dur < full,
+            "full_dur": _text(full),
+            "group": {"active": "false", "cf": _text(edge + sample / 2),
+                      "rate": _text(rate), "rep": _text(rep),
+                      "chirpt": _text(round(float(slot["chirpt"]) + edge / rate, 6)
+                                      % rep),
+                      "dur": _text(dur),
+                      "lat": _text(site.latitude) if site else "",
+                      "lon": _text(site.longitude) if site else ""}}
+
+
 def keep(conn: sqlite3.Connection, station: str, document: dict) -> None:
     """Keep a whole block, and file what it says the sounder reads under its hash."""
     found = _config(document)
@@ -159,6 +222,23 @@ def observe(conn: sqlite3.Connection, station: str, previous: dict | None,
                                      _read(conn, station, new, after)),
         changed_by="station", config_hash=new,
         note="chirp_config.py changed on the station, not by a queued command")
+
+
+def _fitted(full: float, limit: float | None) -> float:
+    """The longest sounding up to ``full`` that, with its products, fits ``limit``.
+
+    ``full`` when nothing whole fits: the checker then says why, once the group
+    is switched on.
+    """
+    if limit is None or full + schedulecheck.processing_estimate_s(full) <= limit:
+        return full
+    return next((float(d) for d in range(math.floor(full), 0, -1)
+                 if d + schedulecheck.processing_estimate_s(d) <= limit), full)
+
+
+def _text(value: float) -> str:
+    """A number as ``schedule.ini`` holds it, with no trailing zeros."""
+    return ("%.6f" % value).rstrip("0").rstrip(".")
 
 
 def _config(document: dict) -> dict:

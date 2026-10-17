@@ -75,7 +75,8 @@
    Every edit is checked by the server with the agent's own checker before it
    can be queued; see `services/api/sounder.py`. Since the console retired
    (issue #8) it also carries Regenerate after a hand edit, the site settings
-   the web may override, and Run now for the NAS copy and the pruner. #}
+   the web may override, Run now for the NAS copy and the pruner, and Add from
+   verified, which turns a slot from /ui/sources into a switched-off group. #}
 <section class="panel" id="sched" hidden>
   <h2>{{ t('live.sched.title') }}</h2>
   <p id="sched-state" class="note"></p>
@@ -120,6 +121,14 @@
     <button data-needs="station" id="sched-reset" disabled>{{ t('live.sched.reset') }}</button>
     <button data-needs="station" id="sched-add">{{ t('live.sched.add') }}</button>
     <span id="sched-said" class="note"></span>
+  </div>
+  <h3>{{ t('live.seed.title') }}</h3>
+  <p class="note">{{ t('live.seed.note') }}</p>
+  <div class="actions">
+    <label>{{ t('live.seed.offer') }} <select id="seed-offer" disabled></select></label>
+    <label>{{ t('live.seed.edge') }} <input id="seed-edge" inputmode="decimal" disabled></label>
+    <button data-needs="station" id="seed-add" disabled>{{ t('live.seed.add') }}</button>
+    <span id="seed-said" class="note"></span>
   </div>
   <div id="site-box" hidden>
   <h3>{{ t('live.site.title') }}</h3>
@@ -510,6 +519,7 @@
       el.disabled = locked();
     });
     $('sched-add').disabled = locked();
+    seedable();
   }
   box.querySelectorAll('[data-general]').forEach(el => {
     const key = el.dataset.general;
@@ -674,6 +684,48 @@
     $('jobs-said').textContent = answer(r, T('live.js.jobs_queued', {job: b.dataset.run, id: ((r.body || {}).id || '').slice(0, 8)}));
   }));
 
+  // Add from verified: every station's verified slots, one offer each and
+  // labelled with the station that verified it. The server converts the slot
+  // chosen, so the group added is the one its tests check.
+  const STATIONS = {{ stations|tojson }};
+  let offers = [];
+  function seedable() {
+    const off = !draft || locked();
+    $('seed-offer').disabled = off || !offers.length;
+    $('seed-edge').disabled = off;
+    $('seed-add').disabled = off || !offers.length || !$('seed-edge').value.trim();
+  }
+  async function verified() {
+    const tok = sessionStorage.getItem('tok') || '', none = {transmitters: []};
+    const found = [];
+    for (const s of STATIONS)
+      found.push(await fetch('/stations/' + encodeURIComponent(s) + '/transmitters', tok ? {headers: {Authorization: 'Bearer ' + tok}} : {})
+        .then(r => r.ok ? r.json() : none).catch(() => none));
+    offers = found.flatMap(f => f.transmitters).flatMap(t => t.timings.map((timing, slot) => ({from: t.station, code: t.code, slot, timing})));
+    const pick = $('seed-offer');
+    pick.textContent = '';
+    for (const [i, o] of offers.entries())
+      Object.assign(pick.appendChild(document.createElement('option')), {value: String(i), textContent: T('live.js.seed_offer', {
+        code: o.code, rate: o.timing['chirp-rate'] / 1000, rep: o.timing.rep, chirpt: o.timing.chirpt, station: o.from})});
+    $('seed-said').textContent = offers.length ? '' : T('live.js.seed_none');
+    seedable();
+  }
+  $('seed-edge').addEventListener('input', seedable);
+  $('seed-add').addEventListener('click', async () => {
+    const o = offers[Number($('seed-offer').value)], said = $('seed-said');
+    if (!o || !draft || locked()) return;
+    if (o.code in draft.schedule) { said.textContent = T('live.js.seed_taken', {name: o.code}); return; }
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/ionozond/seed', 'POST', {from: o.from, code: o.code, slot: o.slot, low_edge_khz: $('seed-edge').value.trim()});
+    if (!r.ok) { said.textContent = answer(r, ''); return; }
+    const seed = r.body;
+    if (seed.name in draft.schedule) { said.textContent = T('live.js.seed_taken', {name: seed.name}); return; }
+    draft.schedule[seed.name] = seed.group;
+    table(); edited();
+    said.textContent = [T('live.js.seed_added', {name: seed.name}),
+      seed.located ? '' : T('live.js.seed_unplaced', {name: seed.name}),
+      seed.capped ? T('live.js.seed_capped', {full: seed.full_dur, dur: seed.group.dur}) : ''].filter(Boolean).join(' ');
+  });
+
   async function load() {
     const tok = sessionStorage.getItem('tok') || '';
     let r;
@@ -702,7 +754,7 @@
     table(); edited();
   });
   ME.then(me => { may = me.capabilities.includes('station'); if (draft) { table(); edited(); } if (shown) state(); });
-  if (STATION) { load(); setInterval(load, 30000); }
+  if (STATION) { load(); verified(); setInterval(load, 30000); }
 })();
 </script>
 {% endblock %}

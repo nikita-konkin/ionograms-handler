@@ -11,10 +11,10 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from services.agent import ionozond
+from services.agent import ionozond, schedulecheck
 from services.agent.qsettings import Ini
 from services.agent.sounderconfig import build
-from services.api import db
+from services.api import db, sounder
 
 CTL = {"Authorization": "Bearer ctl"}
 CONFIG = Path(__file__).resolve().parent / "ionozond" / "fixture_config.ini"
@@ -439,3 +439,138 @@ def test_forgetting_a_station_drops_its_kept_block(client):
     db.forget_station(client.app.state.db, "yoshkar-ola")
     assert db.block(client.app.state.db, "yoshkar-ola") is None, (
         "forgetting a station kept its schedule block")
+
+
+def slot(**change) -> dict:
+    return dict({"chirp-rate": 100000, "rep": 300, "chirpt": 235}, **change)
+
+
+def seed(client, **change):
+    db.save_transmitter(client.app.state.db, "Yoshkar-Ola", "NIC1", [slot()])
+    return client.post("/stations/yoshkar-ola/ionozond/seed", headers=CTL, json=dict(
+        {"from": "Yoshkar-Ola", "code": "NIC1", "slot": 0, "low_edge_khz": 7500},
+        **change))
+
+
+def test_seeding_converts_a_verified_slot_into_the_group_the_hand_made_schedule_has():
+    assert sounder.seed("NIC1", slot(), 7500, reported())["group"]["chirpt"] == "10", (
+        "NIC1 verified at 235 s did not become the hand-made group's chirpt of 10 s")
+
+
+def test_seeding_moves_chirpt_to_the_band_edge_within_the_cycle():
+    rep, rate = random.choice([60, 120, 300, 600]), random.choice([50, 100, 125, 500])
+    chirpt, edge = random.randint(0, rep - 1), random.randint(1000, 20000)
+    found = sounder.seed("NIC1", slot(**{"chirp-rate": rate * 1000, "rep": rep,
+                                         "chirpt": chirpt}), edge, reported())
+    assert float(found["group"]["chirpt"]) == pytest.approx(
+        (chirpt + edge / rate) % rep, abs=1e-3), (
+        "chirpt was not moved to the moment the sweep reaches the band edge")
+
+
+def test_seeding_puts_cf_half_the_sample_rate_above_the_low_edge():
+    edge = random.randint(2000, 15000)
+    assert float(sounder.seed("NIC1", slot(), edge, reported())["group"]["cf"]) == (
+        edge + 12500), "cf is not half the 25 MHz sample rate above the low edge"
+
+
+def test_seeding_gives_the_rate_in_khz_per_second():
+    rate = random.randint(10, 900)
+    assert float(sounder.seed("NIC1", slot(**{"chirp-rate": rate * 1000}), 7500,
+                              reported())["group"]["rate"]) == rate, (
+        "the chirp rate was not converted from Hz/s to kHz/s")
+
+
+def test_seeding_keeps_the_verified_cycle():
+    rep = random.choice([60, 120, 300, 600, 900])
+    assert float(sounder.seed("NIC1", slot(rep=rep), 7500, reported())["group"][
+        "rep"]) == rep, "the seeded group did not keep the verified rep"
+
+
+def test_seeding_listens_across_the_whole_receive_band():
+    assert sounder.seed("NIC1", slot(**{"chirp-rate": 500000}), 7500, reported())[
+        "group"]["dur"] == "50", "25 MHz at 500 kHz/s was not a 50 s sounding"
+
+
+def test_seeding_caps_the_sounding_so_it_fits_the_stop_timeout():
+    limit = random.randint(40, 200)
+    dur = float(sounder.seed("NIC1", slot(), 7500, dict(
+        reported(), timeout_stop_s=float(limit)))["group"]["dur"])
+    assert dur + schedulecheck.processing_estimate_s(dur) <= limit, (
+        "a seeded sounding and its products outlast the unit's TimeoutStopSec")
+
+
+def test_seeding_says_when_it_capped_the_sounding():
+    assert sounder.seed("NIC1", slot(), 7500, dict(reported(), timeout_stop_s=60.0))[
+        "capped"] is True, "a sounding cut short to fit TimeoutStopSec was not said so"
+
+
+def test_seeding_leaves_the_group_switched_off():
+    assert sounder.seed("NIC1", slot(), 7500, reported())["group"][
+        "active"] == "false", (
+        "a seeded group was switched on before the checker showed its collisions")
+
+
+def test_seeding_names_the_group_after_the_code():
+    code = "X%d" % random.randint(1, 9999)
+    assert sounder.seed(code, slot(), 7500, reported())["name"] == code, (
+        "the seeded group was not named after the verified code")
+
+
+def test_seeding_places_the_transmitter_from_the_station_registry():
+    assert float(sounder.seed("NIC1", slot(), 7500, reported())["group"]["lat"]) == (
+        35.18557), "NIC1 was not placed at Nicosia from muf/stations.py"
+
+
+def test_seeding_says_when_the_registry_cannot_place_the_code():
+    assert sounder.seed("QZX%d" % random.randint(1, 999), slot(), 7500, reported())[
+        "located"] is False, "a code the registry cannot resolve was called located"
+
+
+def test_an_unplaced_transmitter_is_seeded_without_coordinates():
+    assert sounder.seed("QZX%d" % random.randint(1, 999), slot(), 7500, reported())[
+        "group"]["lon"] == "", "a code the registry cannot resolve got a longitude"
+
+
+def test_the_seed_route_converts_a_slot_verified_at_another_station(client):
+    health(client)
+    assert seed(client).json()["group"]["chirpt"] == "10", (
+        "the seed route did not convert NIC1, verified at Yoshkar-Ola, to chirpt 10")
+
+
+def test_the_seed_route_refuses_a_transmitter_nobody_verified(client):
+    health(client)
+    assert "QZX1" in seed(client, code="QZX1").json()["detail"], (
+        "the refusal of a transmitter nobody verified did not name it")
+
+
+def test_the_seed_route_refuses_a_slot_the_transmitter_lacks(client):
+    health(client)
+    index = random.randint(1, 9)
+    assert "slot %d" % index in seed(client, slot=index).json()["detail"], (
+        "the refusal of a slot the verified transmitter lacks did not name it")
+
+
+def test_the_seed_route_refuses_a_negative_low_edge(client):
+    health(client)
+    assert seed(client, low_edge_khz=-random.randint(1, 9000)).status_code == 400, (
+        "a band below 0 Hz was seeded")
+
+
+def test_the_seed_route_refuses_a_low_edge_that_is_no_number(client):
+    health(client)
+    assert seed(client, low_edge_khz="seven").status_code == 400, (
+        "a low edge that is no number was seeded")
+
+
+def test_the_seed_route_refuses_a_station_without_a_health_loop(client):
+    assert seed(client).status_code == 409, (
+        "a group was seeded with no reported sample rate to size it by")
+
+
+def test_the_seed_route_asks_for_the_station_capability(client):
+    health(client)
+    db.save_transmitter(client.app.state.db, "Yoshkar-Ola", "NIC1", [slot()])
+    assert client.post("/stations/yoshkar-ola/ionozond/seed", json={
+        "from": "Yoshkar-Ola", "code": "NIC1", "slot": 0,
+        "low_edge_khz": 7500}).status_code == 401, (
+        "an anonymous caller could seed a group")

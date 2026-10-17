@@ -1494,6 +1494,15 @@ MESSAGES: dict[str, str] = {
     "live.sched.apply": "Apply",
     "live.sched.reset": "Discard edits",
     "live.sched.add": "Add transmitter",
+    "live.seed.title": "Add from verified",
+    "live.seed.note":
+        "Every station's verified transmitters from /ui/sources, one slot at a "
+        "time. The census records no frequency, so enter the band's low edge. The "
+        "group is added switched off, and goes through the checks and Apply like "
+        "any other edit.",
+    "live.seed.offer": "Verified slot",
+    "live.seed.edge": "Band low edge, kHz",
+    "live.seed.add": "Add",
     "live.js.sched_error": "error",
     "live.js.sched_warning": "warning",
     "live.js.sched_info": "note",
@@ -1533,6 +1542,21 @@ MESSAGES: dict[str, str] = {
     "live.js.sched_name":
         "Name of the new transmitter: Latin letters, digits, underscores or dots, "
         "and no dash.",
+    "live.js.seed_offer":
+        "{code}: {rate} kHz/s, every {rep} s at {chirpt} s, verified at {station}",
+    "live.js.seed_none":
+        "No station has a verified transmitter yet: verify one on /ui/sources.",
+    "live.js.seed_taken":
+        "The schedule already has {name}. A group holds one slot, and a second "
+        "group would need another name that muf/stations.py knows.",
+    "live.js.seed_added":
+        "Added {name}, switched off. Check it above, switch it on, then Apply.",
+    "live.js.seed_unplaced":
+        "{name} is not in muf/stations.py, so it has no coordinates: enter its "
+        "latitude and longitude, or add it to the registry first.",
+    "live.js.seed_capped":
+        "Its sounding is cut from {full} s to {dur} s, so the capture and its "
+        "products fit the unit's TimeoutStopSec.",
 }
 
 #: Noun forms selected by `i18n.plural`. English needs two; the `few`/`many`
