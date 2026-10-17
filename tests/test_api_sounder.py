@@ -233,3 +233,99 @@ def test_a_change_that_is_not_an_object_is_refused(client):
     health(client)
     assert queue(client, ["cyprus1"]).status_code == 400, (
         "a set_ionozond whose params are not an object was not refused")
+
+
+def drifted() -> dict:
+    return reported(drift=True)
+
+
+def site(**values) -> dict:
+    return {"keys": {key: {"value": value, "from": "/etc/default/ionozond"}
+                     for key, value in values.items()},
+            "editable": ["NAS_BWLIMIT", "PRUNE_FREE_GB", "PRUNE_KEEP_DAYS"],
+            "hash": "%064x" % random.getrandbits(256),
+            "archive_gb": random.uniform(500.0, 4000.0)}
+
+
+def command(client, name, params, station="yoshkar-ola"):
+    return client.post("/stations/%s/commands" % station, headers=CTL,
+                       json={"name": name, "params": params})
+
+
+def test_a_regeneration_of_a_drifted_station_is_queued(client):
+    health(client, drifted())
+    r = command(client, "regenerate_ionozond", {
+        "base": drifted()["base"], "sounder_hash": drifted()["sounder_hash"]})
+    assert r.status_code == 200, "a regeneration of a drifted station was not queued"
+
+
+def test_a_regeneration_of_an_undrifted_station_is_refused(client):
+    health(client)
+    r = command(client, "regenerate_ionozond", {
+        "base": reported()["base"], "sounder_hash": reported()["sounder_hash"]})
+    assert "nothing to regenerate" in r.json()["detail"], (
+        "a regeneration of an undrifted station was queued")
+
+
+def test_a_regeneration_against_a_moved_sounder_hash_is_refused(client):
+    health(client, drifted())
+    r = command(client, "regenerate_ionozond", {
+        "base": drifted()["base"], "sounder_hash": "%064x" % random.getrandbits(256)})
+    assert r.status_code == 400, "a regeneration against a moved file was queued"
+
+
+def test_a_regeneration_without_a_health_loop_is_refused(client):
+    r = command(client, "regenerate_ionozond", {"base": "x", "sounder_hash": "y"})
+    assert r.status_code == 409, "a regeneration was queued with nothing to vet against"
+
+
+def test_a_site_change_is_queued(client):
+    shown = site(PRUNE_KEEP_DAYS="7")
+    health(client, reported(site=shown))
+    r = command(client, "set_ionozond_site", {"base": shown["hash"], "site": {
+        "PRUNE_KEEP_DAYS": str(random.randint(1, 365))}})
+    assert r.status_code == 200, "a valid site change was not queued"
+
+
+@pytest.mark.parametrize("key,value", [("JUMBO", "8000"), ("PATH", "/tmp"),
+                                       ("PRUNE_KEEP_DAYS", "0"),
+                                       ("PRUNE_FREE_GB", "999999999")])
+def test_a_site_change_the_station_would_refuse_is_refused(client, key, value):
+    shown = site(PRUNE_KEEP_DAYS="7")
+    health(client, reported(site=shown))
+    r = command(client, "set_ionozond_site", {"base": shown["hash"],
+                                              "site": {key: value}})
+    assert r.status_code == 400, "a site change the station would refuse was queued"
+
+
+def test_a_site_change_against_a_moved_base_is_refused(client):
+    health(client, reported(site=site(NAS_BWLIMIT="0")))
+    r = command(client, "set_ionozond_site", {
+        "base": "%064x" % random.getrandbits(256), "site": {"NAS_BWLIMIT": "100"}})
+    assert r.status_code == 400, "a site change against a moved base was queued"
+
+
+def test_a_site_change_for_an_agent_without_site_settings_is_refused(client):
+    health(client)
+    r = command(client, "set_ionozond_site", {"base": "x",
+                                              "site": {"NAS_BWLIMIT": "100"}})
+    assert "update the agent" in r.json()["detail"], (
+        "a site change was queued for an agent that reports no site settings")
+
+
+@pytest.mark.parametrize("unit", ["ionozond-nas.service", "ionozond-prune.service"])
+def test_run_now_is_queued_for_a_job_unit(client, unit):
+    assert command(client, "start", {"unit": unit}).status_code == 200, (
+        "run now was not queued for a job unit")
+
+
+@pytest.mark.parametrize("unit", ["ionozond-sounder.service", "ssh.service", "",
+                                  ["ionozond-nas.service"]])
+def test_run_now_is_refused_for_any_other_unit(client, unit):
+    assert command(client, "start", {"unit": unit}).status_code == 400, (
+        "run now was queued for a unit that is not a job unit")
+
+
+def test_a_plain_start_is_still_queued(client):
+    assert command(client, "start", {}).status_code == 200, (
+        "a start without a unit was no longer queued")

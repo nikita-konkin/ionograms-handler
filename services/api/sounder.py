@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from services.agent import control, ionozond, schedulecheck
+from services.agent import control, ionozond, schedulecheck, siteconfig
 
 from . import db
 
@@ -79,6 +79,30 @@ def checked(conn: sqlite3.Connection, station: str, params: dict) -> dict:
             "issues": [i.to_dict() for i in found],
             "edits": ionozond.edits(sounder["document"], wanted),
             "wanted": wanted}
+
+
+def vet_regenerate(conn: sqlite3.Connection, station: str, params: dict) -> None:
+    """Refuse a ``regenerate_ionozond`` the station's last report says cannot go."""
+    if not isinstance(params, dict):
+        raise Unvetted(400, "regenerate_ionozond takes an object of 'base' and "
+                            "'sounder_hash'")
+    try:
+        ionozond.regenerable(params, reported(conn, station))
+    except control.ControlError as exc:
+        raise Unvetted(400, str(exc)) from None
+
+
+def vet_site(conn: sqlite3.Connection, station: str, params: dict) -> None:
+    """Refuse a ``set_ionozond_site`` the station's last report says cannot go."""
+    if not isinstance(params, dict):
+        raise Unvetted(400, "set_ionozond_site takes an object of 'base' and 'site'")
+    found = reported(conn, station).get("site")
+    if not isinstance(found, dict):
+        raise Unvetted(409, (
+            "%s reports no site settings: update the agent on the laptop" % station))
+    problems = siteconfig.vetted(params, found)
+    if problems:
+        raise Unvetted(400, "refused: " + "; ".join(problems))
 
 
 def observe(conn: sqlite3.Connection, station: str, previous: dict | None,

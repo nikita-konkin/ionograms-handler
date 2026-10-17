@@ -346,6 +346,29 @@ def vetted(params: dict, reported: dict) -> tuple:
                           reported.get("timeout_stop_s"))
 
 
+def regenerable(params: dict, reported: dict) -> None:
+    """Refuse a ``regenerate_ionozond`` that would not write what the operator saw.
+
+    The one check, made by the server against the last report and again by the
+    agent against the files: the ``base`` and ``sounder_hash`` shown must still
+    stand, there must be drift to undo, and the console's checks must pass.
+    """
+    if (params.get("base") != reported.get("base")
+            or params.get("sounder_hash") != reported.get("sounder_hash")):
+        raise control.ControlError(
+            "the settings or chirp_config.py changed on the station after this was "
+            "shown; reload and look again")
+    if not reported.get("drift"):
+        raise control.ControlError(
+            "chirp_config.py already holds what schedule.ini and config.ini "
+            "generate: there is nothing to regenerate")
+    errors = [i for i in issues(reported["document"], reported.get("receivers") or [],
+                                reported["settings"], reported.get("timeout_stop_s"))
+              if i.level == schedulecheck.ERROR]
+    if errors:
+        raise control.ControlError("refused: " + "; ".join(_line(i) for i in errors))
+
+
 def captures(wanted: dict, now: float, count: int) -> list:
     """The next ``count`` captures a document would make, as the sounder picks them."""
     names, stations = [], []
@@ -500,22 +523,9 @@ def _regenerated(config: StationConfig, files: Files, params: dict) -> Plan:
     refusal = _mismatch(read, files) or _folders(config, read)
     if refusal:
         raise control.ControlError(refusal)
-    current = described(schedule, read, text)
-    if (params.get("base") != current["base"]
-            or params.get("sounder_hash") != current["sounder_hash"]):
-        raise control.ControlError(
-            "the settings or chirp_config.py changed on the station after this was "
-            "shown; reload and look again")
-    if not current["drift"]:
-        raise control.ControlError(
-            "chirp_config.py already holds what schedule.ini and config.ini "
-            "generate: there is nothing to regenerate")
-    errors = [i for i in issues(current["document"], current["receivers"],
-                                current["settings"], _seconds(health._show(
-                                    config.target, "TimeoutStopUSec")[1]))
-              if i.level == schedulecheck.ERROR]
-    if errors:
-        raise control.ControlError("refused: " + "; ".join(_line(i) for i in errors))
+    current = dict(described(schedule, read, text), timeout_stop_s=_seconds(
+        health._show(config.target, "TimeoutStopUSec")[1]))
+    regenerable(params, current)
     generated = build(schedule, read)
     after = flat(parsed(generated))
     before = current["sounder"] or {}
