@@ -45,7 +45,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import control, health, schedulecheck
+from . import control, health, schedulecheck, siteconfig
 from .config import StationConfig
 from .qsettings import PLAIN, Ini, IniError
 from .sounderconfig import UnreadableConfig, build, literals, parsed
@@ -377,6 +377,13 @@ def _state(config: StationConfig) -> dict:
     except OSError as exc:
         out["pending"] = None
         out["problems"].append("could not keep %s: %s" % (config.sounder_seen, exc))
+    out["nas_dest"] = (read.value("", "nas_dest") if "nas_dest" in read.keys("")
+                       else None)
+    try:
+        out["site"] = siteconfig.report(config)
+    except (control.ControlError, OSError) as exc:
+        out["site"] = None
+        out["problems"].append("could not read the site settings: %s" % exc)
     return out
 
 
@@ -647,24 +654,12 @@ def _files(config: StationConfig) -> Files:
 
 
 def _defaults(path: Path) -> dict:
-    """``KEY=value`` lines, as systemd's ``EnvironmentFile=`` reads the simple ones."""
     try:
-        text = path.read_text(encoding="utf-8")
+        return siteconfig.environment(path)
     except FileNotFoundError:
         raise control.ControlError(
             "%s is missing: it is the unit's EnvironmentFile, and names the "
             "chirp_config.py the sounder reads" % path) from None
-    out = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        out[key.strip()] = value
-    return out
 
 
 def _mismatch(read: Ini, files: Files) -> str:

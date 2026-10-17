@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from . import client, control, health, ionozond, logs, preview
+from . import client, control, health, ionozond, logs, preview, siteconfig
 from .config import StationConfig
 
 
@@ -60,6 +60,8 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     params = command.params or {}
 
     if name in ("start", "start_sounding"):
+        if "unit" in params:
+            return [siteconfig.run(params["unit"])]
         return [control.start(config, no_block=config.no_block)]
     if name in ("stop", "stop_sounding"):
         return [control.stop(config, no_block=config.no_block)]
@@ -70,6 +72,8 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
         return ionozond.apply(config, params)
     if name == "regenerate_ionozond":
         return ionozond.regenerate(config, params)
+    if name == "set_ionozond_site":
+        return siteconfig.apply(config, params)
 
     if name in ("set_config", "configure", "set_params"):
         if health.runs_ionozond(config):
@@ -103,7 +107,7 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     return [control.CommandResult(
         name, False, f"unknown command {command.name!r}; this agent "
                      f"understands start, stop, restart, set_config, set_ionozond, "
-                     f"regenerate_ionozond, "
+                     f"regenerate_ionozond, set_ionozond_site, "
                      f"logs, triage")]
 
 
