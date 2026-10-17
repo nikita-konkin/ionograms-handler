@@ -9,8 +9,10 @@ Server-Sent Events. ``architecture.md`` sec. 5.5 has the event vocabulary.
 minutes its sounding lasts and nothing afterwards -- the archived product is
 the record. What survives a sounding here is its summary, one SNR value per
 frequency step and one PDP value per range row, kept for a day so the console
-can draw the daily course without a query. A restart loses all of it, and the
-next batch the agent sends starts it again.
+can draw the daily course without a query. Every summary is also handed to
+``keep``, which the app points at the database, so the course outlives a
+restart; and the agent sends summaries of soundings it has archived, which go
+to ``keep`` alone (issue #12).
 
 **One vocabulary in both directions.** What the agent posts is what a browser
 receives, plus the ``summary`` this module derives when a sounding ends. The
@@ -28,6 +30,8 @@ import math
 from typing import AsyncIterator, Awaitable, Callable
 
 import numpy as np
+
+from services.agent import summary
 
 #: Summaries kept per transmitter: a day at the 300 s repetition period.
 DAY = 288
@@ -47,6 +51,7 @@ MAX_TX = 64
 STATUS_FIELDS = ("progress", "overflows", "t0", "t1", "got")
 SOUNDING_FIELDS = ("t0", "f_lo_mhz", "f_step_mhz", "range_lo_km",
                    "range_step_km", "km_per_ms")
+AXES = ("tx", *SOUNDING_FIELDS, "columns", "rows")
 
 
 class Refused(ValueError):
@@ -68,10 +73,8 @@ class Sounding:
         for index, text in self.data.items():
             cells[int(index)] = np.frombuffer(base64.b64decode(text), np.uint8)
         taken = [int(i) for i in self.data]
-        power = np.mean(10.0 ** (cells[taken] * DB_STEP / 10.0), axis=0)
-        return {"type": "summary", "tx": self.head["tx"], "t0": self.head["t0"],
-                "snr": _pack(cells.max(axis=1)),
-                "pdp": _pack(10.0 * np.log10(power) / DB_STEP)}
+        return dict({k: self.head[k] for k in AXES}, type="summary", source="live",
+                    snr=summary.snr(cells), pdp=summary.pdp(cells[taken]))
 
 
 class Board:
@@ -110,7 +113,9 @@ class Reader:
 class Hub:
     """Live state of every station, and the browsers watching each one."""
 
-    def __init__(self):
+    def __init__(self,
+                 keep: Callable[[str, dict], None] = lambda station, summary: None):
+        self.keep = keep
         self.boards: dict[str, Board] = collections.defaultdict(Board)
         self.readers: dict[str, set[Reader]] = collections.defaultdict(set)
         self.closed = False
@@ -119,7 +124,12 @@ class Hub:
         board = self.boards[station]
         clean = _checked(events, board)
         for event in clean:
+            if event["type"] == "summary":
+                self.keep(station, event)
+                continue
             for out in _apply(board, event):
+                if out["type"] == "summary":
+                    self.keep(station, out)
                 self._send(station, out)
         return len(clean)
 
@@ -254,6 +264,8 @@ def _checked(events: list, board: Board) -> list[dict]:
             out.append(head)
         elif kind == "column":
             out.append(_column(n, event, shapes.get((tx, event.get("t0")))))
+        elif kind == "summary":
+            out.append(_summary(n, event))
         else:
             raise Refused("event %d has unknown type %r" % (n, kind))
     return out
@@ -285,6 +297,22 @@ def _sounding(n: int, event: dict) -> dict:
     return head
 
 
+def _summary(n: int, event: dict) -> dict:
+    """A sounding the agent summarised from its archive, with the axes it has."""
+    head = _sounding(n, event)
+    clean = dict({k: head[k] for k in AXES}, type="summary", source="archive")
+    for name, size in (("snr", head["columns"]), ("pdp", head["rows"])):
+        try:
+            got = len(base64.b64decode(event.get(name), validate=True))
+        except (TypeError, ValueError, binascii.Error):
+            raise Refused("summary %d has `%s` that is not base64"
+                          % (n, name)) from None
+        if got != size:
+            raise Refused("summary %d has %d `%s` cells for %d" % (n, got, name, size))
+        clean[name] = event[name]
+    return clean
+
+
 def _column(n: int, event: dict, head: dict | None) -> dict:
     if head is None:
         raise Refused("column %d belongs to no sounding this station has sent" % n)
@@ -311,7 +339,3 @@ def _finite(n: int, event: dict, name: str) -> float:
         raise Refused("event %d has `%s` that is not a finite number" % (n, name))
     return value
 
-
-def _pack(values: np.ndarray) -> str:
-    cells = np.clip(np.round(values), 0, 255).astype(np.uint8)
-    return base64.b64encode(cells.tobytes()).decode("ascii")

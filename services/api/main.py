@@ -84,9 +84,11 @@ def _warm(app: FastAPI, roots: list) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = db.init(db.connect())
-    # The live view, in memory: see `live`. Closed at shutdown so that every
-    # open event stream ends and the server is not left waiting on browsers.
-    app.state.live = live.Hub()
+    # The live view, in memory but for its summaries: see `live`. Closed at
+    # shutdown so that every open event stream ends and the server is not left
+    # waiting on browsers.
+    app.state.live = live.Hub(
+        keep=lambda station, summary: db.keep_summary(app.state.db, station, summary))
     app.state.archive_root = Path(os.environ.get("ARCHIVE_ROOT", "."))
     stamp = build.info()
     print(f"api {VERSION}{' ' + stamp['sha'] if stamp['sha'] else ''}"

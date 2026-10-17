@@ -53,6 +53,24 @@ def live_snapshot(station: str, request: Request) -> dict:
     return request.app.state.live.snapshot(station)
 
 
+#: Summaries one read may return: three days of a sounding every 300 s, and
+#: some to spare for a schedule that sounds more often.
+MAX_SUMMARIES = 2000
+
+
+@router.get("/stations/{station}/live/summaries", dependencies=[Depends(require_read)])
+def live_summaries(station: str, tx: str, since: float, until: float,
+                   request: Request) -> dict:
+    conn = request.app.state.db
+    return {"summaries": db.summaries(conn, station, tx, since, until, MAX_SUMMARIES),
+            "earliest": db.earliest_summary(conn, station, tx)}
+
+
+@router.get("/stations/{station}/live/days", dependencies=[Depends(require_read)])
+def live_days(station: str, request: Request) -> dict:
+    return {"days": db.summary_days(request.app.state.db, station)}
+
+
 @router.get("/stations/{station}/live/events", dependencies=[Depends(require_read)])
 def live_events(station: str, request: Request) -> StreamingResponse:
     return StreamingResponse(

@@ -320,6 +320,47 @@ def forget_station(conn: sqlite3.Connection, station: str) -> dict:
 PREVIEW_RETENTION_DAYS = 7
 
 
+SUMMARY_FIELDS = ("tx", "t0", "source", "f_lo_mhz", "f_step_mhz", "columns",
+                  "range_lo_km", "range_step_km", "rows", "km_per_ms", "snr", "pdp")
+
+
+def keep_summary(conn: sqlite3.Connection, station: str, summary: dict) -> None:
+    """Store one sounding's summary; a live one replaces an archived one, never back."""
+    conn.execute(
+        "INSERT INTO live_summary (station, %s) VALUES (?, %s)"
+        " ON CONFLICT(station, tx, t0) DO UPDATE SET %s"
+        " WHERE excluded.source = 'live' OR live_summary.source = 'archive'"
+        % (", ".join(SUMMARY_FIELDS), ", ".join("?" * len(SUMMARY_FIELDS)),
+           ", ".join("%s = excluded.%s" % (k, k) for k in SUMMARY_FIELDS[2:])),
+        (station, *[round(summary[k]) if k == "t0" else summary[k]
+                    for k in SUMMARY_FIELDS]))
+    conn.commit()
+
+
+def summaries(conn: sqlite3.Connection, station: str, tx: str, since: float,
+              until: float, limit: int) -> list[dict]:
+    """One transmitter's summaries from ``since`` to ``until``, oldest first."""
+    return rows(conn, "SELECT %s FROM live_summary WHERE station = ? AND tx = ?"
+                " AND t0 BETWEEN ? AND ? ORDER BY t0 LIMIT ?"
+                % ", ".join(SUMMARY_FIELDS), (station, tx, since, until, limit))
+
+
+def earliest_summary(conn: sqlite3.Connection, station: str, tx: str) -> int | None:
+    found = one(conn, "SELECT MIN(t0) AS t0 FROM live_summary"
+                " WHERE station = ? AND tx = ?", (station, tx))
+    return found["t0"] if found else None
+
+
+def summary_days(conn: sqlite3.Connection, station: str) -> dict:
+    """How many summaries each transmitter has on each UTC day."""
+    out: dict = {}
+    for row in rows(conn, "SELECT tx, date(t0, 'unixepoch') AS day, COUNT(*) AS n"
+                    " FROM live_summary WHERE station = ? GROUP BY tx, day",
+                    (station,)):
+        out.setdefault(row["tx"], {})[row["day"]] = row["n"]
+    return out
+
+
 def save_preview(conn: sqlite3.Connection, station: str, tx: str,
                  image: bytes, **meta: Any) -> None:
     """Store, or replace, one station's newest picture of one transmitter.

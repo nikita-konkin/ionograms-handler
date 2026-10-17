@@ -829,6 +829,33 @@ the files lack: on 2026-10-17 it added `live_ionogram=true` and
 relying on it: drift false and an unchanged `sounder_hash` mean the sounder
 reads what it read before.
 
+### An ionozond station: the live view's history
+
+The SNR and PDP strips on `/ui/live` show three days and scroll back as far
+as the server holds summaries (issue #12). The server keeps every summary it
+builds from live columns, and the live feed fills in the rest from the
+products the station already has: a worker beside the feed reads each
+`lfm_ionogram-*.h5` under `live_dir` and `backfill_dirs`, summarises it as the
+server summarises a live sounding, and posts a few after each live batch.
+
+Once an hour (`backfill_every_s`) it asks the server how many summaries it
+holds for each transmitter and UTC day, and resends every day that holds
+fewer than the station has products, newest day first. A live summary always
+wins over one read from a file. A product that cannot be read is logged once
+and skipped until the feed restarts.
+
+`backfill_dirs` lists folders beyond `live_dir` that hold older products, as
+paths on the laptop:
+
+```json
+"backfill_dirs": ["/home/samsung/ionograms"]
+```
+
+The NAS copy is reached over SSH, not mounted, so the laptop can offer only
+what it still keeps: `nas_keep_h5_days` of products. Restart
+`chirp-live.service` after editing `~/agent.json`, then watch the history
+arrive with `journalctl -u chirp-live -f` and on `/ui/live`.
+
 ### Case B — different networks
 
 **Do not port-forward this over the internet.** It is plain HTTP and one

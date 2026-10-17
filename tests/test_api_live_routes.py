@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import random
+import time
 
 import numpy as np
 import pytest
@@ -156,6 +157,11 @@ def test_live_page_queues_its_commands_through_the_command_route(client):
 def test_live_page_labels_start_in_russian(client):
     assert "Пуск</button>" in page(client, "?station=YOS&lang=ru"), (
         "the live page's Start is not labelled in Russian")
+
+
+def test_live_page_titles_its_strips_with_the_days_they_show(client):
+    assert "Signal/noise, 3 days" in page(client, "?station=YOS&lang=en"), (
+        "the live page's SNR strip does not say it shows three days")
 
 
 def test_live_page_defaults_to_a_station_that_is_live(client):
@@ -314,3 +320,107 @@ def test_live_page_reads_the_last_runs_from_the_health_report(client):
 def test_live_page_names_the_site_settings_in_russian(client):
     assert "Настройки станции</h3>" in page(client, "?station=YOS&lang=ru"), (
         "the live page's site settings are not named in Russian")
+
+
+def complete(client, t0, tx="cyprus1", columns=3, rows=8):
+    head = {"type": "sounding", "tx": tx, "t0": t0, "f_lo_mhz": 7.5,
+            "f_step_mhz": 0.04096, "columns": columns, "range_lo_km": 2551.3,
+            "range_step_km": 7.32, "rows": rows, "km_per_ms": 300.0}
+    cells = lambda: base64.b64encode(  # noqa: E731
+        np.random.randint(0, 256, rows, dtype=np.uint8).tobytes()).decode("ascii")
+    push(client, [head] + [{"type": "column", "tx": tx, "t0": t0, "index": i,
+                            "db": cells()} for i in range(columns)],
+         headers=agent()).raise_for_status()
+    return head
+
+
+def archive(client, head, value):
+    snr = base64.b64encode(bytes([value]) * head["columns"]).decode("ascii")
+    pdp = base64.b64encode(bytes([value]) * head["rows"]).decode("ascii")
+    event = dict({k: v for k, v in head.items() if k != "type"}, type="summary",
+                 snr=snr, pdp=pdp)
+    push(client, [event], headers=agent()).raise_for_status()
+    return snr
+
+
+def summaries(client, since, until, tx="cyprus1"):
+    return client.get("/stations/YOS/live/summaries", params={
+        "tx": tx, "since": since, "until": until}).json()
+
+
+def test_completed_sounding_is_read_back_through_the_range_route(client):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    complete(client, t0)
+    assert [s["t0"] for s in summaries(client, t0 - 1, t0 + 1)["summaries"]] == [t0], (
+        "a completed sounding was not read back through the range route")
+
+
+def test_range_route_leaves_out_a_summary_outside_the_range(client):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    complete(client, t0)
+    assert summaries(client, t0 + 1, t0 + 600)["summaries"] == [], (
+        "the range route returned a summary outside the range")
+
+
+def test_range_route_names_the_earliest_summary(client):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    complete(client, t0)
+    complete(client, t0 + 300)
+    assert summaries(client, t0 + 299, t0 + 301)["earliest"] == t0, (
+        "the range route did not name the earliest summary the station has")
+
+
+def test_archived_summary_does_not_replace_a_live_one(client):
+    head = complete(client, 1792161010 + 300 * random.randint(0, 99))
+    archive(client, head, random.randint(1, 255))
+    got = summaries(client, head["t0"], head["t0"])["summaries"]
+    assert got[0]["source"] == "live", (
+        "a summary from the archive replaced the live one")
+
+
+def test_live_summary_replaces_an_archived_one(client):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    archive(client, {"type": "sounding", "tx": "cyprus1", "t0": t0, "f_lo_mhz": 7.5,
+                     "f_step_mhz": 0.04096, "columns": 3, "range_lo_km": 2551.3,
+                     "range_step_km": 7.32, "rows": 8, "km_per_ms": 300.0}, 9)
+    complete(client, t0)
+    assert summaries(client, t0, t0)["summaries"][0]["source"] == "live", (
+        "a live summary did not replace the one from the archive")
+
+
+def test_archived_summary_is_read_back_with_its_cells(client):
+    head = {"type": "sounding", "tx": "cyprus1",
+            "t0": 1792161010 + 300 * random.randint(0, 99), "f_lo_mhz": 4.0,
+            "f_step_mhz": 0.05, "columns": random.randint(5, 50),
+            "range_lo_km": 2000.0, "range_step_km": 5.0,
+            "rows": random.randint(5, 50), "km_per_ms": 150.0}
+    snr = archive(client, head, random.randint(1, 255))
+    assert summaries(client, head["t0"], head["t0"])["summaries"][0]["snr"] == snr, (
+        "a summary from the archive did not come back with its cells")
+
+
+def test_days_route_counts_each_transmitter_per_day(client):
+    t0 = 1792195200 + 300 * random.randint(0, 200)
+    for k in range(3):
+        complete(client, t0 + 300 * k, tx="NIC1")
+    days = client.get("/stations/YOS/live/days").json()["days"]
+    assert days == {"NIC1": {time.strftime("%Y-%m-%d", time.gmtime(t0)): 3}}, (
+        "the days route did not count the summaries of each transmitter per day")
+
+
+def test_live_page_reads_history_through_the_range_route(client):
+    assert "'/live/summaries?tx='" in page(client), (
+        "the live page does not read its history through the range route")
+
+
+def test_live_page_scrolls_history_longer_than_three_days(client):
+    assert "const SHOWN_DAYS = 3;" in page(client), (
+        "the live page does not show three days of history at a time")
+
+
+def test_kept_summary_is_committed_for_other_connections(client):
+    from services.api import db
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    complete(client, t0)
+    assert len(db.summaries(db.connect(), "YOS", "cyprus1", t0, t0, 10)) == 1, (
+        "a kept summary was not committed where another connection could read it")
