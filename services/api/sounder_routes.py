@@ -9,7 +9,6 @@ operator sees collisions while still typing.
 
 from __future__ import annotations
 
-import json
 import time
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
@@ -25,9 +24,8 @@ router = APIRouter(tags=["ionozond"])
 @router.get("/stations/{station}/ionozond", dependencies=[Depends(require_read)])
 def schedule(station: str, request: Request) -> dict:
     conn = request.app.state.db
-    row = db.latest_health(conn, station)
-    config = json.loads(row["document"] or "{}").get("sounder_config") if row else None
-    if not isinstance(config, dict):
+    row, config = sounder.latest(conn, station)
+    if not config:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             f"{station} reports no ionozond schedule")
     document = config.get("document")

@@ -67,6 +67,12 @@ FLAGS = ("active", "h5_archive", "keep_lfs", "save_raw_voltage")
 
 #: A new transmitter's name: ``services/api/control_routes.py``'s ``CODE_RE``.
 #: It becomes the dash-delimited ``txname`` of the ``.h5`` archive, so no dash.
+#: What a short report carries. The health loop sends the whole block when
+#: any of them changes, and every :data:`WHOLE_S` regardless; the server keeps
+#: the last whole one. See the phase 4 design, section 10.
+SUMMARY = ("base", "sounder_hash", "site_hash", "pending", "drift", "problems")
+WHOLE_S = 3600.0
+
 CODE_RE = re.compile(r"^[A-Za-z0-9_.]{1,24}$")
 
 SPAN = re.compile(r"(\d+(?:\.\d+)?)\s*(us|ms|min|s|h|d)?")
@@ -346,6 +352,11 @@ def vetted(params: dict, reported: dict) -> tuple:
                           reported.get("timeout_stop_s"))
 
 
+def summary(block: dict) -> dict:
+    """A report's block reduced to what says whether it changed, marked short."""
+    return dict({key: block.get(key) for key in SUMMARY}, short=True)
+
+
 def regenerable(params: dict, reported: dict) -> None:
     """Refuse a ``regenerate_ionozond`` that would not write what the operator saw.
 
@@ -407,6 +418,7 @@ def _state(config: StationConfig) -> dict:
     except (control.ControlError, OSError) as exc:
         out["site"] = None
         out["problems"].append("could not read the site settings: %s" % exc)
+    out["site_hash"] = (out["site"] or {}).get("hash")
     return out
 
 

@@ -178,13 +178,27 @@ def obey(config: StationConfig, result: PassResult, *,
             result.errors.append(f"ack {command.id}: {exc}")
 
 
+@dataclass
+class SounderState:
+    """The ionozond block the server last took whole, carried between passes.
+
+    In memory, as :class:`PreviewState` is: a restarted agent sends the block
+    whole once more, and the server takes it.
+    """
+
+    summary: dict = field(default_factory=dict)
+    at: float = 0.0
+
+
 def run_once(config: StationConfig, *, opener: Callable | None = None,
              include_epoch: bool = True,
-             previews: PreviewState | None = None) -> PassResult:
+             previews: PreviewState | None = None,
+             sounder: SounderState | None = None) -> PassResult:
     """Collect health, push it, then pull and execute any pending commands.
 
     ``previews`` carries what the server already has; without one every pass
-    re-sends, which is what a single ``--once`` run should do.
+    re-sends, which is what a single ``--once`` run should do. ``sounder``
+    does the same for the ionozond block: without one it always goes whole.
     """
     result = PassResult()
 
@@ -208,12 +222,20 @@ def run_once(config: StationConfig, *, opener: Callable | None = None,
         result.errors.append(f"collect: {type(exc).__name__}: {exc}")
         return result
 
+    whole = report.sounder_config
+    if whole is not None and sounder is not None and (
+            ionozond.summary(whole) == sounder.summary
+            and time.time() - sounder.at < ionozond.WHOLE_S):
+        report.sounder_config = ionozond.summary(whole)
+
     if config.server_url:
         try:
             client.push_health(config, report, opener=opener)
             result.pushed = True
         except client.TransportError as exc:
             result.errors.append(f"push: {exc}")
+        if result.pushed and sounder is not None and report.sounder_config is whole:
+            sounder.summary, sounder.at = ionozond.summary(whole), time.time()
 
         if scan is not None:
             _push_previews(config, scan, previews or PreviewState(),
@@ -229,10 +251,11 @@ def run_forever(config: StationConfig, *, opener: Callable | None = None,
                 max_passes: int | None = None) -> None:
     """``run_once`` on an interval. ``max_passes`` exists so a test can stop."""
     passes = 0
-    previews = PreviewState()
+    previews, sounder = PreviewState(), SounderState()
     while max_passes is None or passes < max_passes:
         started = time.time()
-        result = run_once(config, opener=opener, previews=previews)
+        result = run_once(config, opener=opener, previews=previews,
+                          sounder=sounder)
         for problem in result.errors:
             print(f"agent: {problem}", file=sys.stderr)
         if result.report is not None and not result.healthy:

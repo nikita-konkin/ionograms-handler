@@ -19,6 +19,11 @@ itself. If the reply never comes, the next report opens it (phase 4, issue #8).
 
 Every report's literals are filed under their hash (:func:`keep`), so an
 epoch's changes are worked out against the configuration it replaces.
+
+**A short report carries the summary alone** (``ionozond.SUMMARY``): the agent
+sends the block whole only when the summary changes, and hourly otherwise. The
+server keeps the last whole block, and :func:`latest` hands it out, marked
+``stale`` when the latest summary no longer matches it.
 """
 
 from __future__ import annotations
@@ -42,18 +47,33 @@ class Unvetted(Exception):
         self.status = status
 
 
+def latest(conn: sqlite3.Connection, station: str) -> tuple:
+    """The station's last health report, and the whole ``sounder_config`` in force."""
+    row = db.latest_health(conn, station)
+    if row is None:
+        return None, {}
+    found = _config(json.loads(row["document"] or "{}"))
+    if not found.get("short"):
+        return row, found
+    kept = db.block(conn, station) or {}
+    return row, dict(kept or found, stale=ionozond.summary(kept) != found)
+
+
 def reported(conn: sqlite3.Connection, station: str) -> dict:
     """The station's last ``sounder_config``, or why there is none to vet against."""
-    row = db.latest_health(conn, station)
+    row, sounder = latest(conn, station)
     if row is None:
         raise Unvetted(409, (
             "%s has sent no health report, so there is no schedule to check this "
             "change against: start the health loop (chirp-agent.service) on the "
             "laptop" % station))
-    document = json.loads(row["document"] or "{}")
-    sounder = _config(document)
+    if sounder.get("stale"):
+        raise Unvetted(409, (
+            "%s's last whole schedule report is out of date: wait for the next "
+            "report, which goes whole within a minute of any change" % station))
     if not sounder:
-        names = {m.get("name") for m in document.get("metrics") or []}
+        names = {m.get("name") for m in json.loads(
+            row["document"] or "{}").get("metrics") or []}
         raise Unvetted(409, (
             "%s runs ionozond, but its agent is too old to report the schedule: "
             "update the agent on the laptop" % station
@@ -110,8 +130,10 @@ def vet_site(conn: sqlite3.Connection, station: str, params: dict) -> None:
 
 
 def keep(conn: sqlite3.Connection, station: str, document: dict) -> None:
-    """File what a report says the sounder reads, under its hash."""
+    """Keep a whole block, and file what it says the sounder reads under its hash."""
     found = _config(document)
+    if found and not found.get("short"):
+        db.keep_block(conn, station, found)
     if found.get("sounder_hash") and isinstance(found.get("sounder"), dict):
         db.keep_literals(conn, station, found["sounder_hash"], found["sounder"])
 

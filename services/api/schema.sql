@@ -99,6 +99,17 @@ CREATE TABLE IF NOT EXISTS config_epoch (
 -- them. Kept so an epoch's changes can be worked out against any earlier
 -- configuration, not only the previous report's. Provenance, like the epochs:
 -- never swept, and kept by `forget_station`.
+-- The last whole `sounder_config` block an ionozond station sent. Its agent
+-- sends the block whole only when the summary changes, and hourly otherwise;
+-- the reports between carry the summary alone. The panel and the vetting read
+-- this row, checked against the latest summary. A live view, one row per
+-- station, dropped by `forget_station`.
+CREATE TABLE IF NOT EXISTS sounder_block (
+    station     TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL,
+    block       TEXT NOT NULL             -- JSON: services.agent.ionozond.state
+);
+
 CREATE TABLE IF NOT EXISTS sounder_literals (
     station     TEXT NOT NULL,
     config_hash TEXT NOT NULL,

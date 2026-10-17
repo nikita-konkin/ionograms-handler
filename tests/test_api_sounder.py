@@ -384,3 +384,58 @@ def test_the_epoch_for_an_unacknowledged_change_records_what_changed(client):
     health(client, changed)
     assert "cyprus1" in epochs(client)[-1]["changes"], (
         "the epoch for an unacknowledged change did not record what changed")
+
+
+def test_a_short_report_keeps_the_last_whole_block(client):
+    health(client)
+    health(client, ionozond.summary(reported()))
+    r = client.get("/stations/yoshkar-ola/ionozond")
+    assert r.json()["sounder_config"]["document"] == reported()["document"], (
+        "a short report lost the last whole block")
+
+
+def test_a_change_is_vetted_against_the_kept_block(client):
+    health(client)
+    health(client, ionozond.summary(reported()))
+    r = queue(client, edit(reported(), lambda d: d["schedule"]["cyprus1"].update(
+        chirpt=str(random.randint(11, 40)))))
+    assert r.status_code == 200, "a change was not vetted against the kept block"
+
+
+def test_a_short_report_that_disagrees_with_the_kept_block_refuses_a_change(client):
+    health(client)
+    health(client, dict(ionozond.summary(reported()),
+                        sounder_hash="%064x" % random.getrandbits(256)))
+    r = queue(client, edit(reported(), lambda d: d["schedule"]["cyprus1"].update(
+        chirpt="20")))
+    assert r.status_code == 409, "a change was vetted against an outdated block"
+
+
+def test_a_short_report_with_no_kept_block_refuses_a_change(client):
+    health(client, ionozond.summary(reported()))
+    r = queue(client, edit(reported(), lambda d: d["schedule"]["cyprus1"].update(
+        chirpt="20")))
+    assert r.status_code == 409, "a change was vetted with no whole block kept"
+
+
+def test_the_schedule_read_says_when_its_block_is_outdated(client):
+    health(client)
+    health(client, dict(ionozond.summary(reported()), pending=True))
+    r = client.get("/stations/yoshkar-ola/ionozond")
+    assert r.json()["sounder_config"]["stale"] is True, (
+        "the schedule read did not say its block is outdated")
+
+
+def test_a_station_change_after_short_reports_records_what_changed(client):
+    health(client)
+    health(client, ionozond.summary(reported()))
+    health(client, reported(switched("active", "true")))
+    assert "sounders.norilsk.cf" in epochs(client)[0]["changes"], (
+        "a change after short reports did not record what the sounder now reads")
+
+
+def test_forgetting_a_station_drops_its_kept_block(client):
+    health(client)
+    db.forget_station(client.app.state.db, "yoshkar-ola")
+    assert db.block(client.app.state.db, "yoshkar-ola") is None, (
+        "forgetting a station kept its schedule block")

@@ -303,6 +303,7 @@ def forget_station(conn: sqlite3.Connection, station: str) -> dict:
                             (station,)).rowcount
     previews = conn.execute("DELETE FROM station_preview WHERE station = ?",
                             (station,)).rowcount
+    conn.execute("DELETE FROM sounder_block WHERE station = ?", (station,))
     conn.commit()
     return {"health_reports": reports, "commands": commands,
             "previews": previews, "kept": kept}
@@ -618,6 +619,22 @@ def record_epoch(conn: sqlite3.Connection, station: str, changes: dict,
          config_hash))
     conn.commit()
     return int(cur.lastrowid)
+
+
+def keep_block(conn: sqlite3.Connection, station: str, block: dict) -> None:
+    """Store, or replace, a station's last whole ``sounder_config``."""
+    conn.execute("INSERT INTO sounder_block (station, received_at, block)"
+                 " VALUES (?, ?, ?) ON CONFLICT(station) DO UPDATE SET"
+                 " received_at = excluded.received_at, block = excluded.block",
+                 (station, utcnow(), json.dumps(block)))
+    conn.commit()
+
+
+def block(conn: sqlite3.Connection, station: str) -> dict | None:
+    """A station's last whole ``sounder_config``, or None if it never sent one."""
+    row = one(conn, "SELECT block FROM sounder_block WHERE station = ?",
+              (station,))
+    return None if row is None else json.loads(row["block"])
 
 
 def keep_literals(conn: sqlite3.Connection, station: str, config_hash: str,

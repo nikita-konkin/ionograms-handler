@@ -195,3 +195,10 @@ def test_control_is_untouched_by_a_site_change(tmp_path, monkeypatch):
     siteconfig.apply(config, change(config, NAS_BWLIMIT="5"))
     assert calls == [], "a site change restarted something"
 
+
+
+def test_the_report_carries_the_site_hash(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = station(tmp_path, b"NAS_BWLIMIT=10\n")
+    assert ionozond.state(config)["site_hash"] == siteconfig.report(config)["hash"], (
+        "the schedule report did not carry the site settings' hash")
