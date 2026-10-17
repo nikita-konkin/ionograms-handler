@@ -1470,6 +1470,11 @@ MESSAGES: dict[str, str] = {
     "live.sched.lat": "Lat., °",
     "live.sched.lon": "Lon., °",
     "live.sched.band": "Band, MHz",
+    "live.sched.chirp_time": "Chirp time, s",
+    "live.sched.chirp_time_hint": (
+        "The second the sweep passes 0 Hz, as /ui/sources lists verified "
+        "slots: the offset less the time the sweep takes to reach the "
+        "band's low edge, within the period"),
     "live.sched.fft_count_index": "General FFT size",
     "live.sched.keep_lfs": "Keep LFS files",
     "live.sched.keep_lfs_hours": "Keep them for, h",

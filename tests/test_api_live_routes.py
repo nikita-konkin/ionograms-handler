@@ -194,6 +194,17 @@ def test_live_page_says_a_stop_waits_for_the_sounding_in_progress(client):
         "the live page does not say a queued stop waits for the sounding in progress")
 
 
+def test_live_page_shows_the_chirp_time_after_the_band(client):
+    text = page(client, "?station=YOS&lang=en")
+    assert text.find("Chirp time, s</th>") > text.find("Band, MHz</th>") > 0, (
+        "the schedule does not show the chirp time after the band")
+
+
+def test_live_page_names_the_chirp_time_in_russian(client):
+    assert "Время ЛЧМ, с</th>" in page(client, "?station=YOS&lang=ru"), (
+        "the schedule does not name the chirp time in Russian")
+
+
 def test_live_page_carries_a_schedule_panel(client):
     assert '<section class="panel" id="sched" hidden>' in page(client), (
         "the live page has no schedule panel")
