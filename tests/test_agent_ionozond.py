@@ -6,6 +6,7 @@ import copy
 import os
 import random
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ import pytest
 from services.agent import client, control, health, ionozond, runner
 from services.agent.config import StationConfig
 from services.agent.qsettings import Ini
-from services.agent.sounderconfig import build
+from services.agent.sounderconfig import build, literals
 
 DATA = Path(__file__).resolve().parent / "ionozond"
 
@@ -551,3 +552,247 @@ def test_the_first_capture_after_midnight_is_at_its_chirptime():
     first = ionozond.captures(described()["document"], midnight, 1)[0]
     assert first["start"] == midnight + 10, (
         "the first capture after midnight was not at its chirptime")
+
+
+def hand_edit(config, old: bytes, new: bytes) -> None:
+    path = config.console_settings / "config.ini"
+    path.write_bytes(path.read_bytes().replace(old, new))
+
+
+def drifted(config) -> dict:
+    hand_edit(config, b"whiten_n=20000", b"whiten_n=%d" % random.randint(20001, 90000))
+    now = ionozond.state(config)
+    return {"base": now["base"], "sounder_hash": now["sounder_hash"]}
+
+
+def archived(tmp_path, data_dir: bytes, live_dir=None):
+    config = laptop(tmp_path)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    with open(str(config.sounder_defaults), "ab") as fh:
+        fh.write(b"IONOZOND_ARCHIVE=" + archive.as_posix().encode() + b"/\n")
+    hand_edit(config, b"data_dir=/tmp/igs/", b"data_dir=" + data_dir)
+    return replace(config, live_dir=archive if live_dir is None else live_dir)
+
+
+def test_regenerate_writes_what_the_ini_files_generate(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    ionozond.regenerate(config, drifted(config))
+    console = config.console_settings
+    assert (config.live_dir / "chirp_config.py").read_text(encoding="utf-8") == build(
+        Ini.read(console / "schedule.ini"), Ini.read(console / "config.ini")), (
+        "regenerate did not write what the ini files generate")
+
+
+def test_regenerate_leaves_the_ini_files_alone(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    shown = drifted(config)
+    before = {k: v for k, v in files(config).items() if k != "chirp_config.py"}
+    ionozond.regenerate(config, shown)
+    after = {k: v for k, v in files(config).items() if k != "chirp_config.py"}
+    assert after == before, "regenerate changed the ini files it reads"
+
+
+def test_regenerate_refuses_a_moved_base(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    shown = dict(drifted(config), base="0" * 64)
+    assert ionozond.regenerate(config, shown)[0].ok is False, (
+        "regenerate went ahead against a schedule that has changed since")
+
+
+def test_regenerate_refuses_a_moved_sounder_hash(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    shown = dict(drifted(config), sounder_hash="f" * 64)
+    assert ionozond.regenerate(config, shown)[0].ok is False, (
+        "regenerate went ahead against a sounder file that has changed since")
+
+
+def test_regenerate_refuses_when_nothing_has_drifted(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    now = ionozond.state(config)
+    results = ionozond.regenerate(config, {"base": now["base"],
+                                           "sounder_hash": now["sounder_hash"]})
+    assert "nothing to regenerate" in results[0].detail, (
+        "regenerate did not say that an undrifted station has nothing to regenerate")
+
+
+def test_regenerate_refuses_a_schedule_the_checker_calls_wrong(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    path = config.console_settings / "schedule.ini"
+    path.write_bytes(path.read_bytes().replace(b"rep=300\nchirpt=10",
+                                               b"rep=0\nchirpt=10"))
+    now = ionozond.state(config)
+    results = ionozond.regenerate(config, {"base": now["base"],
+                                           "sounder_hash": now["sounder_hash"]})
+    assert "hangs" in results[0].detail, (
+        "regenerate wrote a schedule whose rep 0 hangs the sounder")
+
+
+def test_regenerate_asks_for_a_try_restart_without_waiting(tmp_path, monkeypatch):
+    calls = systemd(monkeypatch)
+    config = laptop(tmp_path)
+    ionozond.regenerate(config, drifted(config))
+    assert calls == [("try-restart", "ionozond-sounder.service", True)], (
+        "the regenerated file was not taken up by a try-restart without waiting")
+
+
+def test_a_refused_restart_puts_the_old_sounder_file_back(tmp_path, monkeypatch):
+    systemd(monkeypatch, accept=False)
+    config = laptop(tmp_path)
+    shown = drifted(config)
+    before = files(config)
+    ionozond.regenerate(config, shown)
+    assert files(config) == before, (
+        "a refused restart left the regenerated file in place")
+
+
+def test_a_regeneration_journals_what_the_sounder_now_reads(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    journal = ionozond.regenerate(config, drifted(config))[0].journal
+    assert "whiten_n" in journal["changes"], (
+        "the regeneration did not journal what the sounder now reads")
+
+
+def test_a_regeneration_journals_the_new_sounder_hash(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    journal = ionozond.regenerate(config, drifted(config))[0].journal
+    assert journal["config_hash"] == ionozond.state(config)["sounder_hash"], (
+        "the regeneration journalled a hash other than what the sounder now reads")
+
+
+def test_a_hand_edit_to_the_settings_reports_drift(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    drifted(config)
+    assert ionozond.state(config)["drift"] is True, (
+        "a hand edit to config.ini did not report drift")
+
+
+def test_after_regenerating_nothing_has_drifted(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    ionozond.regenerate(config, drifted(config))
+    assert ionozond.state(config)["drift"] is False, (
+        "the station still reported drift after regenerating")
+
+
+def test_a_drifted_report_carries_what_regenerating_would_give(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    drifted(config)
+    now = ionozond.state(config)
+    console = config.console_settings
+    assert now["regenerated"] == ionozond.flat(literals(build(
+        Ini.read(console / "schedule.ini"), Ini.read(console / "config.ini")))), (
+        "a drifted report did not carry what regenerating would give")
+
+
+def test_an_undrifted_report_carries_nothing_to_regenerate(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    assert "regenerated" not in ionozond.state(laptop(tmp_path)), (
+        "an undrifted report carried literals to regenerate")
+
+
+def test_the_drift_refusal_no_longer_sends_anyone_to_the_console():
+    reported = dict(described(), drift=True)
+    with pytest.raises(control.ControlError) as refused:
+        ionozond.vetted(dict(reported["document"], base=reported["base"]), reported)
+    assert "dialog" not in str(refused.value), (
+        "the drift refusal still sends the operator to the console's dialog")
+
+
+def test_regenerate_refuses_a_data_dir_naming_another_folder(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = archived(tmp_path, b"/tmp/igs/")
+    results = ionozond.regenerate(config, drifted(config))
+    assert "IONOZOND_ARCHIVE" in results[0].detail, (
+        "regenerate did not refuse a data_dir naming another folder than "
+        "IONOZOND_ARCHIVE")
+
+
+def test_regenerate_refuses_a_live_dir_naming_another_folder(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    archive = (tmp_path / "archive").as_posix().encode()
+    config = archived(tmp_path, archive, live_dir=tmp_path / "elsewhere")
+    results = ionozond.regenerate(config, drifted(config))
+    assert "live_dir" in results[0].detail, (
+        "regenerate did not refuse a live_dir naming another folder than "
+        "IONOZOND_ARCHIVE")
+
+
+def test_regenerate_accepts_the_same_folder_written_differently(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    config = archived(tmp_path, b"~/archive")
+    assert ionozond.regenerate(config, drifted(config))[0].ok is True, (
+        "regenerate refused a data_dir that names IONOZOND_ARCHIVE another way")
+
+
+def test_the_agent_dispatches_regenerate_to_the_sounder(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(ionozond, "regenerate", lambda config, params: seen.append(
+        params) or [])
+    runner._dispatch(laptop(tmp_path), client.Command(
+        "1", "regenerate_ionozond", {"base": "x"}))
+    assert seen == [{"base": "x"}], "regenerate_ionozond did not reach regenerate"
+
+
+def general(value, key="nas_keep_h5_days") -> dict:
+    reported = described()
+    wanted = copy.deepcopy(reported["document"])
+    wanted["general"][key] = value
+    return ionozond.merged(reported["document"], wanted, reported["receivers"])
+
+
+@pytest.mark.parametrize("days", ["-1", "1", "21", "3650", 21])
+def test_the_local_h5_retention_takes_minus_one_or_a_day_count(days):
+    assert general(days)["general"]["nas_keep_h5_days"] == str(days), (
+        "a valid local .h5 retention was not accepted")
+
+
+@pytest.mark.parametrize("days", ["0", "-2", "3651", "1.5", "x", True])
+def test_the_local_h5_retention_refuses_anything_else(days):
+    with pytest.raises(control.ControlError, match="nas_keep_h5_days"):
+        general(days)
+
+
+def test_the_h5_archive_switch_can_be_set_from_the_web():
+    assert general("false", "h5_archive")["general"]["h5_archive"] == "false", (
+        "the .h5 archive switch could not be set from the web")
+
+
+def test_the_h5_archive_switch_takes_only_true_or_false():
+    with pytest.raises(control.ControlError, match="h5_archive"):
+        general("off", "h5_archive")
+
+
+def test_a_retention_change_is_written_into_the_console_settings(
+        tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    days = random.randint(1, 3650)
+    ionozond.apply(config, request(config, lambda d: d["general"].update(
+        nas_keep_h5_days=str(days))))
+    assert b"nas_keep_h5_days=%d" % days in (
+        config.console_settings / "config.ini").read_bytes(), (
+        "the local .h5 retention did not reach config.ini")
+
+
+def test_the_editable_document_carries_the_local_h5_retention(tmp_path, monkeypatch):
+    systemd(monkeypatch)
+    config = laptop(tmp_path)
+    path = config.console_settings / "config.ini"
+    path.write_bytes(path.read_bytes().replace(
+        b"[General]\n", b"[General]\nnas_keep_h5_days=21\n"))
+    regenerate(config.console_settings, config.live_dir / "chirp_config.py")
+    assert ionozond.state(config)["document"]["general"]["nas_keep_h5_days"] == "21", (
+        "the editable document left out the local .h5 retention")

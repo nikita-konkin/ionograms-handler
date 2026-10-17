@@ -10,9 +10,9 @@ the console would, or the next dialog closed on the laptop would undo it.
 Two fingerprints, for two questions:
 
 * ``base`` hashes the **editable document** -- every transmitter in
-  ``schedule.ini`` but the receiver, switched on or not, and the four
-  parameters. A queued edit carries the ``base`` it was made against, and is
-  refused if the schedule has changed since.
+  ``schedule.ini`` but the receiver, switched on or not, and the
+  parameters the web may set. A queued edit carries the ``base`` it was
+  made against, and is refused if the schedule has changed since.
 * ``sounder_hash`` hashes **what the sounder reads**: the literals of
   ``chirp_config.py``. It alone drives the configuration history; editing a
   transmitter that is switched off changes nothing the sounder reads, and
@@ -21,7 +21,8 @@ Two fingerprints, for two questions:
 **Drift.** On every health pass and before every edit the console's files are
 regenerated in memory and compared with ``chirp_config.py`` as the sounder
 would read it. When they differ, someone edited one without the other, and an
-edit is refused until the console regenerates the file.
+edit is refused until :func:`regenerate` writes the file again. Since phase 4
+(issue #8) the console is retired, so drift means a hand edit of an ini file.
 
 **Taking it up.** The write is followed by ``systemctl --no-block
 try-restart``: a running sounder finishes the sounding in progress on SIGTERM
@@ -44,12 +45,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import control, health, schedulecheck
+from . import control, health, schedulecheck, siteconfig
 from .config import StationConfig
 from .qsettings import PLAIN, Ini, IniError
 from .sounderconfig import UnreadableConfig, build, literals, parsed
 
 NAME = "set_ionozond"
+REGENERATE = "regenerate_ionozond"
 
 #: The fields of a transmitter the web may set, and those a new one must have.
 FIELDS = ("active", "cf", "chirpt", "dur", "fft_count", "lat", "lon", "rate", "rep")
@@ -57,12 +59,20 @@ REQUIRED = ("active", "cf", "chirpt", "dur", "lat", "lon", "rate", "rep")
 
 #: The parameters the web may set, from ``[General]`` in ``config.ini``.
 #: ``nas_dest``, ``data_dir``, the receive chain and the processing internals
-#: are left out on purpose; see the design document, section 3.
-GENERAL = ("fft_count_index", "keep_lfs", "keep_lfs_hours", "save_raw_voltage")
-FLAGS = ("active", "keep_lfs", "save_raw_voltage")
+#: are left out on purpose: they are hand edits plus Regenerate. See the
+#: phase 3 design, section 3, and the phase 4 design, section 2.
+GENERAL = ("fft_count_index", "h5_archive", "keep_lfs", "keep_lfs_hours",
+           "nas_keep_h5_days", "save_raw_voltage")
+FLAGS = ("active", "h5_archive", "keep_lfs", "save_raw_voltage")
 
 #: A new transmitter's name: ``services/api/control_routes.py``'s ``CODE_RE``.
 #: It becomes the dash-delimited ``txname`` of the ``.h5`` archive, so no dash.
+#: What a short report carries. The health loop sends the whole block when
+#: any of them changes, and every :data:`WHOLE_S` regardless; the server keeps
+#: the last whole one. See the phase 4 design, section 10.
+SUMMARY = ("base", "sounder_hash", "site_hash", "pending", "drift", "problems")
+WHOLE_S = 3600.0
+
 CODE_RE = re.compile(r"^[A-Za-z0-9_.]{1,24}$")
 
 SPAN = re.compile(r"(\d+(?:\.\d+)?)\s*(us|ms|min|s|h|d)?")
@@ -108,23 +118,17 @@ def state(config: StationConfig) -> dict:
 
 def apply(config: StationConfig, params: dict) -> list:
     """Check, write and take up one ``set_ionozond``; every outcome acknowledged."""
-    try:
-        files = _files(config)
-        with _locked((files.schedule, files.config)):
-            plan = _plan(config, files, params)
-            active = health._show(config.target, "ActiveState")[1] or "unknown"
-            _written(plan)
-            restart = control.systemctl("try-restart", config.target, no_block=True)
-            if not restart.ok:
-                _restored(plan)
-                return [control.CommandResult(
-                    NAME, False, "rolled back: the restart was refused, and the "
-                                 "sounder still runs the configuration it started "
-                                 "with. %s" % restart.detail), restart]
-    except (control.ControlError, IniError, UnreadableConfig, OSError) as exc:
-        return [control.CommandResult(NAME, False, str(exc))]
-    return [control.CommandResult(NAME, True, _said(plan, active),
-                                  journal=plan.journal), restart]
+    return _carried(config, NAME, lambda files: _plan(config, files, params))
+
+
+def regenerate(config: StationConfig, params: dict) -> list:
+    """Write ``chirp_config.py`` again from the ini files, after a hand edit.
+
+    ``params`` carries the ``base`` and ``sounder_hash`` the operator was shown,
+    so a file that changed since is refused rather than overwritten.
+    """
+    return _carried(config, REGENERATE, lambda files: _regenerated(
+        config, files, params))
 
 
 def document(schedule: Ini, config: Ini) -> dict:
@@ -313,6 +317,12 @@ def described(schedule: Ini, read: Ini, text: str) -> dict:
         out["sounder"], out["sounder_hash"] = None, None
         out["problems"].append(str(exc))
     out["drift"] = _drifted(schedule, read, text)
+    if out["drift"]:
+        try:
+            out["regenerated"] = flat(literals(build(schedule, read)))
+        except UnreadableConfig as exc:
+            out["problems"].append("regenerating would give an unreadable file: %s"
+                                   % exc)
     return out
 
 
@@ -326,10 +336,10 @@ def vetted(params: dict, reported: dict) -> tuple:
     """
     if reported.get("drift"):
         raise control.ControlError(
-            "chirp_config.py no longer matches the console's schedule.ini and "
-            "config.ini, so one was changed without the other. The console must "
-            "regenerate it: open its parameters dialog on the laptop and press OK, "
-            "then make the change again.")
+            "chirp_config.py no longer matches schedule.ini and config.ini, so "
+            "one was changed without the other. Regenerate it from the ini files, "
+            "with Regenerate on /ui/live or `python3 -m services.agent ionozond "
+            "regenerate` on the laptop, then make the change again.")
     if params.get("base") != reported.get("base"):
         raise control.ControlError(
             "the schedule changed on the station after this edit was made; reload "
@@ -340,6 +350,34 @@ def vetted(params: dict, reported: dict) -> tuple:
         raise control.ControlError("this change changes nothing")
     return wanted, issues(wanted, sites, reported["settings"],
                           reported.get("timeout_stop_s"))
+
+
+def summary(block: dict) -> dict:
+    """A report's block reduced to what says whether it changed, marked short."""
+    return dict({key: block.get(key) for key in SUMMARY}, short=True)
+
+
+def regenerable(params: dict, reported: dict) -> None:
+    """Refuse a ``regenerate_ionozond`` that would not write what the operator saw.
+
+    The one check, made by the server against the last report and again by the
+    agent against the files: the ``base`` and ``sounder_hash`` shown must still
+    stand, there must be drift to undo, and the console's checks must pass.
+    """
+    if (params.get("base") != reported.get("base")
+            or params.get("sounder_hash") != reported.get("sounder_hash")):
+        raise control.ControlError(
+            "the settings or chirp_config.py changed on the station after this was "
+            "shown; reload and look again")
+    if not reported.get("drift"):
+        raise control.ControlError(
+            "chirp_config.py already holds what schedule.ini and config.ini "
+            "generate: there is nothing to regenerate")
+    errors = [i for i in issues(reported["document"], reported.get("receivers") or [],
+                                reported["settings"], reported.get("timeout_stop_s"))
+              if i.level == schedulecheck.ERROR]
+    if errors:
+        raise control.ControlError("refused: " + "; ".join(_line(i) for i in errors))
 
 
 def captures(wanted: dict, now: float, count: int) -> list:
@@ -373,6 +411,14 @@ def _state(config: StationConfig) -> dict:
     except OSError as exc:
         out["pending"] = None
         out["problems"].append("could not keep %s: %s" % (config.sounder_seen, exc))
+    out["nas_dest"] = (read.value("", "nas_dest") if "nas_dest" in read.keys("")
+                       else None)
+    try:
+        out["site"] = siteconfig.report(config)
+    except (control.ControlError, OSError) as exc:
+        out["site"] = None
+        out["problems"].append("could not read the site settings: %s" % exc)
+    out["site_hash"] = (out["site"] or {}).get("hash")
     return out
 
 
@@ -461,6 +507,73 @@ def _plan(config: StationConfig, files: Files, params: dict) -> Plan:
                 journal)
 
 
+def _carried(config: StationConfig, name: str, planned) -> list:
+    """Lock, plan, write and ``try-restart``; roll back if the restart is refused."""
+    try:
+        files = _files(config)
+        with _locked((files.schedule, files.config)):
+            plan = planned(files)
+            active = health._show(config.target, "ActiveState")[1] or "unknown"
+            _written(plan)
+            restart = control.systemctl("try-restart", config.target, no_block=True)
+            if not restart.ok:
+                _restored(plan)
+                return [control.CommandResult(
+                    name, False, "rolled back: the restart was refused, and the "
+                                 "sounder still runs the configuration it started "
+                                 "with. %s" % restart.detail), restart]
+    except (control.ControlError, IniError, UnreadableConfig, OSError) as exc:
+        return [control.CommandResult(name, False, str(exc))]
+    return [control.CommandResult(name, True, _said(plan, active),
+                                  journal=plan.journal), restart]
+
+
+def _regenerated(config: StationConfig, files: Files, params: dict) -> Plan:
+    schedule, read = Ini.read(files.schedule), Ini.read(files.config)
+    raw = files.sounder.read_bytes()
+    text = raw.decode("utf-8")
+    refusal = _mismatch(read, files) or _folders(config, read)
+    if refusal:
+        raise control.ControlError(refusal)
+    current = dict(described(schedule, read, text), timeout_stop_s=_seconds(
+        health._show(config.target, "TimeoutStopUSec")[1]))
+    regenerable(params, current)
+    generated = build(schedule, read)
+    after = flat(parsed(generated))
+    before = current["sounder"] or {}
+    journal = {
+        "station": config.station, "config_path": str(files.sounder),
+        "edits": {}, "regenerated": True, "document_hash": current["base"],
+        "config_hash": fingerprint(after), "warnings": [],
+        "applied_at": time.time(), "requires_restart": True,
+    }
+    if fingerprint(after) != fingerprint(before):
+        journal["changes"] = diff(before, after)
+    return Plan(files, (schedule.data, read.data, raw),
+                (schedule.data, read.data, generated.encode("utf-8")), journal)
+
+
+def _folders(config: StationConfig, read: Ini) -> str:
+    """Why ``data_dir`` or ``live_dir`` disagrees with ``IONOZOND_ARCHIVE``, or ""."""
+    archive = _defaults(Path(config.sounder_defaults)).get("IONOZOND_ARCHIVE", "")
+    if not archive:
+        return ""
+    data_dir = read.value("", "data_dir") if "data_dir" in read.keys("") else ""
+    live_dir = str(config.live_dir) if config.live_dir is not None else ""
+    if all(_folder(path) == _folder(archive) for path in (data_dir, live_dir)
+           if path):
+        return ""
+    return ("data_dir in config.ini is %s and the agent's live_dir is %s, but the "
+            "units hand the sounder IONOZOND_ARCHIVE=%s. The sounder, the live "
+            "feed, the prune unit and the NAS unit must all name one folder: "
+            "correct config.ini or the agent's config first"
+            % (data_dir or "unset", live_dir or "unset", archive))
+
+
+def _folder(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.expanduser(path)))
+
+
 def _written(plan: Plan) -> None:
     """Back up, then replace each changed file, ``chirp_config.py`` last."""
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
@@ -488,6 +601,9 @@ def _restored(plan: Plan) -> None:
 def _said(plan: Plan, active: str) -> str:
     edits = "; ".join("%s: %r -> %r" % (key, change["from"], change["to"])
                       for key, change in plan.journal["edits"].items())
+    if plan.journal.get("regenerated"):
+        edits = "chirp_config.py, regenerated from schedule.ini and config.ini (%s)" % (
+            ", ".join(plan.journal.get("changes", {})) or "no value the sounder reads")
     then = ("the sounder restarts on it once the sounding in progress ends"
             if active == "active" else
             "the sounder is %s, so it reads the change at its next start" % active)
@@ -560,24 +676,12 @@ def _files(config: StationConfig) -> Files:
 
 
 def _defaults(path: Path) -> dict:
-    """``KEY=value`` lines, as systemd's ``EnvironmentFile=`` reads the simple ones."""
     try:
-        text = path.read_text(encoding="utf-8")
+        return siteconfig.environment(path)
     except FileNotFoundError:
         raise control.ControlError(
             "%s is missing: it is the unit's EnvironmentFile, and names the "
             "chirp_config.py the sounder reads" % path) from None
-    out = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        out[key.strip()] = value
-    return out
 
 
 def _mismatch(read: Ini, files: Files) -> str:
@@ -643,6 +747,11 @@ def _written_as(key: str, value) -> str:
         raise control.ControlError("fft_count_index must be 0 to 7")
     if key == "keep_lfs_hours" and (_float(text) is None or _float(text) < 0):
         raise control.ControlError("keep_lfs_hours must be zero or more")
+    if key == "nas_keep_h5_days" and not (
+            _int(text, 0) == -1 or 1 <= _int(text, 0) <= 3650):
+        raise control.ControlError(
+            "nas_keep_h5_days must be -1, to keep every .h5 locally, or 1 to 3650 "
+            "days")
     return text
 
 

@@ -2732,10 +2732,16 @@ def test_the_ionozond_example_is_read_as_an_ionozond_station():
         "the ionozond example is not read as an ionozond station")
 
 
-def test_the_ionozond_example_watches_no_chirpsounder2_archive_job():
-    assert example("station-ionozond.json.example").job_units == [], (
-        "the ionozond example watches chirpsounder2's archive jobs, which its laptop "
-        "does not have")
+def test_the_ionozond_example_reports_its_nas_copy_and_pruner():
+    assert example("station-ionozond.json.example").job_units == [
+        "ionozond-nas.service", "ionozond-prune.service"], (
+        "the ionozond example does not report the NAS copy and the pruner")
+
+
+def test_the_ionozond_example_names_the_file_its_drop_ins_load():
+    assert example("station-ionozond.json.example").site_overrides == Path(
+        "/home/samsung/.config/ionozond/web.env"), (
+        "the ionozond example names another web.env than its drop-ins load")
 
 
 def test_the_dob_example_is_not_read_as_an_ionozond_station():

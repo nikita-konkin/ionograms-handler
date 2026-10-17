@@ -41,6 +41,8 @@
   #sched .fail, #sched .error { color:var(--fail); }
   #sched .actions { display:flex; flex-wrap:wrap; align-items:baseline; gap:.4rem .8rem; }
   #sched ul, #sched ol { margin:.3rem 0 .8rem; padding-left:1.4rem; }
+  #sched #site td, #sched #jobs td { text-align:left; white-space:normal; }
+  #sched #site input { width:8em; }
 </style>
 
 <div class="panel live-head" data-station="{{ station }}">
@@ -71,12 +73,22 @@
 {# The ionozond schedule (issue #4): what the sounder reads, from the station's
    last health report, and an editor for whoever may control the station.
    Every edit is checked by the server with the agent's own checker before it
-   can be queued; see `services/api/sounder.py`. #}
+   can be queued; see `services/api/sounder.py`. Since the console retired
+   (issue #8) it also carries Regenerate after a hand edit, the site settings
+   the web may override, Run now for the NAS copy and the pruner, and Add from
+   verified, which turns a slot from /ui/sources into a switched-off group. #}
 <section class="panel" id="sched" hidden>
   <h2>{{ t('live.sched.title') }}</h2>
   <p id="sched-state" class="note"></p>
   <p id="sched-pending" class="note warn" hidden></p>
   <p id="sched-drift" class="note fail" hidden></p>
+  <div id="sched-regen" hidden>
+    <ul id="sched-regenerated"></ul>
+    <div class="actions">
+      <button data-needs="station" id="sched-regenerate" disabled>{{ t('live.sched.regenerate') }}</button>
+      <span id="sched-regen-said" class="note"></span>
+    </div>
+  </div>
   <p id="sched-problems" class="note fail" hidden></p>
   <div class="wide"><table>
     <thead><tr>
@@ -97,7 +109,10 @@
     <label><input type="checkbox" data-general="keep_lfs"> {{ t('live.sched.keep_lfs') }}</label>
     <label>{{ t('live.sched.keep_lfs_hours') }} <input data-general="keep_lfs_hours"></label>
     <label><input type="checkbox" data-general="save_raw_voltage"> {{ t('live.sched.save_raw_voltage') }}</label>
+    <label><input type="checkbox" data-general="h5_archive"> {{ t('live.sched.h5_archive') }}</label>
+    <label>{{ t('live.sched.nas_keep_h5_days') }} <input data-general="nas_keep_h5_days"></label>
   </div>
+  <p id="sched-nas" class="note"></p>
   <h3>{{ t('live.sched.next') }}</h3>
   <ol id="sched-next"></ol>
   <ul id="sched-issues"></ul>
@@ -107,6 +122,36 @@
     <button data-needs="station" id="sched-add">{{ t('live.sched.add') }}</button>
     <span id="sched-said" class="note"></span>
   </div>
+  <h3>{{ t('live.seed.title') }}</h3>
+  <p class="note">{{ t('live.seed.note') }}</p>
+  <div class="actions">
+    <label>{{ t('live.seed.offer') }} <select id="seed-offer" disabled></select></label>
+    <label>{{ t('live.seed.edge') }} <input id="seed-edge" inputmode="decimal" disabled></label>
+    <button data-needs="station" id="seed-add" disabled>{{ t('live.seed.add') }}</button>
+    <span id="seed-said" class="note"></span>
+  </div>
+  <div id="site-box" hidden>
+  <h3>{{ t('live.site.title') }}</h3>
+  <p class="note">{{ t('live.site.note') }}</p>
+  <div class="wide"><table id="site">
+    <thead><tr>
+      <th>{{ t('live.site.key') }}</th><th>{{ t('live.site.value') }}</th><th>{{ t('live.site.from') }}</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="actions">
+    <button data-needs="station" id="site-apply" disabled>{{ t('live.site.apply') }}</button>
+    <span id="site-said" class="note"></span>
+  </div>
+  </div>
+  <h3>{{ t('live.jobs.title') }}</h3>
+  <div class="wide"><table id="jobs"><tbody>
+    <tr><td>{{ t('live.jobs.nas') }}</td><td data-job="ionozond-nas.service"></td>
+      <td><button data-needs="station" data-run="ionozond-nas.service">{{ t('live.jobs.run') }}</button></td></tr>
+    <tr><td>{{ t('live.jobs.prune') }}</td><td data-job="ionozond-prune.service"></td>
+      <td><button data-needs="station" data-run="ionozond-prune.service">{{ t('live.jobs.run') }}</button></td></tr>
+  </tbody></table></div>
+  <p id="jobs-said" class="note"></p>
 </section>
 
 <div class="panel">
@@ -417,7 +462,7 @@
   const STATION = {{ station|tojson }};
   const FIELDS = ['cf', 'rate', 'chirpt', 'rep', 'dur', 'fft_count', 'lat', 'lon'];
   const LEVEL = {error: T('live.js.sched_error'), warning: T('live.js.sched_warning'), info: T('live.js.sched_info')};
-  const FLAGS = new Set(['keep_lfs', 'save_raw_voltage']);
+  const FLAGS = new Set(['h5_archive', 'keep_lfs', 'save_raw_voltage']);
   const box = document.getElementById('sched'), body = box.querySelector('tbody');
   const $ = id => document.getElementById(id);
   const pad = n => String(n).padStart(2, '0');
@@ -425,6 +470,8 @@
   const stamp = text => String(text || '').replace('T', ' ').replace('Z', '');
   const on = v => !['', '0', 'false'].includes(String(v === undefined ? '' : v).toLowerCase());
   const copy = v => JSON.parse(JSON.stringify(v));
+  const plain = v => v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  const answer = (r, queued) => r.ok ? queued : r.needsToken ? r.detail : T('live.js.refused', {detail: r.detail});
   // `origin` is the document the draft started from and `base` its hash: an
   // edit is checked and queued against the schedule it was made on, so a
   // change on the station meanwhile is refused rather than overwritten.
@@ -472,6 +519,7 @@
       el.disabled = locked();
     });
     $('sched-add').disabled = locked();
+    seedable();
   }
   box.querySelectorAll('[data-general]').forEach(el => {
     const key = el.dataset.general;
@@ -544,7 +592,139 @@
     $('sched-drift').textContent = T('live.js.sched_drift');
     $('sched-problems').hidden = !problems.length;
     $('sched-problems').textContent = T('live.js.sched_problems', {detail: problems.join('; ')});
+    $('sched-nas').hidden = !('nas_dest' in cfg);
+    $('sched-nas').textContent = cfg.nas_dest ? T('live.js.sched_nas', {dest: cfg.nas_dest}) : T('live.js.sched_nas_none');
+    regeneration();
+    sites();
   }
+
+  // Regenerate after a hand edit: what the sounder would read differently is
+  // shown before anything is queued, and the button asks twice, as Stop does.
+  let regenArmed = false, regenSent = null;
+  function differences(before, after) {
+    before = before || {}; after = after || {};
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
+      .filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
+      .map(k => k + ' ' + plain(before[k]) + ' → ' + plain(after[k]));
+  }
+  function regeneration() {
+    const cfg = shown.sounder_config, out = $('sched-regenerated');
+    $('sched-regen').hidden = !cfg.drift;
+    out.textContent = '';
+    if (!cfg.drift) { regenArmed = false; return; }
+    out.appendChild(document.createElement('li')).textContent = T('live.js.regen_diff');
+    for (const line of differences(cfg.sounder, cfg.regenerated)) out.appendChild(document.createElement('li')).textContent = line;
+    $('sched-regenerate').disabled = !may || !cfg.regenerated || regenSent === cfg.sounder_hash;
+  }
+  $('sched-regenerate').addEventListener('click', async () => {
+    const cfg = shown && shown.sounder_config;
+    if (!cfg || !cfg.drift) return;
+    if (!regenArmed) { regenArmed = true; $('sched-regen-said').textContent = T('live.js.regen_confirm'); return; }
+    regenArmed = false;
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/commands', 'POST', {name: 'regenerate_ionozond', params: {base: cfg.base, sounder_hash: cfg.sounder_hash}});
+    if (r.ok) { regenSent = cfg.sounder_hash; $('sched-regenerate').disabled = true; }
+    $('sched-regen-said').textContent = answer(r, T('live.js.regen_queued', {id: ((r.body || {}).id || '').slice(0, 8)}));
+  });
+
+  // The site settings: every key the prune and NAS units are handed, and an
+  // input for the few the web may override. An empty input falls back to the
+  // root file. Rebuilt only when the station's settings change, so a value
+  // being typed survives the refresh.
+  let siteBase = null, siteDraft = {}, siteMay = null;
+  function sites() {
+    const site = shown.sounder_config.site, out = $('site').tBodies[0];
+    $('site-box').hidden = !site;
+    if (!site) { out.textContent = ''; siteBase = null; return; }
+    if (site.hash === siteBase && may === siteMay) return;
+    if (site.hash !== siteBase) siteDraft = {};
+    siteBase = site.hash; siteMay = may;
+    out.textContent = '';
+    const editable = new Set(site.editable || []);
+    for (const key of [...new Set([...Object.keys(site.keys), ...editable])].sort()) {
+      const entry = site.keys[key] || {value: '', from: '—'}, tr = out.insertRow();
+      tr.insertCell().textContent = key;
+      const cell = tr.insertCell();
+      if (editable.has(key) && may) {
+        const input = cell.appendChild(document.createElement('input'));
+        input.value = key in siteDraft ? siteDraft[key] : entry.value;
+        input.oninput = () => {
+          if (input.value.trim() === entry.value) delete siteDraft[key]; else siteDraft[key] = input.value.trim();
+          $('site-apply').disabled = !Object.keys(siteDraft).length; $('site-said').textContent = '';
+        };
+      } else cell.textContent = entry.value;
+      tr.insertCell().textContent = entry.from;
+    }
+    $('site-apply').disabled = !may || !Object.keys(siteDraft).length;
+  }
+  $('site-apply').addEventListener('click', async () => {
+    const changes = {};
+    for (const [key, value] of Object.entries(siteDraft)) changes[key] = value === '' ? null : value;
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/commands', 'POST', {name: 'set_ionozond_site', params: {base: siteBase, site: changes}});
+    if (r.ok) $('site-apply').disabled = true;
+    $('site-said').textContent = answer(r, T('live.js.site_queued', {id: ((r.body || {}).id || '').slice(0, 8)}));
+  });
+
+  // The NAS copy and the pruner: how their last runs went, from the station's
+  // health report, and Run now, which starts one once without waiting for it.
+  async function jobs() {
+    const tok = sessionStorage.getItem('tok') || '';
+    let metrics = [];
+    try {
+      const r = await fetch('/stations/' + encodeURIComponent(STATION) + '/health', tok ? {headers: {Authorization: 'Bearer ' + tok}} : {});
+      if (r.ok) metrics = (await r.json()).metrics || [];
+    } catch (e) { return; }
+    box.querySelectorAll('[data-run]').forEach(b => {
+      const m = metrics.find(x => x.name === 'job:' + b.dataset.run), cell = box.querySelector('[data-job="' + b.dataset.run + '"]');
+      cell.textContent = m ? m.detail : T('live.js.jobs_unknown');
+      cell.className = m && m.ok === false ? 'fail' : '';
+    });
+  }
+  box.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', async () => {
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/commands', 'POST', {name: 'start', params: {unit: b.dataset.run}});
+    $('jobs-said').textContent = answer(r, T('live.js.jobs_queued', {job: b.dataset.run, id: ((r.body || {}).id || '').slice(0, 8)}));
+  }));
+
+  // Add from verified: every station's verified slots, one offer each and
+  // labelled with the station that verified it. The server converts the slot
+  // chosen, so the group added is the one its tests check.
+  const STATIONS = {{ stations|tojson }};
+  let offers = [];
+  function seedable() {
+    const off = !draft || locked();
+    $('seed-offer').disabled = off || !offers.length;
+    $('seed-edge').disabled = off;
+    $('seed-add').disabled = off || !offers.length || !$('seed-edge').value.trim();
+  }
+  async function verified() {
+    const tok = sessionStorage.getItem('tok') || '', none = {transmitters: []};
+    const found = [];
+    for (const s of STATIONS)
+      found.push(await fetch('/stations/' + encodeURIComponent(s) + '/transmitters', tok ? {headers: {Authorization: 'Bearer ' + tok}} : {})
+        .then(r => r.ok ? r.json() : none).catch(() => none));
+    offers = found.flatMap(f => f.transmitters).flatMap(t => t.timings.map((timing, slot) => ({from: t.station, code: t.code, slot, timing})));
+    const pick = $('seed-offer');
+    pick.textContent = '';
+    for (const [i, o] of offers.entries())
+      Object.assign(pick.appendChild(document.createElement('option')), {value: String(i), textContent: T('live.js.seed_offer', {
+        code: o.code, rate: o.timing['chirp-rate'] / 1000, rep: o.timing.rep, chirpt: o.timing.chirpt, station: o.from})});
+    $('seed-said').textContent = offers.length ? '' : T('live.js.seed_none');
+    seedable();
+  }
+  $('seed-edge').addEventListener('input', seedable);
+  $('seed-add').addEventListener('click', async () => {
+    const o = offers[Number($('seed-offer').value)], said = $('seed-said');
+    if (!o || !draft || locked()) return;
+    if (o.code in draft.schedule) { said.textContent = T('live.js.seed_taken', {name: o.code}); return; }
+    const r = await control('/stations/' + encodeURIComponent(STATION) + '/ionozond/seed', 'POST', {from: o.from, code: o.code, slot: o.slot, low_edge_khz: $('seed-edge').value.trim()});
+    if (!r.ok) { said.textContent = answer(r, ''); return; }
+    const seed = r.body;
+    if (seed.name in draft.schedule) { said.textContent = T('live.js.seed_taken', {name: seed.name}); return; }
+    draft.schedule[seed.name] = seed.group;
+    table(); edited();
+    said.textContent = [T('live.js.seed_added', {name: seed.name}),
+      seed.located ? '' : T('live.js.seed_unplaced', {name: seed.name}),
+      seed.capped ? T('live.js.seed_capped', {full: seed.full_dur, dur: seed.group.dur}) : ''].filter(Boolean).join(' ');
+  });
 
   async function load() {
     const tok = sessionStorage.getItem('tok') || '';
@@ -555,6 +735,7 @@
     shown = await r.json();
     box.hidden = false;
     state();
+    jobs();
     const cfg = shown.sounder_config;
     if (!cfg.document) { body.textContent = ''; draft = null; return; }
     if (draft === null || !dirty() || (sent && cfg.base !== base)) {
@@ -572,8 +753,8 @@
     draft.schedule[name] = {active: 'false', cf: '', rate: '', chirpt: '', rep: '', dur: '', lat: '', lon: ''};
     table(); edited();
   });
-  ME.then(me => { may = me.capabilities.includes('station'); if (draft) { table(); edited(); } });
-  if (STATION) { load(); setInterval(load, 30000); }
+  ME.then(me => { may = me.capabilities.includes('station'); if (draft) { table(); edited(); } if (shown) state(); });
+  if (STATION) { load(); verified(); setInterval(load, 30000); }
 })();
 </script>
 {% endblock %}

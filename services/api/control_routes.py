@@ -66,9 +66,12 @@ from .read_routes import _age_seconds
 router = APIRouter(tags=["control"])
 
 #: What the web interface may queue. A strict subset of the agent's own
-#: ``ALLOWED_VERBS`` plus ``set_config``, and ``set_ionozond`` for the ionozond
-#: schedule (``services/api/sounder.py``); see the module docstring.
-QUEUEABLE = ("start", "stop", "restart", "set_config", "set_ionozond")
+#: ``ALLOWED_VERBS`` plus ``set_config``, and for ionozond the schedule, its
+#: regeneration after a hand edit and the site settings
+#: (``services/api/sounder.py``); see the module docstring. ``start`` with a
+#: ``unit`` is Run now, for the two job units of ``siteconfig.JOBS`` only.
+QUEUEABLE = ("start", "stop", "restart", "set_config", "set_ionozond",
+             "regenerate_ionozond", "set_ionozond_site")
 
 #: Settings ``set_config`` may carry from the web. A strict subset of
 #: ``control.EDITABLE`` plus ``control.COMPOSITE`` -- see the module docstring
@@ -111,6 +114,12 @@ def enqueue(station: str, request: Request,
         params = _vet_config(params)
     if name == "set_ionozond":
         _vet_ionozond(request.app.state.db, station, params)
+    if name == "regenerate_ionozond":
+        _vet(sounder.vet_regenerate, request.app.state.db, station, params)
+    if name == "set_ionozond_site":
+        _vet(sounder.vet_site, request.app.state.db, station, params)
+    if name == "start" and isinstance(params, dict) and "unit" in params:
+        _vet_unit(params["unit"])
 
     command_id = db.enqueue(request.app.state.db, station, name,
                             params=params,
@@ -139,6 +148,22 @@ def _vet_ionozond(conn: sqlite3.Connection, station: str, params: dict) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "refused: " + "; ".join(
             ("%s: %s" % (i["station"], i["text"])) if i["station"] else i["text"]
             for i in result["issues"] if i["level"] == "error"))
+
+
+def _vet(check, conn: sqlite3.Connection, station: str, params: dict) -> None:
+    try:
+        check(conn, station, params)
+    except sounder.Unvetted as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+
+
+def _vet_unit(unit) -> None:
+    """Run now starts one of the two job units, the only ones polkit lets it start."""
+    from services.agent import siteconfig
+
+    if unit not in siteconfig.JOBS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, (
+            "Run now starts %s only, not %r" % (" or ".join(siteconfig.JOBS), unit)))
 
 
 def _vet_config(params: dict) -> dict:

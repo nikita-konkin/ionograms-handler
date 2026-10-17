@@ -57,6 +57,7 @@ async def push_health(request: Request,
     conn = request.app.state.db
     previous = db.latest_health(conn, station)
     report_id = db.store_health(conn, station, document)
+    sounder.keep(conn, station, document)
     sounder.observe(conn, station, previous, document)
     return {"ok": True, "report_id": report_id}
 

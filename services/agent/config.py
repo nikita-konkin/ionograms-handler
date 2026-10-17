@@ -220,6 +220,10 @@ class StationConfig:
     #: Where the Qt console keeps ``schedule.ini`` and ``config.ini``; ``~`` is
     #: the agent's own home, which on the laptop is the console's.
     console_settings: Path = Path("~/.config/dsChirp")
+    #: The agent's own override file for the few ``/etc/default/ionozond`` keys
+    #: the web may set. Drop-ins load it after the root file in the prune and
+    #: NAS units only; see :mod:`services.agent.siteconfig`.
+    site_overrides: Path = Path("~/.config/ionozond/web.env")
     #: Where the agent keeps the fingerprint of ``chirp_config.py`` as it first
     #: saw it during the sounder's current run. The file's date cannot say what
     #: the sounder loaded: the console rewrites it, unchanged, on every dialog OK.
@@ -305,7 +309,7 @@ class StationConfig:
         known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
         for key in ("chirp_config", "launcher", "output_dir", "ringbuffer_dir",
                     "live_dir", "sounder_defaults", "console_settings",
-                    "sounder_seen"):
+                    "site_overrides", "sounder_seen"):
             if key in known:
                 known[key] = Path(known[key])
         for key in ("units", "optional_units", "preview_size"):

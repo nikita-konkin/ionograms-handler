@@ -133,6 +133,33 @@ def cmd_live(args) -> int:
     return 0
 
 
+def cmd_regenerate(args) -> int:
+    from . import ionozond
+
+    config = _config(args)
+    now = ionozond.state(config)
+    if "base" not in now:
+        print("; ".join(now["problems"]), file=sys.stderr)
+        return 2
+    if not now["drift"]:
+        print("chirp_config.py already holds what schedule.ini and config.ini "
+              "generate: there is nothing to regenerate")
+        return 0
+    changes = ionozond.diff(now["sounder"] or {}, now.get("regenerated", {}))
+    print("The sounder would read differently:")
+    for key, change in changes.items():
+        print(f"  {key}: {change['from']!r} -> {change['to']!r}")
+    if not args.yes and input("Write chirp_config.py and try-restart the "
+                              "sounder? [y/N] ").strip().lower() != "y":
+        print("nothing written")
+        return 1
+    results = ionozond.regenerate(config, {"base": now["base"],
+                                           "sounder_hash": now["sounder_hash"]})
+    for result in results:
+        print(result.detail or result.command)
+    return 0 if results[0].ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="services.agent",
@@ -186,6 +213,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("live", help="follow the sounder and post its captures as they grow"
                    ).set_defaults(func=cmd_live)
+
+    ioz = sub.add_parser("ionozond", help="the ionozond sounder's settings files")
+    isub = ioz.add_subparsers(dest="action", required=True)
+    rg = isub.add_parser("regenerate",
+                         help="write chirp_config.py again from schedule.ini and "
+                              "config.ini, after a hand edit")
+    rg.add_argument("--yes", action="store_true", help="do not ask first")
+    rg.set_defaults(func=cmd_regenerate)
 
     return parser
 

@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from . import client, control, health, ionozond, logs, preview
+from . import client, control, health, ionozond, logs, preview, siteconfig
 from .config import StationConfig
 
 
@@ -60,6 +60,8 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     params = command.params or {}
 
     if name in ("start", "start_sounding"):
+        if "unit" in params:
+            return [siteconfig.run(params["unit"])]
         return [control.start(config, no_block=config.no_block)]
     if name in ("stop", "stop_sounding"):
         return [control.stop(config, no_block=config.no_block)]
@@ -68,6 +70,10 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
 
     if name == "set_ionozond":
         return ionozond.apply(config, params)
+    if name == "regenerate_ionozond":
+        return ionozond.regenerate(config, params)
+    if name == "set_ionozond_site":
+        return siteconfig.apply(config, params)
 
     if name in ("set_config", "configure", "set_params"):
         if health.runs_ionozond(config):
@@ -101,6 +107,7 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     return [control.CommandResult(
         name, False, f"unknown command {command.name!r}; this agent "
                      f"understands start, stop, restart, set_config, set_ionozond, "
+                     f"regenerate_ionozond, set_ionozond_site, "
                      f"logs, triage")]
 
 
@@ -171,13 +178,27 @@ def obey(config: StationConfig, result: PassResult, *,
             result.errors.append(f"ack {command.id}: {exc}")
 
 
+@dataclass
+class SounderState:
+    """The ionozond block the server last took whole, carried between passes.
+
+    In memory, as :class:`PreviewState` is: a restarted agent sends the block
+    whole once more, and the server takes it.
+    """
+
+    summary: dict = field(default_factory=dict)
+    at: float = 0.0
+
+
 def run_once(config: StationConfig, *, opener: Callable | None = None,
              include_epoch: bool = True,
-             previews: PreviewState | None = None) -> PassResult:
+             previews: PreviewState | None = None,
+             sounder: SounderState | None = None) -> PassResult:
     """Collect health, push it, then pull and execute any pending commands.
 
     ``previews`` carries what the server already has; without one every pass
-    re-sends, which is what a single ``--once`` run should do.
+    re-sends, which is what a single ``--once`` run should do. ``sounder``
+    does the same for the ionozond block: without one it always goes whole.
     """
     result = PassResult()
 
@@ -201,12 +222,20 @@ def run_once(config: StationConfig, *, opener: Callable | None = None,
         result.errors.append(f"collect: {type(exc).__name__}: {exc}")
         return result
 
+    whole = report.sounder_config
+    if whole is not None and sounder is not None and (
+            ionozond.summary(whole) == sounder.summary
+            and time.time() - sounder.at < ionozond.WHOLE_S):
+        report.sounder_config = ionozond.summary(whole)
+
     if config.server_url:
         try:
             client.push_health(config, report, opener=opener)
             result.pushed = True
         except client.TransportError as exc:
             result.errors.append(f"push: {exc}")
+        if result.pushed and sounder is not None and report.sounder_config is whole:
+            sounder.summary, sounder.at = ionozond.summary(whole), time.time()
 
         if scan is not None:
             _push_previews(config, scan, previews or PreviewState(),
@@ -222,10 +251,11 @@ def run_forever(config: StationConfig, *, opener: Callable | None = None,
                 max_passes: int | None = None) -> None:
     """``run_once`` on an interval. ``max_passes`` exists so a test can stop."""
     passes = 0
-    previews = PreviewState()
+    previews, sounder = PreviewState(), SounderState()
     while max_passes is None or passes < max_passes:
         started = time.time()
-        result = run_once(config, opener=opener, previews=previews)
+        result = run_once(config, opener=opener, previews=previews,
+                          sounder=sounder)
         for problem in result.errors:
             print(f"agent: {problem}", file=sys.stderr)
         if result.report is not None and not result.healthy:

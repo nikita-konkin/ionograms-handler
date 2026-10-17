@@ -644,6 +644,191 @@ Check it within a minute: the station's row on `/ui` shows a fresh report for
 journalctl -u $UNIT -n 20 --no-pager
 ```
 
+### An ionozond station: retiring the Qt console
+
+Phase 4 (issue #8, `docs/2026-10-17-ionozond-retiring-the-console.md`) moves
+what was left of the console onto `/ui/live`: Regenerate after a hand edit of
+the ini files, the `.h5` archive switch and its local retention, the
+storage-policy keys of `/etc/default/ionozond`, and Run now for the NAS copy
+and the pruner. The steps below are run on the laptop, by hand, in this order.
+None of them restarts the sounder, since `chirp_config.py` does not change.
+
+**0. Before starting**, record two facts: whether the prune timer is enabled,
+and whether a chirpsounder2 agent posting as `Yoshkar-Ola` runs on this
+laptop. The health loop must already report `sounder_config` for
+`yoshkar-ola` with no drift and no problems.
+
+```bash
+systemctl is-enabled ionozond-prune.timer ionozond-nas.timer
+```
+
+```bash
+systemctl list-units 'chirp-agent*' --no-pager
+```
+
+**1. Back up** the console's settings, the sounder's file and the root file
+into one dated tarball:
+
+```bash
+CFG=$(sed -n 's/^IONOZOND_CONFIG=//p' /etc/default/ionozond)
+```
+
+```bash
+tar czf ~/ionozond-before-phase4-$(date +%F).tar.gz ~/.config/dsChirp "$CFG" /etc/default/ionozond
+```
+
+**2. Deploy** the agent: `git pull` in the checkout `chirp-live.service` runs
+from, then restart the health loop (`chirp-agent.service`, or
+`chirp-agent-ionozond.service` where it was installed under that name) and
+`chirp-live.service`.
+
+**3. Check the three folders agree.** `data_dir` in `config.ini`, `live_dir`
+in `~/agent.json` and `IONOZOND_ARCHIVE` must name the same folder; a
+trailing slash or a `~` does not matter. Regenerate refuses to run while they
+disagree, because the sounder would write where the prune and NAS units never
+look.
+
+```bash
+grep -E '^IONOZOND_(ARCHIVE|CONFIG)=' /etc/default/ionozond; grep -E '^(data_dir|nas_dest|nas_keep_h5_days)=' ~/.config/dsChirp/config.ini; grep live_dir ~/agent.json
+```
+
+**4. Align the NAS fallbacks.** `nas_sync.py` takes the destination and the
+retention from `config.ini`, through `chirp_config.py`, and falls back to
+`NAS_DEST` and `NAS_KEEP_H5_DAYS` only when those are missing. Set the
+fallbacks to what `config.ini` says, so that a `config.ini` restored from an
+old backup cannot quietly stop the copy or change the retention. With the
+values step 3 printed (on 2026-10-17, `/mnt/ionozond_5tb/ionozond_data` and
+21):
+
+```bash
+sudo sed -i -e 's#^NAS_DEST=.*#NAS_DEST=/mnt/ionozond_5tb/ionozond_data#' -e 's#^NAS_KEEP_H5_DAYS=.*#NAS_KEEP_H5_DAYS=21#' /etc/default/ionozond
+```
+
+```bash
+grep -E '^NAS_(DEST|KEEP_H5_DAYS)=' /etc/default/ionozond
+```
+
+If the second command prints nothing for a key, the file never had it: add
+the line with `sudoedit /etc/default/ionozond`.
+
+**5. Let the prune and NAS units read `web.env`.** The web writes
+`PRUNE_KEEP_DAYS`, `PRUNE_FREE_GB` and `NAS_BWLIMIT` into
+`~/.config/ionozond/web.env`, which `samsung` owns, and never touches the root
+file. A drop-in loads it after `/etc/default/ionozond`, so its keys win. An
+environment file can set `PATH` or `LD_PRELOAD`, so it may only be loaded by a
+unit that runs as `samsung` with no step run as root. Check both units as
+installed first. This must print `User=samsung` twice and nothing else; any
+`Exec…=+…`, `Exec…=!…` or `PermissionsStartOnly=` line means stop here and
+install no drop-in:
+
+```bash
+systemctl cat ionozond-prune.service ionozond-nas.service | grep -E '^(User|PermissionsStartOnly)=|^Exec[A-Za-z]*=[+!]'
+```
+
+Then install the drop-in in both, never in `ionozond-sounder.service`, whose
+`ExecStartPre=+…ethtool` runs as root:
+
+```bash
+for u in ionozond-prune ionozond-nas; do sudo mkdir -p /etc/systemd/system/$u.service.d && printf '%s\n' '# web.env is writable by samsung. Load it only in a unit that runs as samsung' '# with no "+" or "!" step: never in ionozond-sounder.service.' '[Service]' 'EnvironmentFile=-/home/samsung/.config/ionozond/web.env' | sudo tee /etc/systemd/system/$u.service.d/web.conf; done
+```
+
+```bash
+sudo systemctl daemon-reload
+```
+
+```bash
+systemctl show ionozond-prune.service ionozond-nas.service -p EnvironmentFiles
+```
+
+The last command shows both files for each unit, `web.env` with `(ignore_errors=yes)`:
+the leading `-` makes a missing `web.env` harmless, so deleting it undoes every
+web edit at the next run.
+
+**6. Extend the polkit rule** so Run now can start the two job units, and
+nothing more. Replace `/etc/polkit-1/rules.d/50-ionozond-sounder.rules`
+(written with `sudo`, as before) with:
+
+```js
+// Lets the ionograms-handler agent start, stop and restart the sounder, and
+// restart it only if it is running after a schedule change; and start one run
+// of the NAS copy or the pruner. Nothing else: no other unit or verb, and no
+// enable, mask or edit of these.
+polkit.addRule(function(action, subject) {
+    if (action.id != "org.freedesktop.systemd1.manage-units" ||
+        subject.user != "samsung") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit"), verb = action.lookup("verb");
+    if (unit == "ionozond-sounder.service" &&
+        (verb == "start" || verb == "stop" || verb == "restart" ||
+         verb == "try-restart")) {
+        return polkit.Result.YES;
+    }
+    if ((unit == "ionozond-nas.service" || unit == "ionozond-prune.service") &&
+        verb == "start") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
+```
+
+Prove it from a shell logged in as `samsung`, as above. The first must print
+`exit 0`; the second must print `exit 2`, since the rule grants `start` only:
+
+```bash
+sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ionozond-nas.service --detail verb start; echo "exit $?"
+```
+
+```bash
+sudo pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit ionozond-nas.service --detail verb stop; echo "exit $?"
+```
+
+Repeat the four sounder probes above: the rule was rewritten, not appended to.
+
+**7. Dry-run the pruner, then enable its timer.** Without `--apply` it only
+reports what it would delete. Read the list before enabling the timer, which
+runs it with `--apply`:
+
+```bash
+cd ~/projects/ionozond && set -a && . /etc/default/ionozond && set +a && python3 tools/prune_lfs.py "$IONOZOND_ARCHIVE" --keep-days "$PRUNE_KEEP_DAYS" --free-gb "$PRUNE_FREE_GB"
+```
+
+```bash
+sudo systemctl enable --now ionozond-prune.timer
+```
+
+It is a backstop: with `keep_lfs` off the sounder deletes each capture once
+its `.h5` is written, and the pruner finds nothing to do.
+
+**8. Report both jobs.** In `~/agent.json`, set
+`"job_units": ["ionozond-nas.service", "ionozond-prune.service"]`, as in
+[station-ionozond.json.example](station-ionozond.json.example), and restart
+the health loop. `/ui/live` then shows each job's last run beside its Run now
+button, and `/ui` turns red on a failed run or a timer that stopped firing.
+
+**9. Retire the console's launcher**, so it is no longer started from habit.
+Leave the binary and `~/.cache/ionozond-build` in place for a rollback:
+
+```bash
+rm -f ~/.local/share/applications/ionozond.desktop "$(xdg-user-dir DESKTOP)/ionozond.desktop"
+```
+
+**10. Verify** from `/ui/live`: a schedule change; a Regenerate after a
+deliberate hand edit of an unused key in `config.ini` (such as `whiten_n`),
+whose diff names that key alone; a change of `PRUNE_FREE_GB`, which appears in
+`~/.config/ionozond/web.env`; and a Run now of the NAS copy that ends green.
+
+**Rolling back.** Delete `~/.config/ionozond/web.env` to undo every web edit
+of the site settings; delete the two drop-ins and run `daemon-reload` to stop
+reading it. The previous agent answers `regenerate_ionozond` and
+`set_ionozond_site` with "unknown command". To bring the console back, run
+`tools/host-setup/19-install-desktop.sh` in the ionozond checkout. Its first
+dialog OK writes every key the dialog holds into the ini files, so it adds any
+the files lack: on 2026-10-17 it added `live_ionogram=true` and
+`save_raw_voltage=false`. After such an OK, check the health report before
+relying on it: drift false and an unchanged `sounder_hash` mean the sounder
+reads what it read before.
+
 ### Case B — different networks
 
 **Do not port-forward this over the internet.** It is plain HTTP and one
