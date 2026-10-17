@@ -1474,6 +1474,22 @@ MESSAGES: dict[str, str] = {
     "live.sched.keep_lfs": "Keep LFS files",
     "live.sched.keep_lfs_hours": "Keep them for, h",
     "live.sched.save_raw_voltage": "Save raw voltage",
+    "live.sched.h5_archive": "Write the .h5 archive",
+    "live.sched.nas_keep_h5_days": "Keep .h5 locally for, days (−1: always)",
+    "live.sched.regenerate": "Regenerate chirp_config.py",
+    "live.site.title": "Site settings",
+    "live.site.note":
+        "Every key the prune and NAS units are handed. The editable ones go into "
+        "the agent's web.env, which overrides /etc/default/ionozond and is read at "
+        "the next run; leave one empty to fall back to the root file.",
+    "live.site.key": "Key",
+    "live.site.value": "Value",
+    "live.site.from": "From",
+    "live.site.apply": "Apply site settings",
+    "live.jobs.title": "NAS copy and pruning",
+    "live.jobs.nas": "NAS copy",
+    "live.jobs.prune": "Pruning",
+    "live.jobs.run": "Run now",
     "live.sched.next": "Next captures",
     "live.sched.apply": "Apply",
     "live.sched.reset": "Discard edits",
@@ -1495,10 +1511,24 @@ MESSAGES: dict[str, str] = {
     "live.js.sched_never": "No change has been recorded yet.",
     "live.js.sched_pending": "Written; takes effect after the sounding in progress.",
     "live.js.sched_drift":
-        "chirp_config.py no longer matches the console's schedule.ini and "
-        "config.ini, so one was changed without the other. Open the console's "
-        "parameters dialog on the laptop and press OK to regenerate it; until then "
-        "the schedule cannot be changed from here.",
+        "chirp_config.py no longer matches schedule.ini and config.ini, so one was "
+        "changed by hand without the other. Check below what the sounder would read "
+        "differently, then regenerate it; until then the schedule cannot be changed "
+        "from here.",
+    "live.js.sched_nas": "The NAS copy goes to {dest}; it is changed on the laptop.",
+    "live.js.sched_nas_none": "No NAS destination is set, so nothing is copied.",
+    "live.js.regen_diff": "Regenerating would change what the sounder reads:",
+    "live.js.regen_confirm":
+        "Press Regenerate again to write chirp_config.py from the ini files and "
+        "restart a running sounder after the sounding in progress.",
+    "live.js.regen_queued":
+        "Queued as {id}. The station regenerates chirp_config.py on its next pull.",
+    "live.js.site_queued":
+        "Queued as {id}. The prune and NAS units read it at their next run.",
+    "live.js.jobs_unknown": "Not reported: add the unit to job_units in agent.json.",
+    "live.js.jobs_queued":
+        "Queued as {id}. The station starts {job} on its next pull, without "
+        "waiting for it to finish.",
     "live.js.sched_problems": "The station could not read its schedule: {detail}",
     "live.js.sched_name":
         "Name of the new transmitter: Latin letters, digits, underscores or dots, "

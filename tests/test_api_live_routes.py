@@ -237,3 +237,80 @@ def test_live_page_starts_each_band_half_the_full_sample_rate_below_cf(client):
 def test_live_page_names_the_schedule_in_russian(client):
     assert "Расписание</h2>" in page(client, "?station=YOS&lang=ru"), (
         "the live page's schedule panel is not named in Russian")
+
+
+def test_live_page_offers_the_h5_archive_switch(client):
+    assert '<input type="checkbox" data-general="h5_archive">' in page(client), (
+        "the live page offers no .h5 archive switch")
+
+
+def test_live_page_offers_the_local_h5_retention(client):
+    assert '<input data-general="nas_keep_h5_days">' in page(client), (
+        "the live page offers no local .h5 retention")
+
+
+def test_live_page_shows_the_nas_destination(client):
+    assert "T('live.js.sched_nas', {dest: cfg.nas_dest})" in page(client), (
+        "the live page does not show the NAS destination")
+
+
+def test_live_page_offers_regenerate_to_whoever_may_control_a_station(client):
+    assert '<button data-needs="station" id="sched-regenerate"' in page(client), (
+        "the live page offers no Regenerate gated on the station capability")
+
+
+def test_live_page_queues_regenerate_as_regenerate_ionozond(client):
+    assert "name: 'regenerate_ionozond'" in page(client), (
+        "the live page does not queue Regenerate as regenerate_ionozond")
+
+
+def test_live_page_shows_what_regenerate_would_change(client):
+    assert "cfg.sounder, cfg.regenerated" in page(client), (
+        "the live page does not show what Regenerate would change")
+
+
+def test_live_page_asks_once_more_before_regenerating(client):
+    assert "T('live.js.regen_confirm'" in page(client), (
+        "the live page does not ask again before regenerating")
+
+
+def test_the_drift_notice_names_regenerate_not_the_console(client):
+    from services.api.locale import en
+    assert "dialog" not in en.MESSAGES["live.js.sched_drift"], (
+        "the drift notice still sends the operator to the console's dialog")
+
+
+def test_live_page_lists_the_site_settings(client):
+    assert '<table id="site">' in page(client), (
+        "the live page does not list the site settings")
+
+
+def test_live_page_queues_a_site_change_as_set_ionozond_site(client):
+    assert "name: 'set_ionozond_site'" in page(client), (
+        "the live page does not queue a site change as set_ionozond_site")
+
+
+def test_live_page_offers_site_apply_to_whoever_may_control_a_station(client):
+    assert '<button data-needs="station" id="site-apply"' in page(client), (
+        "the live page offers no site Apply gated on the station capability")
+
+
+@pytest.mark.parametrize("unit", ["ionozond-nas.service", "ionozond-prune.service"])
+def test_live_page_offers_run_now_for_each_job(client, unit):
+    assert 'data-run="%s"' % unit in page(client), (
+        "the live page offers no Run now for %s" % unit)
+
+
+def test_live_page_queues_run_now_as_a_start_of_the_unit(client):
+    assert "{name: 'start', params: {unit: b.dataset.run}}" in page(client), (
+        "the live page does not queue Run now as a start of the job unit")
+
+
+def test_live_page_reads_the_last_runs_from_the_health_report(client):
+    assert "'job:' + b.dataset.run" in page(client), (
+        "the live page does not read the jobs' last runs from the health report")
+
+
+def test_live_page_names_the_site_settings_in_russian(client):
+    assert "Настройки станции</h3>" in page(client, "?station=YOS&lang=ru"), (
+        "the live page's site settings are not named in Russian")
