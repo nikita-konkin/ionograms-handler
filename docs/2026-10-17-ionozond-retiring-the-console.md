@@ -71,9 +71,11 @@ the ionozond repository:
 (decision 1). Phase 3's section 11 said the ini files "may stop being the
 source of truth". They stay, for three reasons:
 
-- **The rollback costs nothing.** The console reads the same two files. Run
-  it again, and its first dialog OK regenerates a `chirp_config.py` identical
-  to the agent's, since the generator is byte-equal to the console's.
+- **The rollback costs little.** The console reads the same two files, and
+  the generator is byte-equal to the console's. Its first dialog OK
+  regenerates a `chirp_config.py` identical to the agent's when the ini files
+  already hold every key the dialog writes; otherwise the OK adds the missing
+  keys first (section 8).
 - **Phase 3 carries over unchanged.** The line editor, the generator, the
   golden tests, `base`, `sounder_hash` and drift all keep working.
 - **A new store would buy little.** A station document that the agent
@@ -321,8 +323,15 @@ None of these steps restarts the sounder: `chirp_config.py` does not change.
 
 - **To the console:** run `19-install-desktop.sh` again, which restores the
   launcher. The console reads the ini files the agent kept. Its first dialog
-  OK rewrites `chirp_config.py` byte for byte as the agent left it, so
-  nothing restarts.
+  OK writes every key the dialog holds into the ini files, so it also adds
+  the keys they lack. On 2026-10-17 the phase 3 round trip showed it: the OK
+  that set `keep_lfs_hours` added `live_ionogram=true` and
+  `save_raw_voltage=false`, which `config.ini` had not held. So the OK
+  rewrites `chirp_config.py` byte for byte as the agent left it only when the
+  ini files already hold every key the dialog writes. Otherwise check the
+  next health report: drift false and an unchanged `sounder_hash` mean
+  nothing restarts, and a new hash opens an epoch as any station change
+  does.
 - **Web edits of the site settings:** delete `~/.config/ionozond/web.env`.
   The units fall back to `/etc/default/ionozond` at their next run.
 - **The drop-ins:** delete them and run `daemon-reload`.
