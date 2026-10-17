@@ -68,6 +68,8 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
 
     if name == "set_ionozond":
         return ionozond.apply(config, params)
+    if name == "regenerate_ionozond":
+        return ionozond.regenerate(config, params)
 
     if name in ("set_config", "configure", "set_params"):
         if health.runs_ionozond(config):
@@ -101,6 +103,7 @@ def _dispatch(config: StationConfig, command: client.Command) -> list:
     return [control.CommandResult(
         name, False, f"unknown command {command.name!r}; this agent "
                      f"understands start, stop, restart, set_config, set_ionozond, "
+                     f"regenerate_ionozond, "
                      f"logs, triage")]
 
 

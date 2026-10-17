@@ -21,7 +21,8 @@ Two fingerprints, for two questions:
 **Drift.** On every health pass and before every edit the console's files are
 regenerated in memory and compared with ``chirp_config.py`` as the sounder
 would read it. When they differ, someone edited one without the other, and an
-edit is refused until the console regenerates the file.
+edit is refused until :func:`regenerate` writes the file again. Since phase 4
+(issue #8) the console is retired, so drift means a hand edit of an ini file.
 
 **Taking it up.** The write is followed by ``systemctl --no-block
 try-restart``: a running sounder finishes the sounding in progress on SIGTERM
@@ -50,6 +51,7 @@ from .qsettings import PLAIN, Ini, IniError
 from .sounderconfig import UnreadableConfig, build, literals, parsed
 
 NAME = "set_ionozond"
+REGENERATE = "regenerate_ionozond"
 
 #: The fields of a transmitter the web may set, and those a new one must have.
 FIELDS = ("active", "cf", "chirpt", "dur", "fft_count", "lat", "lon", "rate", "rep")
@@ -108,23 +110,17 @@ def state(config: StationConfig) -> dict:
 
 def apply(config: StationConfig, params: dict) -> list:
     """Check, write and take up one ``set_ionozond``; every outcome acknowledged."""
-    try:
-        files = _files(config)
-        with _locked((files.schedule, files.config)):
-            plan = _plan(config, files, params)
-            active = health._show(config.target, "ActiveState")[1] or "unknown"
-            _written(plan)
-            restart = control.systemctl("try-restart", config.target, no_block=True)
-            if not restart.ok:
-                _restored(plan)
-                return [control.CommandResult(
-                    NAME, False, "rolled back: the restart was refused, and the "
-                                 "sounder still runs the configuration it started "
-                                 "with. %s" % restart.detail), restart]
-    except (control.ControlError, IniError, UnreadableConfig, OSError) as exc:
-        return [control.CommandResult(NAME, False, str(exc))]
-    return [control.CommandResult(NAME, True, _said(plan, active),
-                                  journal=plan.journal), restart]
+    return _carried(config, NAME, lambda files: _plan(config, files, params))
+
+
+def regenerate(config: StationConfig, params: dict) -> list:
+    """Write ``chirp_config.py`` again from the ini files, after a hand edit.
+
+    ``params`` carries the ``base`` and ``sounder_hash`` the operator was shown,
+    so a file that changed since is refused rather than overwritten.
+    """
+    return _carried(config, REGENERATE, lambda files: _regenerated(
+        config, files, params))
 
 
 def document(schedule: Ini, config: Ini) -> dict:
@@ -313,6 +309,12 @@ def described(schedule: Ini, read: Ini, text: str) -> dict:
         out["sounder"], out["sounder_hash"] = None, None
         out["problems"].append(str(exc))
     out["drift"] = _drifted(schedule, read, text)
+    if out["drift"]:
+        try:
+            out["regenerated"] = flat(literals(build(schedule, read)))
+        except UnreadableConfig as exc:
+            out["problems"].append("regenerating would give an unreadable file: %s"
+                                   % exc)
     return out
 
 
@@ -326,10 +328,10 @@ def vetted(params: dict, reported: dict) -> tuple:
     """
     if reported.get("drift"):
         raise control.ControlError(
-            "chirp_config.py no longer matches the console's schedule.ini and "
-            "config.ini, so one was changed without the other. The console must "
-            "regenerate it: open its parameters dialog on the laptop and press OK, "
-            "then make the change again.")
+            "chirp_config.py no longer matches schedule.ini and config.ini, so "
+            "one was changed without the other. Regenerate it from the ini files, "
+            "with Regenerate on /ui/live or `python3 -m services.agent ionozond "
+            "regenerate` on the laptop, then make the change again.")
     if params.get("base") != reported.get("base"):
         raise control.ControlError(
             "the schedule changed on the station after this edit was made; reload "
@@ -461,6 +463,86 @@ def _plan(config: StationConfig, files: Files, params: dict) -> Plan:
                 journal)
 
 
+def _carried(config: StationConfig, name: str, planned) -> list:
+    """Lock, plan, write and ``try-restart``; roll back if the restart is refused."""
+    try:
+        files = _files(config)
+        with _locked((files.schedule, files.config)):
+            plan = planned(files)
+            active = health._show(config.target, "ActiveState")[1] or "unknown"
+            _written(plan)
+            restart = control.systemctl("try-restart", config.target, no_block=True)
+            if not restart.ok:
+                _restored(plan)
+                return [control.CommandResult(
+                    name, False, "rolled back: the restart was refused, and the "
+                                 "sounder still runs the configuration it started "
+                                 "with. %s" % restart.detail), restart]
+    except (control.ControlError, IniError, UnreadableConfig, OSError) as exc:
+        return [control.CommandResult(name, False, str(exc))]
+    return [control.CommandResult(name, True, _said(plan, active),
+                                  journal=plan.journal), restart]
+
+
+def _regenerated(config: StationConfig, files: Files, params: dict) -> Plan:
+    schedule, read = Ini.read(files.schedule), Ini.read(files.config)
+    raw = files.sounder.read_bytes()
+    text = raw.decode("utf-8")
+    refusal = _mismatch(read, files) or _folders(config, read)
+    if refusal:
+        raise control.ControlError(refusal)
+    current = described(schedule, read, text)
+    if (params.get("base") != current["base"]
+            or params.get("sounder_hash") != current["sounder_hash"]):
+        raise control.ControlError(
+            "the settings or chirp_config.py changed on the station after this was "
+            "shown; reload and look again")
+    if not current["drift"]:
+        raise control.ControlError(
+            "chirp_config.py already holds what schedule.ini and config.ini "
+            "generate: there is nothing to regenerate")
+    errors = [i for i in issues(current["document"], current["receivers"],
+                                current["settings"], _seconds(health._show(
+                                    config.target, "TimeoutStopUSec")[1]))
+              if i.level == schedulecheck.ERROR]
+    if errors:
+        raise control.ControlError("refused: " + "; ".join(_line(i) for i in errors))
+    generated = build(schedule, read)
+    after = flat(parsed(generated))
+    before = current["sounder"] or {}
+    journal = {
+        "station": config.station, "config_path": str(files.sounder),
+        "edits": {}, "regenerated": True, "document_hash": current["base"],
+        "config_hash": fingerprint(after), "warnings": [],
+        "applied_at": time.time(), "requires_restart": True,
+    }
+    if fingerprint(after) != fingerprint(before):
+        journal["changes"] = diff(before, after)
+    return Plan(files, (schedule.data, read.data, raw),
+                (schedule.data, read.data, generated.encode("utf-8")), journal)
+
+
+def _folders(config: StationConfig, read: Ini) -> str:
+    """Why ``data_dir`` or ``live_dir`` disagrees with ``IONOZOND_ARCHIVE``, or ""."""
+    archive = _defaults(Path(config.sounder_defaults)).get("IONOZOND_ARCHIVE", "")
+    if not archive:
+        return ""
+    data_dir = read.value("", "data_dir") if "data_dir" in read.keys("") else ""
+    live_dir = str(config.live_dir) if config.live_dir is not None else ""
+    if all(_folder(path) == _folder(archive) for path in (data_dir, live_dir)
+           if path):
+        return ""
+    return ("data_dir in config.ini is %s and the agent's live_dir is %s, but the "
+            "units hand the sounder IONOZOND_ARCHIVE=%s. The sounder, the live "
+            "feed, the prune unit and the NAS unit must all name one folder: "
+            "correct config.ini or the agent's config first"
+            % (data_dir or "unset", live_dir or "unset", archive))
+
+
+def _folder(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.expanduser(path)))
+
+
 def _written(plan: Plan) -> None:
     """Back up, then replace each changed file, ``chirp_config.py`` last."""
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
@@ -488,6 +570,9 @@ def _restored(plan: Plan) -> None:
 def _said(plan: Plan, active: str) -> str:
     edits = "; ".join("%s: %r -> %r" % (key, change["from"], change["to"])
                       for key, change in plan.journal["edits"].items())
+    if plan.journal.get("regenerated"):
+        edits = "chirp_config.py, regenerated from schedule.ini and config.ini (%s)" % (
+            ", ".join(plan.journal.get("changes", {})) or "no value the sounder reads")
     then = ("the sounder restarts on it once the sounding in progress ends"
             if active == "active" else
             "the sounder is %s, so it reads the change at its next start" % active)
