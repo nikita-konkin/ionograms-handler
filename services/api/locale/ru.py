@@ -1487,6 +1487,11 @@ MESSAGES: dict[str, str] = {
     "live.sched.lat": "Шир., °",
     "live.sched.lon": "Долг., °",
     "live.sched.band": "Полоса, МГц",
+    "live.sched.chirp_time": "Время ЛЧМ, с",
+    "live.sched.chirp_time_hint": (
+        "Секунда, когда развёртка проходит 0 Гц, как в подтверждённых "
+        "слотах на /ui/sources: сдвиг минус время, за которое развёртка "
+        "доходит до нижнего края полосы, по модулю периода"),
     "live.sched.fft_count_index": "Общий размер БПФ",
     "live.sched.keep_lfs": "Хранить файлы LFS",
     "live.sched.keep_lfs_hours": "Хранить их, ч",

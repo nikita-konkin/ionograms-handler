@@ -98,6 +98,7 @@
       <th>{{ t('live.sched.dur') }}</th><th>{{ t('live.sched.fft_count') }}</th>
       <th>{{ t('live.sched.lat') }}</th><th>{{ t('live.sched.lon') }}</th>
       <th>{{ t('live.sched.band') }}</th>
+      <th title="{{ t('live.sched.chirp_time_hint') }}">{{ t('live.sched.chirp_time') }}</th>
     </tr></thead>
     <tbody></tbody>
   </table></div>
@@ -545,6 +546,13 @@
     const lo = (parseFloat(row.cf) - sr / 2) / 1e3, hi = lo + parseFloat(row.dur) * parseFloat(row.rate) / 1e3;
     return isFinite(lo) && isFinite(hi) ? lo.toFixed(2) + '–' + hi.toFixed(2) : '—';
   }
+  // ionozond's offset is the second the sweep reaches the band's low edge;
+  // chirpsounder2 and /ui/sources count from the second it passes 0 Hz.
+  function chirpTime(row) {
+    const sr = (shown.sounder_config.settings || {}).sample_rate_khz, rep = parseFloat(row.rep);
+    const t = parseFloat(row.chirpt) - (parseFloat(row.cf) - sr / 2) / parseFloat(row.rate);
+    return isFinite(t) && rep > 0 ? String(+(((t % rep) + rep) % rep).toFixed(3)) : '—';
+  }
 
   function table() {
     body.textContent = '';
@@ -561,12 +569,12 @@
         tr.insertCell().appendChild(input);
         return [key, input];
       });
-      const last = tr.insertCell();
-      last.textContent = band(row);
+      const last = tr.insertCell(), when = tr.insertCell();
+      last.textContent = band(row); when.textContent = chirpTime(row);
       for (const [key, input] of inputs) input.oninput = () => {
         const text = input.value.trim();
         if (text === '' && !(key in was)) delete row[key]; else row[key] = text;
-        last.textContent = band(row); edited();
+        last.textContent = band(row); when.textContent = chirpTime(row); edited();
       };
     }
     box.querySelectorAll('[data-general]').forEach(el => {
