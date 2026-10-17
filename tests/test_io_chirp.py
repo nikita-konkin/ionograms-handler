@@ -249,6 +249,20 @@ def test_header_reconstructs_the_acquisition_scalars(make_chirp_h5):
     assert stop == pytest.approx(float(ion.cal.freq[-1]), rel=1e-9)
 
 
+def test_header_keeps_a_non_ascii_transmitter_name(make_chirp_h5):
+    """h5py writes a ``str`` as UTF-8, so the name must come back as written (#9)."""
+    ion = io_chirp.load(make_chirp_h5(make_power(), txname="Sodankylä"))
+    assert ion.header.tx_name == "Sodankylä", "Non-ASCII transmitter name was mangled"
+
+
+def test_header_replaces_bytes_that_are_not_utf8(make_chirp_h5):
+    """A Latin-1 name degrades to U+FFFD instead of failing the whole load."""
+    path = make_chirp_h5(make_power(), txname=b"Sodankyl\xe4",
+                         name="lfm_ionogram-latin1.h5")
+    assert io_chirp.load(path).header.tx_name == "Sodankyl�", (
+        "Invalid UTF-8 byte was not replaced")
+
+
 def test_recovers_the_exact_fft_length(make_chirp_h5):
     """`n_range_full` must come back as v2's real fftlen, not a near miss.
 

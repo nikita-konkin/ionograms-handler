@@ -254,9 +254,13 @@ _NAME_RE = re.compile(
 
 
 def _scalar(value):
-    """Unwrap an h5py scalar dataset, decoding bytes to ``str``."""
+    """Unwrap an h5py scalar dataset, decoding bytes to ``str``.
+
+    UTF-8, because that is how h5py writes a Python ``str``: ASCII here stored
+    ``Sodankylä`` as ``Sodankyl\\ufffd\\ufffd`` (#9).
+    """
     if isinstance(value, bytes):
-        return value.decode("ascii", errors="replace").strip()
+        return value.decode("utf-8", errors="replace").strip()
     if isinstance(value, np.ndarray) and value.ndim == 0:
         return _scalar(value[()])
     if isinstance(value, np.generic):
