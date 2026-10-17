@@ -43,7 +43,8 @@
     "PRUNE_KEEP_DAYS, PRUNE_FREE_GB and NAS_BWLIMIT. It must be the path the",
     "prune and NAS units' drop-ins load, and only those two units may load it.",
     "",
-    "backfill_dirs are folders beyond live_dir holding older .h5 products.",
+    "backfill_dirs are folders beyond live_dir holding older .h5 products,",
+    "normally the NAS copy that ionozond_5tb.mount puts under /mnt.",
     "The feed reads them for the history of /ui/live's SNR and PDP strips:",
     "deploy/README.md, 'the live view's history'."
   ],
@@ -60,7 +61,7 @@
   "live_unit": "ionozond-sounder.service",
   "live_window": 16384,
   "live_interval_s": 2.0,
-  "backfill_dirs": ["/home/samsung/ionograms"],
+  "backfill_dirs": ["/mnt/ionozond_5tb/ionozond_data"],
   "sounder_defaults": "/etc/default/ionozond",
   "console_settings": "/home/samsung/.config/dsChirp",
   "site_overrides": "/home/samsung/.config/ionozond/web.env"
