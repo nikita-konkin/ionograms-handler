@@ -1269,10 +1269,23 @@ def reprocess_window(path: str | Path,
     that noise is exact; at another window it is scaled by the window's power
     (exact for white noise) and, for ``.lfs``, interpolated between rows.
     Outside the stored range nothing exists, so the axis stops at the window.
+
+    Without ``gate_km`` an ``.lfs`` window is also held to the gate its
+    capture loads at, :func:`calibrate.default_gate`, so the two give the same
+    axis. That matters for a window as wide as the band (ionozond's
+    ``--full``): +-60000 km would hand every extractor the direct signal and
+    the mirror half, and k-means finds no MUF there. A window entirely outside
+    that gate -- a manual one, kept on purpose -- is left as it is. v2 needs
+    no such step: ``io_chirp.reprocess`` gives its whole axis too.
     """
     path = Path(path)
     ew = read(path)
     lo, hi = ew.range_lo_km, ew.range_hi_km
+    if gate_km is None and ew.source == SOURCE_LFS and ew.lfs_header is not None:
+        d_lo, d_hi = calibrate.default_gate(
+            io_lfs.parse_header(ew.lfs_header, path, stations))
+        if max(lo, d_lo) < min(hi, d_hi):
+            lo, hi = max(lo, d_lo), min(hi, d_hi)
     if gate_km is not None:
         lo, hi = max(lo, float(gate_km[0])), min(hi, float(gate_km[1]))
         if lo >= hi:

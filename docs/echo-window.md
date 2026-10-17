@@ -298,7 +298,15 @@ spectrogram and dividing by §3.5's noise:
   `source_window`/`source_step`.
 - **`.lfs`:** `spectro`'s non-overlapping Hann rows.
 
-The result covers the window's range and nothing else.
+The result covers the window's range and nothing else. Without an explicit
+gate, an `.lfs` window is also held to the gate its capture loads at
+(`calibrate.default_gate`: the ground path to the header's `rmax`), so a
+window as wide as the band — ionozond's `--full`, ±60 000 km — gives the
+capture's own axis rather than the direct signal and the mirror half. On
+cyprus1_20260204_120010 that makes all four extractors match the `.lfs`;
+without it, k-means found no MUF. A window entirely outside that gate is kept
+whole. v2 has no such step, since `io_chirp.reprocess` gives its whole axis
+too.
 
 ## 4. Using it
 

@@ -137,6 +137,33 @@ def test_an_lfs_echo_comes_back_at_its_range(make_lfs_iq, tmp_path):
     assert _peak_km(derived) == pytest.approx(r_true, abs=LFS_BIN_KM / 2)
 
 
+def test_a_full_band_window_loads_at_the_lfs_gate(make_lfs_iq, tmp_path):
+    """The whole band, undecimated -- ionozond's ``--full`` -- re-derived with
+    no gate lands on the axis the capture itself loads at, not +-60000 km."""
+    r_true = 198 * LFS_BIN_KM
+    n = int(20 * SR)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(r_true)))
+    half = abs(LFS_KM_PER_HZ) * SR / 2
+
+    report = echo_window.write(lfs, out_dir=tmp_path, manual_km=(-half, half))
+    assert echo_window.read(report.target).plan.numtaps == 1
+
+    full = spectro.compute(lfs)
+    derived = echo_window.reprocess_window(report.target)
+    np.testing.assert_allclose(derived.vrange, full.vrange)
+    np.testing.assert_allclose(derived.power, full.power, rtol=1e-4)
+
+
+def test_a_window_outside_the_lfs_gate_is_kept_whole(make_lfs_iq, tmp_path):
+    n = int(20 * SR)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(1200.0)))
+    report = echo_window.write(lfs, out_dir=tmp_path, manual_km=(800.0, 1600.0))
+
+    derived = echo_window.reprocess_window(report.target)
+    assert 800.0 <= derived.vrange.min() and derived.vrange.max() <= 1600.0
+    assert _peak_km(derived) == pytest.approx(1200.0, abs=LFS_BIN_KM)
+
+
 def test_a_v2_echo_comes_back_at_its_range(make_chirp_z_h5):
     r_true = ECHO_RANGE_KM + 7 * V2_BIN_KM          # 3119.9 km, on a bin
     n = int(10 * SR)
