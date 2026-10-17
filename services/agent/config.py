@@ -212,6 +212,14 @@ class StationConfig:
     #: as the Qt console draws it.
     live_window: int = 16384
     live_interval_s: float = 2.0
+    #: Folders beyond ``live_dir`` that hold this station's older products,
+    #: normally the NAS copy; ``services.agent.backfill`` reads them after
+    #: ``live_dir`` for the live view's history (issue #12).
+    backfill_dirs: tuple[Path, ...] = ()
+    #: How often the backfill asks the server what it lacks, and how many
+    #: summaries go in each post after a live batch.
+    backfill_every_s: float = 3600.0
+    backfill_per_post: int = 20
 
     #: The ionozond unit's ``EnvironmentFile=``, read for ``IONOZOND_CONFIG``:
     #: the ``chirp_config.py`` the sounder is actually handed, rather than the
@@ -315,6 +323,8 @@ class StationConfig:
         for key in ("units", "optional_units", "preview_size"):
             if key in known:
                 known[key] = tuple(known[key])
+        if "backfill_dirs" in known:
+            known["backfill_dirs"] = tuple(Path(p) for p in known["backfill_dirs"])
         return cls(**known)
 
     @classmethod

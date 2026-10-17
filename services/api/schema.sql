@@ -255,6 +255,29 @@ CREATE TABLE IF NOT EXISTS station_preview (
 );
 
 
+-- The live view's history: one row per sounding a station has summarised,
+-- one SNR byte per frequency step and one PDP byte per range row, a quarter
+-- of a dB per count (`services/api/live.py`). `source` is `live` when the
+-- hub saw the sounding's columns, `archive` when the agent summarised the
+-- product afterwards (issue #12); a live row is never replaced by an archived
+-- one. Each row carries its own axes, because the schedule changes them.
+CREATE TABLE IF NOT EXISTS live_summary (
+    station       TEXT NOT NULL,
+    tx            TEXT NOT NULL,
+    t0            INTEGER NOT NULL,     -- the sounding's start, whole seconds
+    source        TEXT NOT NULL,
+    f_lo_mhz      REAL NOT NULL,
+    f_step_mhz    REAL NOT NULL,
+    columns       INTEGER NOT NULL,
+    range_lo_km   REAL NOT NULL,
+    range_step_km REAL NOT NULL,
+    rows          INTEGER NOT NULL,
+    km_per_ms     REAL NOT NULL,
+    snr           TEXT NOT NULL,        -- base64 bytes, `columns` of them
+    pdp           TEXT NOT NULL,        -- base64 bytes, `rows` of them
+    PRIMARY KEY (station, tx, t0)
+);
+
 -- Folders that are meant to be indexed, so that "what is in this database"
 -- stops being whatever someone last ran `services.api.ingest` over by hand.
 --

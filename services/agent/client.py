@@ -150,6 +150,16 @@ def push_live(config: StationConfig, events: list, *, opener=None,
                     payload={"events": events}, timeout=timeout, opener=opener)
 
 
+def live_days(config: StationConfig, *, opener=None, timeout: float = 15.0) -> dict:
+    """How many live summaries the server holds, by transmitter and UTC day."""
+    if not config.server_url:
+        raise TransportError("no server_url configured")
+    url = config.server_url.rstrip("/") + f"/stations/{config.station}/live/days"
+    data = _request(url, token=config.token, method="GET", timeout=timeout,
+                    opener=opener)
+    return data.get("days", {}) if isinstance(data, dict) else {}
+
+
 def pull_commands(config: StationConfig, *, opener=None,
                   timeout: float = 15.0) -> list[Command]:
     """Ask for pending work. An empty list is the normal answer."""

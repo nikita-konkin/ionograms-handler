@@ -184,8 +184,9 @@ class Feed:
 
     def __init__(self, config: StationConfig, lines: Callable[[], list],
                  post: Callable[[list], object], clock: Callable[[], float] = time.time,
-                 obey: Callable[[], None] | None = None):
+                 obey: Callable[[], None] | None = None, backfill=None):
         self.config = config
+        self.backfill = backfill
         self.lines = lines
         self.post = post
         self.clock = clock
@@ -224,6 +225,23 @@ class Feed:
         queued = reply.get("queued") if isinstance(reply, dict) else 0
         if isinstance(queued, int) and queued > 0:
             self.obey()
+        if self.backfill is not None:
+            self._history()
+
+    def _history(self) -> None:
+        """Post what the backfill has ready, apart from the live batch it follows.
+
+        Apart, because a batch is taken whole or refused whole: a summary the
+        server will not take must not cost the live columns. One lost to a
+        failed post is offered again at the next survey.
+        """
+        ready = self.backfill.take(self.config.backfill_per_post)
+        if not ready:
+            return
+        try:
+            self.post(ready)
+        except client.TransportError as exc:
+            print("live: backfill: %s" % exc, file=sys.stderr, flush=True)
 
     def _events(self) -> list:
         events = [e for e in map(status_event, self.lines()) if e is not None]
@@ -264,7 +282,11 @@ def run(config: StationConfig, sleep: Callable[[float], None] = time.sleep) -> N
     """Follow the sounder for as long as the process lives."""
     journal = Journal(["journalctl", "-u", config.live_unit, "-f", "-n", "0",
                        "-o", "cat"])
-    feed = Feed(config, journal.lines, lambda events: client.push_live(config, events))
+    from .backfill import Backfill
+    history = Backfill(config, lambda: client.live_days(config))
+    threading.Thread(target=history.run, daemon=True).start()
+    feed = Feed(config, journal.lines, lambda events: client.push_live(config, events),
+                backfill=history)
     while True:
         started = time.time()
         feed.step()

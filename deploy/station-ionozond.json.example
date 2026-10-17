@@ -41,7 +41,11 @@
     "",
     "site_overrides is the agent's own web.env, where /ui/live writes",
     "PRUNE_KEEP_DAYS, PRUNE_FREE_GB and NAS_BWLIMIT. It must be the path the",
-    "prune and NAS units' drop-ins load, and only those two units may load it."
+    "prune and NAS units' drop-ins load, and only those two units may load it.",
+    "",
+    "backfill_dirs are folders beyond live_dir holding older .h5 products.",
+    "The feed reads them for the history of /ui/live's SNR and PDP strips:",
+    "deploy/README.md, 'the live view's history'."
   ],
   "station": "yoshkar-ola",
   "server_url": "http://<server>:8000",
@@ -56,6 +60,7 @@
   "live_unit": "ionozond-sounder.service",
   "live_window": 16384,
   "live_interval_s": 2.0,
+  "backfill_dirs": ["/home/samsung/ionograms"],
   "sounder_defaults": "/etc/default/ionozond",
   "console_settings": "/home/samsung/.config/dsChirp",
   "site_overrides": "/home/samsung/.config/ionozond/web.env"

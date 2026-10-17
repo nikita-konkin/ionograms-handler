@@ -257,3 +257,61 @@ def test_sounding_resent_after_it_completed_is_not_counted_twice():
     hub.publish("YOS", whole(dict(head)))
     assert len(hub.snapshot("YOS")["daily"]["cyprus1"]) == 1, (
         "a sounding resent after it completed was summarised twice")
+
+
+def archived(head=None, snr=None, pdp=None):
+    head = head or sounding()
+    fields = {k: head[k] for k in ("tx", "t0", "f_lo_mhz", "f_step_mhz", "columns",
+                                   "range_lo_km", "range_step_km", "rows", "km_per_ms")}
+    pack = lambda size: base64.b64encode(  # noqa: E731
+        np.random.randint(0, 256, size, dtype=np.uint8).tobytes()).decode("ascii")
+    return dict(fields, type="summary", snr=snr or pack(head["columns"]),
+                pdp=pdp or pack(head["rows"]))
+
+
+def test_summary_carries_the_axes_of_its_sounding():
+    hub = live.Hub()
+    head = sounding(columns=random.randint(2, 9))
+    hub.publish("YOS", whole(head))
+    summary = hub.snapshot("YOS")["daily"]["cyprus1"][0]
+    axes = (*live.SOUNDING_FIELDS, "columns", "rows")
+    assert all(summary[k] == head[k] for k in axes), (
+        "a summary lost the axes of the sounding it summarises")
+
+
+def test_complete_sounding_is_kept_as_live():
+    kept = []
+    hub = live.Hub(keep=lambda station, summary: kept.append((station, summary)))
+    hub.publish("YOS", whole(sounding(columns=random.randint(2, 9))))
+    assert [(s, k["source"]) for s, k in kept] == [("YOS", "live")], (
+        "a complete sounding was not kept as a live summary")
+
+
+def test_archived_summary_is_kept_as_archive():
+    kept = []
+    hub = live.Hub(keep=lambda station, summary: kept.append(summary))
+    event = archived()
+    hub.publish("YOS", [event])
+    assert [(k["t0"], k["source"]) for k in kept] == [(event["t0"], "archive")], (
+        "a summary the agent sent from its archive was not kept as one")
+
+
+def test_archived_summary_stays_out_of_the_live_day():
+    hub = live.Hub(keep=lambda station, summary: None)
+    hub.publish("YOS", [archived()])
+    assert hub.snapshot("YOS")["daily"] == {}, (
+        "a summary from the archive entered the live day")
+
+
+def test_archived_summary_with_the_wrong_snr_length_is_refused():
+    head = sounding()
+    bad = base64.b64encode(bytes(head["columns"] + random.randint(1, 9))).decode()
+    with pytest.raises(live.Refused):
+        live.Hub().publish("YOS", [archived(head, snr=bad)])
+
+
+def test_archived_summary_with_the_wrong_pdp_length_is_refused():
+    head = sounding()
+    bad = base64.b64encode(bytes(head["rows"] + random.randint(1, 9))).decode()
+    with pytest.raises(live.Refused):
+        live.Hub().publish("YOS", [archived(head, pdp=bad)])

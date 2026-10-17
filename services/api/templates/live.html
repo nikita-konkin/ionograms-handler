@@ -174,7 +174,9 @@
   };
   const ENDINGS = new Set(['writing', 'clean', 'degraded', 'failed']);
   const complete = pic => Object.keys(pic.cells).length >= pic.head.columns;
-  const DB_STEP = 0.25, DAY = 288, REP_S = 300;
+  const DB_STEP = 0.25, REP_S = 300;
+  const SHOWN_DAYS = 3;
+  const SPAN_S = SHOWN_DAYS * 86400, COLS = SPAN_S / REP_S;
   const DPR = Math.min(2, window.devicePixelRatio || 1);
   const M = {l: 42, r: 46, t: 6, b: 30};
   const txs = {};
@@ -239,10 +241,58 @@
     el.querySelector('h2').textContent = tx;
     ['ctrl', 'current', 'snr', 'pdp'].forEach(k => { el.querySelector('[data-p="' + k + '"]').previousElementSibling.querySelector('b').textContent = TEXT[k]; });
     document.getElementById('txs').appendChild(el);
-    const one = {el, cur: null, last: null, daily: [], status: null};
+    const one = {el, tx, cur: null, last: null, status: null, history: new Map(), earliest: null, back: 0, loading: false};
     txs[tx] = one;
     hover(one);
+    scroll(one);
+    const now = Math.floor(Date.now() / 1000);
+    history(one, now - SPAN_S, now + REP_S);
     return one;
+  }
+
+  function merge(one, list) {
+    for (const s of list) one.history.set(Math.round(s.t0), s);
+    dirty = true; redraw();
+  }
+  async function history(one, since, until) {
+    if (one.loading) return;
+    one.loading = true;
+    try {
+      const tok = sessionStorage.getItem('tok') || '';
+      const r = await fetch('/stations/' + encodeURIComponent(STATION) + '/live/summaries?tx=' + encodeURIComponent(one.tx)
+        + '&since=' + Math.floor(since) + '&until=' + Math.ceil(until), tok ? {headers: {Authorization: 'Bearer ' + tok}} : {});
+      if (r.ok) { const got = await r.json(); one.earliest = got.earliest; merge(one, got.summaries); }
+    } catch (e) { /* the strips keep what they have; the next scroll asks again */ }
+    one.loading = false;
+  }
+  function newest(one) { let n = null; for (const t of one.history.keys()) if (n === null || t > n) n = t; return n; }
+  function oldest(one) { let n = null; for (const t of one.history.keys()) if (n === null || t < n) n = t; return n; }
+  function reach(one) { const n = newest(one); return n === null || one.earliest === null ? 0 : Math.max(0, n - SPAN_S - one.earliest); }
+  function scroll(one) {
+    for (const k of ['snr', 'pdp']) {
+      const cv = one.el.querySelector('[data-p="' + k + '"]');
+      let from = null;
+      const move = by => {
+        const top = reach(one);
+        if (!top) return;
+        one.back = Math.max(0, Math.min(top, one.back + by));
+        const start = newest(one) - one.back - SPAN_S, first = oldest(one);
+        if (first !== null && start < first && first > one.earliest) history(one, start - SPAN_S, first);
+        dirty = true; redraw();
+      };
+      cv.addEventListener('mousedown', e => { if (reach(one)) { from = e.clientX; cv.style.cursor = 'grabbing'; } });
+      window.addEventListener('mouseup', () => { from = null; cv.style.cursor = reach(one) ? 'grab' : ''; });
+      cv.addEventListener('mousemove', e => {
+        if (from === null) return;
+        const g = cv._g; if (!g) return;
+        move((e.clientX - from) / g.pw * SPAN_S); from = e.clientX;
+      });
+      cv.addEventListener('wheel', e => {
+        if (!reach(one)) return;
+        e.preventDefault();
+        move((Math.abs(e.deltaX) > Math.abs(e.deltaY) ? -e.deltaX : e.deltaY) / 100 * 6 * REP_S);
+      }, {passive: false});
+    }
   }
 
   function apply(kind, ev) {
@@ -251,7 +301,7 @@
       document.getElementById('empty').hidden = false;
       for (const [tx, view] of Object.entries(ev.last)) panel(tx).last = fromView(view);
       for (const [tx, view] of Object.entries(ev.current)) panel(tx).cur = fromView(view);
-      for (const [tx, list] of Object.entries(ev.daily)) panel(tx).daily = list.slice(-DAY);
+      for (const [tx, list] of Object.entries(ev.daily)) merge(panel(tx), list);
       for (const [tx, st] of Object.entries(ev.status)) panel(tx).status = st;
       return;
     }
@@ -268,8 +318,7 @@
       put(one.cur, ev.index, ev.db);
       if (complete(one.cur)) one.last = one.cur;
     } else if (kind === 'summary') {
-      one.daily.push(ev);
-      if (one.daily.length > DAY) one.daily.shift();
+      merge(one, [ev]);
     }
   }
 
@@ -312,15 +361,21 @@
     cv._g = {pl, pt, pw, ph, x: o.x, y: o.y, read: o.read};
   }
 
-  function dailyImage(one, key, size, map) {
-    const cv = document.createElement('canvas'); cv.width = DAY; cv.height = size;
-    const ctx = cv.getContext('2d'), img = ctx.createImageData(DAY, size);
-    const end = one.daily[one.daily.length - 1].t0;
-    for (const s of one.daily) {
-      const x = DAY - 1 - Math.round((end - s.t0) / REP_S);
-      if (x < 0 || !s[key]) continue;
+  function stripImage(one, key, head, end, map) {
+    const size = key === 'snr' ? head.columns : head.rows;
+    const cv = document.createElement('canvas'); cv.width = COLS; cv.height = size;
+    const ctx = cv.getContext('2d'), img = ctx.createImageData(COLS, size);
+    for (const s of one.history.values()) {
+      const x = COLS - 1 - Math.round((end - s.t0) / REP_S);
+      if (x < 0 || x >= COLS || !s[key]) continue;
       const cells = bytes(s[key]);
-      for (let r = 0; r < Math.min(size, cells.length); r++) paint(img, ((size - 1 - r) * DAY + x) * 4, cells[r] * DB_STEP, map);
+      for (let r = 0; r < size; r++) {
+        const at = key === 'snr'
+          ? Math.round((head.f_lo_mhz + (r + 0.5) * head.f_step_mhz - (s.f_lo_mhz ?? head.f_lo_mhz)) / (s.f_step_mhz ?? head.f_step_mhz) - 0.5)
+          : Math.round(((head.range_lo_km + (r + 0.5) * head.range_step_km) / head.km_per_ms * (s.km_per_ms ?? head.km_per_ms)
+              - (s.range_lo_km ?? head.range_lo_km)) / (s.range_step_km ?? head.range_step_km) - 0.5);
+        if (at >= 0 && at < cells.length) paint(img, ((size - 1 - r) * COLS + x) * 4, cells[at] * DB_STEP, map);
+      }
     }
     ctx.putImageData(img, 0, 0);
     return cv;
@@ -350,13 +405,16 @@
       }
       for (const k of ['snr', 'pdp']) {
         const cv = one.el.querySelector('[data-p="' + k + '"]');
-        if (!one.daily.length || !head) { plot(cv, null); meta(k, ''); continue; }
-        const a = axis(head), end = one.daily[one.daily.length - 1].t0 / 3600, start = end - (DAY - 1) * REP_S / 3600;
-        const fit = Math.floor((cv.clientWidth - M.l - M.r) / 52), step = [3, 6, 12].find(s => 24 / s <= fit) || 12, xt = [];
+        const latest = newest(one);
+        if (latest === null || !head) { plot(cv, null); meta(k, ''); continue; }
+        const last = latest - Math.min(one.back, reach(one)), a = axis(head), end = last / 3600, start = end - (COLS - 1) * REP_S / 3600;
+        const fit = Math.floor((cv.clientWidth - M.l - M.r) / 52), step = [3, 6, 12, 24].find(s => SHOWN_DAYS * 24 / s <= fit) || 24, xt = [];
         for (let h = Math.ceil(start / step) * step; h <= end; h += step) xt.push(h);
-        meta(k, 'dB');
-        plot(cv, {img: dailyImage(one, k, k === 'snr' ? head.columns : head.rows, MAPS[k]), x: [start, end], y: k === 'snr' ? a.f : a.t,
-                  xticks: xt, xfmt: h => pad(((Math.round(h) % 24) + 24) % 24) + ':00', xlab: 'UTC', ylab: k === 'snr' ? TEXT.f : TEXT.t, map: k,
+        meta(k, 'dB' + (reach(one) ? ' · ⇆' : ''));
+        cv.style.cursor = reach(one) ? 'grab' : '';
+        plot(cv, {img: stripImage(one, k, head, last, MAPS[k]), x: [start, end], y: k === 'snr' ? a.f : a.t,
+                  xticks: xt, xfmt: h => { const d = new Date(Math.round(h) * 3600000); return d.getUTCHours() ? pad(d.getUTCHours()) + ':00' : pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1); },
+                  xlab: 'UTC', ylab: k === 'snr' ? TEXT.f : TEXT.t, map: k,
                   read: (hx, y) => hms(hx * 3600) + ' UTC · ' + (k === 'snr' ? 'f ' + y.toFixed(2) + ' MHz' : 't ' + y.toFixed(3) + ' ms')});
       }
     }
