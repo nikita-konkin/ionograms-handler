@@ -94,6 +94,19 @@ CREATE TABLE IF NOT EXISTS config_epoch (
     config_hash TEXT                      -- what the sounder read, where known
 );
 
+-- What the sounder read under each `config_epoch.config_hash`: the flat
+-- literals of an ionozond station's `chirp_config.py`, as its agent reported
+-- them. Kept so an epoch's changes can be worked out against any earlier
+-- configuration, not only the previous report's. Provenance, like the epochs:
+-- never swept, and kept by `forget_station`.
+CREATE TABLE IF NOT EXISTS sounder_literals (
+    station     TEXT NOT NULL,
+    config_hash TEXT NOT NULL,
+    literals    TEXT NOT NULL,            -- JSON: services.agent.ionozond.flat
+    first_seen  TEXT NOT NULL,
+    PRIMARY KEY (station, config_hash)
+);
+
 CREATE INDEX IF NOT EXISTS config_epoch_station ON config_epoch(station, valid_from);
 
 

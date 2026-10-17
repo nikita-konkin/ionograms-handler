@@ -235,6 +235,13 @@ def test_a_change_that_is_not_an_object_is_refused(client):
         "a set_ionozond whose params are not an object was not refused")
 
 
+def waited(client) -> None:
+    conn = client.app.state.db
+    conn.execute("UPDATE command SET delivered_at = '2026-01-01T00:00:00Z'"
+                 " WHERE delivered_at IS NOT NULL")
+    conn.commit()
+
+
 def drifted() -> dict:
     return reported(drift=True)
 
@@ -329,3 +336,51 @@ def test_run_now_is_refused_for_any_other_unit(client, unit):
 def test_a_plain_start_is_still_queued(client):
     assert command(client, "start", {}).status_code == 200, (
         "a start without a unit was no longer queued")
+
+
+def test_an_unacknowledged_change_opens_an_epoch_after_the_wait(client):
+    health(client)
+    health(client, reported(switched("active", "true")))
+    queue(client, edit(reported(switched("active", "true")), lambda d: d["schedule"][
+        "cyprus1"].update(chirpt=str(random.randint(11, 40)))))
+    client.get("/stations/yoshkar-ola/commands", headers=CTL)
+    changed = reported(Ini(switched("active", "true")).with_value(
+        "cyprus1", "chirpt", "45").data)
+    health(client, changed)
+    waited(client)
+    health(client, changed)
+    assert epochs(client)[-1]["config_hash"] == changed["sounder_hash"], (
+        "a change whose acknowledgement never came opened no epoch")
+
+
+def test_a_report_of_the_hash_the_epoch_holds_opens_none(client):
+    health(client)
+    health(client, reported(switched("active", "true")))
+    health(client, reported(switched("active", "true")))
+    health(client, reported(switched("active", "true")))
+    assert len(epochs(client)) == 1, "a report of the epoch's own hash opened another"
+
+
+def test_a_regeneration_awaiting_its_acknowledgement_opens_no_station_epoch(client):
+    health(client, drifted())
+    command(client, "regenerate_ionozond", {
+        "base": drifted()["base"], "sounder_hash": drifted()["sounder_hash"]})
+    client.get("/stations/yoshkar-ola/commands", headers=CTL)
+    health(client, reported(switched("active", "true")))
+    assert epochs(client) == [], (
+        "a regeneration still awaiting its acknowledgement opened a station epoch")
+
+
+def test_the_epoch_for_an_unacknowledged_change_records_what_changed(client):
+    health(client)
+    health(client, reported(switched("active", "true")))
+    queue(client, edit(reported(switched("active", "true")), lambda d: d["schedule"][
+        "cyprus1"].update(chirpt=str(random.randint(11, 40)))))
+    client.get("/stations/yoshkar-ola/commands", headers=CTL)
+    changed = reported(Ini(switched("active", "true")).with_value(
+        "cyprus1", "chirpt", "45").data)
+    health(client, changed)
+    waited(client)
+    health(client, changed)
+    assert "cyprus1" in epochs(client)[-1]["changes"], (
+        "the epoch for an unacknowledged change did not record what changed")

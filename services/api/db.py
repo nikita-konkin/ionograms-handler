@@ -620,6 +620,24 @@ def record_epoch(conn: sqlite3.Connection, station: str, changes: dict,
     return int(cur.lastrowid)
 
 
+def keep_literals(conn: sqlite3.Connection, station: str, config_hash: str,
+                  literals: dict) -> None:
+    """File what an ionozond sounder reads under its hash, once."""
+    conn.execute("INSERT OR IGNORE INTO sounder_literals (station, config_hash,"
+                 " literals, first_seen) VALUES (?, ?, ?, ?)",
+                 (station, config_hash, json.dumps(literals, sort_keys=True),
+                  utcnow()))
+    conn.commit()
+
+
+def literals(conn: sqlite3.Connection, station: str,
+             config_hash: str) -> dict | None:
+    """What the sounder read under ``config_hash``, or None if it was never filed."""
+    row = one(conn, "SELECT literals FROM sounder_literals WHERE station = ?"
+                    " AND config_hash = ?", (station, config_hash))
+    return None if row is None else json.loads(row["literals"])
+
+
 # --------------------------------------------------------------------------
 # Archives -- the folders that are meant to be indexed
 # --------------------------------------------------------------------------
