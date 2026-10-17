@@ -845,14 +845,16 @@ wins over one read from a file. A product that cannot be read is logged once
 and skipped until the feed restarts.
 
 `backfill_dirs` lists folders beyond `live_dir` that hold older products, as
-paths on the laptop:
+paths on the laptop. The laptop keeps `nas_keep_h5_days` of products itself
+and the NAS, mounted at `/mnt/ionozond_5tb` by `ionozond_5tb.mount`, holds
+the rest, so name the NAS copy to reach the whole history:
 
 ```json
-"backfill_dirs": ["/home/samsung/ionograms"]
+"backfill_dirs": ["/mnt/ionozond_5tb/ionozond_data"]
 ```
 
-The NAS copy is reached over SSH, not mounted, so the laptop can offer only
-what it still keeps: `nas_keep_h5_days` of products. Restart
+A sounding found in both is read once, from `live_dir`. A NAS that is not
+mounted holds nothing to read and costs nothing. Restart
 `chirp-live.service` after editing `~/agent.json`, then watch the history
 arrive with `journalctl -u chirp-live -f` and on `/ui/live`.
 
