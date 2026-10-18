@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ t('app.title') }}{% endblock %}</title>
+<script>
+  try {
+    const theme = localStorage.getItem('theme');
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+  } catch (e) { /* the system's scheme stands */ }
+</script>
 <style>
   :root {
     --bg: #14161a; --panel: #1c1f26; --line: #2b3039;
@@ -11,10 +17,15 @@
     --ok: #4ac26b; --fail: #e5534b; --unknown: #6b7280; --accent: #58a6ff;
     --warn: #d29922;
   }
+  /* The system's scheme unless the header's switch chose one: `data-theme`
+     on the root, set before the page draws by the script below. */
   @media (prefers-color-scheme: light) {
-    :root { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
-            --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; }
+    :root:not([data-theme="dark"]) { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
+            --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; color-scheme:light; }
   }
+  :root[data-theme="light"] { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
+          --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; color-scheme:light; }
+  :root[data-theme="dark"] { color-scheme:dark; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
          font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
@@ -30,6 +41,10 @@
   nav.lang { flex:none; }
   nav.lang a { margin-right:.4rem; font-size:.85rem; letter-spacing:.05em; }
   nav.lang a:last-child { margin-right:0; }
+  nav.theme button { background:none; border:0; padding:0; margin-right:.4rem; font:inherit;
+                     font-size:.85rem; color:var(--dim); cursor:pointer; }
+  nav.theme button:last-child { margin-right:0; }
+  nav.theme button:hover, nav.theme button.on { color:var(--accent); }
   nav a:hover, nav a.on { color:var(--accent); }
   main { padding:1rem; max-width:1400px; margin:0 auto; box-sizing:border-box; }
   .panel { background:var(--panel); border:1px solid var(--line);
@@ -316,6 +331,27 @@
        filter and the sort. `?lang=` is what writes the cookie -- see
        `i18n.LocaleMiddleware` -- so these are ordinary links and there is
        nothing here for JavaScript to do. #}
+    {# Auto follows the system; a choice is kept in this browser. Pages that
+       draw on a canvas listen for `themechange` to redraw in the new colours. #}
+    <nav class="lang theme" aria-label="{{ t('chrome.theme') }}">
+      <button type="button" data-theme-set="auto">{{ t('chrome.theme_auto') }}</button><button
+        type="button" data-theme-set="light">{{ t('chrome.theme_light') }}</button><button
+        type="button" data-theme-set="dark">{{ t('chrome.theme_dark') }}</button>
+    </nav>
+    <script>
+      (() => {
+        const buttons = document.querySelectorAll('[data-theme-set]');
+        const mark = () => buttons.forEach(b => b.classList.toggle('on', b.dataset.themeSet === (document.documentElement.dataset.theme || 'auto')));
+        buttons.forEach(b => b.addEventListener('click', () => {
+          const key = b.dataset.themeSet;
+          if (key === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = key;
+          try { if (key === 'auto') localStorage.removeItem('theme'); else localStorage.setItem('theme', key); } catch (e) { /* this page still switches */ }
+          mark();
+          window.dispatchEvent(new Event('themechange'));
+        }));
+        mark();
+      })();
+    </script>
     <nav class="lang" aria-label="{{ t('chrome.language') }}">
       {% for code in locales %}<a href="{{ lang_urls[code] }}" hreflang="{{ code }}"
          {% if code == lang %}class="on" aria-current="true"{% endif

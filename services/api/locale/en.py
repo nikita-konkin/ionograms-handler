@@ -32,6 +32,10 @@ MESSAGES: dict[str, str] = {
     "chrome.build_title":
         "Code committed {committed} · image built {built} · "
         "running since {started} (UTC)",
+    "chrome.theme": "Theme",
+    "chrome.theme_auto": "Auto",
+    "chrome.theme_light": "Light",
+    "chrome.theme_dark": "Dark",
     "chrome.language": "Language",
 
     "nav.console": "Console",
@@ -1432,6 +1436,8 @@ MESSAGES: dict[str, str] = {
     "live.older": "Earlier sounding from the archive",
     "live.newer": "Later sounding",
     "live.latest": "Back to the live ionogram",
+    "live.h_sphere": "h′, km · sphere",
+    "live.h_flat": "h′, km · flat",
     "live.ctrl": "Last complete ionogram",
     "live.current": "Current ionogram",
     "live.snr": "Signal/noise, 3 days",
