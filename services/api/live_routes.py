@@ -12,10 +12,13 @@ library. See ``services/api/live.py`` for what flows.
 
 from __future__ import annotations
 
+import base64
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from services.agent import schedulecheck
+from services.agent import product, schedulecheck
 
 from . import db, live
 from .auth import Capability, Principal, require, require_read
@@ -69,6 +72,34 @@ def live_summaries(station: str, tx: str, since: float, until: float,
 @router.get("/stations/{station}/live/days", dependencies=[Depends(require_read)])
 def live_days(station: str, request: Request) -> dict:
     return {"days": db.summary_days(request.app.state.db, station)}
+
+
+@router.get("/stations/{station}/live/archive", dependencies=[Depends(require_read)])
+def live_archive(station: str, tx: str, request: Request, before: float | None = None,
+                 after: float | None = None) -> dict:
+    """The archived sounding nearest a time, drawn as the live view draws its own.
+
+    One side of the time or the other, so the page can step back through the
+    archive and forward again.
+    """
+    if (before is None) == (after is None):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "give exactly one of before and after")
+    row = db.archived(request.app.state.db, station, tx, before=before, after=after)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "the archive holds no %s sounding %s that time" % (
+                                tx, "before" if before is not None else "after"))
+    path = Path(row["path"])
+    if not path.is_absolute():
+        path = Path(request.app.state.archive_root) / path
+    try:
+        head, cells = product.read(path)
+    except (OSError, ValueError, KeyError) as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "cannot read %s: %s" % (row["file"], exc)) from None
+    return dict(head, tx=tx, data={str(i): base64.b64encode(column.tobytes()).decode()
+                                   for i, column in enumerate(cells)})
 
 
 @router.get("/stations/{station}/live/events", dependencies=[Depends(require_read)])

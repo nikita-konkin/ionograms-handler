@@ -14,8 +14,10 @@ rows would look fine until someone counted them.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1161,3 +1163,24 @@ def remove_archive(conn: sqlite3.Connection, archive_id: int) -> bool:
     cur = conn.execute("DELETE FROM archive WHERE id = ?", (archive_id,))
     conn.commit()
     return cur.rowcount > 0
+
+
+def archived(conn: sqlite3.Connection, station: str, tx: str, *,
+             before: float | None = None, after: float | None = None):
+    """The archived product nearest a time on one side of it, or None.
+
+    The live view's own products only, ``lfm_ionogram-*``, received at this
+    station. ``datetime`` is stored as text with a space and maybe
+    microseconds, so the bounds are whole seconds in that spelling: before
+    ``t`` is anything sorting under ``t``'s second, after it anything from the
+    next second on.
+    """
+    spell = lambda t: time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(t))  # noqa: E731
+    if before is not None:
+        cmp, bound, order = "<", spell(math.floor(before)), "DESC"
+    else:
+        cmp, bound, order = ">=", spell(math.floor(after) + 1), "ASC"
+    return one(conn, "SELECT * FROM sounding WHERE tx = ? AND lower(rx) = lower(?)"
+                     " AND file LIKE 'lfm_ionogram-%'"
+                     f" AND datetime {cmp} ? ORDER BY datetime {order} LIMIT 1",
+               (tx, station, bound))
