@@ -205,6 +205,26 @@ def test_live_page_names_the_chirp_time_in_russian(client):
         "the schedule does not name the chirp time in Russian")
 
 
+def test_live_page_steps_its_control_ionogram_through_the_archive(client):
+    assert "/live/archive?tx=" in page(client), (
+        "the live page cannot step back through the archive")
+
+
+def test_live_page_reads_moscow_time_three_hours_ahead_of_utc(client):
+    assert "const MSK_S = 3 * 3600;" in page(client), (
+        "the live page does not read the strips in Moscow time")
+
+
+def test_live_page_fills_a_strip_until_the_next_sounding(client):
+    assert "const HOLD_S = 1800;" in page(client), (
+        "the live page does not hold a strip column until the next sounding")
+
+
+def test_live_page_hides_transmitters_the_schedule_switched_off(client):
+    assert "addEventListener('ionozond-schedule'" in page(client), (
+        "the live page does not follow the schedule's transmitters")
+
+
 def test_live_page_carries_a_schedule_panel(client):
     assert '<section class="panel" id="sched" hidden>' in page(client), (
         "the live page has no schedule panel")
@@ -435,3 +455,63 @@ def test_kept_summary_is_committed_for_other_connections(client):
     complete(client, t0)
     assert len(db.summaries(db.connect(), "YOS", "cyprus1", t0, t0, 10)) == 1, (
         "a kept summary was not committed where another connection could read it")
+
+
+def stored(client, make_chirp_h5, t0, tx="cyprus1", rx="YOS"):
+    path = make_chirp_h5(np.random.exponential(1.0, (random.randint(20, 60), 600)),
+                         t0=float(t0), txname=tx, station_name=rx,
+                         name="lfm_ionogram-%s-%s-ch0-000-%.2f.h5" % (tx, rx, t0))
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(t0))
+    conn = client.app.state.db
+    conn.execute("INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at)"
+                 " VALUES (?, ?, ?, ?, ?, ?)",
+                 (path.name, str(path), when, tx, rx, when))
+    conn.commit()
+    return path
+
+
+def archived(client, tx="cyprus1", **bound):
+    return client.get("/stations/YOS/live/archive", params=dict(bound, tx=tx))
+
+
+def test_the_archive_offers_the_newest_sounding_before_a_time(client, make_chirp_h5):
+    t0 = 1792161010 + 600 * random.randint(0, 99)
+    for k in range(3):
+        stored(client, make_chirp_h5, t0 + 300 * k)
+    assert archived(client, before=t0 + 600).json()["t0"] == t0 + 300, (
+        "the archive did not offer the sounding just before the time")
+
+
+def test_the_archive_offers_the_oldest_sounding_after_a_time(client, make_chirp_h5):
+    t0 = 1792161010 + 600 * random.randint(0, 99)
+    for k in range(3):
+        stored(client, make_chirp_h5, t0 + 300 * k)
+    assert archived(client, after=t0).json()["t0"] == t0 + 300, (
+        "the archive did not offer the sounding just after the time")
+
+
+def test_an_archived_sounding_carries_every_column(client, make_chirp_h5):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    stored(client, make_chirp_h5, t0)
+    view = archived(client, before=t0 + 1).json()
+    assert len(view["data"]) == view["columns"], (
+        "an archived sounding did not carry a column per frequency step")
+
+
+def test_the_archive_says_when_nothing_is_earlier(client, make_chirp_h5):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    stored(client, make_chirp_h5, t0)
+    assert archived(client, before=t0).status_code == 404, (
+        "the archive did not say it holds nothing earlier")
+
+
+def test_the_archive_keeps_to_its_station(client, make_chirp_h5):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    stored(client, make_chirp_h5, t0, rx="DOB")
+    assert archived(client, before=t0 + 1).status_code == 404, (
+        "the archive offered another station's sounding")
+
+
+def test_the_archive_needs_a_bound(client):
+    assert archived(client).status_code == 400, (
+        "the archive answered without a time to step from")

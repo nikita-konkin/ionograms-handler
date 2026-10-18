@@ -27,15 +27,12 @@ import os
 import queue
 import sys
 import time
-import warnings
 from pathlib import Path
 from typing import Callable
 
-import numpy as np
+from muf import io_chirp
 
-from muf import calibrate, io_chirp, spectro
-
-from . import client, live, summary
+from . import client, product, summary
 from .config import StationConfig
 
 #: Summaries ready and waiting for the feed. The worker blocks when it is
@@ -45,25 +42,8 @@ READY = 200
 
 def summarise(path: Path) -> dict:
     """One archived product as a ``summary`` event, in the live columns' units."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        ion = io_chirp.load(path)
-    vrange = np.asarray(ion.vrange, dtype=np.float64)[::-1]
-    freq = np.asarray(ion.freq, dtype=np.float64)
-    if freq.size < 2 or vrange.size < 2:
-        raise ValueError("%s has too few frequencies or ranges to summarise"
-                         % path.name)
-    fold = -(-vrange.size // live.ROWS)
-    cells = summary.counts(np.maximum.reduceat(
-        ion.db[:, ::-1] - spectro.NOISE_FLOOR_DB, np.arange(0, vrange.size, fold),
-        axis=1))
-    return {"type": "summary", "tx": ion.header.tx_name, "t0": round(ion.header.t0),
-            "f_lo_mhz": float(freq[0]), "f_step_mhz": float(np.median(np.diff(freq))),
-            "columns": int(cells.shape[0]), "range_lo_km": float(vrange[0]),
-            "range_step_km": float(np.median(np.diff(vrange))) * fold,
-            "rows": int(cells.shape[1]),
-            "km_per_ms": calibrate.C_KM_S / 1e3 * 2.0 / ion.header.div_coef,
-            "snr": summary.snr(cells), "pdp": summary.pdp(cells)}
+    head, cells = product.read(path)
+    return dict(head, type="summary", snr=summary.snr(cells), pdp=summary.pdp(cells))
 
 
 def products(roots: list) -> dict:

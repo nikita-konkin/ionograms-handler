@@ -27,6 +27,8 @@
   .plots figure { margin:0; min-width:0; }
   .plots figcaption { display:flex; justify-content:space-between; gap:.6rem; color:var(--dim); flex-wrap:wrap; }
   .plots figcaption b { color:var(--ink); font-weight:normal; }
+  .plots .step { display:flex; gap:.25rem; }
+  .plots .step button { padding:0 .45rem; line-height:1.4; }
   .plots canvas { display:block; width:100%; aspect-ratio:16 / 10; }
   .readout { color:var(--dim); min-height:1.5em; font-variant-numeric:tabular-nums; }
   #log { margin:0; max-height:14rem; overflow:auto; color:var(--dim); white-space:pre; }
@@ -167,6 +169,7 @@
     ctrl: {{ t('live.ctrl')|tojson }}, current: {{ t('live.current')|tojson }},
     snr: {{ t('live.snr')|tojson }}, pdp: {{ t('live.pdp')|tojson }},
     f: {{ t('live.f_axis')|tojson }}, t: {{ t('live.t_axis')|tojson }},
+    older: {{ t('live.older')|tojson }}, newer: {{ t('live.newer')|tojson }}, latest: {{ t('live.latest')|tojson }},
   };
   const STATE = {
     waiting: T('live.js.waiting'), capturing: T('live.js.capturing'),
@@ -176,6 +179,8 @@
   const ENDINGS = new Set(['writing', 'clean', 'degraded', 'failed']);
   const complete = pic => Object.keys(pic.cells).length >= pic.head.columns;
   const DB_STEP = 0.25, REP_S = 300;
+  const MSK_S = 3 * 3600;
+  const HOLD_S = 1800;
   const SHOWN_DAYS = 3;
   const SPAN_S = SHOWN_DAYS * 86400, COLS = SPAN_S / REP_S;
   const DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -183,6 +188,8 @@
   const txs = {};
   const pad = n => String(n).padStart(2, '0');
   const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
+  const dmy = s => { const d = new Date(s * 1000); return pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1) + '.' + d.getUTCFullYear(); };
+  const moment = s => dmy(s) + ' ' + hms(s) + ' UTC · ' + hms(s + MSK_S) + ' ' + T('live.js.msk');
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   const MAPS = {
@@ -237,19 +244,55 @@
     el.className = 'panel';
     el.innerHTML = '<div class="tx-head"><h2></h2><span class="meta"></span><span class="pill state"></span></div>'
       + '<div class="bar"><i></i></div><div class="plots">'
-      + ['ctrl', 'current', 'snr', 'pdp'].map(k => '<figure><figcaption><b></b><span data-m="' + k + '"></span></figcaption>'
+      + ['ctrl', 'current', 'snr', 'pdp'].map(k => '<figure><figcaption><b></b><span data-m="' + k + '"></span>'
+        + (k === 'ctrl' ? '<span class="step"><button data-s="-1">&#9664;</button><button data-s="1">&#9654;</button><button data-s="0">&#9197;</button></span>' : '')
+        + '</figcaption>'
         + '<canvas data-p="' + k + '"></canvas><div class="readout" data-r="' + k + '"></div></figure>').join('') + '</div>';
     el.querySelector('h2').textContent = tx;
     ['ctrl', 'current', 'snr', 'pdp'].forEach(k => { el.querySelector('[data-p="' + k + '"]').previousElementSibling.querySelector('b').textContent = TEXT[k]; });
     document.getElementById('txs').appendChild(el);
-    const one = {el, tx, cur: null, last: null, status: null, history: new Map(), earliest: null, back: 0, loading: false};
+    const one = {el, tx, cur: null, last: null, past: null, status: null, history: new Map(), earliest: null, back: 0, loading: false};
     txs[tx] = one;
+    if (scheduled) el.hidden = !scheduled.has(tx);
+    el.querySelectorAll('.step button').forEach(b => {
+      b.title = TEXT[{'-1': 'older', '1': 'newer', '0': 'latest'}[b.dataset.s]];
+      b.addEventListener('click', () => step(one, +b.dataset.s));
+    });
     hover(one);
     scroll(one);
     const now = Math.floor(Date.now() / 1000);
     history(one, now - SPAN_S, now + REP_S);
     return one;
   }
+
+  // The control ionogram steps through the archive and back to live. The
+  // archive draws a product in the live view's own units, so a past
+  // sounding looks and reads exactly as the live one does.
+  async function step(one, dir) {
+    if (!dir || (dir > 0 && !one.past)) { one.past = null; dirty = true; redraw(); return; }
+    const from = one.past || one.last, at = from ? from.head.t0 : Math.floor(Date.now() / 1000);
+    const tok = sessionStorage.getItem('tok') || '';
+    let r;
+    try {
+      r = await fetch('/stations/' + encodeURIComponent(STATION) + '/live/archive?tx=' + encodeURIComponent(one.tx)
+        + (dir < 0 ? '&before=' : '&after=') + at, tok ? {headers: {Authorization: 'Bearer ' + tok}} : {});
+    } catch (e) { say(one.tx + ': ' + e); return; }
+    if (r.ok) {
+      const view = await r.json();
+      one.past = one.last && view.t0 >= one.last.head.t0 ? null : fromView(view);
+    } else if (dir > 0 && r.status === 404) {
+      one.past = null;
+    } else {
+      say(one.tx + ': ' + (r.status === 404 ? T('live.js.archive_none') : ((await r.json().catch(() => ({}))).detail || r.status)));
+    }
+    dirty = true; redraw();
+  }
+
+  let scheduled = null;
+  window.addEventListener('ionozond-schedule', e => {
+    scheduled = new Set(e.detail);
+    for (const [tx, one] of Object.entries(txs)) one.el.hidden = !scheduled.has(tx);
+  });
 
   function merge(one, list) {
     for (const s of list) one.history.set(Math.round(s.t0), s);
@@ -366,16 +409,22 @@
     const size = key === 'snr' ? head.columns : head.rows;
     const cv = document.createElement('canvas'); cv.width = COLS; cv.height = size;
     const ctx = cv.getContext('2d'), img = ctx.createImageData(COLS, size);
-    for (const s of one.history.values()) {
-      const x = COLS - 1 - Math.round((end - s.t0) / REP_S);
-      if (x < 0 || x >= COLS || !s[key]) continue;
+    // A schedule may sound a transmitter less often than every REP_S, so each
+    // summary holds its colour until the next one, but never past HOLD_S: a
+    // longer gap is an outage and stays empty.
+    const times = [...one.history.keys()].sort((a, b) => a - b);
+    for (const [i, t] of times.entries()) {
+      const s = one.history.get(t), x = COLS - 1 - Math.round((end - s.t0) / REP_S);
+      const wide = i + 1 < times.length ? Math.max(1, Math.round(Math.min(times[i + 1] - t, HOLD_S) / REP_S)) : 1;
+      if (x + wide <= 0 || x >= COLS || !s[key]) continue;
       const cells = bytes(s[key]);
       for (let r = 0; r < size; r++) {
         const at = key === 'snr'
           ? Math.round((head.f_lo_mhz + (r + 0.5) * head.f_step_mhz - (s.f_lo_mhz ?? head.f_lo_mhz)) / (s.f_step_mhz ?? head.f_step_mhz) - 0.5)
           : Math.round(((head.range_lo_km + (r + 0.5) * head.range_step_km) / head.km_per_ms * (s.km_per_ms ?? head.km_per_ms)
               - (s.range_lo_km ?? head.range_lo_km)) / (s.range_step_km ?? head.range_step_km) - 0.5);
-        if (at >= 0 && at < cells.length) paint(img, ((size - 1 - r) * COLS + x) * 4, cells[at] * DB_STEP, map);
+        if (at >= 0 && at < cells.length)
+          for (let c = Math.max(0, x); c < Math.min(COLS, x + wide); c++) paint(img, ((size - 1 - r) * COLS + c) * 4, cells[at] * DB_STEP, map);
       }
     }
     ctx.putImageData(img, 0, 0);
@@ -394,11 +443,14 @@
           + (st && st.state === 'waiting' && st.t0 ? hms(st.t0) + '–' + hms(st.t1) : hms(head.t0)) + ' UTC'
         : '';
       const meta = (k, text) => { one.el.querySelector('[data-m="' + k + '"]').textContent = text; };
-      for (const [k, pic] of [['ctrl', one.last], ['current', one.cur || one.last]]) {
+      one.el.querySelectorAll('.step button').forEach(b => { b.disabled = b.dataset.s !== '-1' && !one.past; });
+      for (const [k, pic] of [['ctrl', one.past || one.last], ['current', one.cur || one.last]]) {
         const cv = one.el.querySelector('[data-p="' + k + '"]');
         if (!pic) { plot(cv, null); meta(k, ''); continue; }
         const a = axis(pic.head), live = k === 'current' && pic.filled < pic.head.columns;
-        meta(k, live ? pic.filled + '/' + pic.head.columns : hms(pic.head.t0) + ' UTC');
+        meta(k, live ? pic.filled + '/' + pic.head.columns
+          : k === 'ctrl' && pic === one.past ? dmy(pic.head.t0) + ' ' + hms(pic.head.t0) + ' UTC · ' + T('live.js.archived')
+          : hms(pic.head.t0) + ' UTC');
         plot(cv, {img: pic.cv, x: a.f, y: a.t, xlab: TEXT.f, ylab: TEXT.t, map: 'iono',
                   cursor: live ? a.f[0] + pic.filled * pic.head.f_step_mhz : null,
                   read: (fx, ty) => { const c = Math.floor((fx - a.f[0]) / pic.head.f_step_mhz), r = Math.floor((ty - a.t[0]) * pic.head.km_per_ms / pic.head.range_step_km), cells = pic.cells[c];
@@ -416,7 +468,7 @@
         plot(cv, {img: stripImage(one, k, head, last, MAPS[k]), x: [start, end], y: k === 'snr' ? a.f : a.t,
                   xticks: xt, xfmt: h => { const d = new Date(Math.round(h) * 3600000); return d.getUTCHours() ? pad(d.getUTCHours()) + ':00' : pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1); },
                   xlab: 'UTC', ylab: k === 'snr' ? TEXT.f : TEXT.t, map: k,
-                  read: (hx, y) => hms(hx * 3600) + ' UTC · ' + (k === 'snr' ? 'f ' + y.toFixed(2) + ' MHz' : 't ' + y.toFixed(3) + ' ms')});
+                  read: (hx, y) => moment(Math.round(hx * 3600)) + ' · ' + (k === 'snr' ? 'f ' + y.toFixed(2) + ' MHz' : 't ' + y.toFixed(3) + ' ms')});
       }
     }
   }
@@ -804,6 +856,7 @@
     jobs();
     const cfg = shown.sounder_config;
     if (!cfg.document) { body.textContent = ''; draft = null; return; }
+    window.dispatchEvent(new CustomEvent('ionozond-schedule', {detail: Object.keys(cfg.document.schedule || {}).filter(n => on(cfg.document.schedule[n].active))}));
     if (draft === null || !dirty() || (sent && cfg.base !== base)) {
       origin = copy(cfg.document); draft = copy(cfg.document); base = cfg.base; sent = false;
       table(); edited();
