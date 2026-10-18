@@ -159,9 +159,19 @@ def test_live_page_labels_start_in_russian(client):
         "the live page's Start is not labelled in Russian")
 
 
-def test_live_page_titles_its_strips_with_the_days_they_show(client):
-    assert "Signal/noise, 3 days" in page(client, "?station=YOS&lang=en"), (
-        "the live page's SNR strip does not say it shows three days")
+def test_live_page_titles_its_strips_without_a_fixed_span(client):
+    assert '"Signal/noise"' in page(client, "?station=YOS&lang=en"), (
+        "the live page's SNR strip still claims a fixed span")
+
+
+def test_live_page_zooms_its_strips_in_to_six_hours(client):
+    assert "const MIN_SPAN_S = 6 * 3600;" in page(client), (
+        "the live page cannot zoom its strips in to six hours")
+
+
+def test_live_page_says_how_long_a_strip_spans(client):
+    assert "T('live.js.span_h'" in page(client), (
+        "the live page does not say how long a strip spans")
 
 
 def test_live_page_defaults_to_a_station_that_is_live(client):

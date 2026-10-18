@@ -202,7 +202,11 @@
   let model = 'sphere';
   try { if (localStorage.getItem('live.height') === 'flat') model = 'flat'; } catch (e) { /* the default stands */ }
   const SHOWN_DAYS = 3;
-  const SPAN_S = SHOWN_DAYS * 86400, COLS = SPAN_S / REP_S;
+  const SPAN_S = SHOWN_DAYS * 86400;
+  // The wheel zooms a strip between six hours and SPAN_S, around the time
+  // under the cursor; dragging scrolls it, and a double click goes back to
+  // the whole span, newest at the right.
+  const MIN_SPAN_S = 6 * 3600;
   const DPR = Math.min(2, window.devicePixelRatio || 1);
   const M = {l: 42, r: 46, t: 6, b: 30};
   const txs = {};
@@ -271,7 +275,7 @@
     el.querySelector('h2').textContent = tx;
     ['ctrl', 'current', 'snr', 'pdp'].forEach(k => { el.querySelector('[data-p="' + k + '"]').previousElementSibling.querySelector('b').textContent = TEXT[k]; });
     document.getElementById('txs').appendChild(el);
-    const one = {el, tx, cur: null, last: null, past: null, status: null, history: new Map(), earliest: null, back: 0, loading: false};
+    const one = {el, tx, cur: null, last: null, past: null, status: null, history: new Map(), earliest: null, back: 0, span: SPAN_S, loading: false};
     txs[tx] = one;
     if (scheduled) el.hidden = !scheduled.has(tx);
     place(one);
@@ -340,17 +344,30 @@
   }
   function newest(one) { let n = null; for (const t of one.history.keys()) if (n === null || t > n) n = t; return n; }
   function oldest(one) { let n = null; for (const t of one.history.keys()) if (n === null || t < n) n = t; return n; }
-  function reach(one) { const n = newest(one); return n === null || one.earliest === null ? 0 : Math.max(0, n - SPAN_S - one.earliest); }
+  function reach(one) { const n = newest(one); return n === null || one.earliest === null ? 0 : Math.max(0, n - one.span - one.earliest); }
+  const spanText = s => s >= 86400 ? T('live.js.span_d', {n: +(s / 86400).toFixed(1)}) : T('live.js.span_h', {n: +(s / 3600).toFixed(s < 36000 ? 1 : 0)});
   function scroll(one) {
     for (const k of ['snr', 'pdp']) {
       const cv = one.el.querySelector('[data-p="' + k + '"]');
       let from = null;
+      const fetchOlder = () => {
+        const start = newest(one) - one.back - one.span, first = oldest(one);
+        if (first !== null && start < first && first > one.earliest) history(one, start - SPAN_S, first);
+      };
       const move = by => {
         const top = reach(one);
         if (!top) return;
         one.back = Math.max(0, Math.min(top, one.back + by));
-        const start = newest(one) - one.back - SPAN_S, first = oldest(one);
-        if (first !== null && start < first && first > one.earliest) history(one, start - SPAN_S, first);
+        fetchOlder();
+        dirty = true; redraw();
+      };
+      const zoom = (factor, at) => {
+        const span = Math.max(MIN_SPAN_S, Math.min(SPAN_S, one.span * factor));
+        if (span === one.span || newest(one) === null) return;
+        const last = newest(one) - one.back, under = last - one.span * (1 - at);
+        one.span = span;
+        one.back = Math.max(0, Math.min(reach(one), newest(one) - (under + span * (1 - at))));
+        fetchOlder();
         dirty = true; redraw();
       };
       cv.addEventListener('mousedown', e => { if (reach(one)) { from = e.clientX; cv.style.cursor = 'grabbing'; } });
@@ -358,13 +375,16 @@
       cv.addEventListener('mousemove', e => {
         if (from === null) return;
         const g = cv._g; if (!g) return;
-        move((e.clientX - from) / g.pw * SPAN_S); from = e.clientX;
+        move((e.clientX - from) / g.pw * one.span); from = e.clientX;
       });
       cv.addEventListener('wheel', e => {
-        if (!reach(one)) return;
+        const g = cv._g; if (!g) return;
         e.preventDefault();
-        move((Math.abs(e.deltaX) > Math.abs(e.deltaY) ? -e.deltaX : e.deltaY) / 100 * 6 * REP_S);
+        if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { move(-(e.deltaX || e.deltaY) / 100 * one.span / 12); return; }
+        const r = cv.getBoundingClientRect(), at = Math.max(0, Math.min(1, (e.clientX - r.left - g.pl) / g.pw));
+        zoom(Math.exp(e.deltaY * 0.002), at);
       }, {passive: false});
+      cv.addEventListener('dblclick', () => { one.span = SPAN_S; one.back = 0; dirty = true; redraw(); });
     }
   }
 
@@ -451,6 +471,7 @@
 
   function stripImage(one, key, head, end, map) {
     const size = key === 'snr' ? head.columns : head.rows;
+    const COLS = Math.round(one.span / REP_S);
     const cv = document.createElement('canvas'); cv.width = COLS; cv.height = size;
     const ctx = cv.getContext('2d'), img = ctx.createImageData(COLS, size);
     // A schedule may sound a transmitter less often than every REP_S, so each
@@ -507,10 +528,10 @@
         const cv = one.el.querySelector('[data-p="' + k + '"]');
         const latest = newest(one);
         if (latest === null || !head) { plot(cv, null); meta(k, ''); continue; }
-        const last = latest - Math.min(one.back, reach(one)), a = axis(head), end = last / 3600, start = end - (COLS - 1) * REP_S / 3600;
-        const fit = Math.floor((cv.clientWidth - M.l - M.r) / LABEL_PX), step = HOUR_STEPS.find(s => SHOWN_DAYS * 24 / s <= fit) || 24, xt = [];
+        const last = latest - Math.min(one.back, reach(one)), a = axis(head), end = last / 3600, start = end - (Math.round(one.span / REP_S) - 1) * REP_S / 3600;
+        const fit = Math.floor((cv.clientWidth - M.l - M.r) / LABEL_PX), step = HOUR_STEPS.find(s => one.span / 3600 / s <= fit) || 24, xt = [];
         for (let h = Math.ceil(start / step) * step; h <= end; h += step) xt.push(h);
-        meta(k, 'dB' + (reach(one) ? ' · ⇆' : ''));
+        meta(k, 'dB · ' + spanText(one.span) + (reach(one) ? ' · ⇆' : ''));
         cv.style.cursor = reach(one) ? 'grab' : '';
         plot(cv, {img: stripImage(one, k, head, last, MAPS[k]), x: [start, end], y: k === 'snr' ? a.f : a.t,
                   xticks: xt, xfmt: h => { const d = new Date(Math.round(h) * 3600000); return d.getUTCHours() ? pad(d.getUTCHours()) + ':00' : pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1); },
