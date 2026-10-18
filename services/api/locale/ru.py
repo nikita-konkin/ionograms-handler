@@ -24,9 +24,12 @@ MESSAGES: dict[str, str] = {
     "chrome.build_title":
         "Код от {committed} · образ собран {built} · "
         "запущен {started} (UTC)",
-    "chrome.theme": "Тема",
+    "chrome.theme": "Тема: нажмите, чтобы сменить",
     "chrome.theme_auto": "Авто",
     "chrome.theme_light": "Светлая",
+    "chrome.theme_plots": "Светлая, тёмные графики",
+    "chrome.theme_grey": "Серая",
+    "chrome.theme_dim": "Приглушённая",
     "chrome.theme_dark": "Тёмная",
     "chrome.language": "Язык",
 

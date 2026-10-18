@@ -235,6 +235,16 @@ def test_live_page_measures_height_over_a_spherical_earth(client):
         "the live page has no spherical Earth to measure height over")
 
 
+def test_live_page_fills_its_plots_with_the_plot_colour(client):
+    assert "g.fillStyle = css('--plot');" in page(client), (
+        "the live page does not fill its plots with the theme's plot colour")
+
+
+def test_live_page_keeps_height_labels_apart(client):
+    assert "const TICK_GAP_PX = 12;" in page(client), (
+        "the live page lets crowded height labels overlap")
+
+
 def test_live_page_carries_a_schedule_panel(client):
     assert '<section class="panel" id="sched" hidden>' in page(client), (
         "the live page has no schedule panel")

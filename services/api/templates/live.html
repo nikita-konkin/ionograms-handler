@@ -182,6 +182,7 @@
   const DB_STEP = 0.25, REP_S = 300;
   const MSK_S = 3 * 3600;
   const HOLD_S = 1800;
+  const TICK_GAP_PX = 12;
   // An oblique echo's group path as the height of a single hop's mirror over
   // the transmitter-receiver distance: over a spherical Earth, or the flat
   // one muf.trace.hop_range_km labels hops with. Flat reads high on a long
@@ -409,12 +410,12 @@
     const side = o && o.y2 ? 44 : 0, pl = M.l, pt = M.t, pw = W - M.l - M.r - side, ph = H - M.t - M.b;
     cv._g = null;
     if (pw < 20 || ph < 20) return;
-    g.fillStyle = css('--bg'); g.fillRect(pl, pt, pw, ph);
+    g.fillStyle = css('--plot'); g.fillRect(pl, pt, pw, ph);
     if (!o) return;
     if (o.img) { g.imageSmoothingEnabled = false; g.drawImage(o.img, pl, pt, pw, ph); }
     const X = v => pl + (v - o.x[0]) / (o.x[1] - o.x[0]) * pw, Y = v => pt + ph - (v - o.y[0]) / (o.y[1] - o.y[0]) * ph;
     g.font = '11px ' + getComputedStyle(document.body).fontFamily; g.textBaseline = 'middle';
-    g.strokeStyle = css('--line'); g.fillStyle = css('--dim'); g.lineWidth = 1;
+    g.strokeStyle = css('--plot-line'); g.fillStyle = css('--dim'); g.lineWidth = 1;
     g.textAlign = 'center';
     (o.xticks || ticks(o.x[0], o.x[1], Math.max(2, Math.floor(pw / 70)))).forEach(v => { const x = Math.round(X(v)) + .5; g.globalAlpha = .5; g.beginPath(); g.moveTo(x, pt); g.lineTo(x, pt + ph); g.stroke(); g.globalAlpha = 1; g.fillText(o.xfmt ? o.xfmt(v) : String(v), x, pt + ph + 10); });
     g.textAlign = 'right';
@@ -426,7 +427,14 @@
     if (o.y2) {
       const f = HEIGHT[o.y2.model], d = o.y2.ground, k = o.y2.kpm, h0 = Math.max(0, f.h(o.y[0] * k, d)), h1 = f.h(o.y[1] * k, d);
       g.fillStyle = css('--dim'); g.textAlign = 'left';
-      if (h1 > h0) ticks(h0, h1, Math.max(2, Math.floor(ph / 34))).forEach(h => { const v = f.p(h, d) / k; if (v >= o.y[0] && v <= o.y[1]) g.fillText(String(h), pl + pw + 4, Math.round(Y(v)) + .5); });
+      // Height grows fastest at the bottom of the delay axis, so its ticks
+      // crowd there: a label too close to the one below it is skipped.
+      let below = Infinity;
+      if (h1 > h0) ticks(h0, h1, Math.max(2, Math.floor(ph / 34))).forEach(h => {
+        const v = f.p(h, d) / k, y = Math.round(Y(v)) + .5;
+        if (v < o.y[0] || v > o.y[1] || below - y < TICK_GAP_PX) return;
+        g.fillText(String(h), pl + pw + 4, y); below = y;
+      });
       g.save(); g.translate(pl + pw + side - 6, pt + ph / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.fillStyle = css('--accent'); g.fillText(TEXT[o.y2.model] + ' ⇄', 0, 0); g.restore();
       flip = {x: pl + pw + side - 14, w: 16, y: pt, h: ph};
     }

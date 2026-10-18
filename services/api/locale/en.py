@@ -32,9 +32,12 @@ MESSAGES: dict[str, str] = {
     "chrome.build_title":
         "Code committed {committed} · image built {built} · "
         "running since {started} (UTC)",
-    "chrome.theme": "Theme",
+    "chrome.theme": "Theme: click for the next one",
     "chrome.theme_auto": "Auto",
     "chrome.theme_light": "Light",
+    "chrome.theme_plots": "Light, dark plots",
+    "chrome.theme_grey": "Grey",
+    "chrome.theme_dim": "Dim",
     "chrome.theme_dark": "Dark",
     "chrome.language": "Language",
 
