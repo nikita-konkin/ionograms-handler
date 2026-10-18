@@ -225,6 +225,16 @@ def test_live_page_hides_transmitters_the_schedule_switched_off(client):
         "the live page does not follow the schedule's transmitters")
 
 
+def test_live_page_asks_how_far_each_transmitter_is(client):
+    assert "/live/path?tx=" in page(client), (
+        "the live page cannot place its ionograms' height axis")
+
+
+def test_live_page_measures_height_over_a_spherical_earth(client):
+    assert "const EARTH_KM = 6371;" in page(client), (
+        "the live page has no spherical Earth to measure height over")
+
+
 def test_live_page_carries_a_schedule_panel(client):
     assert '<section class="panel" id="sched" hidden>' in page(client), (
         "the live page has no schedule panel")
@@ -515,3 +525,36 @@ def test_the_archive_keeps_to_its_station(client, make_chirp_h5):
 def test_the_archive_needs_a_bound(client):
     assert archived(client).status_code == 400, (
         "the archive answered without a time to step from")
+
+
+def ground(tx, rx):
+    from types import SimpleNamespace
+
+    from muf import calibrate
+    return calibrate.ground_range_km(SimpleNamespace(
+        is_oblique=True, tx_latitude=tx[0], tx_longitude=tx[1],
+        rx_latitude=rx[0], rx_longitude=rx[1]))
+
+
+def test_a_path_is_measured_from_the_schedule_the_station_reported(client):
+    from tests.test_api_sounder import health
+    health(client)
+    got = client.get("/stations/yoshkar-ola/live/path", params={"tx": "cyprus1"}).json()
+    assert got["ground_km"] == pytest.approx(ground((35, 34), (56.38, 47.53))), (
+        "the path was not measured from the reported schedule")
+
+
+def test_a_path_is_measured_from_the_registry_without_a_report(client):
+    from muf.stations import default_registry
+    sites = default_registry()
+    tx, rx = sites.station("NIC1"), sites.station("yoshkar-ola")
+    got = client.get("/stations/yoshkar-ola/live/path", params={"tx": "NIC1"}).json()
+    assert got["ground_km"] == pytest.approx(ground(
+        (tx.latitude, tx.longitude), (rx.latitude, rx.longitude))), (
+        "the path was not measured from the station registry")
+
+
+def test_an_unknown_path_is_not_measured(client):
+    got = client.get("/stations/yoshkar-ola/live/path",
+                     params={"tx": "nowhere%d" % random.randint(0, 999)})
+    assert got.status_code == 404, "a path nobody can place was measured"

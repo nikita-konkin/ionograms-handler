@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from muf import calibrate
+from muf.stations import default_registry
 from services.agent import product, schedulecheck
 
-from . import db, live
+from . import db, live, sounder
 from .auth import Capability, Principal, require, require_read
 from .web_routes import templates
 
@@ -100,6 +103,38 @@ def live_archive(station: str, tx: str, request: Request, before: float | None =
                             "cannot read %s: %s" % (row["file"], exc)) from None
     return dict(head, tx=tx, data={str(i): base64.b64encode(column.tobytes()).decode()
                                    for i, column in enumerate(cells)})
+
+
+@router.get("/stations/{station}/live/path", dependencies=[Depends(require_read)])
+def live_path(station: str, tx: str, request: Request) -> dict:
+    """How far the transmitter is from this station, for the ionograms' height axis.
+
+    From the coordinates the station's schedule reports, as the sounder itself
+    gates by, and from the station registry by name where the report has none.
+    """
+    try:
+        found = sounder.reported(request.app.state.db, station)
+    except sounder.Unvetted:
+        found = {}
+    group = ((found.get("document") or {}).get("schedule") or {}).get(tx) or {}
+    receivers = found.get("receivers") or [{}]
+    sites = default_registry()
+    ends = [_place(group, sites.station(tx)),
+            _place(receivers[0], sites.station(station))]
+    km = None if None in ends else calibrate.ground_range_km(SimpleNamespace(
+        is_oblique=True, tx_latitude=ends[0][0], tx_longitude=ends[0][1],
+        rx_latitude=ends[1][0], rx_longitude=ends[1][1]))
+    if km is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "cannot place both ends of %s to %s" % (tx, station))
+    return {"ground_km": km}
+
+
+def _place(group: dict, site) -> tuple[float, float] | None:
+    try:
+        return float(group["lat"]), float(group["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None if site is None else (site.latitude, site.longitude)
 
 
 @router.get("/stations/{station}/live/events", dependencies=[Depends(require_read)])

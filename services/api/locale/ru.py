@@ -24,6 +24,10 @@ MESSAGES: dict[str, str] = {
     "chrome.build_title":
         "Код от {committed} · образ собран {built} · "
         "запущен {started} (UTC)",
+    "chrome.theme": "Тема",
+    "chrome.theme_auto": "Авто",
+    "chrome.theme_light": "Светлая",
+    "chrome.theme_dark": "Тёмная",
     "chrome.language": "Язык",
 
     "nav.console": "Консоль",
@@ -1447,6 +1451,8 @@ MESSAGES: dict[str, str] = {
     "live.older": "Предыдущее зондирование из архива",
     "live.newer": "Следующее зондирование",
     "live.latest": "Вернуться к текущей ионограмме",
+    "live.h_sphere": "h', км · сфера",
+    "live.h_flat": "h', км · плоск.",
     "live.ctrl": "Контрольная ионограмма",
     "live.current": "Текущая ионограмма",
     "live.snr": "Сигнал/шум за 3 суток",
