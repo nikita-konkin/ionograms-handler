@@ -160,7 +160,7 @@ def test_a_window_outside_the_lfs_gate_is_kept_whole(make_lfs_iq, tmp_path):
     report = echo_window.write(lfs, out_dir=tmp_path, manual_km=(800.0, 1600.0))
 
     derived = echo_window.reprocess_window(report.target)
-    assert 800.0 <= derived.vrange.min() and derived.vrange.max() <= 1600.0
+    assert derived.vrange.min() >= 800.0 and derived.vrange.max() <= 1600.0
     assert _peak_km(derived) == pytest.approx(1200.0, abs=LFS_BIN_KM)
 
 
