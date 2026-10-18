@@ -103,7 +103,16 @@ shuffle; §6.3 has the measurement behind that choice.
 | `selection` | str, JSON | §3.7 |
 | `edge_energy_db` | float `[2]` | brightest power-ionogram cell within one margin inside the low and the high edge, dB on the shared scale |
 | `truncated_suspect` | bool | either edge value ≥ 43 dB, the detection threshold |
+| `edge_sigma` | float `[2]` | selection rule 2 on: the echo statistic's peak within one margin inside the low and the high edge, robust deviations; NaN where the margin holds no usable bin. §3.7 |
+| `trace_at_edge` | bool | selection rule 2 on: either `edge_sigma` ≥ 3. A window written by rule 1 has neither attribute |
 | `writer` | str | `"ionograms-handler <git sha>"` |
+
+`truncated_suspect` keeps its rule 1 meaning, and a broadcast carrier
+crossing a row near an edge sets it as readily as a trace does: in October
+2026 it was set on 193 of 310 windows and about 173 of those were carriers
+(§6.5). `trace_at_edge` is the test to act on. A reader that finds
+`trace_at_edge` uses it; on a window that lacks it, `truncated_suspect` is all
+there is.
 
 A reader checks `format` and `version`, and refuses a version it does not
 know. Within v1 a reader ignores attributes it does not recognise. Any change
@@ -246,13 +255,17 @@ quantity rather than an approximation (§3.8).
 The `selection` JSON records how the range window was chosen:
 
 ```json
-{"method": "auto_gate+geometry", "margin_km": 150.0, "max_hops": 3,
- "auto_gate_km": [2666.016, 2827.148], "geometry_km": [2635.687, 3961.924],
- "manual_km": null}
+{"rule": 2, "method": "echo_gate+geometry", "margin_km": 150.0, "max_hops": 3,
+ "echo_gate_km": [2666.016, 2856.445], "echo_gate_sigma": 37.46,
+ "echo_gate_reach": "near", "echo_gate_runs": 1, "auto_gate_km": null,
+ "geometry_km": [2635.687, 3961.924], "manual_km": null}
 ```
 
-`method` is `auto_gate`, `geometry`, `auto_gate+geometry` (the union), or
-`manual`. Unused candidates are `null`.
+`method` is `echo_gate`, `geometry`, `echo_gate+geometry` (the union), or
+`manual`; rule 1 wrote `auto_gate` in place of `echo_gate`, and a JSON with no
+`rule` key is rule 1. Unused candidates are `null`. `echo_gate_reach` says
+which of the cases below the energy candidate came from: `near`, `far`, or
+`axis` where there is no geometry.
 
 **The window follows the energy, not the geometry.** `architecture.md` records
 a 45 ms epoch error that displaced an echo by 13,500 km. A window built from
@@ -260,11 +273,52 @@ the path alone would have kept an empty band and dropped the only echo, and
 once `z` is gone that cannot be undone. The window is therefore the
 **union** of two candidates:
 
-- `calibrate.auto_gate` on the product's own power ionogram. For v2 that is
-  the stored `SNR`; for `.lfs` it is `spectro.compute` over the whole axis,
-  not the header gate.
+- the **echo gate** on the product's own power ionogram. For v2 that is the
+  stored `SNR`; for `.lfs` it is `spectro.compute` over the whole axis, not
+  the header gate.
 - `calibrate.geometry_gate` for 1…`max_hops` hops, where the geometry is
-  known. A relative axis has none, so there the window is `auto_gate` alone.
+  known. A relative axis has none, so there the window is the echo gate alone.
+
+**The echo gate (rule 2, 2026-10-18).** Rule 1 used `calibrate.auto_gate`,
+which takes the range where the most cells clear their row's 98th percentile
+as soon as it beats the median by half. A silent band always offers one, and
+the receiver's response, tilting the noise floor 1–1.5 dB across the band,
+makes its louder edge outcount the rest threefold. In October 2026 that
+turned soundings with no echo into windows of the whole band, undecimated
+(§6.5). Rule 2 computes, for power `P[row, bin]` on the shared scale:
+
+1. **Flatten the floor.** `m[bin]` = median of `P` over rows; `F` = running
+   median of `m` over 25 % of the axis, evaluated at 257 evenly spaced bins
+   (the window shrinking at the ends) and linear between them. `Q = P / F`.
+2. **Count.** `c[bin]` = cells of `Q` above their own row's 98th percentile,
+   smoothed by a centred boxcar of `max(3, ⌊40 km / step⌋ | 1)` bins.
+3. **Take off the background.** `e = c − B`, `B` the same running median of
+   `c` over `min(axis, 6000 km)`. A carrier crossing a row puts that row's
+   bright cells into the tens of thousands of km of band it sweeps; `B`
+   follows that plateau, an echo complex of 2–3 thousand km does not move it.
+4. **Standardise locally.** `z = e / max(1.4826 · S, 1 / width)`, `S` the same
+   running median of `|e|`.
+5. **Runs.** A run is a stretch with `z ≥ 3`; it is an echo when it peaks at
+   `z ≥ 8` outside a guard of `max(width, 4 % of the axis)` bins at either
+   end. The receiver puts lines of its own 0.6–1.4 kHz inside the edges of
+   its 40 kHz band (cyprus1 at −57300 km; Norilsk and Magadan near
+   ±11300 km), and nothing there can be measured anyway.
+6. **Choose.** Of the echoes, the strongest within 1500 km of the geometry is
+   the main one, and the gate spans it and every other echo within 1500 km of
+   it or of the geometry: a second mode, sporadic E, scatter rising from the
+   trace. If no echo is within reach of the geometry, the strongest anywhere
+   is taken with its own neighbours (`far`): the displaced echo the union is
+   for. If there is no echo at all, there is no gate, and the window is the
+   geometry's.
+
+The same statistic checks the finished window's edges: `edge_sigma` is the
+peak of `z` within one margin inside each edge, half-open at the inner end
+where a kept run stops, and `trace_at_edge` is either one at 3 or more -- the
+level kept runs are grown to, so an edge there cuts what the gate would have
+taken. A carrier does not move it. Before the flag is read, an edge standing
+at 3 or more is moved out by one margin at a time, up to 1500 km a side and
+the axis; what remains at an edge after that is what it flags. A `manual`
+range is never moved.
 
 The writer adds `margin_km` to each side of that union and clips it to what
 the samples can represent. A `manual` range is kept exactly as given, with no
@@ -358,7 +412,12 @@ the window directly.
   file verifies.
 - The writer is idempotent and works per file. A target that already holds a
   window is left alone, so a second run is a no-op that leaves the file
-  byte-identical.
+  byte-identical. ionozond's writer takes `--recut` to replace a window an
+  earlier selection rule chose (not a manual range, which no rule changes),
+  while the capture is still there to cut from; the rest of the file is
+  copied across unchanged, as for `--drop-raw`. Its pruner cuts such a window
+  again before it deletes the capture, and keeps a capture whose window has
+  `trace_at_edge`.
 - Every write goes to a temporary sibling in the same directory and is
   renamed into place atomically. An interrupted or failed write leaves the
   original exactly as it was and removes the temporary file.
@@ -473,7 +532,44 @@ reader, so it is on.
 The task expected a rate of about 300–500 Hz on cyprus1. That is what one or
 two hops would give. The geometry candidate for three hops is what widens the
 band. With one hop the edge check does its job: the 2F mode sits inside the
-upper margin and the window says so.
+upper margin and the window says so. (Rule 1, through a bright cell. Rule 2's
+echo gate follows 1F's flank at 3 sd to 2915 km, which takes the 2F in; the
+window is 2486–3065 km, 0.70 MB, and its edges read 1.0 / 2.2 sd.)
+
+### 6.5 Real: five circuits, 17–18 October 2026 (measured 2026-10-18)
+
+338 chirpsounder2 products written by ionozond (`7612f02`, `d995df5`), each
+with a window cut from its `.lfs` under rule 1, `/Users/w/data/ionozond_data`;
+the captures themselves were not available, so check 3 of §5 could not run.
+
+- 28 files are truncated HDF5 (18 NIC2 of 17 October, 10 NIC5 of 18
+  October), cut at a few recurring lengths: a broken copy, not the writer.
+- The 310 others meet every rule of §3 that can be checked without the
+  capture: attributes, filter (82.6–83.1 dB, 0.0006 dB), chunks, gzip and
+  shuffle, sample count, time and sweep bookkeeping. Against the product's
+  own SNR, re-derived at its row length (16384 at 100 kHz/s, 4096 at
+  500 kHz/s), strong cells agree to 0.18–0.38 dB median on the files checked.
+- **Rule 1 inflated the windows.** Magadan (46) and NIC5 (28) had no echo in
+  any sounding, Norilsk in most. `auto_gate` found the louder edge instead,
+  and those windows took 1–2 decimation: 3.2 GB of samples where
+  geometry-sized windows take 0.4 GB, NIC5 alone 1.9 GB.
+- **Rule 1 cut echoes.** On 18 October the Norilsk trace sat at 2310–2370 km,
+  below the geometry's 2495 km and the window's 2345 km, and NIC1/NIC2
+  scatter rose to 4300–5300 km above the windows' 4113 km: 22 soundings with
+  echo outside the window. NIC1's lowest echo moved between 2974 and 3464 km
+  from sounding to sounding that morning, against a steady 2747–2790 km at
+  the same hours the day before: the sounding's timing, not the ionosphere.
+- `truncated_suspect` was set on 193 windows; 20 of the 22 real cuts were
+  among them, and most of the rest were carriers.
+
+Rule 2 on the same material, as far as the windows cover it (their samples
+reconstructed and put through §3.8), and on the 24 hourly cyprus1 captures
+of 4 February with the whole axis:
+
+| | Rule 1 | Rule 2 |
+|---|---|---|
+| cyprus1, 24 hours | 22 windows 2486–4112 km (D 45), 2 of the whole band (10, 11 UTC: the −57300 km line) | all 24 at 2486–4112 km (D 45); echo at 15–180 sd in 22, none in 2; edges ≤ 2.7 sd, none flagged |
+| October windows of D ≤ 2 (105) | all of the band or most of it | 103 no echo → geometry; 2 echoes near it (2285–2329 km Norilsk, 3955–4008 km Magadan) |
 
 ## 7. Decisions and what is left
 
@@ -491,7 +587,22 @@ Decided 2026-10-16:
   sample 0. The header has no field for an acquisition delay; if the
   recorder has one, `t_first_s` is off by it.
 
+Decided 2026-10-18:
+
+- **Selection rule 2** (§3.7) replaces `auto_gate` with the echo gate, and
+  `edge_sigma` / `trace_at_edge` join the attributes. The format stays v1:
+  nothing a reader needs changes meaning, and both new attributes are
+  ignorable.
+- **The far case stays.** When nothing answers near the geometry, the
+  strongest echo elsewhere is still kept. It costs the whole band on a
+  sounding whose only signal is someone else's, and it is the one defence
+  against the displaced echo.
+
 Still open:
+
+- **Sounding timing.** On 18 October 2026 NIC1's and NIC2's echoes moved by
+  hundreds of km between soundings and Norilsk's sat closer than its ground
+  range. The window survives it within 1500 km; absolute delays do not.
 
 - **v2 vertical products.** The window follows the product's own range axis,
   which for vertical v2 is twice `.lfs`'s (`io_chirp.load` warns about this).

@@ -546,13 +546,13 @@ def test_no_candidate_on_a_relative_axis_has_nothing_to_keep(make_chirp_z_h5,
                                                              monkeypatch):
     """Nothing stands out and no geometry can place it: no window, not a guess.
 
-    ``auto_gate`` is made to find nothing because whether it does on a short
-    synthetic noise record is a property of ``auto_gate``, tested elsewhere.
+    ``echo_gate`` is made to find nothing because whether it does on a short
+    synthetic noise record is a property of ``echo_gate``, tested elsewhere.
     """
     path = make_chirp_z_h5(z=_noise(int(5 * SR)), window=V2_WINDOW, step=V2_STEP,
                            txname=io_chirp.UNIDENTIFIED_TX)
     digest = _sha(path)
-    monkeypatch.setattr(echo_window.calibrate, "auto_gate", lambda *a, **k: None)
+    monkeypatch.setattr(echo_window, "echo_gate", lambda *a, **k: None)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with pytest.raises(echo_window.NoEchoError, match="nothing to keep"):
@@ -567,6 +567,8 @@ def test_an_echo_on_the_edge_is_flagged(make_lfs_iq, tmp_path):
     window = echo_window.read(report.target)
     assert (window.range_lo_km, window.range_hi_km) == (2860.0, 3400.0)
     assert window.truncated_suspect
+    assert window.trace_at_edge
+    assert window.edge_sigma[0] >= echo_window.EDGE_SIGMA
     assert "TRUNCATION SUSPECTED" in window.describe()
     assert window.selection["method"] == "manual"
 
@@ -582,6 +584,119 @@ def test_the_window_follows_the_energy_not_the_geometry(make_lfs_iq, tmp_path):
     assert selection["geometry_km"] is not None
     assert selection["geometry_km"][1] < 16400.0
     assert window.range_lo_km < 16400.0 < window.range_hi_km
+    assert selection["echo_gate_reach"] == "far"
+
+
+# --------------------------------------------------------------------------
+# Selection rule 2: what the October 2026 soundings taught
+# --------------------------------------------------------------------------
+
+def _tilted_noise(n: int, tilt_db: float = 1.5, seed: int = 0) -> np.ndarray:
+    """Noise whose power rises ``tilt_db`` across the band, as a receiver's
+    response tilts it: the floor the five October 2026 circuits showed."""
+    spectrum = np.fft.fft(_noise(n, seed=seed))
+    f = np.fft.fftfreq(n, d=1.0 / SR)
+    return np.fft.ifft(spectrum * 10 ** (tilt_db * (f / SR) / 20))
+
+
+def _carriers(n: int, rows, lo_hz: float = -6000.0, hi_hz: float = 4000.0,
+              amplitude: float = 10.0) -> np.ndarray:
+    """A broadcast carrier crossing the sweep, in each of ``rows``.
+
+    Dechirped, a fixed carrier is a chirp of its own: during one spectrogram
+    row it runs through ``lo_hz..hi_hz`` of the beat band, a quarter of it,
+    bright at every range in between -- the window's edges included.
+    """
+    x = np.zeros(n, dtype=np.complex128)
+    w = spectro.DEFAULT_WINDOW
+    t = np.arange(w) / SR
+    k = (hi_hz - lo_hz) / (w / SR)
+    for i in rows:
+        phase = 2 * np.pi * (lo_hz * t + k * t * t / 2)
+        x[i * w:(i + 1) * w] = amplitude * np.exp(1j * phase)
+    return x
+
+
+def test_a_silent_band_keeps_the_geometry_alone(make_lfs_iq, tmp_path):
+    """Rule 1's ``auto_gate`` takes the busiest range once it beats the median
+    by half, which a silent band always offers somewhere: here at a random
+    range, on the October 2026 soundings at the edge a 1.5 dB tilt makes
+    louder. The window then took the whole band undecimated -- 70 MB a
+    sounding on NIC5, with nothing in it. Rule 2 asks for a range that
+    stands out of a flattened floor by many deviations, and finds none."""
+    n = int(10 * SR)
+    lfs = make_lfs_iq(_tilted_noise(n))
+    ion = echo_window._power_ionogram(echo_window.source_of(lfs))
+    assert echo_window.calibrate.auto_gate(ion.power, ion.vrange,
+                                           margin_km=0.0) is not None
+
+    report = echo_window.write(lfs, out_dir=tmp_path)
+    window = echo_window.read(report.target)
+    geometry = window.selection["geometry_km"]
+    assert window.selection["method"] == "geometry"
+    assert window.selection["echo_gate_km"] is None
+    assert window.selection["rule"] == echo_window.SELECTION_RULE
+    assert window.range_lo_km == pytest.approx(geometry[0] - 150.0)
+    assert window.range_hi_km == pytest.approx(geometry[1] + 150.0)
+    assert window.decimation > 10
+    assert not window.trace_at_edge
+
+
+def test_a_signal_far_from_the_path_stays_out_beside_its_echo(make_lfs_iq,
+                                                              tmp_path):
+    """cyprus1 carries a line at -57300 km in most soundings, someone else's
+    signal. Beside the path's own echo it is not kept."""
+    n = int(10 * SR)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(2900.0))
+                      + _tone(n, _lfs_beat(-40000.0)))
+    window = echo_window.read(echo_window.write(lfs, out_dir=tmp_path).target)
+    assert window.selection["echo_gate_reach"] == "near"
+    assert window.range_lo_km < 2900.0 < window.range_hi_km
+    assert window.range_lo_km > 0.0
+    assert window.decimation > 10
+
+
+def test_scatter_beyond_the_geometry_comes_with_the_echo(make_lfs_iq, tmp_path):
+    """On 18 October 2026 NIC1's and NIC2's echoes rose to 4300-5300 km, past
+    the three-hop geometry; rule 1 kept the brightest trace and the geometry
+    and cut the rest. An echo within reach of the path's is kept with it."""
+    n = int(10 * SR)
+    scatter = _gaussian_echo(n, _lfs_beat(4600.0), sigma_hz=40.0, power=200.0)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(2900.0)) + scatter)
+    window = echo_window.read(echo_window.write(lfs, out_dir=tmp_path).target)
+    assert window.selection["geometry_km"][1] < 4400.0
+    assert window.selection["echo_gate_runs"] == 2
+    assert window.range_hi_km > 4700.0
+
+
+def test_a_carrier_at_the_edge_is_not_a_trace(make_lfs_iq, tmp_path):
+    """Rule 1's edge test is the brightest cell near an edge, and a carrier
+    crossing a row is bright across the whole of it: 193 of 310 October
+    windows were flagged, about 173 of them for that. The echo statistic
+    counts per row, so a carrier does not move it."""
+    n = int(10 * SR)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(2900.0))
+                      + _carriers(n, rows=(5, 17, 29, 41)))
+    window = echo_window.read(echo_window.write(lfs, out_dir=tmp_path).target)
+    assert window.truncated_suspect           # rule 1's test, unchanged
+    assert not window.trace_at_edge
+    assert "TRUNCATION SUSPECTED" not in window.describe()
+
+
+def test_a_rule_one_window_reads_as_it_did(make_lfs_iq, tmp_path):
+    """Windows written before rule 2 carry neither ``edge_sigma`` nor
+    ``trace_at_edge``; a reader reports them by rule 1's flag, as before."""
+    n = int(10 * SR)
+    lfs = make_lfs_iq(_noise(n) + _tone(n, _lfs_beat(2900.0)))
+    target = echo_window.write(lfs, out_dir=tmp_path,
+                               manual_km=(2860.0, 3400.0)).target
+    with h5py.File(target, "a") as fh:
+        del fh[echo_window.GROUP].attrs["edge_sigma"]
+        del fh[echo_window.GROUP].attrs["trace_at_edge"]
+    window = echo_window.read(target)
+    assert window.trace_at_edge is None and window.edge_sigma is None
+    assert window.truncated_suspect
+    assert "dB at the low / high edge" in window.describe()
 
 
 # --------------------------------------------------------------------------
