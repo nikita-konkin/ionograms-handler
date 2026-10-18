@@ -245,6 +245,16 @@ def test_live_page_keeps_height_labels_apart(client):
         "the live page lets crowded height labels overlap")
 
 
+def test_live_page_labels_its_colour_bars_as_densely_as_its_axes(client):
+    assert "ticks(lo, hi, Math.max(4, Math.floor(ph / 34)))" in page(client), (
+        "the live page labels its colour bars more sparsely than its axes")
+
+
+def test_live_page_can_label_the_strips_every_hour(client):
+    assert "const HOUR_STEPS = [1, 2, 3, 6, 12, 24];" in page(client), (
+        "the live page cannot label its strips more often than every 3 hours")
+
+
 def test_live_page_carries_a_schedule_panel(client):
     assert '<section class="panel" id="sched" hidden>' in page(client), (
         "the live page has no schedule panel")

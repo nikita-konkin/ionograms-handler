@@ -183,6 +183,10 @@
   const MSK_S = 3 * 3600;
   const HOLD_S = 1800;
   const TICK_GAP_PX = 12;
+  // Hour steps a strip's time axis may take, finest first, and the room one
+  // label needs: the finest that fits the strip's width is used.
+  const HOUR_STEPS = [1, 2, 3, 6, 12, 24];
+  const LABEL_PX = 44;
   // An oblique echo's group path as the height of a single hop's mirror over
   // the transmitter-receiver distance: over a spherical Earth, or the flat
   // one muf.trace.hop_range_km labels hops with. Flat reads high on a long
@@ -441,7 +445,7 @@
     const map = MAPS[o.map], [lo, hi] = map.scale, cb = pl + pw + side + 8;
     for (let i = 0; i < ph; i++) { const k = Math.round((1 - i / ph) * 255) * 4; g.fillStyle = 'rgb(' + map.lut[k] + ',' + map.lut[k + 1] + ',' + map.lut[k + 2] + ')'; g.fillRect(cb, pt + i, 8, 1.5); }
     g.fillStyle = css('--dim'); g.textAlign = 'left';
-    ticks(lo, hi, 4).forEach(v => g.fillText(String(v), cb + 11, pt + ph - (v - lo) / (hi - lo) * ph));
+    ticks(lo, hi, Math.max(4, Math.floor(ph / 34))).forEach(v => g.fillText(String(v), cb + 11, pt + ph - (v - lo) / (hi - lo) * ph));
     cv._g = {pl, pt, pw, ph, x: o.x, y: o.y, read: o.read, flip};
   }
 
@@ -504,7 +508,7 @@
         const latest = newest(one);
         if (latest === null || !head) { plot(cv, null); meta(k, ''); continue; }
         const last = latest - Math.min(one.back, reach(one)), a = axis(head), end = last / 3600, start = end - (COLS - 1) * REP_S / 3600;
-        const fit = Math.floor((cv.clientWidth - M.l - M.r) / 52), step = [3, 6, 12, 24].find(s => SHOWN_DAYS * 24 / s <= fit) || 24, xt = [];
+        const fit = Math.floor((cv.clientWidth - M.l - M.r) / LABEL_PX), step = HOUR_STEPS.find(s => SHOWN_DAYS * 24 / s <= fit) || 24, xt = [];
         for (let h = Math.ceil(start / step) * step; h <= end; h += step) xt.push(h);
         meta(k, 'dB' + (reach(one) ? ' · ⇆' : ''));
         cv.style.cursor = reach(one) ? 'grab' : '';
