@@ -7,7 +7,7 @@
 <script>
   try {
     const theme = localStorage.getItem('theme');
-    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    if (['light', 'plots', 'grey', 'dim', 'dark'].includes(theme)) document.documentElement.dataset.theme = theme;
   } catch (e) { /* the system's scheme stands */ }
 </script>
 <style>
@@ -16,15 +16,27 @@
     --ink: #e6e8ec; --dim: #9aa3b2;
     --ok: #4ac26b; --fail: #e5534b; --unknown: #6b7280; --accent: #58a6ff;
     --warn: #d29922;
+    --plot: #14161a; --plot-line: #2b3039;
   }
-  /* The system's scheme unless the header's switch chose one: `data-theme`
-     on the root, set before the page draws by the script below. */
+  /* The system's scheme unless the header's switch chose a theme: `data-theme`
+     on the root, set before the page draws by the script below. `--plot` is
+     the backdrop of the live page's rasters, which read best dark: their
+     colour scale starts at blue, and a weak blue echo vanishes on white. */
   @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
-            --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; color-scheme:light; }
+    :root:not([data-theme]) { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
+            --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; --plot:#f6f7f9;
+            --plot-line:#dfe3e8; color-scheme:light; }
   }
-  :root[data-theme="light"] { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24;
-          --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700; color-scheme:light; }
+  :root[data-theme="light"], :root[data-theme="plots"] { --bg:#f6f7f9; --panel:#fff;
+          --line:#dfe3e8; --ink:#1b1f24; --dim:#5b6673; --unknown:#98a1ad; --warn:#9a6700;
+          --plot:#f6f7f9; --plot-line:#dfe3e8; color-scheme:light; }
+  :root[data-theme="plots"] { --plot:#14161a; --plot-line:#2b3039; }
+  :root[data-theme="grey"] { --bg:#d9dde3; --panel:#e9ecf0; --line:#b3bac4; --ink:#1b1f24;
+          --dim:#4a5563; --unknown:#7d8794; --warn:#8a5d00; --plot:#c3c9d1;
+          --plot-line:#aab2bd; color-scheme:light; }
+  :root[data-theme="dim"] { --bg:#22272e; --panel:#2d333b; --line:#444c56; --ink:#cdd9e5;
+          --dim:#909dab; --unknown:#768390; --plot:#1c2128; --plot-line:#444c56;
+          color-scheme:dark; }
   :root[data-theme="dark"] { color-scheme:dark; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
@@ -41,10 +53,9 @@
   nav.lang { flex:none; }
   nav.lang a { margin-right:.4rem; font-size:.85rem; letter-spacing:.05em; }
   nav.lang a:last-child { margin-right:0; }
-  nav.theme button { background:none; border:0; padding:0; margin-right:.4rem; font:inherit;
-                     font-size:.85rem; color:var(--dim); cursor:pointer; }
-  nav.theme button:last-child { margin-right:0; }
-  nav.theme button:hover, nav.theme button.on { color:var(--accent); }
+  #theme { background:none; border:0; padding:0; font:inherit; font-size:.85rem;
+           color:var(--dim); cursor:pointer; white-space:nowrap; flex:none; }
+  #theme:hover { color:var(--accent); }
   nav a:hover, nav a.on { color:var(--accent); }
   main { padding:1rem; max-width:1400px; margin:0 auto; box-sizing:border-box; }
   .panel { background:var(--panel); border:1px solid var(--line);
@@ -331,25 +342,31 @@
        filter and the sort. `?lang=` is what writes the cookie -- see
        `i18n.LocaleMiddleware` -- so these are ordinary links and there is
        nothing here for JavaScript to do. #}
-    {# Auto follows the system; a choice is kept in this browser. Pages that
-       draw on a canvas listen for `themechange` to redraw in the new colours. #}
-    <nav class="lang theme" aria-label="{{ t('chrome.theme') }}">
-      <button type="button" data-theme-set="auto">{{ t('chrome.theme_auto') }}</button><button
-        type="button" data-theme-set="light">{{ t('chrome.theme_light') }}</button><button
-        type="button" data-theme-set="dark">{{ t('chrome.theme_dark') }}</button>
-    </nav>
+    {# One label that steps to the next theme on each click, as the live
+       page's height axis steps between its models. Auto follows the system;
+       a choice is kept in this browser. Pages that draw on a canvas listen
+       for `themechange` to redraw in the new colours. #}
+    <button type="button" id="theme" data-themes="auto light plots grey dim dark"
+            title="{{ t('chrome.theme') }}"
+            data-label-auto="{{ t('chrome.theme_auto') }}"
+            data-label-light="{{ t('chrome.theme_light') }}"
+            data-label-plots="{{ t('chrome.theme_plots') }}"
+            data-label-grey="{{ t('chrome.theme_grey') }}"
+            data-label-dim="{{ t('chrome.theme_dim') }}"
+            data-label-dark="{{ t('chrome.theme_dark') }}"></button>
     <script>
       (() => {
-        const buttons = document.querySelectorAll('[data-theme-set]');
-        const mark = () => buttons.forEach(b => b.classList.toggle('on', b.dataset.themeSet === (document.documentElement.dataset.theme || 'auto')));
-        buttons.forEach(b => b.addEventListener('click', () => {
-          const key = b.dataset.themeSet;
-          if (key === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = key;
-          try { if (key === 'auto') localStorage.removeItem('theme'); else localStorage.setItem('theme', key); } catch (e) { /* this page still switches */ }
-          mark();
+        const button = document.getElementById('theme'), order = button.dataset.themes.split(' ');
+        const current = () => document.documentElement.dataset.theme || 'auto';
+        const show = () => { button.textContent = button.dataset['label' + current()[0].toUpperCase() + current().slice(1)] + ' \u21c4'; };
+        button.addEventListener('click', () => {
+          const next = order[(order.indexOf(current()) + 1) % order.length];
+          if (next === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
+          try { if (next === 'auto') localStorage.removeItem('theme'); else localStorage.setItem('theme', next); } catch (e) { /* this page still switches */ }
+          show();
           window.dispatchEvent(new Event('themechange'));
-        }));
-        mark();
+        });
+        show();
       })();
     </script>
     <nav class="lang" aria-label="{{ t('chrome.language') }}">
