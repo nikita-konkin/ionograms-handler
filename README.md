@@ -1054,6 +1054,7 @@ different interpretations of one ionogram, not something to merge.
 | `muf info TARGET`     | header and derived geometry, no processing                                  |
 | `muf detect TARGET`   | census a chirpsounder2 detection tree: which transmitters, on what schedule |
 | `muf stations`        | print the station coordinate registry                                       |
+| `muf echo-window TARGET` | keep the dechirped voltage around the echoes ([`docs/echo-window.md`](docs/echo-window.md)) |
 
 ### Which commands read which format
 
@@ -1079,6 +1080,8 @@ one directory, alongside three kinds of detection file. Dispatch is by name —
 `digisonde_ionogram-` against `lfm_ionogram-` — which is the writer's own
 prefix rather than a guess, and `io_digisonde.read_header` then confirms it
 against the file's `type` dataset before reading anything.
+
+A fourth file kind, `<stem>.echo.h5` -- an echo window cut from an `.lfs` by `muf echo-window` -- is read by name by `run`, `plot` and `info`, over the range it kept; v2 products may carry the same `echo_window` group ([`docs/echo-window.md`](docs/echo-window.md)).
 
 `--input-format {lfs,chirp2,digisonde}` overrides that, for a file that was
 renamed. It is separate from `run`'s `--format {csv,parquet}`, which is the

@@ -50,6 +50,14 @@ DIGISONDE = "digisonde"
 
 FORMATS = (LFS, CHIRP2, DIGISONDE)
 
+#: A standalone echo window cut from an ``.lfs`` capture, ``<stem>.echo.h5``
+#: (``muf.echo_window``, ``docs/echo-window.md``). Readable here by name, and
+#: deliberately *not* in :data:`FORMATS`: that tuple is what discovery, the
+#: archive scan and ``--input-format`` offer, and a window is a derivative of
+#: a sounding already counted under ``lfs``, not a sounding of its own.
+ECHO_WINDOW = "echo_window"
+ECHO_WINDOW_SUFFIX = ".echo.h5"
+
 #: The glob each finder uses, by format. Exposed because a caller that only
 #: needs to know *whether* a tree holds soundings should not have to build the
 #: whole list to find out -- `find_soundings` on a year of `.lfs` is a full
@@ -127,6 +135,8 @@ def format_of(path: str | Path, override: str | None = None) -> str:
     # mis-dispatch is not subtle: the schemas share no dataset but `t0`.
     if suffix == ".h5" and name.startswith(io_digisonde.FILE_PREFIX):
         return DIGISONDE
+    if name.lower().endswith(ECHO_WINDOW_SUFFIX):
+        return ECHO_WINDOW
     fmt = SUFFIXES.get(suffix)
     if fmt is None:
         raise FormatError(
@@ -199,6 +209,10 @@ def read_header(path: str | Path, *, format: str | None = None,
         return io_chirp.read_header(path, resolve_stations(stations))
     if fmt == DIGISONDE:
         return io_digisonde.read_header(path, resolve_stations(stations))
+    if fmt == ECHO_WINDOW:
+        from . import echo_window
+
+        return echo_window.read_header(path, resolve_stations(stations))
     return _read_lfs_header(path, resolve_stations(stations))
 
 
@@ -251,6 +265,11 @@ def load(path: str | Path,
                                       cache_dir,
                                       stations=resolve_stations(stations))
 
+    if fmt == ECHO_WINDOW:
+        return _from_echo_window(path, window, zero_periods, gate_km,
+                                 resolve_stations(stations),
+                                 nominal_stop_mhz)
+
     if fmt == DIGISONDE:
         # No `window`/`zero_periods` warning: a digisonde product is pulse
         # compressed rather than transformed, so those flags describe nothing
@@ -277,6 +296,13 @@ def load(path: str | Path,
                                   stations=resolve_stations(stations),
                                   nominal_stop_mhz=nominal_stop_mhz)
 
+    # No `z`, but its echo window survived: the one place left to re-derive
+    # from, over the range it kept and nowhere else.
+    if (window != DEFAULT_WINDOW and not header.has_raw_voltage
+            and header.has_echo_window):
+        return _from_echo_window(path, window, zero_periods, gate_km,
+                                 resolve_stations(stations), nominal_stop_mhz)
+
     ignored = []
     if window != DEFAULT_WINDOW:
         ignored.append(f"window={window}")
@@ -297,12 +323,36 @@ def load(path: str | Path,
                          nominal_stop_mhz=nominal_stop_mhz, header=header)
 
 
+def _from_echo_window(path: Path, window: int, zero_periods: int,
+                      gate_km, stations, nominal_stop_mhz) -> Ionogram:
+    """Re-derive from a stored echo window, saying what it cannot give back.
+
+    The window holds the voltage over one range interval, so the ionogram it
+    yields stops at that interval's edges; a caller expecting the stored
+    product's axis has to be told, not handed a narrower one silently.
+    """
+    from . import echo_window
+
+    ew = echo_window.read(path, samples=False)
+    if zero_periods != DEFAULT_ZERO_PERIODS:
+        warnings.warn(f"{path.name}: zero_periods={zero_periods} ignored when "
+                      f"re-deriving from an echo window.", stacklevel=3)
+    warnings.warn(
+        f"{path.name}: re-derived from its echo window -- range "
+        f"{ew.range_lo_km:.0f}-{ew.range_hi_km:.0f} km only; outside it the "
+        f"voltage was not kept (docs/echo-window.md).", stacklevel=3)
+    return echo_window.reprocess_window(path, window, gate_km, stations=stations,
+                                        nominal_stop_mhz=nominal_stop_mhz)
+
+
 def describe_formats(paths) -> dict[str, int]:
     """Count soundings by format. For a CLI banner, and for spotting a mixed tree."""
     counts = dict.fromkeys(FORMATS, 0)
     for path in paths:
         try:
-            counts[format_of(path)] += 1
+            fmt = format_of(path)
         except FormatError:
             continue
+        if fmt in counts:
+            counts[fmt] += 1
     return {fmt: n for fmt, n in counts.items() if n}

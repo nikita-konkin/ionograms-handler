@@ -171,6 +171,21 @@ def read_header(path: str | Path,
     path = Path(path)
     with open(path, "rb") as fh:
         blob = fh.read(HEADER_SIZE)
+    return parse_header(blob, path, stations)
+
+
+def parse_header(blob: bytes, path: str | Path,
+                 stations: Mapping[str, tuple[float, float]] | None = None
+                 ) -> LfsHeader:
+    """:func:`read_header` on bytes already in hand.
+
+    For a header kept somewhere other than the head of its recording -- the
+    echo window's standalone file stores the source's 512 bytes verbatim, so
+    the axes it is re-derived on are the recording's own (``muf.echo_window``).
+    ``path`` is only what the header will report as its file.
+    """
+    path = Path(path)
+    blob = bytes(blob)
     if len(blob) < HEADER_SIZE:
         raise ValueError(f"{path}: truncated, {len(blob)} bytes < {HEADER_SIZE}")
 
