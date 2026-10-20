@@ -29,8 +29,11 @@ Four decisions carry most of the weight:
 records a 45 ms epoch error that displaced an echo by 13,500 km. A window
 computed from the path alone would have kept an empty band and discarded the
 sounding's only echo, irreversibly once the raw voltage is dropped. So the
-window is the *union* of :func:`muf.calibrate.auto_gate` on the product's own
-power ionogram and the 1-3 hop geometry, never the geometry alone.
+window is the *union* of :func:`echo_gate` on the product's own power
+ionogram and the 1-3 hop geometry, never the geometry alone. ``echo_gate``
+takes only a range that stands out of a flattened noise floor by many robust
+deviations: on a sounding with no echo it finds nothing, rather than the
+louder edge of the band.
 
 **The filter is alias-free, not merely image-free.** Its stopband begins
 inside the output Nyquist, so nothing folds into the stored band at all. That
@@ -123,6 +126,49 @@ DETECTION_DB = 43.0
 
 #: Where a median-noise cell lands on the shared dB scale (25.571 dB).
 NOISE_DB = float(spectro.to_db(np.array([1.0 / NOISE_COEF]))[0])
+
+#: The selection rule, recorded in the ``selection`` JSON. Rule 1 took
+#: ``calibrate.auto_gate`` as the energy candidate; rule 2 takes
+#: :func:`echo_gate` and adds ``edge_sigma`` / ``trace_at_edge``.
+SELECTION_RULE = 2
+
+#: How far above its surroundings, in robust deviations, a range must stand
+#: to count as an echo. None of the 103 silent October 2026 windows reached
+#: it; the path's echo stood at 15-180 on the 24 hourly cyprus1 soundings of
+#: 4 February, and Norilsk's weakest October trace, 2285-2329 km, at 8.1.
+ECHO_SIGMA = 8.0
+
+#: An echo's run is grown outward while the profile stays this far above the
+#: median, so the weak flanks of a trace -- spread F, the scatter that rises
+#: from it -- come with it rather than being cut at a fraction of its peak.
+EXTENT_SIGMA = 3.0
+
+#: Other runs that clear ``ECHO_SIGMA`` are kept when they lie this close to
+#: the strongest run near the path's geometry: a second mode, a sporadic-E
+#: leg. Farther ones are someone else's signal -- on cyprus1 a line at
+#: -57300 km stands in 9-22 % of the rows of most soundings -- and are kept
+#: only when nothing at all answers near the geometry (the displaced echo).
+ECHO_REACH_KM = 1500.0
+
+#: The running median that flattens the noise floor across range spans this
+#: fraction of the axis. The receiver's response tilts the floor by 1-1.5 dB
+#: from one edge of the band to the other (October 2026, all five circuits),
+#: which moves the count of cells over a row's 98th percentile threefold; a
+#: trace a few hundred km wide does not move a median this long.
+FLOOR_FRACTION = 0.25
+
+#: Bins this close to either end of the axis never count as an echo. The
+#: receiver puts lines of its own there: 0.6-1.4 kHz inside the edges of the
+#: 40 kHz band on cyprus1 in February 2026 (at -57300 km, in most soundings)
+#: and on Norilsk and Magadan in October (near +-11300 km). 4 % is 1.6 kHz.
+EDGE_GUARD_FRACTION = 0.04
+
+#: The echo statistic is taken over a running median of itself this wide,
+#: km. A broadcast carrier crossing a row concentrates that row's bright
+#: cells in the stretch of beat band it sweeps -- tens of thousands of km at
+#: these chirp rates -- and lifts the count there into a broad plateau; the
+#: echoes of one circuit, scatter included, span at most 2-3 thousand.
+BACKGROUND_KM = 6000.0
 
 #: The ``.lfs`` spectrogram window the selection ionogram and ``row_noise`` are
 #: computed at -- the pipeline's default, so ``row_noise`` is exactly the
@@ -312,6 +358,21 @@ def _lfs_row_noise(iq: np.ndarray, window: int) -> np.ndarray:
 # --- selection ---------------------------------------------------------------
 
 @dataclass(frozen=True)
+class EchoGate:
+    """Where the echo statistic puts the energy, and how far it stands out."""
+
+    lo_km: float
+    hi_km: float
+    #: The strongest kept run's peak, in robust deviations above the median.
+    sigma: float
+    #: ``"near"`` the path's geometry; ``"far"`` from it when nothing answered
+    #: near it (the displaced echo); ``"axis"`` when there is no geometry.
+    reach: str
+    #: Significant runs the gate spans.
+    runs: int
+
+
+@dataclass(frozen=True)
 class Selection:
     """The range window and how it was arrived at."""
 
@@ -320,18 +381,29 @@ class Selection:
     method: str
     margin_km: float
     max_hops: int
-    auto_km: tuple[float, float] | None
+    echo: EchoGate | None
     geometry_km: tuple[float, float] | None
     manual_km: tuple[float, float] | None
     edge_energy_db: tuple[float, float]
     truncated_suspect: bool
+    edge_sigma: tuple[float, float] = (float("nan"), float("nan"))
+    trace_at_edge: bool = False
 
     def as_dict(self) -> dict:
         def pair(v):
             return None if v is None else [round(float(v[0]), 3), round(float(v[1]), 3)]
 
-        return {"method": self.method, "margin_km": self.margin_km,
-                "max_hops": self.max_hops, "auto_gate_km": pair(self.auto_km),
+        echo = self.echo
+        found = None if echo is None else (echo.lo_km, echo.hi_km)
+        return {"rule": SELECTION_RULE, "method": self.method,
+                "margin_km": self.margin_km, "max_hops": self.max_hops,
+                "echo_gate_km": pair(found),
+                "echo_gate_sigma": None if echo is None else round(echo.sigma, 2),
+                "echo_gate_reach": None if echo is None else echo.reach,
+                "echo_gate_runs": None if echo is None else echo.runs,
+                # Rule 1's candidate. Kept as a key, always null now, so a
+                # reader that looks for it finds the rule changed, not a gap.
+                "auto_gate_km": None,
                 "geometry_km": pair(self.geometry_km),
                 "manual_km": pair(self.manual_km)}
 
@@ -344,38 +416,216 @@ def _edge_db(ion: Ionogram, lo: float, hi: float) -> float:
     return float(np.max(np.asarray(ion.db)[:, cols]))
 
 
+#: Points the noise floor's running median is evaluated at; it is linear in
+#: between. The floor is a smooth tilt, so this loses nothing, and it keeps the
+#: median off an 8192 x 2049 array.
+FLOOR_NODES = 257
+
+#: Robust deviation of a normal sample from its median absolute deviation.
+MAD_TO_SIGMA = 1.4826
+
+#: An edge of the window where the echo statistic stands this high marks a
+#: trace that the window may cut (``trace_at_edge``): the level a kept run is
+#: grown to, so an edge at it cuts what the gate would have taken. The 48
+#: edges of the 24 hourly cyprus1 windows of 4 February 2026 peaked at 2.7.
+EDGE_SIGMA = EXTENT_SIGMA
+
+
+def _noise_floor(level: np.ndarray, fraction: float) -> np.ndarray:
+    """A running median of ``level`` over ``fraction`` of its length.
+
+    Evaluated at ``FLOOR_NODES`` evenly spaced bins, the window shrinking at
+    the ends rather than reflecting, and interpolated linearly between them.
+    """
+    n = level.size
+    half = max(1, int(fraction * n) // 2)
+    nodes = np.unique(np.round(np.linspace(0, n - 1, min(n, FLOOR_NODES))).astype(int))
+    at = np.array([np.median(level[max(0, i - half):i + half + 1]) for i in nodes])
+    return np.interp(np.arange(n), nodes, at)
+
+
+def echo_profile(power, vrange, *,
+                 quantile: float = calibrate.AUTO_GATE_QUANTILE,
+                 smooth_km: float = calibrate.AUTO_GATE_SMOOTH_KM):
+    """The echo statistic per range bin, in robust deviations, and its guard.
+
+    ``auto_gate``'s count -- cells above their row's ``quantile``, smoothed
+    over ``smooth_km`` -- taken after each range column is divided by a
+    running median of the column medians. That median spans
+    ``FLOOR_FRACTION`` of the axis: long enough that no trace moves it, short
+    enough to follow the receiver's tilt, which alone makes the louder edge
+    of a silent band outcount its quieter one threefold. The count's own
+    running median over ``BACKGROUND_KM`` is then taken off -- the broad
+    plateau a carrier lifts -- and what is left is expressed in robust
+    deviations, ``1.4826`` times a running median of its own absolute value
+    over the same width.
+
+    Returns ``(z, guard)`` -- ``guard`` marks the bins within
+    ``EDGE_GUARD_FRACTION`` of either end, which never hold an echo -- or
+    ``None`` for an array with nothing in it.
+    """
+    power = np.asarray(power, dtype=np.float64)
+    vrange = np.asarray(vrange, dtype=np.float64)
+    if power.ndim != 2 or power.shape[0] < 2 or vrange.size < 3:
+        return None
+    with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
+        warnings.simplefilter("ignore", RuntimeWarning)
+        level = np.nanmedian(power, axis=0)
+        good = np.isfinite(level) & (level > 0)
+        if not good.any():
+            return None
+        level = np.where(good, level, np.median(level[good]))
+        flat = power / _noise_floor(level, FLOOR_FRACTION)
+        threshold = np.nanquantile(flat, quantile, axis=1, keepdims=True)
+        count = (flat > threshold).sum(axis=0).astype(np.float64)
+    step = abs(float(vrange[1] - vrange[0])) or 1.0
+    width = max(3, int(smooth_km / step) | 1)          # odd, so it is centred
+    count = np.convolve(count, np.ones(width) / width, mode="same")
+    reach = min(1.0, BACKGROUND_KM / step / count.size)
+    excess = count - _noise_floor(count, reach)
+    # The spread is local too: under a carrier's plateau the count is not only
+    # higher but busier, and one spread for the whole axis would read that as
+    # an echo. One count in one bin is the smallest step the smoothed profile
+    # can take, so it is the floor: a profile of identical bins (a sparsified
+    # v2 product's empty field) has a spread of zero otherwise.
+    spread = np.maximum(MAD_TO_SIGMA * _noise_floor(np.abs(excess), reach), 1.0 / width)
+    z = excess / spread
+    guard = np.zeros(z.size, dtype=bool)
+    g = max(width, int(EDGE_GUARD_FRACTION * z.size))
+    guard[:g] = guard[-g:] = True
+    return z, guard
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """``[start, stop)`` of each run of True."""
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], mask.astype(np.int8), [0]))))
+    return list(zip(edges[::2].tolist(), edges[1::2].tolist()))
+
+
+def _gap_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Distance between two intervals, 0 where they overlap."""
+    return max(0.0, max(a[0], b[0]) - min(a[1], b[1]))
+
+
+def echo_gate(power, vrange, geometry: tuple[float, float] | None = None, *,
+              profile=None) -> EchoGate | None:
+    """The range the echo occupies, or ``None`` when nothing stands out.
+
+    A run is a stretch of :func:`echo_profile` at ``EXTENT_SIGMA`` or more;
+    it is an echo if it peaks at ``ECHO_SIGMA`` or more outside the guard.
+    Of the echoes, the strongest within ``ECHO_REACH_KM`` of ``geometry`` is
+    the main one, and with it come the others within ``ECHO_REACH_KM`` of it
+    or of the geometry. When none is near the geometry the strongest anywhere
+    is taken, with its own neighbours: that is the displaced echo the union
+    with the geometry exists for. A signal far from the path is dropped when
+    the path's own echo is there.
+
+    ``None`` -- not a guess -- for a sounding where no range stands out: its
+    window is then the geometry's alone.
+    """
+    vrange = np.asarray(vrange, dtype=np.float64)
+    profile = profile if profile is not None else echo_profile(power, vrange)
+    if profile is None:
+        return None
+    z, guard = profile
+    usable = np.where(guard, -np.inf, z)
+    found = []
+    for a, b in _runs(z >= EXTENT_SIGMA):
+        peak = float(usable[a:b].max())
+        if peak >= ECHO_SIGMA:
+            span = vrange[a:b]
+            found.append((peak, (float(span.min()), float(span.max()))))
+    if not found:
+        return None
+    if geometry is not None:
+        near = [f for f in found if _gap_km(f[1], geometry) <= ECHO_REACH_KM]
+        reach = "near" if near else "far"
+    else:
+        near, reach = [], "axis"
+    main = max(near or found, key=lambda f: f[0])
+    anchors = [main[1]] + ([tuple(geometry)] if reach == "near" else [])
+    kept = [f for f in found
+            if f is main or min(_gap_km(f[1], a) for a in anchors) <= ECHO_REACH_KM]
+    return EchoGate(lo_km=min(f[1][0] for f in kept), hi_km=max(f[1][1] for f in kept),
+                    sigma=main[0], reach=reach, runs=len(kept))
+
+
+def _edge_sigma(profile, vrange, outer: float, inner: float) -> float:
+    """The echo statistic's peak between the window's edge ``outer`` and
+    ``inner``, a margin inside it. Half-open at ``inner``: that is where a
+    kept run ends, and the run's own last bin is not something cut."""
+    if profile is None:
+        return float("nan")
+    z, guard = profile
+    vr = np.asarray(vrange, dtype=np.float64)
+    half = 0.5 * (abs(float(vr[1] - vr[0])) if vr.size > 1 else 0.0)
+    near, far = sorted((outer, inner))
+    cols = ((vr > near + half) if inner < outer else (vr >= near)) & (
+        (vr < far - half) if inner > outer else (vr <= far)) & ~guard
+    return float(z[cols].max()) if cols.any() else float("nan")
+
+
+def _grow(profile, vrange, lo: float, hi: float, edge: float,
+          axis: tuple[float, float]) -> tuple[float, float]:
+    """Move each edge out by ``edge`` while the echo statistic in the margin
+    inside it stands at ``EDGE_SIGMA``, up to ``ECHO_REACH_KM`` a side and the
+    axis. What is left at an edge after this is what ``trace_at_edge`` flags."""
+    step = max(float(edge), 1.0)
+
+    def busy(outer, inner):
+        return _edge_sigma(profile, vrange, outer, inner) >= EDGE_SIGMA   # NaN: no
+
+    for _ in range(int(ECHO_REACH_KM // step)):
+        if lo <= axis[0] or not busy(lo, lo + edge):
+            break
+        lo = max(axis[0], lo - step)
+    for _ in range(int(ECHO_REACH_KM // step)):
+        if hi >= axis[1] or not busy(hi, hi - edge):
+            break
+        hi = min(axis[1], hi + step)
+    return lo, hi
+
+
 def select_window(source: Source, ion: Ionogram | None = None, *,
                   margin_km: float = DEFAULT_MARGIN_KM,
                   max_hops: int = DEFAULT_MAX_HOPS,
                   manual_km: tuple[float, float] | None = None) -> Selection:
     """The range window to keep.
 
-    The union of where the power ionogram's energy is (``auto_gate``) and
+    The union of where the power ionogram's energy is (:func:`echo_gate`) and
     where the 1..``max_hops`` geometry puts the modes, plus ``margin_km``, clipped
     to what the samples can represent. A relative axis -- a search-mode
     ``unkown`` product -- has no geometry to offer, so there it is
-    ``auto_gate`` alone. ``manual_km`` replaces both, margin included.
+    ``echo_gate`` alone. ``manual_km`` replaces both, margin included.
 
-    Either way, energy at the detection threshold within ``margin_km`` of an
-    edge marks the window ``truncated_suspect``: something bright the
-    candidates did not account for is close enough to be cut.
+    Either way the edges are checked twice. ``truncated_suspect`` is rule 1's
+    test and keeps its meaning: a cell at the detection threshold within
+    ``margin_km`` of an edge -- which a broadcast carrier crossing the row
+    passes as readily as a trace. ``trace_at_edge`` asks the echo statistic
+    instead: a trace stacks rows at one range, while a carrier spreads a few
+    rows over a stretch of band far wider than ``BACKGROUND_KM``, which the
+    statistic takes off. Before that, an edge where the statistic stands at
+    ``EDGE_SIGMA`` is moved out a margin at a time (:func:`_grow`), so the
+    window does not cut what it can see; a manual range is never moved.
 
     Raises :class:`NoEchoError` when neither candidate exists: a sounding of
     pure noise with no known path has no window, and inventing one would be
     the irreversible kind of wrong.
     """
     ion = ion if ion is not None else _power_ionogram(source)
-    auto = geometry = None
+    echo = geometry = None
+    profile = echo_profile(ion.power, ion.vrange)
     if manual_km is not None:
         candidates = [tuple(float(v) for v in manual_km)]
         method = "manual"
     else:
-        auto = calibrate.auto_gate(ion.power, ion.vrange, margin_km=0.0)
         if not source.relative:
             geometry = calibrate.geometry_gate(source.header, max_hops=max_hops,
                                                margin_km=0.0)
-        candidates = [c for c in (auto, geometry) if c is not None]
-        method = "+".join(name for name, c in (("auto_gate", auto),
+        echo = echo_gate(ion.power, ion.vrange, geometry, profile=profile)
+        found = None if echo is None else (echo.lo_km, echo.hi_km)
+        candidates = [c for c in (found, geometry) if c is not None]
+        method = "+".join(name for name, c in (("echo_gate", found),
                                                ("geometry", geometry))
                           if c is not None)
         if not candidates:
@@ -397,14 +647,21 @@ def select_window(source: Source, ion: Ionogram | None = None, *,
                           f"the samples represent")
 
     edge = max(float(margin_km), abs(float(ion.cal.range_step)))
+    if manual_km is None:
+        lo, hi = _grow(profile, ion.vrange, lo, hi, edge, (axis_lo, axis_hi))
     edges = (_edge_db(ion, lo, lo + edge), _edge_db(ion, hi - edge, hi))
     truncated = any(math.isfinite(e) and e >= DETECTION_DB for e in edges)
+    sigmas = (_edge_sigma(profile, ion.vrange, lo, lo + edge),
+              _edge_sigma(profile, ion.vrange, hi, hi - edge))
     return Selection(lo_km=float(lo), hi_km=float(hi), method=method,
                      margin_km=float(margin_km), max_hops=int(max_hops),
-                     auto_km=auto, geometry_km=geometry,
+                     echo=echo, geometry_km=geometry,
                      manual_km=(None if manual_km is None
                                 else (float(manual_km[0]), float(manual_km[1]))),
-                     edge_energy_db=edges, truncated_suspect=truncated)
+                     edge_energy_db=edges, truncated_suspect=truncated,
+                     edge_sigma=sigmas,
+                     trace_at_edge=any(math.isfinite(s) and s >= EDGE_SIGMA
+                                       for s in sigmas))
 
 
 # --- band and filter ---------------------------------------------------------
@@ -677,6 +934,9 @@ class EchoWindow:
     noise_window: int = 0
     lfs_header: bytes | None = None
     taps: np.ndarray | None = None
+    #: Selection rule 2 and later; ``None`` on a window chosen by rule 1.
+    edge_sigma: tuple[float, float] | None = None
+    trace_at_edge: bool | None = None
 
     @property
     def plan(self) -> Plan:
@@ -708,7 +968,11 @@ class EchoWindow:
         line = (f"echo window {self.range_lo_km:.0f}-{self.range_hi_km:.0f} km "
                 f"({self.range_axis}), {self.sr_hz:.1f} Hz (/{self.decimation}), "
                 f"{self.nbytes / 1e6:.2f} MB")
-        if self.truncated_suspect:
+        if self.trace_at_edge:
+            lo, hi = self.edge_sigma
+            line += (f" -- TRUNCATION SUSPECTED: a trace at the low / high edge, "
+                     f"{lo:.1f} / {hi:.1f} sd, over {EDGE_SIGMA:.0f}")
+        elif self.trace_at_edge is None and self.truncated_suspect:
             lo, hi = self.edge_energy_db
             line += (f" -- TRUNCATION SUSPECTED: {lo:.1f} / {hi:.1f} dB at the "
                      f"low / high edge, over the {DETECTION_DB:.0f} dB threshold")
@@ -758,6 +1022,8 @@ def read(path: str | Path, *, samples: bool = True) -> EchoWindow:
             raise ValueError(f"{path}: {len(taps)} stored taps, filter "
                              f"records {numtaps}")
         edge = np.asarray(a["edge_energy_db"], dtype=np.float64)
+        sigma = (np.asarray(a["edge_sigma"], dtype=np.float64)
+                 if "edge_sigma" in a else None)
         return EchoWindow(
             path=path, samples=data, n=n, format=FORMAT, version=version,
             source=_str(a["source"]), source_name=_str(a["source_name"]),
@@ -777,7 +1043,10 @@ def read(path: str | Path, *, samples: bool = True) -> EchoWindow:
             truncated_suspect=bool(a["truncated_suspect"]),
             writer=_str(a["writer"]),
             row_noise=row_noise, noise_window=int(noise_window or 0),
-            lfs_header=header, taps=taps)
+            lfs_header=header, taps=taps,
+            edge_sigma=None if sigma is None else (float(sigma[0]), float(sigma[1])),
+            trace_at_edge=(bool(a["trace_at_edge"]) if "trace_at_edge" in a
+                           else None))
 
 
 def read_header(path: str | Path,
@@ -837,6 +1106,8 @@ def _attrs(source: Source, selection: Selection, plan: Plan) -> dict:
         "selection": json.dumps(selection.as_dict(), sort_keys=True),
         "edge_energy_db": np.asarray(selection.edge_energy_db, dtype=np.float64),
         "truncated_suspect": np.bool_(selection.truncated_suspect),
+        "edge_sigma": np.asarray(selection.edge_sigma, dtype=np.float64),
+        "trace_at_edge": np.bool_(selection.trace_at_edge),
         "writer": _writer(),
     }
 
@@ -916,8 +1187,10 @@ class Report:
                 f"{self.selection.lo_km:.0f}-{self.selection.hi_km:.0f} km "
                 f"[{self.selection.method}], {self.plan.sr_hz:.1f} Hz "
                 f"(/{self.plan.decimation}), {self.stored_bytes / 1e6:.2f} MB{ratio}")
-            if self.selection.truncated_suspect:
-                bits.append("TRUNCATION SUSPECTED")
+            if self.selection.trace_at_edge:
+                bits.append("TRUNCATION SUSPECTED: a trace at an edge")
+            elif self.selection.echo is None and self.selection.manual_km is None:
+                bits.append("no echo stands out: geometry only")
         if self.detail:
             bits.append(self.detail)
         if self.verification is not None:
