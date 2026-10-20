@@ -256,17 +256,6 @@ def console(request: Request):
     })
 
 
-#: What counts as a point on the series page.
-#:
-#: MUF *or* LOF, not MUF alone. The page draws both ends of the band now, and
-#: a sounding whose trace faded out before it reached the ceiling has a real
-#: LOF and no MUF -- under the old condition it was not on the chart at all,
-#: which reads as "nothing was recorded" rather than "the top was never seen".
-#: Used for the chooser and the day list too, so a circuit or a day is offered
-#: exactly when selecting it draws something.
-HAS_A_PICK = "(e.muf IS NOT NULL OR e.lof IS NOT NULL)"
-
-
 @router.get("/ui/series")
 def series(request: Request, method: str = "algo",
            circuit: str | None = None,
@@ -302,7 +291,7 @@ def series(request: Request, method: str = "algo",
 
     ``forecast=<model_id>`` overlays one registered model's latest issue on the
     measured curve, which is the comparison this page exists to make possible.
-    Without it only an *active* model is drawn -- see `_live_forecasts`. The
+    Without it only an *active* model is drawn -- see `series.live_forecasts`. The
     two are not the same trace and are not drawn the same: an operational
     forecast is the answer, a named one is a candidate being judged against the
     measurement beside it.
@@ -318,7 +307,7 @@ def series(request: Request, method: str = "algo",
     circuits = [f"{r['tx']} -> {r['rx']}" for r in db.rows(
         conn, "SELECT s.tx AS tx, s.rx AS rx, COUNT(*) AS n"
               " FROM extraction e JOIN sounding s ON s.id = e.sounding_id"
-              f" WHERE e.method = ? AND {HAS_A_PICK}"
+              f" WHERE e.method = ? AND {series_mod.HAS_A_PICK}"
               " GROUP BY s.tx, s.rx ORDER BY n DESC", (method,))]
     if circuit not in ("all", *circuits):
         circuit = circuits[0] if circuits else "all"
@@ -326,27 +315,13 @@ def series(request: Request, method: str = "algo",
     days = [r["day"] for r in db.rows(
         conn, "SELECT DISTINCT substr(s.datetime, 1, 10) AS day"
               " FROM extraction e JOIN sounding s ON s.id = e.sounding_id"
-              f" WHERE {HAS_A_PICK} ORDER BY day")]
+              f" WHERE {series_mod.HAS_A_PICK} ORDER BY day")]
 
-    sql = ["SELECT s.id, s.datetime, s.tx, s.rx, s.path_km,"
-           " s.tx_lat, s.tx_lon, s.rx_lat, s.rx_lon, s.freq_stop,"
-           " e.muf, e.lof, e.limited, e.loflim, e.muf_smooth, e.snr",
-           "FROM extraction e JOIN sounding s ON s.id = e.sounding_id",
-           f"WHERE e.method = ? AND {HAS_A_PICK}"]
-    params: list = [method]
-    if circuit != "all":
-        tx, _, rx = circuit.partition(" -> ")
-        sql.append("AND s.tx = ? AND s.rx = ?")
-        params += [tx, rx]
-    if start:
-        sql.append("AND s.datetime >= ?")
-        params.append(db.time_bound(start))
-    if end:
-        sql.append("AND s.datetime <= ?")
-        params.append(db.time_bound(end, end=True))
-    sql.append("ORDER BY s.datetime LIMIT 5000")
-
-    points = db.rows(conn, " ".join(sql), tuple(params))
+    tx, _, rx = circuit.partition(" -> ")
+    points = series_mod.picks(conn, method,
+                              tx=tx if circuit != "all" else None,
+                              rx=rx if circuit != "all" else None,
+                              start=start, end=end)
 
     # Every model that has actually written a forecast for a circuit on this
     # page. Registered-but-never-run is deliberately not offered: it would be
@@ -372,133 +347,8 @@ def series(request: Request, method: str = "algo",
         "forecast": forecast, "candidates": candidates,
         "frame": series_mod.frame(
             points, model=model,
-            forecasts=_live_forecasts(conn, points, forecast)),
+            forecasts=series_mod.live_forecasts(conn, points, forecast)),
     })
-
-
-def _live_forecasts(conn, points, model_id: int | None = None) -> dict:
-    """The latest issue for the circuits on the page.
-
-    **Active models only, unless one is named** -- the rule `/forecast`
-    already states and for the same reason. Every registered model may write
-    forecasts, that being how a comparison is run, so drawing them all would
-    put a legacy import on the same axis as the measurement in the same style
-    as the operational curve. Naming one is a deliberate act and is marked as
-    such: `comparison` rides along on the entry so the plot can draw it as a
-    candidate rather than as the forecast.
-
-    A named model is fetched **whatever its state**, including one bound to
-    another circuit. That is not an oversight: running somebody else's model
-    against this path is exactly what a comparison is, `infer --model` already
-    allows it, and the alias in the hover says whose data it learned.
-
-    Failures are swallowed to an empty dict: the series page is the page an
-    operator opens to look at data, and it existed and worked before there was
-    a prediction service at all. A forecast that cannot be read is a missing
-    trace, not a 500.
-    """
-    circuits = {(row["tx"], row["rx"]) for row in points
-                if row.get("tx") and row.get("rx")}
-    if not circuits:
-        return {}
-
-    # The only difference between the two modes, kept to one line so the
-    # issued_at correlation below cannot drift between them.
-    where, key = (("m.id = ?", model_id) if model_id is not None
-                  else ("m.active = 1", None))
-
-    found: dict = {}
-    for tx, rx in sorted(circuits):
-        for param in ("muf", "lof"):
-            try:
-                rows = db.rows(
-                    conn,
-                    "SELECT f.valid_at, f.value, f.sigma, f.input_measured, "
-                    "       m.name, m.id, "
-                    "       m.active, m.target_alias, "
-                    "       m.trained_from, m.trained_to "
-                    "FROM forecast f JOIN model_registry m ON m.id = f.model_id "
-                    f"WHERE {where} AND f.param = ? AND f.tx = ? AND f.rx = ? "
-                    "AND f.issued_at = (SELECT MAX(issued_at) FROM forecast x "
-                    "  WHERE x.model_id = f.model_id AND x.param = f.param "
-                    "  AND x.tx = f.tx AND x.rx = f.rx) "
-                    "ORDER BY f.valid_at",
-                    ((key, param, tx, rx) if key is not None
-                     else (param, tx, rx)),
-                )
-            except Exception:                     # pragma: no cover - defensive
-                continue
-            if not rows:
-                continue
-            rows = _broken_at_gaps(rows)
-            found[(tx, rx, param)] = {
-                "tx": tx, "rx": rx, "param": param,
-                "model": rows[0]["name"],
-                "model_id": rows[0]["id"],
-                "alias": rows[0]["target_alias"],
-                "comparison": not rows[0]["active"],
-                # The span the model learned on, so the plot can separate the
-                # part of the curve it has already seen from the part that is
-                # a genuine prediction. Null for every legacy import: those
-                # were fitted somewhere else and the window was never
-                # recorded, which is a different statement from "trained on
-                # nothing" and leaves the curve coloured throughout rather
-                # than greying a zero-width stretch of it.
-                "trained_from": (_iso_stamp(rows[0]["trained_from"])
-                                 if rows[0]["trained_from"] else None),
-                "trained_to": (_iso_stamp(rows[0]["trained_to"])
-                               if rows[0]["trained_to"] else None),
-                "t": [_iso_stamp(row["valid_at"]) for row in rows],
-                "value": [row["value"] for row in rows],
-                "sigma": [row["sigma"] for row in rows],
-                "input_measured": [row.get("input_measured") for row in rows],
-            }
-    return found
-
-
-#: A hole in a forecast wider than this many of its own steps is drawn as a
-#: hole. Plotly joins consecutive points whatever lies between them, so a run
-#: that has no rows across a silent fortnight would otherwise be drawn as a
-#: straight line over it -- the very thing `dataset.MAX_BRIDGE_HOURS` stopped
-#: the model from producing.
-GAP_STEPS = 3
-
-
-def _broken_at_gaps(rows: list[dict]) -> list[dict]:
-    """Insert an all-null row inside every gap, which plotly draws as a break."""
-    if len(rows) < 3:
-        return rows
-    import pandas as pd
-
-    times = pd.to_datetime([row["valid_at"] for row in rows], format="mixed")
-    steps = times[1:] - times[:-1]
-    step = steps.median()
-    if not step or pd.isna(step):
-        return rows
-    out = [rows[0]]
-    for previous, row, gap in zip(rows, rows[1:], steps):
-        if gap > GAP_STEPS * step:
-            middle = pd.Timestamp(previous["valid_at"]) + gap / 2
-            out.append({**dict.fromkeys(row),
-                        "valid_at": middle.strftime(db.TIME_FORMAT),
-                        "name": row["name"], "id": row["id"],
-                        "active": row["active"],
-                        "target_alias": row["target_alias"],
-                        "trained_from": row["trained_from"],
-                        "trained_to": row["trained_to"]})
-        out.append(row)
-    return out
-
-
-def _iso_stamp(text: str) -> str:
-    """`2026-08-13T04:00:00Z` as the page's own spelling of an instant.
-
-    The forecast table stamps with the trailing ``Z`` that `db.utcnow` puts on
-    everything; the soundings are naive UTC. Plotly would place two such axes
-    an offset apart, which draws a forecast that lags its own measurement by
-    the local timezone.
-    """
-    return str(text).rstrip("Z")
 
 
 @router.get("/ui/sources")

@@ -419,6 +419,72 @@ If you later containerise the agent on the laptop, leave it unlabelled and
 update it by hand. An auto-updating process that can stop a radio is a
 different risk from an auto-updating web page.
 
+## 2c. Public page
+
+A public, read-only results page -- latest ionograms, a 24-hour strip, MUF/LOF
+series and the forecast -- served by the host's own nginx from a folder of
+static files. The `publish` service (`services/publish/publisher.py`) rewrites
+that folder every `PUBLISH_INTERVAL_S`.
+
+**The api is never exposed by this, and must not be.** Reads are open while
+`READ_TOKEN` is unset, and the same read router answers `/principals`, model
+artifacts, station health and `/net`; the control routes share the process.
+The page is files, so it shows exactly what the publisher writes: allow-listed
+circuits, allow-listed fields, no file paths, ids or model internals. It also
+keeps showing the last snapshot while the api or the archive mount is down,
+with a banner once it is over an hour old.
+
+**Before going live:** rotate `CONTROL_TOKEN` if it has ever been committed,
+and confirm `BIND_ADDR` is unset or `127.0.0.1` -- the host is now reachable
+from the internet, and nothing but nginx should answer on it.
+
+```bash
+# 1. The folder: written by the containers' uid, read by nginx
+sudo mkdir -p /srv/ionograms-public
+sudo chown 10001:www-data /srv/ionograms-public
+sudo chmod 2755 /srv/ionograms-public
+
+# 2. deploy/.env
+#    PUBLISH_DIR=/srv/ionograms-public
+#    PUBLISH_CIRCUITS=NIC->DOB          # allow-list; empty refuses to start
+
+# 3. One pass by hand, to see it work (or what stops it)
+docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env \
+  --profile publish run --rm publish \
+  python -m services.publish.publisher --db /data/ionograms.sqlite3 \
+  --archive-root /archive --out /publish/site
+ls /srv/ionograms-public                 # index.html status.json data/ img/ ...
+
+# 4. The vhost (edit server_name and root first), then TLS
+sudo cp deploy/public-site.nginx.conf /etc/nginx/sites-available/ionograms-public
+sudo ln -s /etc/nginx/sites-available/ionograms-public /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d <domain>
+
+# 5. Stay resident
+docker compose -f deploy/docker-compose.hub.yml --env-file deploy/.env \
+  --profile publish up -d publish
+```
+
+**Check from outside** -- the page loads, and the api does not answer through
+it:
+
+```bash
+curl -sI https://<domain>/ | grep -iE "^HTTP|content-security|cache-control"
+curl -s -o /dev/null -w "%{http_code}\n" https://<domain>/principals   # 404
+curl -s -o /dev/null -w "%{http_code}\n" https://<domain>/healthz      # 404
+```
+
+**On Apache** the same vhost is `DocumentRoot` on the folder, `Header always
+set` for the three security headers, `Header set Cache-Control` per
+`<LocationMatch>` (`^/img/` immutable, `\.json$` `no-cache`), `mod_deflate`
+for json/js/css, and `<FilesMatch "^\.">` denied. No `ProxyPass`.
+
+**Costs.** Each sounding is drawn once -- the image's name is its time, so an
+existing file is its own cache. `.h5` products render in a fraction of a
+second; `.lfs` re-runs the spectrogram, seconds each. The folder holds 24
+images and one JSON per circuit, a few hundred KB each.
+
 ## 3. Connect the real acquisition laptop
 
 This is the part that needs a decision, because it is the only step that makes
