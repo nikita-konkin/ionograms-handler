@@ -1,0 +1,50 @@
+# Pulls the public results page from the hub, over the VPN, into the folder
+# this host's nginx serves (deploy/README.md, "2d. Public page on another
+# host"). Install on the public host, not on the hub.
+#
+# The hub's `publish` service writes the page into its PUBLISH_DIR; this only
+# copies that folder. The hub's api never leaves the hub, so the public host
+# holds exactly what the publisher's allow-lists let through and nothing it
+# could be talked into fetching.
+#
+# Pull, not push: the hub stays a host that nothing on the public side can make
+# act, and the key that reaches it is pinned on the hub to a read-only rsync of
+# one folder (`rrsync -ro` in its authorized_keys).
+
+[Unit]
+Description=pull the ionograms public page from the hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ionopull
+# PULL_FROM=publish@10.0.0.130:/ -- the hub's account, and `/` because rrsync
+# on the hub already roots that account at its PUBLISH_DIR.
+EnvironmentFile=/etc/default/ionograms-public-pull
+
+# A oneshot has no start timeout by default, and one hung on a dead VPN keeps
+# the timer from ever starting the next: the page would go quietly stale with
+# nothing marked failed. rsync's own --timeout covers a stall mid-transfer.
+TimeoutStartSec=10min
+
+# 24 is "some files vanished": an image the publisher pruned between rsync
+# listing it and copying it. The next pass agrees with the hub again.
+SuccessExitStatus=24
+
+# -rt, never -a: regular files and directories only. A symlink is neither kept
+# nor followed, so nginx here cannot be made to serve a file outside the folder.
+# --delay-updates holds a pass's files aside until all have arrived, so a page
+# never names an image that is not here yet; --delete-delay removes what the hub
+# pruned only after that. --chmod gives nginx read access whatever the hub's
+# modes, and the `.tmp-` files are the publisher's own, half-written.
+ExecStart=/usr/bin/rsync -rt --delay-updates --delete-delay \
+    --chmod=D755,F644 --exclude=.tmp-* --timeout=120 \
+    -e "ssh -i /etc/ionograms-public-pull/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ionograms-public-pull/known_hosts -o ConnectTimeout=30" \
+    ${PULL_FROM} /srv/ionograms-public/
+
+ProtectSystem=strict
+ReadWritePaths=/srv/ionograms-public
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

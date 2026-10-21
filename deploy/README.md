@@ -424,7 +424,8 @@ different risk from an auto-updating web page.
 A public, read-only results page -- latest ionograms, a 24-hour strip, MUF/LOF
 series and the forecast -- served by the host's own nginx from a folder of
 static files. The `publish` service (`services/publish/publisher.py`) rewrites
-that folder every `PUBLISH_INTERVAL_S`.
+that folder every `PUBLISH_INTERVAL_S`. When the hub must stay off the
+internet, another host can serve it instead: see 2d.
 
 **The api is never exposed by this, and must not be.** Reads are open while
 `READ_TOKEN` is unset, and the same read router answers `/principals`, model
@@ -484,6 +485,133 @@ for json/js/css, and `<FilesMatch "^\.">` denied. No `ProxyPass`.
 existing file is its own cache. `.h5` products render in a fraction of a
 second; `.lfs` re-runs the spectrogram, seconds each. The folder holds 24
 images and one JSON per circuit, a few hundred KB each.
+
+## 2d. Public page on another host
+
+The work server is on a private network and stays there. A separate public
+host reaches it only through the VPN, pulls the folder from 2c every five
+minutes (`deploy/ionograms-public-pull.timer`), and serves its copy with the
+same vhost. Below, the hub is `10.0.0.130` and the public host
+`192.168.50.117`.
+
+**Four layers, each holding on its own:**
+
+- **OpenVPN** carries the traffic, and the public host routes only the hub's
+  address into it.
+- **SSH inside the VPN**, with the hub's host key pinned, so another peer on
+  the VPN cannot pose as the hub.
+- **The key opens one thing on the hub**: a read-only rsync of the published
+  folder (`rrsync -ro` with `restrict`). No shell, no writes, no other path.
+- **The pull copies regular files only**, so nginx cannot be made to serve
+  anything outside the folder.
+
+The api never leaves the hub. If the VPN drops, pulls fail and the page keeps
+its last copy, with its own banner once that copy is over an hour old.
+
+### On the hub
+
+Run `publish` as in 2c, steps 1-3 and 5. Step 4 is not needed: the hub serves
+nothing.
+
+```bash
+# 1. An account for the pull. Its shell only ever runs the forced command.
+sudo useradd --create-home --shell /bin/sh publish
+
+# 2. rrsync ships with rsync 3.2.4+; older releases (Ubuntu 22.04) keep it
+#    among the docs, gzipped or not
+command -v rrsync || sudo sh -c 'zcat -f /usr/share/doc/rsync/scripts/rrsync* > /usr/local/bin/rrsync && chmod 755 /usr/local/bin/rrsync'
+```
+
+**3.** The public host's key (below) goes into
+`/home/publish/.ssh/authorized_keys`, owned by `publish`, mode 600, as one
+line:
+
+```
+command="rrsync -ro /srv/ionograms-public",restrict ssh-ed25519 AAAA... ionopull@public
+```
+
+### On the public host: the VPN
+
+**The `.ovpn` file is a credential.** It normally holds the client's private
+key: whoever has it is on the VPN as this host. Never commit it (`*.ovpn` is
+ignored here, and this repository is public), never paste it into a chat, an
+issue or an email, and delete the copies left in Downloads once it is
+installed. If it leaks, ask the VPN's admin to revoke that client certificate;
+changing this host fixes nothing.
+
+```bash
+# 1. On the machine it was downloaded to: straight to the server
+scp client.ovpn admin@192.168.50.117:
+
+# ...and on the server, readable by root only
+sudo apt install openvpn
+sudo install -o root -g root -m 600 ~/client.ovpn /etc/openvpn/client/hub.conf
+shred -u ~/client.ovpn
+```
+
+If the profile has an `auth-user-pass` line, put the username and password in
+`/etc/openvpn/client/hub.auth` (two lines, `root:root`, mode 600) and make the
+line `auth-user-pass /etc/openvpn/client/hub.auth`.
+
+**2. Only the hub goes into the tunnel.** Append to `hub.conf`:
+
+```
+# A pushed default route would send this site's replies to its visitors
+# through the VPN as well. `"route "` with its space drops pushed routes but
+# keeps `route-gateway`, which the tunnel needs.
+pull-filter ignore "redirect-gateway"
+pull-filter ignore "route "
+route 10.0.0.130 255.255.255.255
+```
+
+```bash
+# 3. Up, at boot too, and check the routing
+sudo systemctl enable --now openvpn-client@hub
+ip route get 10.0.0.130      # dev tun0
+ip route get 1.1.1.1         # anything but tun0
+
+# 4. The pull only goes out; nothing on the VPN side may connect in. First
+#    in the list, ahead of any allow rule (plain `deny` while there is none)
+sudo ufw insert 1 deny in on tun0 || sudo ufw deny in on tun0
+```
+
+### On the public host: the pull
+
+```bash
+# 1. An account that can do nothing but this, and its key
+sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin ionopull
+sudo install -d -o root -g root -m 755 /etc/ionograms-public-pull
+sudo ssh-keygen -t ed25519 -N '' -C ionopull@public -f /etc/ionograms-public-pull/id_ed25519
+sudo chown ionopull /etc/ionograms-public-pull/id_ed25519
+sudo cat /etc/ionograms-public-pull/id_ed25519.pub   # -> the hub's authorized_keys, step 3 above
+
+# 2. Pin the hub's host key -- and check it, rather than trusting whatever
+#    answers first. This fingerprint must equal the hub's own:
+#    `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the hub.
+ssh-keyscan -t ed25519 10.0.0.130 | sudo tee /etc/ionograms-public-pull/known_hosts
+ssh-keygen -lf /etc/ionograms-public-pull/known_hosts
+
+# 3. The folder, the source, the units. PULL_FROM ends in `/` because rrsync
+#    on the hub already roots the account at the published folder.
+sudo install -d -o ionopull -g www-data -m 755 /srv/ionograms-public
+echo 'PULL_FROM=publish@10.0.0.130:/' | sudo tee /etc/default/ionograms-public-pull
+sudo cp deploy/ionograms-public-pull.service deploy/ionograms-public-pull.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 4. One pull by hand, to see it work (or what stops it), then the timer
+sudo systemctl start ionograms-public-pull.service
+ls /srv/ionograms-public                 # index.html status.json data/ img/ ...
+sudo systemctl enable --now ionograms-public-pull.timer
+```
+
+**5.** nginx and TLS are 2c step 4 on this host, with the same vhost file, and
+the same checks from outside. Visitors reach it by a domain whose router
+forwards 80 and 443 to `192.168.50.117`.
+
+```bash
+systemctl list-timers ionograms-public-pull.timer
+journalctl -u ionograms-public-pull --since -1h
+```
 
 ## 3. Connect the real acquisition laptop
 

@@ -1,0 +1,20 @@
+# Runs ionograms-public-pull.service every five minutes, on the public host.
+#
+# The hub publishes every PUBLISH_INTERVAL_S (15 minutes by default), so a
+# five-minute pull puts a new snapshot online within five minutes of it being
+# written. A VPN outage of any length is caught up by the first pull that
+# succeeds; until then the page keeps the last copy, and shows its own banner
+# once that copy is over an hour old.
+
+[Unit]
+Description=pull the ionograms public page from the hub, every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+# Measured from when the last pull *finished*, so a slow one cannot overlap
+# the next.
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
