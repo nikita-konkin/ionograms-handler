@@ -278,6 +278,20 @@ CREATE TABLE IF NOT EXISTS live_summary (
     PRIMARY KEY (station, tx, t0)
 );
 
+-- The `rx` names in product files that are a station's own (issue #27). A
+-- station's agent name and the receiver name its recorder writes into every
+-- file are different things: Yoshkar-Ola's two receivers wrote `Yoshkar-Ola`
+-- and `yoshkar-ola`, names apart only by case, and their agents became
+-- `yoshkar-ola-1` and `yoshkar-ola-2` while the files kept what they say.
+-- Written by `rename_station`; a station with no row here owns exactly its
+-- own name, matched with case, so two receivers whose names differ only in
+-- case never take each other's soundings.
+CREATE TABLE IF NOT EXISTS station_receiver (
+    station TEXT NOT NULL,
+    rx      TEXT NOT NULL,
+    PRIMARY KEY (station, rx)
+);
+
 -- Folders that are meant to be indexed, so that "what is in this database"
 -- stops being whatever someone last ran `services.api.ingest` over by hand.
 --

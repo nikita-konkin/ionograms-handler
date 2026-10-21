@@ -311,6 +311,102 @@ def forget_station(conn: sqlite3.Connection, station: str) -> dict:
             "previews": previews, "kept": kept}
 
 
+#: Every table keyed by a station's agent name, with the columns its rows are
+#: unique on. A row the new name already holds under the same key is the newer
+#: copy -- the agent that reports under the new name sent it -- so it stays and
+#: the old one goes. `transmitter` is the exception: an identification is a
+#: human judgement, and two of them for one code are a conflict to resolve, not
+#: a duplicate to drop.
+STATION_KEYS = {
+    "config_epoch": (),
+    "health_report": (),
+    "command": (),
+    "transmitter": (),
+    "sounder_block": ("station",),
+    "sounder_literals": ("station", "config_hash"),
+    "station_preview": ("station", "tx"),
+    "live_summary": ("station", "tx", "t0"),
+}
+
+STATION_TABLES = tuple(STATION_KEYS)
+
+
+def receivers(conn: sqlite3.Connection, station: str) -> tuple[str, ...]:
+    """The `rx` names in product files that are this station's own.
+
+    Those `rename_station` recorded, or the station's own name alone.
+    """
+    found = conn.execute("SELECT rx FROM station_receiver WHERE station = ?"
+                         " ORDER BY rx", (station,)).fetchall()
+    return tuple(row[0] for row in found) or (station,)
+
+
+def receiver_clause(conn: sqlite3.Connection, station: str,
+                    column: str = "rx") -> tuple[str, tuple[str, ...]]:
+    """``column IN (...)`` over the station's receivers, with its parameters."""
+    names = receivers(conn, station)
+    return "%s IN (%s)" % (column, ",".join("?" * len(names))), names
+
+
+def station_rows(conn: sqlite3.Connection, station: str) -> dict[str, int]:
+    """How many rows each station-keyed table holds under this name."""
+    return {table: conn.execute(f"SELECT COUNT(*) FROM {table} WHERE station = ?",
+                                (station,)).fetchone()[0]
+            for table in STATION_TABLES}
+
+
+def rename_station(conn: sqlite3.Connection, old: str, new: str) -> dict[str, int]:
+    """Move everything kept under an agent's name to a new one. Returns the counts.
+
+    The product files keep the `rx` they were written with, so the receivers
+    `old` owned become `new`'s, beside `new`'s own name. Refuses a name that
+    holds nothing, which is a typo, and a transmitter both names identified.
+    One transaction: it lands whole or not at all.
+    """
+    if old == new:
+        raise ValueError(f"cannot rename station {old!r} to itself")
+    moved = station_rows(conn, old)
+    owned = receivers(conn, old)
+    if not any(moved.values()) and owned == (old,):
+        raise ValueError(f"nothing is kept under station {old!r}")
+    clash = conn.execute(
+        "SELECT a.code FROM transmitter a JOIN transmitter b ON b.station = ?"
+        " AND (b.code = a.code OR b.sounder_id = a.sounder_id)"
+        " WHERE a.station = ?", (new, old)).fetchall()
+    if clash:
+        raise ValueError("station %r already identified %s, as %r did; resolve "
+                         "that on the Sources page first"
+                         % (new, ", ".join(sorted({r[0] for r in clash})), old))
+    with conn:
+        for table, key in STATION_KEYS.items():
+            verb = "UPDATE OR IGNORE" if key else "UPDATE"
+            conn.execute(f"{verb} {table} SET station = ? WHERE station = ?",
+                         (new, old))
+            conn.execute(f"DELETE FROM {table} WHERE station = ?", (old,))
+        conn.executemany("INSERT OR IGNORE INTO station_receiver (station, rx)"
+                         " VALUES (?, ?)",
+                         [(new, rx) for rx in {*owned, *receivers(conn, new)}])
+        conn.execute("DELETE FROM station_receiver WHERE station = ?", (old,))
+    return moved
+
+
+def backup(path: Path) -> Path:
+    """A consistent copy beside the database, via SQLite's own backup API.
+
+    Not `cp`: the database runs in WAL mode, so a file copy taken while the api
+    is writing can land mid-transaction and is not guaranteed to open.
+    """
+    target = path.with_name("%s.bak-%s" % (
+        path.name, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+    source = sqlite3.connect(str(path))
+    try:
+        with sqlite3.connect(str(target)) as dest:
+            source.backup(dest)
+    finally:
+        source.close()
+    return target
+
+
 # --------------------------------------------------------------------------
 # Previews (services/agent/preview.py)
 # --------------------------------------------------------------------------
@@ -1180,7 +1276,8 @@ def archived(conn: sqlite3.Connection, station: str, tx: str, *,
         cmp, bound, order = "<", spell(math.floor(before)), "DESC"
     else:
         cmp, bound, order = ">=", spell(math.floor(after) + 1), "ASC"
-    return one(conn, "SELECT * FROM sounding WHERE tx = ? AND lower(rx) = lower(?)"
+    owned, names = receiver_clause(conn, station)
+    return one(conn, f"SELECT * FROM sounding WHERE tx = ? AND {owned}"
                      " AND file LIKE 'lfm_ionogram-%'"
                      f" AND datetime {cmp} ? ORDER BY datetime {order} LIMIT 1",
-               (tx, station, bound))
+               (tx, *names, bound))

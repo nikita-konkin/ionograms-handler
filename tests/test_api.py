@@ -4333,6 +4333,33 @@ def test_a_different_rate_in_the_same_second_is_a_different_emitter(tmp_path):
     assert got["slots"][0]["examples"] == []
 
 
+def test_examples_are_not_taken_from_a_receiver_named_apart_only_by_case(tmp_path):
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    _search_sounding(conn, _recent(240), rx="yoshkar-ola")
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
+                                seconds=[240], fraction=0.00994, cycle_s=300.0,
+                                start=time.time() - 86400)
+    assert got["slots"][0]["examples"] == [], (
+        "examples were taken from a receiver whose name differs only in case")
+
+
+def test_a_renamed_station_finds_examples_filed_under_its_old_name(tmp_path):
+    from services.api import db, sources
+
+    conn = db.init(db.connect(tmp_path / "t.sqlite3"))
+    conn.execute("INSERT INTO health_report (station, received_at, document)"
+                 " VALUES ('Yoshkar-Ola', ?, '{}')", (db.utcnow(),))
+    at = _search_sounding(conn, _recent(240))
+    db.rename_station(conn, "Yoshkar-Ola", "yoshkar-ola-1")
+    got = sources.slot_examples(conn, station="yoshkar-ola-1", rate=100e3,
+                                seconds=[240], fraction=0.00994, cycle_s=300.0,
+                                start=time.time() - 86400)
+    assert [x["id"] for s in got["slots"] for x in s["examples"]] == [at], (
+        "a renamed station found no examples filed under its old name")
+
+
 def test_rows_from_before_the_rate_column_are_counted_not_guessed(tmp_path):
     """A 125 kHz/s sweep under a 100 kHz/s row is worse than no picture."""
     from services.api import db, sources
@@ -4360,7 +4387,7 @@ def test_each_slot_gets_its_best_trace_and_its_newest(tmp_path):
     # Another receiver, same second: not this row's picture.
     _search_sounding(conn, _recent(235), rx="DOB", muf=25.0, snr=50.0)
 
-    got = sources.slot_examples(conn, station="yoshkar-ola", rate=100e3,
+    got = sources.slot_examples(conn, station="Yoshkar-Ola", rate=100e3,
                                 seconds=[240, 235], fraction=0.00994,
                                 cycle_s=300.0, start=time.time() - 86400)
     slots = {s["second"]: s for s in got["slots"]}

@@ -610,11 +610,12 @@ def arrivals(conn, station: str, limit: int = 6,
     from . import db
 
     now = time_now() if now is None else now
+    owned, names = db.receiver_clause(conn, station)
     out = []
     for row in db.rows(conn,
                        "SELECT id, datetime, tx, rx, freq_start, freq_stop,"
-                       " sweep_fraction FROM sounding WHERE rx = ?"
-                       " ORDER BY datetime DESC LIMIT ?", (station, limit)):
+                       f" sweep_fraction FROM sounding WHERE {owned}"
+                       " ORDER BY datetime DESC LIMIT ?", (*names, limit)):
         stamp = _parse_stamp(row["datetime"])
         row["age_s"] = None if stamp is None else round(now - stamp, 1)
         out.append(row)
@@ -632,10 +633,11 @@ def observed_span_mhz(conn, station: str, limit: int = 50) -> float | None:
     """
     from . import db
 
+    owned, names = db.receiver_clause(conn, station)
     spans = [r["span"] for r in db.rows(
         conn, "SELECT (freq_stop - freq_start) AS span FROM sounding"
-              " WHERE rx = ? AND freq_stop IS NOT NULL AND freq_start IS NOT NULL"
-              " ORDER BY datetime DESC LIMIT ?", (station, limit))
+              f" WHERE {owned} AND freq_stop IS NOT NULL AND freq_start IS NOT NULL"
+              " ORDER BY datetime DESC LIMIT ?", (*names, limit))
         if r["span"] and r["span"] > 0]
     if not spans:
         return None
@@ -659,10 +661,11 @@ def observed_band_mhz(conn, station: str, limit: int = 20) -> dict | None:
     """
     from . import db
 
+    owned, names = db.receiver_clause(conn, station)
     rows = db.rows(
         conn, "SELECT freq_start AS lo, freq_stop AS hi FROM sounding"
-              " WHERE rx = ? AND freq_stop IS NOT NULL AND freq_start IS NOT NULL"
-              " ORDER BY datetime DESC LIMIT ?", (station, limit))
+              f" WHERE {owned} AND freq_stop IS NOT NULL AND freq_start IS NOT NULL"
+              " ORDER BY datetime DESC LIMIT ?", (*names, limit))
     los = sorted(r["lo"] for r in rows if r["lo"] is not None)
     his = sorted(r["hi"] for r in rows if r["hi"] is not None)
     if not los or not his:

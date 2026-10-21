@@ -17,10 +17,11 @@ carry on and the log looks normal.
 from __future__ import annotations
 
 import json
+import random
 
 import pytest
 
-from services.api import acquisition
+from services.api import acquisition, db
 
 #: A complete entry, the shape every `.ini` in the pinned clone's
 #: `examples/marieluise` carries.
@@ -333,3 +334,16 @@ def test_unparseable_and_lone_entries_do_not_raise():
     assert acquisition.overlapping_slots([], 24.80) == []
     assert acquisition.overlapping_slots(
         [entry, {"chirp-rate": "nonsense", "rep": 300, "chirpt": 5}], 24.80) == []
+
+
+def test_a_renamed_station_lists_what_arrived_under_its_old_name(tmp_path):
+    old, new = "Rx%d" % random.randint(0, 999), "rx-%d" % random.randint(0, 999)
+    with db.session(tmp_path / "t.sqlite3") as conn:
+        conn.execute("INSERT INTO health_report (station, received_at, document)"
+                     " VALUES (?, ?, '{}')", (old, db.utcnow()))
+        conn.execute("INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at)"
+                     " VALUES ('f.h5', 'd/f.h5', '2026-10-21 10:00:00', 'NIC0', ?, ?)",
+                     (old, db.utcnow()))
+        db.rename_station(conn, old, new)
+        assert len(acquisition.arrivals(conn, new)) == 1, (
+            "a renamed station does not list what arrived under its old name")
