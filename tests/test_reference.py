@@ -404,7 +404,11 @@ def test_indices_fetch_live():
         si = indices.solar_indices(dt.date(2022, 3, 20))
     except indices.IndexUnavailable as exc:
         pytest.skip(f"index sources unreachable: {exc}")
-
+    # Each source is optional on its own, so losing SILSO alone still returns
+    # indices -- without the daily number this test is about. www.sidc.be has
+    # dropped TLS from OpenSSL clients while answering Windows ones.
+    if "silso_daily" not in si.used:
+        pytest.skip(f"SILSO daily unreachable: {si.source}")
     assert si.ssn_daily is not None
     assert si.is_smoothed          # 2022 is old enough to have a real R12
     assert 0 < si.r12 < 400
