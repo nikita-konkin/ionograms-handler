@@ -191,6 +191,9 @@ deploy/.env
 deploy/.env.*
 !deploy/.env.example
 *.sqlite3
+# A VPN client profile carries the client's private key. The public host's
+# pull (deploy/README.md, 2d) needs one, and this repository is public.
+*.ovpn
 
 # Claude Code preview config -- machine-specific paths
 .claude/launch.json
