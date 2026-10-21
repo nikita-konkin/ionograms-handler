@@ -315,3 +315,41 @@ def test_archived_summary_with_the_wrong_pdp_length_is_refused():
     bad = base64.b64encode(bytes(head["rows"] + random.randint(1, 9))).decode()
     with pytest.raises(live.Refused):
         live.Hub().publish("YOS", [archived(head, pdp=bad)])
+
+
+def echo(head, lo_km=None, hi_km=None):
+    lo = lo_km if lo_km is not None else random.uniform(1200.0, 2400.0)
+    return {"type": "echo", "tx": head["tx"], "t0": head["t0"], "lo_km": lo,
+            "hi_km": hi_km if hi_km is not None else lo + random.uniform(20.0, 300.0),
+            "sigma": random.uniform(8.0, 90.0)}
+
+
+def test_an_echo_is_kept_for_its_transmitter():
+    hub = live.Hub()
+    head = sounding()
+    event = echo(head)
+    hub.publish("YOS", [head, event])
+    assert hub.snapshot("YOS")["echo"][head["tx"]]["lo_km"] == event["lo_km"], (
+        "the hub did not keep where a sounding's echo was")
+
+
+def test_an_echo_reaches_a_browser_watching_its_station():
+    hub = live.Hub()
+    head = sounding()
+    got = frames(hub, "YOS", lambda: hub.publish("YOS", [head, echo(head)]))
+    assert any(f.startswith("event: echo") for f in got), (
+        "a browser watching the station never heard where the echo was")
+
+
+def test_an_echo_whose_range_is_not_a_number_is_refused():
+    hub = live.Hub()
+    head = sounding()
+    with pytest.raises(live.Refused):
+        hub.publish("YOS", [head, dict(echo(head), lo_km="low")])
+
+
+def test_an_echo_whose_range_runs_backwards_is_refused():
+    hub = live.Hub()
+    head = sounding()
+    with pytest.raises(live.Refused):
+        hub.publish("YOS", [head, echo(head, lo_km=2000.0, hi_km=1900.0)])

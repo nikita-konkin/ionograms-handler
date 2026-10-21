@@ -38,7 +38,7 @@ from typing import Callable
 
 import numpy as np
 
-from muf import calibrate, io_lfs, spectro
+from muf import calibrate, echo_window, io_lfs, spectro
 
 from . import client, runner
 from .config import StationConfig
@@ -62,6 +62,11 @@ FRESH_S = 60.0
 #: over a thousand cells where a screen shows a few hundred and the server
 #: takes at most 4096. cyprus1 at 100 kHz/s is 208 rows and is never folded.
 ROWS = 400
+
+#: Range bins the whole axis is folded to for finding the echo, by the maximum
+#: of each block as the rows are. Enough to place an echo within a few tens of
+#: km over the full beat band, and a sounding's worth is a few megabytes.
+ECHO_BINS = 2048
 
 
 def newest(root: Path) -> Path | None:
@@ -87,6 +92,13 @@ class Capture:
 
     Folded by the maximum of each block of rows, as the preview is: a trace is
     one bright cell, and averaging it with its neighbours would lose it.
+
+    **Where the echo really is, once the capture is whole.** The rows sent
+    cover only what the path allows, so an echo the station's clock has moved
+    out of them is simply absent. Each window's whole range is kept too,
+    folded to ``ECHO_BINS``, and after the last column the capture says where
+    :func:`muf.echo_window.echo_gate` finds an echo over all of it -- the
+    server and the page compare that with the window.
     """
 
     def __init__(self, path: Path, window: int = 16384):
@@ -98,6 +110,9 @@ class Capture:
                                    gate_km=calibrate.geometry_gate(header))
         fold = -(-self.cal.n_range // ROWS)
         self.blocks = np.arange(0, self.cal.n_range, fold)
+        whole = -(-self.cal.n_range_full // ECHO_BINS)
+        self.bins = np.arange(0, self.cal.n_range_full, whole)
+        self.whole: list = []
         self.taper = spectro.hanning(window)
         self.done = 0
         self.ends = header.start_epoch + header.dur
@@ -129,8 +144,10 @@ class Capture:
                          count=(ready - self.done) * self.window)
         out = []
         for k in range(ready - self.done):
-            row = spectro.column(iq[k * self.window:(k + 1) * self.window], self.taper,
-                                 self.cal.n_range_full, self.cal.gate_idx)
+            full = spectro.spectrum(iq[k * self.window:(k + 1) * self.window],
+                                    self.taper, self.cal.n_range_full)
+            self.whole.append(np.maximum.reduceat(full, self.bins))
+            row = full[self.cal.gate_idx[0]:self.cal.gate_idx[1] + 1]
             db = np.maximum.reduceat(spectro.to_db(row)[::-1] - spectro.NOISE_FLOOR_DB,
                                      self.blocks)
             cells = np.clip(np.round(db / DB_STEP), 0, 255).astype(np.uint8)
@@ -138,7 +155,21 @@ class Capture:
                         "index": self.done + k,
                         "db": base64.b64encode(cells.tobytes()).decode("ascii")})
         self.done = ready
-        return out
+        return out + self._echo()
+
+    def _echo(self) -> list:
+        """Where the echo stands out over the whole range, once the capture is done"""
+        if not self.finished or not self.whole:
+            return []
+        power = np.array(self.whole)
+        self.whole = []
+        g0, step = self.cal.gate_idx[0], float(self.cal.range_step)
+        km = float(self.cal.vrange[0]) - (self.bins - g0) * step
+        found = echo_window.echo_gate(power[:, ::-1], km[::-1])
+        if found is None:
+            return []
+        return [{"type": "echo", "tx": self.head["tx"], "t0": self.head["t0"],
+                 "lo_km": found.lo_km, "hi_km": found.hi_km, "sigma": found.sigma}]
 
 
 class Journal:

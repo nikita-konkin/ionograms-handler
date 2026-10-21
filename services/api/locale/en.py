@@ -1453,6 +1453,8 @@ MESSAGES: dict[str, str] = {
     "live.js.span_h": "{n} h",
     "live.js.span_d": "{n} d",
     "live.js.msk": "MSK",
+    "live.js.echo_outside": ("Echoes at {at} ms, outside the {window} ms"
+                             " this path allows: the station's timing is probably off"),
     "live.js.archived": "archive",
     "live.js.archive_none": "the archive holds no earlier sounding",
     "live.js.waiting": "waiting",

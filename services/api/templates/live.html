@@ -18,6 +18,7 @@
   .tx-head h2 { margin:0; }
   .tx-head .meta { color:var(--dim); font-variant-numeric:tabular-nums; }
   .tx-head .state { margin-left:auto; }
+  .echo-warn { color:var(--warn); margin:0 0 .6rem; font-size:.85rem; }
   .state.capturing, .state.clean { color:var(--ok); border-color:var(--ok); }
   .state.writing, .state.degraded { color:var(--warn); border-color:var(--warn); }
   .state.failed { color:var(--fail); border-color:var(--fail); }
@@ -267,6 +268,7 @@
     const el = document.createElement('section');
     el.className = 'panel';
     el.innerHTML = '<div class="tx-head"><h2></h2><span class="meta"></span><span class="pill state"></span></div>'
+      + '<p class="echo-warn" hidden></p>'
       + '<div class="bar"><i></i></div><div class="plots">'
       + ['ctrl', 'current', 'snr', 'pdp'].map(k => '<figure><figcaption><b></b><span data-m="' + k + '"></span>'
         + (k === 'ctrl' ? '<span class="step"><button data-s="-1">&#9664;</button><button data-s="1">&#9654;</button><button data-s="0">&#9197;</button></span>' : '')
@@ -275,7 +277,7 @@
     el.querySelector('h2').textContent = tx;
     ['ctrl', 'current', 'snr', 'pdp'].forEach(k => { el.querySelector('[data-p="' + k + '"]').previousElementSibling.querySelector('b').textContent = TEXT[k]; });
     document.getElementById('txs').appendChild(el);
-    const one = {el, tx, cur: null, last: null, past: null, status: null, history: new Map(), earliest: null, back: 0, span: SPAN_S, loading: false};
+    const one = {el, tx, cur: null, last: null, past: null, status: null, echo: null, history: new Map(), earliest: null, back: 0, span: SPAN_S, loading: false};
     txs[tx] = one;
     if (scheduled) el.hidden = !scheduled.has(tx);
     place(one);
@@ -396,6 +398,7 @@
       for (const [tx, view] of Object.entries(ev.current)) panel(tx).cur = fromView(view);
       for (const [tx, list] of Object.entries(ev.daily)) merge(panel(tx), list);
       for (const [tx, st] of Object.entries(ev.status)) panel(tx).status = st;
+      for (const [tx, found] of Object.entries(ev.echo || {})) panel(tx).echo = found;
       return;
     }
     const one = panel(ev.tx);
@@ -412,6 +415,8 @@
       if (complete(one.cur)) one.last = one.cur;
     } else if (kind === 'summary') {
       merge(one, [ev]);
+    } else if (kind === 'echo') {
+      one.echo = ev;
     }
   }
 
@@ -508,6 +513,18 @@
           + (st && st.state === 'waiting' && st.t0 ? hms(st.t0) + '–' + hms(st.t1) : hms(head.t0)) + ' UTC'
         : '';
       const meta = (k, text) => { one.el.querySelector('[data-m="' + k + '"]').textContent = text; };
+      // The rows cover only the delays this path allows, so an echo the
+      // station's clock has moved out of them would simply be missing: the
+      // agent says where it stood over the whole range, and this says so.
+      const found = one.echo, done = one.last && one.last.head, warn = one.el.querySelector('.echo-warn');
+      const out = found && done && found.t0 === done.t0
+        && (found.lo_km < done.range_lo_km || found.hi_km > done.range_lo_km + done.rows * done.range_step_km);
+      warn.hidden = !out;
+      if (out) {
+        const ms = km => (km / done.km_per_ms).toFixed(2);
+        warn.textContent = T('live.js.echo_outside', {at: ms(found.lo_km) + '–' + ms(found.hi_km),
+          window: ms(done.range_lo_km) + '–' + ms(done.range_lo_km + done.rows * done.range_step_km)});
+      }
       one.el.querySelectorAll('.step button').forEach(b => { b.disabled = b.dataset.s !== '-1' && !one.past; });
       for (const [k, pic] of [['ctrl', one.past || one.last], ['current', one.cur || one.last]]) {
         const cv = one.el.querySelector('[data-p="' + k + '"]');

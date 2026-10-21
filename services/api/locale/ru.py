@@ -1468,6 +1468,9 @@ MESSAGES: dict[str, str] = {
     "live.js.span_h": "{n} ч",
     "live.js.span_d": "{n} сут",
     "live.js.msk": "МСК",
+    "live.js.echo_outside": ("Отражения на {at} мс, вне {window} мс,"
+                             " допустимых для этой трассы:"
+                             " вероятно, сбита синхронизация станции"),
     "live.js.archived": "архив",
     "live.js.archive_none": "в архиве нет более раннего зондирования",
     "live.js.waiting": "ожидание",

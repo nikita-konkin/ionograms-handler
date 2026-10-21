@@ -479,6 +479,16 @@ def test_days_route_counts_each_transmitter_per_day(client):
         "the days route did not count the summaries of each transmitter per day")
 
 
+def test_live_page_warns_when_echoes_leave_the_window(client):
+    assert "T('live.js.echo_outside'" in page(client), (
+        "the live page does not warn when echoes sit outside the window")
+
+
+def test_live_page_listens_for_where_the_echo_is(client):
+    assert "kind === 'echo'" in page(client), (
+        "the live page does not listen for where the echo is")
+
+
 def test_live_page_reads_history_through_the_range_route(client):
     assert "'/live/summaries?tx='" in page(client), (
         "the live page does not read its history through the range route")
