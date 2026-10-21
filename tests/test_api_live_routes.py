@@ -552,6 +552,26 @@ def test_the_archive_keeps_to_its_station(client, make_chirp_h5):
         "the archive offered another station's sounding")
 
 
+def test_the_archive_does_not_take_a_receiver_that_differs_only_in_case(
+        client, make_chirp_h5):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    stored(client, make_chirp_h5, t0, rx="yos")
+    assert archived(client, before=t0 + 1).status_code == 404, (
+        "the archive offered a sounding from a receiver named apart only by case")
+
+
+def test_a_renamed_station_steps_through_its_old_receivers_soundings(
+        client, make_chirp_h5):
+    from services.api import db
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    complete(client, t0 - 3600)
+    stored(client, make_chirp_h5, t0)
+    db.rename_station(client.app.state.db, "YOS", "yos-2")
+    assert client.get("/stations/yos-2/live/archive",
+                      params={"tx": "cyprus1", "before": t0 + 1}).status_code == 200, (
+        "a renamed station cannot step through soundings filed under its old name")
+
+
 def test_the_archive_needs_a_bound(client):
     assert archived(client).status_code == 400, (
         "the archive answered without a time to step from")

@@ -924,6 +924,44 @@ mounted holds nothing to read and costs nothing. Restart
 `chirp-live.service` after editing `~/agent.json`, then watch the history
 arrive with `journalctl -u chirp-live -f` and on `/ui/live`.
 
+### Renaming a station's agent
+
+A station has two names. Its agent reports under `station` in `agent.json`,
+and the server keeps health reports, commands, schedules, identified
+transmitters, previews and live summaries under it. Its recorder writes `rx`
+into every product file. Yoshkar-Ola's two receivers wrote `Yoshkar-Ola`
+(chirpsounder2) and `yoshkar-ola` (ionozond), names apart only by case, so
+their agents become `yoshkar-ola-1` and `yoshkar-ola-2` (issue #27). The
+product files keep the `rx` they were written with; `tools/rename_station.py`
+records that the old `rx` is the new station's own, so the console, Sources and
+the live archive still find its soundings.
+
+**1. Stop the agents** that report under the old name. On the chirpsounder2
+host that is `chirp-agent.service`; on the ionozond laptop, `chirp-live.service`
+and the health loop beside it (`chirp-agent.service` or
+`chirp-agent-ionozond.service`).
+
+**2. Rename on the server**, a dry run first:
+
+```bash
+sudo docker exec ionograms-api-1 python tools/rename_station.py --from Yoshkar-Ola --to yoshkar-ola-1
+```
+
+```bash
+sudo docker exec ionograms-api-1 python tools/rename_station.py --from Yoshkar-Ola --to yoshkar-ola-1 --apply
+```
+
+and the same for `--from yoshkar-ola --to yoshkar-ola-2`. It keeps a copy of
+the database beside it first, and refuses a name that holds nothing.
+
+**3. Give each agent its new name**: `"station": "yoshkar-ola-1"` in
+`/home/ionouser/agent.json` on the chirpsounder2 host, and
+`"station": "yoshkar-ola-2"` in `/home/samsung/agent.json` on the laptop. Start
+the agents again and check the console shows two panels under the new names.
+
+Running the rename again is safe: if an agent sent something under the old
+name between the two steps, a second `--apply` moves it too.
+
 ### Case B — different networks
 
 **Do not port-forward this over the internet.** It is plain HTTP and one

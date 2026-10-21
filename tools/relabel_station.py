@@ -78,7 +78,6 @@ import argparse
 import sqlite3
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Running a script puts tools/ on sys.path, not the repo root. Same shim, and
@@ -346,23 +345,6 @@ def apply(conn: sqlite3.Connection, plan: Plan, *,
                              (plan.new, plan.old))
 
 
-def backup(path: Path) -> Path:
-    """A consistent copy, via SQLite's own backup API.
-
-    Not `cp`: the database runs in WAL mode, so a file copy taken while the api
-    is writing can land mid-transaction and is not guaranteed to open.
-    """
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = path.with_name(f"{path.name}.bak-{stamp}")
-    source = sqlite3.connect(str(path))
-    try:
-        with sqlite3.connect(str(target)) as dest:
-            source.backup(dest)
-    finally:
-        source.close()
-    return target
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
@@ -417,7 +399,7 @@ def main(argv=None) -> int:
             raise SystemExit(f"Refusing to apply: {', '.join(blocked)} needed. "
                              f"See STOP above.")
 
-        copy = backup(args.db)
+        copy = db.backup(args.db)
         print()
         print(f"Backup: {copy}")
         apply(conn, plan, on_conflict=args.on_conflict,

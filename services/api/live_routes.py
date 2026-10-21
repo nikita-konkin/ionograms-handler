@@ -112,15 +112,17 @@ def live_path(station: str, tx: str, request: Request) -> dict:
     From the coordinates the station's schedule reports, as the sounder itself
     gates by, and from the station registry by name where the report has none.
     """
+    conn = request.app.state.db
     try:
-        found = sounder.reported(request.app.state.db, station)
+        found = sounder.reported(conn, station)
     except sounder.Unvetted:
         found = {}
     group = ((found.get("document") or {}).get("schedule") or {}).get(tx) or {}
     receivers = found.get("receivers") or [{}]
     sites = default_registry()
+    known = (sites.station(name) for name in (station, *db.receivers(conn, station)))
     ends = [_place(group, sites.station(tx)),
-            _place(receivers[0], sites.station(station))]
+            _place(receivers[0], next((site for site in known if site), None))]
     km = None if None in ends else calibrate.ground_range_km(SimpleNamespace(
         is_oblique=True, tx_latitude=ends[0][0], tx_longitude=ends[0][1],
         rx_latitude=ends[1][0], rx_longitude=ends[1][1]))

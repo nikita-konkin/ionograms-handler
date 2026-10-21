@@ -882,15 +882,16 @@ def slot_examples(conn, *, station: str, rate: float, seconds, fraction: float,
     """
     wanted = sorted({int(s) % int(cycle_s) for s in seconds})
     slot_tol_s = max(EXAMPLE_MIN_TOL_S, EXAMPLE_SD_FACTOR * (fraction_sd or 0.0))
+    owned, names = db.receiver_clause(conn, station, "s.rx")
     rows = db.rows(conn,
         "SELECT s.id, s.datetime, s.chirp_rate,"
         " MAX(e.snr) AS snr,"
         " SUM(CASE WHEN e.muf IS NOT NULL THEN 1 ELSE 0 END) AS picks"
         " FROM sounding s LEFT JOIN extraction e ON e.sounding_id = s.id"
-        " WHERE lower(s.tx) = ? AND lower(s.rx) = ?"
+        f" WHERE lower(s.tx) = ? AND {owned}"
         " AND s.datetime >= ? AND s.datetime <= ?"
         " GROUP BY s.id",
-        (SEARCH_TX, str(station).strip().lower(),
+        (SEARCH_TX, *names,
          _iso(start - cycle_s), _iso((end or time.time()) + cycle_s)))
 
     by_slot: dict[int, list] = {s: [] for s in wanted}
