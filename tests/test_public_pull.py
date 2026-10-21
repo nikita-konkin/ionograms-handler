@@ -20,6 +20,9 @@ SERVICE = DEPLOY / "ionograms-public-pull.service"
 TIMER = DEPLOY / "ionograms-public-pull.timer"
 VHOST = DEPLOY / "public-site.nginx.conf"
 
+#: rsync's long options that keep a symlink or copy what it points at.
+LINKING = ("--archive", "--links", "--copy-links", "--copy-unsafe-links")
+
 
 def settings(unit: Path) -> dict[str, str]:
     """A unit's directives, continuation lines joined, comments skipped."""
@@ -74,9 +77,8 @@ def test_the_pull_skips_what_the_publisher_is_still_writing():
 
 
 def test_the_pull_copies_no_symlink():
-    linking = [a for a in pull() if a in ("--archive", "--links", "--copy-links",
-                                          "--copy-unsafe-links")
-               or re.fullmatch(r"-[A-Za-z]*[alL][A-Za-z]*", a)]
+    linking = [a for a in pull()
+               if a in LINKING or re.fullmatch(r"-[A-Za-z]*[alL][A-Za-z]*", a)]
     assert not linking, (
         f"the pull keeps or follows symlinks ({linking}), so nginx on the public "
         "host could be made to serve a file outside the published folder")

@@ -518,8 +518,8 @@ nothing.
 sudo useradd --create-home --shell /bin/sh publish
 
 # 2. rrsync ships with rsync 3.2.4+; older releases (Ubuntu 22.04) keep it
-#    among the docs
-command -v rrsync || sudo sh -c 'zcat -f /usr/share/doc/rsync/scripts/rrsync.gz > /usr/local/bin/rrsync && chmod 755 /usr/local/bin/rrsync'
+#    among the docs, gzipped or not
+command -v rrsync || sudo sh -c 'zcat -f /usr/share/doc/rsync/scripts/rrsync* > /usr/local/bin/rrsync && chmod 755 /usr/local/bin/rrsync'
 ```
 
 **3.** The public host's key (below) goes into
