@@ -1383,6 +1383,97 @@ def epoch_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric
     )
 
 
+#: Archives an ionozond station's offset is read from, newest first. Two
+#: transmitters at a 600 s repetition make this the last half hour; each costs
+#: about 0.2 s to load and search, once a minute.
+ECHO_SOUNDINGS = 6
+
+#: Of those, how many must show an echo before their median is a verdict. One
+#: stray early echo -- an interferer the gate took -- is then outvoted.
+ECHO_QUORUM = 3
+
+#: The late edge of the window, as :func:`epoch_offset` sets it from
+#: ``reference_tx``: the latest a path's earliest echo can be and still be the
+#: ionosphere.
+ECHO_MAX_HOPS = 2
+ECHO_MAX_HEIGHT_KM = 450.0
+
+
+def echo_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric:
+    """Receiver clock against the path, from where ionozond's own echoes begin.
+
+    An ionozond sounder records on a schedule and detects nothing, so there is
+    no arrival phase to solve as :func:`epoch_offset` does. What it has is the
+    echo itself, on an axis that starts at the scheduled second: a clock that
+    runs slow moves every echo earlier by its error. No echo can begin before
+    the ground line, so the median of where recent echoes begin, less that
+    line, is the epoch offset with the ionosphere's excess inside it -- and
+    judged by the same window.
+
+    The metric this station earned. On 17 October 2026 yoshkar-ola-2's echoes
+    from NIC began +0.5 ms past the ground line, day and night, to within
+    0.1 ms. On the 18th, after a restart, they wandered 4 ms late for six hours;
+    from the 21st they slid 3 ms early, out of the live view's window. Every
+    metric stayed green, and yoshkar-ola-1 at the same site read cyprus1 on
+    time.
+
+    An archive that cannot be read -- the one still being written -- is
+    skipped, not fatal.
+    """
+    if config.live_dir is None:
+        return Metric.unknown("epoch_offset_s", "no live_dir configured")
+    try:
+        from muf import calibrate, echo_window, loader
+    except Exception as exc:
+        return Metric.unknown("epoch_offset_s", f"muf unavailable: {exc}")
+    root = Path(config.live_dir)
+    if not root.is_dir():
+        return Metric.unknown("epoch_offset_s", f"{root}: no such directory")
+    cutoff = time.time() - max_age_s
+    try:
+        days = sorted(p for p in root.glob("????.??.??") if p.is_dir())[-2:]
+        found = sorted(((_t0_from_name(p.name) or 0.0, p) for day in days
+                        for p in day.glob("lfm_ionogram-*.h5")), reverse=True)
+    except OSError as exc:
+        return Metric.unknown("epoch_offset_s", f"{type(exc).__name__}: {exc}")
+    recent = [p for t0, p in found if t0 > cutoff][:ECHO_SOUNDINGS]
+    if not recent:
+        return Metric.unknown(
+            "epoch_offset_s",
+            f"no lfm_ionogram-*.h5 in the last {max_age_s / 3600:.0f} h under {root}")
+    measured = []
+    for path in recent:
+        try:
+            ion = loader.load(path)
+        except Exception:
+            continue
+        ground = calibrate.ground_range_km(ion.header)
+        if ground is None:
+            continue
+        gate = echo_window.echo_gate(ion.power, ion.vrange,
+                                     calibrate.geometry_gate(ion.header, margin_km=0.0))
+        if gate is not None:
+            measured.append(((gate.lo_km - ground) / C_KM_S, ground,
+                             ion.header.tx_name))
+    if len(measured) < ECHO_QUORUM:
+        return Metric.unknown(
+            "epoch_offset_s",
+            f"{len(measured)} of the newest {len(recent)} soundings show an echo "
+            f"on a path of known geometry, and {ECHO_QUORUM} are needed")
+    offset, ground, tx = sorted(measured)[(len(measured) - 1) // 2]
+    late = hop_excess_s(ground, ECHO_MAX_HOPS, ECHO_MAX_HEIGHT_KM)
+    return Metric(
+        "epoch_offset_s", round(offset, 6),
+        ok=(-EPOCH_EARLY_LIMIT_S < offset < late),
+        detail=(f"the median of {len(measured)} echoes in the newest {len(recent)} "
+                f"soundings begins {offset * 1e3:+.2f} ms = {offset * C_KM_S:+.0f} km "
+                f"from the {ground:.0f} km ground line ({tx}). Window "
+                f"{-EPOCH_EARLY_LIMIT_S * 1e3:+.1f} to {late * 1e3:+.2f} ms -- an echo "
+                f"cannot begin before the ground line, and {ECHO_MAX_HOPS} hop(s) at "
+                f"{ECHO_MAX_HEIGHT_KM:.0f} km virtual height is the latest it can"),
+    )
+
+
 # --------------------------------------------------------------------------
 # Document
 # --------------------------------------------------------------------------
@@ -1449,7 +1540,8 @@ def collect(config: StationConfig | None = None, *,
     An ionozond station (:func:`runs_ionozond`) reports its sidecar and
     archive ages and the sounder's own STATUS in place of what only a
     chirpsounder2 ini or its products can answer: the product age by
-    chirpsounder2's naming, the sample rate, the band and the epoch offset.
+    chirpsounder2's naming, the sample rate and the band. Its epoch offset
+    comes from its echoes (:func:`echo_offset`) rather than a timing solve.
     """
     config = config or StationConfig()
     ionozond = runs_ionozond(config)
@@ -1471,8 +1563,8 @@ def collect(config: StationConfig | None = None, *,
         metrics.extend(band(config))
     metrics.append(uptime_s())
     metrics.append(system_clock(config))
-    if include_epoch and not ionozond:
-        metrics.append(epoch_offset(config))
+    if include_epoch:
+        metrics.append(echo_offset(config) if ionozond else epoch_offset(config))
 
     report = HealthReport(station=config.station, timestamp=time.time(),
                           metrics=metrics)

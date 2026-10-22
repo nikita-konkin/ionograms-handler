@@ -19,6 +19,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from services.agent import client, control, health, logs, runner
@@ -2708,6 +2709,113 @@ def test_a_missing_chirpsounder2_ini_fails_nothing_on_ionozond(tmp_path, monkeyp
 def test_a_chirpsounder2_station_still_reports_its_band(station):
     names = [m.name for m in health.collect(station, include_epoch=False).metrics]
     assert "center_freq_hz" in names, "a chirpsounder2 station lost its band"
+
+
+#: NIC to Yoshkar-Ola along the ground, by the station registry.
+GROUND_KM = 2587.8
+
+
+def echoing(make_chirp_h5, tmp_path, start_km, *, age=None, tx="NIC1"):
+    """An ionozond archive in its day folder, its echo beginning ``start_km``
+    along the path, or none at all for ``None``."""
+    from conftest import chirp_range_gates_m
+
+    t0 = round(time.time() - (random.uniform(60, 3000) if age is None else age))
+    day = tmp_path / time.strftime("%Y.%m.%d", time.gmtime(t0))
+    day.mkdir(exist_ok=True)
+    rows = random.randint(16, 24)
+    power = np.random.exponential(1.0, (rows, 8192))
+    if start_km is not None:
+        km = chirp_range_gates_m(8192, 40_000.0, 100_000.0) / 1e3
+        power[rows // 4:, (km >= start_km) & (km < start_km + 60.0)] *= 1e3
+    return make_chirp_h5(power, t0=float(t0), txname=tx, station_name="yoshkar-ola",
+                         max_range_extent_km=8000.0,
+                         name=f"{day.name}/lfm_ionogram-{tx}-yoshkar-ola-ch0-000-{t0:.2f}.h5")
+
+
+def test_an_echo_before_the_ground_line_is_a_clock_fault(tmp_path, make_chirp_h5):
+    for _ in range(health.ECHO_SOUNDINGS):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900))
+    assert health.echo_offset(ionozond(tmp_path)).ok is False, (
+        "an echo arriving before the ground line was not a clock fault")
+
+
+def test_an_echo_one_hop_past_the_ground_line_is_not_a_fault(tmp_path, make_chirp_h5):
+    for _ in range(health.ECHO_SOUNDINGS):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM + random.uniform(100, 300))
+    assert health.echo_offset(ionozond(tmp_path)).ok is True, (
+        "an ordinary one-hop echo was called a clock fault")
+
+
+def test_the_offset_is_where_the_echo_begins_against_the_ground_line(tmp_path,
+                                                                     make_chirp_h5):
+    start = GROUND_KM + random.uniform(-900, 600)
+    for _ in range(health.ECHO_SOUNDINGS):
+        echoing(make_chirp_h5, tmp_path, start)
+    value = health.echo_offset(ionozond(tmp_path)).value
+    assert abs(value - (start - GROUND_KM) / health.C_KM_S) < 0.2e-3, (
+        "the offset was not where the echo begins against the ground line")
+
+
+def test_one_stray_early_echo_does_not_convict_the_clock(tmp_path, make_chirp_h5):
+    echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900),
+            age=random.uniform(60, 600))
+    for _ in range(health.ECHO_SOUNDINGS - 1):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM + random.uniform(100, 300),
+                age=random.uniform(900, 3000))
+    assert health.echo_offset(ionozond(tmp_path)).ok is True, (
+        "one stray early echo convicted the clock")
+
+
+def test_soundings_without_an_echo_leave_the_offset_unknown(tmp_path, make_chirp_h5):
+    for _ in range(health.ECHO_SOUNDINGS):
+        echoing(make_chirp_h5, tmp_path, None)
+    assert health.echo_offset(ionozond(tmp_path)).ok is None, (
+        "soundings without an echo produced a verdict")
+
+
+def test_fewer_echoes_than_the_quorum_leave_the_offset_unknown(tmp_path, make_chirp_h5):
+    for _ in range(health.ECHO_QUORUM - 1):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900))
+    assert health.echo_offset(ionozond(tmp_path)).ok is None, (
+        "fewer echoes than the quorum produced a verdict")
+
+
+def test_soundings_older_than_the_window_are_not_evidence(tmp_path, make_chirp_h5):
+    for _ in range(health.ECHO_SOUNDINGS):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900),
+                age=random.uniform(7, 20) * 3600)
+    assert health.echo_offset(ionozond(tmp_path), max_age_s=6 * 3600.0).ok is None, (
+        "soundings older than the window produced a verdict")
+
+
+def test_a_product_still_being_written_does_not_stop_the_measurement(tmp_path,
+                                                                     make_chirp_h5):
+    for _ in range(health.ECHO_QUORUM):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900),
+                age=random.uniform(900, 3000))
+    newest = echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900),
+                     age=random.uniform(60, 600))
+    newest.write_bytes(newest.read_bytes()[:random.randint(1000, 20000)])
+    assert health.echo_offset(ionozond(tmp_path)).ok is False, (
+        "a product still being written stopped the measurement")
+
+
+def test_a_path_with_no_known_geometry_leaves_the_offset_unknown(tmp_path,
+                                                                 make_chirp_h5):
+    for _ in range(health.ECHO_SOUNDINGS):
+        echoing(make_chirp_h5, tmp_path, GROUND_KM - random.uniform(300, 900),
+                tx="synth%d" % random.randint(0, 999))
+    assert health.echo_offset(ionozond(tmp_path)).ok is None, (
+        "a path with no known geometry produced a verdict")
+
+
+def test_an_ionozond_station_reports_its_epoch_offset(tmp_path, monkeypatch):
+    answering(monkeypatch)
+    journal(monkeypatch, "STATUS cyprus1 writing")
+    names = [m.name for m in health.collect(ionozond(tmp_path)).metrics]
+    assert "epoch_offset_s" in names, (
+        "an ionozond station did not report its epoch offset")
 
 
 def example(name) -> StationConfig:
