@@ -63,6 +63,7 @@ DEFAULT_OPTIONAL_UNITS = ("chirp-digisonde@",)
 DEFAULT_JOB_UNITS = (
     "chirp-archive-sync.service",
     "chirp-archive-prune.service",
+    "chirp-echo-window.service",
 )
 
 #: Systemd target the control commands act on. One target rather than five

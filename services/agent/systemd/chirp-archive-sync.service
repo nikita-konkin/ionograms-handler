@@ -24,6 +24,10 @@
 Description=mirror the local ionogram archive to the NAS
 After=network-online.target
 Wants=network-online.target
+# Cut each product's echo window and drop its 78 MB `z` first, so the copy
+# carries the small product. `Wants=`: a failed cut never stops the copy.
+Wants=chirp-echo-window.service
+After=chirp-echo-window.service
 # Nothing to do if the share is not mounted, and rsync would otherwise
 # cheerfully fill the local disk's mountpoint directory instead.
 ConditionPathIsMountPoint=/mnt/ionozond_5tb

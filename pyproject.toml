@@ -73,6 +73,11 @@ packages = ["muf", "muf.extractors", "muf.reference", "services",
 # `tests/test_agent.py::test_the_agent_stays_within_python_38` is the backstop:
 # this setting stops a *linter* suggesting 3.9+ syntax, and that test stops it
 # arriving by any other route.
+#
+# One part of `muf` runs there too: `services/agent/echo.py` imports
+# `muf.echo_window` to cut each product's echo window on the station (#37).
+# `tests/test_echo_window_py38.py` holds the modules that import pulls in to
+# 3.8, so `requires-python` above stays a statement about the rest of `muf`.
 target-version = "py38"
 
 # 88, not the 79 most of this tree already keeps to. Of 58 000 lines, 1 588 run

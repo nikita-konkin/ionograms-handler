@@ -1,0 +1,36 @@
+# Cuts the echo window into each finished chirpsounder2 product and drops its
+# full voltage `z`, before the NAS copy runs.
+#
+# With `save_raw_voltage = true` every product carries `z`, about 78 MB. The
+# echo window keeps the part of it worth keeping -- each echo's Doppler,
+# fading and phase -- in about 1.6 MB (docs/echo-window.md). This job does the
+# cut on the station so that only the small product crosses the SMB1 link.
+#
+# No timer of its own. chirp-archive-sync.service pulls this in and orders
+# itself after it (`Wants=` + `After=`), so every five-minute copy starts with
+# a cut and waits for it to finish. `Wants=`, not `Requires=`: a cut that
+# fails must never stop the copy. The products it could not cut ship whole,
+# and the next pass tries them again.
+#
+# A product with nothing to keep keeps its `z`, and a cut that does not
+# verify keeps its `z` and fails the run, so the job turns red on /ui rather
+# than shrinking a product it cannot reproduce. See services/agent/echo.py.
+
+[Unit]
+Description=cut the echo window into each chirpsounder2 product
+
+[Service]
+Type=oneshot
+User=ionouser
+WorkingDirectory=/home/ionouser/ionograms-handler
+
+# The same asymmetry as the jobs beside it: this has no deadline, and the
+# recorder it shares a CPU and a disk with does. Late is free; lost is not.
+Nice=19
+IOSchedulingClass=idle
+
+# Keep identical to ARCHIVE_LOCAL in chirp-archive-sync.service and
+# chirp-archive-prune.service, and to `output_dir` in agent.json.
+Environment=ARCHIVE_LOCAL=/home/ionouser/ionozond_data2
+ExecStart=/home/ionouser/chirpsounder2/.venv38/bin/python -m services.agent.echo \
+    ${ARCHIVE_LOCAL}
