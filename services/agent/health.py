@@ -487,13 +487,22 @@ def job_states(config: StationConfig) -> list[Metric]:
                                      f"{status or '?'}{ran}{where}. "
                                      f"`journalctl -u {unit} -n 20` says why."))
 
-        out.append(_timer_metric(unit))
+        # A job another unit pulls in, like chirp-echo-window, has no timer.
+        # systemd answers `ActiveState=inactive` for a timer that does not
+        # exist, which would read as one that was stopped.
+        if _show(_timer_of(unit), "LoadState")[1] != "not-found":
+            out.append(_timer_metric(unit))
     return out
 
 
+def _timer_of(unit: str) -> str:
+    """The timer that drives a job unit, by systemd's own naming convention."""
+    return unit.rsplit(".", 1)[0] + ".timer"
+
+
 def _timer_metric(unit: str) -> Metric:
-    """The timer behind a job unit, by systemd's own naming convention."""
-    timer = unit.rsplit(".", 1)[0] + ".timer"
+    """The timer behind a job unit."""
+    timer = _timer_of(unit)
     code, state = _show(timer, "ActiveState")
     if code != 0 or not state or state == "unknown":
         return Metric.unknown(

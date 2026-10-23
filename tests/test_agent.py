@@ -1445,7 +1445,8 @@ def test_one_output_dir_is_written_in_three_places():
     example = root / "deploy/station-dob.json.example"
     wanted = json.loads(example.read_text(encoding="utf-8"))["output_dir"]
 
-    for unit in ("chirp-archive-sync.service", "chirp-archive-prune.service"):
+    for unit in ("chirp-archive-sync.service", "chirp-archive-prune.service",
+                 "chirp-echo-window.service"):
         text = (root / "services/agent/systemd" / unit).read_text(encoding="utf-8")
         found = re.findall(r"^Environment=ARCHIVE_LOCAL=(.+)$", text, re.M)
         assert found == [wanted], (
@@ -1916,6 +1917,28 @@ def test_a_job_that_has_never_run_is_not_reported_as_succeeding(monkeypatch,
     # Unknown, not red: a timer installed five minutes ago has not failed at
     # anything. The timer metric beside it is what says whether it will fire.
     assert "systemd carries before a unit has run" in job.detail
+
+
+def test_a_job_pulled_in_by_another_has_no_dead_timer(monkeypatch, station):
+    """chirp-echo-window has no timer: chirp-archive-sync pulls it in.
+
+    `systemctl show` on a timer that does not exist answers
+    `ActiveState=inactive`, the same as a timer someone stopped, which reads
+    as a job that will never fire again -- red on every pass of a job that
+    ran five minutes ago.
+    """
+    _fake_show(monkeypatch, {
+        ("chirp-echo-window.service", "Result"): "success",
+        ("chirp-echo-window.service", "ExecMainExitTimestamp"):
+            "Сб 2026-10-24 01:05:09 MSK",
+        ("chirp-echo-window.service", "ExecMainStatus"): "0",
+        ("chirp-echo-window.timer", "LoadState"): "not-found",
+        ("chirp-echo-window.timer", "ActiveState"): "inactive",
+    })
+    metrics = health.job_states(
+        replace(station, job_units=("chirp-echo-window.service",)))
+    assert "timer:chirp-echo-window.timer" not in {m.name for m in metrics}, \
+        "a job with no timer of its own was reported as a dead timer"
 
 
 def test_a_start_skipped_by_its_condition_is_red(monkeypatch, station):

@@ -403,6 +403,33 @@ muf info /archive/echo/2026.02.04/cyprus1_20260204_120010.echo.h5
 `ChirpHeader.has_echo_window` and `io_chirp.read_echo_window(path)` expose
 the window directly.
 
+### On a chirpsounder2 station
+
+`chirp-echo-window.service` cuts every finished product on the station,
+before the NAS copy, so only the windowed product crosses the network
+(#37). It runs `python -m services.agent.echo` on the staging folder, which
+calls `write(path, drop_raw=True)` on each `lfm_ionogram-*.h5` older than two
+minutes. `chirp-archive-sync.service` pulls it in and waits for it
+(`Wants=` + `After=`), so it needs no timer, and a failed cut never stops a
+copy. A product with nothing to keep keeps its `z`; a cut that does not
+verify keeps its `z` and fails the run, which turns the job red on `/ui`.
+
+Rolling it out on yoshkar-ola-1, as `ionouser`:
+
+```bash
+/home/ionouser/chirpsounder2/.venv38/bin/python -c "import numpy, scipy, h5py"
+cd ~/ionograms-handler && git pull
+sudo cp services/agent/systemd/chirp-echo-window.service services/agent/systemd/chirp-archive-sync.service /etc/systemd/system/
+sudo systemctl daemon-reload
+/home/ionouser/chirpsounder2/.venv38/bin/python -m services.agent.echo ~/ionozond_data2 --dry-run
+```
+
+The dry run reads nothing yet, since no product carries `z`. Then set
+`save_raw_voltage = true` under `[lfm]` in
+`~/chirpsounder2/my_station.ini`, restart `chirp-ionograms.service`, and after
+the next sync pass check `journalctl -u chirp-echo-window -n 5` and the size
+of the newest product: about 1.6 MB more than before, never 78 MB.
+
 ## 5. Safety
 
 **Nothing here is destructive by default:**
