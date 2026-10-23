@@ -337,3 +337,43 @@ def test_columns_of_a_capture_renamed_away_keep_their_sounding(make_lfs, tmp_pat
     beat.step()
     assert sent[0][0]["type"] == "sounding", (
         "columns of a capture renamed away were sent without their sounding")
+
+
+def finished(make_lfs, tmp_path, iq=None):
+    """A whole capture of 24 windows: ten seconds of sweep at 40 kHz."""
+    return live.Capture(capture(make_lfs, tmp_path, 24, iq=iq, dur=10))
+
+
+def reported(follow):
+    return [e for e in follow.columns() if e["type"] == "echo"]
+
+
+def test_a_finished_capture_says_where_its_echo_is(make_lfs, tmp_path):
+    step = 120000.0 / 16384
+    target = round(random.uniform(1200.0, 1900.0) / step)
+    found = reported(finished(make_lfs, tmp_path, iq=echo(target, 24)))
+    at = target * step
+    assert found and found[0]["lo_km"] - step <= at <= found[0]["hi_km"] + step, (
+        "a finished capture did not say its echo at %.0f km was there" % at)
+
+
+def test_an_echo_outside_the_window_is_still_found(make_lfs, tmp_path):
+    step = 120000.0 / 16384
+    target = round(random.uniform(1200.0, 1900.0) / step)
+    follow = finished(make_lfs, tmp_path, iq=echo(target, 24))
+    found = reported(follow)
+    assert found and found[0]["hi_km"] < follow.head["range_lo_km"], (
+        "an echo below the window was not reported below it")
+
+
+def test_a_capture_of_noise_says_no_echo_stands_out(make_lfs, tmp_path):
+    assert reported(finished(make_lfs, tmp_path)) == [], (
+        "a capture of noise reported an echo")
+
+
+def test_an_unfinished_capture_says_nothing_of_its_echo_yet(make_lfs, tmp_path):
+    step = 120000.0 / 16384
+    follow = live.Capture(capture(make_lfs, tmp_path, 2,
+                                  iq=echo(round(1500.0 / step), 2)))
+    assert reported(follow) == [], (
+        "a capture still being written reported its echo")

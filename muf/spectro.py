@@ -192,6 +192,19 @@ def compute(
     )
 
 
+def spectrum(iq: np.ndarray, win: np.ndarray, n_range_full: int) -> np.ndarray:
+    """One window of IQ as a whole, ungated row of median-equalized power.
+
+    The noise floor is the full spectrum's, so restricting the range window
+    afterwards does not bias it.
+    """
+    padded = np.zeros(n_range_full, dtype=np.complex128)
+    padded[:len(win)] = win * iq
+    power = np.abs(np.fft.fftshift(np.fft.fft(padded))) ** 2
+    floor = NOISE_COEF * np.median(power)
+    return power / floor if floor > 0 else power
+
+
 def column(iq: np.ndarray, win: np.ndarray, n_range_full: int,
            gate: tuple[int, int]) -> np.ndarray:
     """One window of IQ as a range-gated row of median-equalized power.
@@ -200,14 +213,7 @@ def column(iq: np.ndarray, win: np.ndarray, n_range_full: int,
     holding one window at a time -- the station agent following a capture as
     it is written -- forms exactly the row this module would have.
     """
-    padded = np.zeros(n_range_full, dtype=np.complex128)
-    padded[:len(win)] = win * iq
-    spectrum = np.abs(np.fft.fftshift(np.fft.fft(padded))) ** 2
-    # Noise floor from the full spectrum, before gating, so that restricting
-    # the range window does not bias the estimate.
-    floor = NOISE_COEF * np.median(spectrum)
-    row = spectrum[gate[0]:gate[1] + 1]
-    return row / floor if floor > 0 else row
+    return spectrum(iq, win, n_range_full)[gate[0]:gate[1] + 1]
 
 
 # --- caching -----------------------------------------------------------------

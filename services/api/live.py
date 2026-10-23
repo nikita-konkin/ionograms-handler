@@ -51,6 +51,10 @@ MAX_TX = 64
 STATUS_FIELDS = ("progress", "overflows", "t0", "t1", "got")
 SOUNDING_FIELDS = ("t0", "f_lo_mhz", "f_step_mhz", "range_lo_km",
                    "range_step_km", "km_per_ms")
+#: Where an echo stood out over a sounding's whole range, which the agent says
+#: after its last column: the rows it sent cover only what the path allows,
+#: so an echo a station's clock has moved out of them is otherwise invisible.
+ECHO_FIELDS = ("t0", "lo_km", "hi_km", "sigma")
 AXES = ("tx", *SOUNDING_FIELDS, "columns", "rows")
 
 
@@ -85,6 +89,7 @@ class Board:
         self.current: dict[str, Sounding] = {}
         self.last: dict[str, Sounding] = {}
         self.daily: dict[str, collections.deque] = {}
+        self.echo: dict[str, dict] = {}
 
 
 class Reader:
@@ -139,7 +144,8 @@ class Hub:
                 "status": dict(board.status),
                 "current": {tx: s.view() for tx, s in board.current.items()},
                 "last": {tx: s.view() for tx, s in board.last.items()},
-                "daily": {tx: list(d) for tx, d in board.daily.items()}}
+                "daily": {tx: list(d) for tx, d in board.daily.items()},
+                "echo": dict(board.echo)}
 
     def subscribe(self, station: str) -> Reader:
         reader = Reader()
@@ -211,6 +217,9 @@ def _apply(board: Board, event: dict) -> list[dict]:
     if event["type"] == "status":
         board.status[tx] = event
         return [event]
+    if event["type"] == "echo":
+        board.echo[tx] = event
+        return [event]
     held = board.current.get(tx)
     if event["type"] == "sounding":
         if any(s is not None and s.head["t0"] == event["t0"]
@@ -266,6 +275,8 @@ def _checked(events: list, board: Board) -> list[dict]:
             out.append(_column(n, event, shapes.get((tx, event.get("t0")))))
         elif kind == "summary":
             out.append(_summary(n, event))
+        elif kind == "echo":
+            out.append(_echo(n, event))
         else:
             raise Refused("event %d has unknown type %r" % (n, kind))
     return out
@@ -295,6 +306,15 @@ def _sounding(n: int, event: dict) -> dict:
     if min(head["f_step_mhz"], head["range_step_km"], head["km_per_ms"]) <= 0:
         raise Refused("sounding %d has a step that is not positive" % n)
     return head
+
+
+def _echo(n: int, event: dict) -> dict:
+    clean = {"type": "echo", "tx": event["tx"]}
+    for name in ECHO_FIELDS:
+        clean[name] = _finite(n, event, name)
+    if clean["lo_km"] > clean["hi_km"]:
+        raise Refused("echo %d ends before it starts" % n)
+    return clean
 
 
 def _summary(n: int, event: dict) -> dict:
