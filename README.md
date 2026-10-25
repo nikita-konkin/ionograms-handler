@@ -1081,7 +1081,7 @@ one directory, alongside three kinds of detection file. Dispatch is by name —
 prefix rather than a guess, and `io_digisonde.read_header` then confirms it
 against the file's `type` dataset before reading anything.
 
-A fourth file kind, `<stem>.echo.h5` -- an echo window cut from an `.lfs` by `muf echo-window` -- is read by name by `run`, `plot` and `info`, over the range it kept; v2 products may carry the same `echo_window` group ([`docs/echo-window.md`](docs/echo-window.md)).
+A fourth file kind, `<stem>.echo.h5` -- an echo window cut from an `.lfs` by `muf echo-window` -- is read by name by `run`, `plot` and `info`, over the range it kept; v2 products may carry the same `echo_window` group ([`docs/echo-window.md`](docs/echo-window.md)). The window is chosen by the echo that stands out -- selection rule 2, which replaced `auto_gate` after rule 1 turned echo-less soundings into undecimated windows of the whole band -- and since #37 a chirpsounder2 station cuts it itself: `chirp-echo-window.service` runs over the staging folder just before every NAS copy, so with `save_raw_voltage = true` only the ~1.6 MB windowed product crosses the network rather than the 78 MB voltage. A product with nothing to keep keeps its `z`; a cut that does not verify keeps its `z` and fails the run. `docs/echo-window.md` §3.7 and §4 are the spec.
 
 `--input-format {lfs,chirp2,digisonde}` overrides that, for a file that was
 renamed. It is separate from `run`'s `--format {csv,parquet}`, which is the
@@ -1658,20 +1658,37 @@ muf/                    the pipeline
   carriers.py           rejecting narrow features with no trace around them
   render.py, cli.py
 services/
-  agent/                runs ON the station: health push, control, logs
+  agent/                runs ON the station: health push, control, logs,
+                        live feed, the echo-window cut, the ionozond schedule
     health.py           the metrics; unknown is never zero, see below
+    live.py             the live view's feed: capture columns and STATUS lines
+    echo.py             cut the echo window into each product, then drop `z`
+    ionozond.py, qsettings.py, schedulecheck.py
+                        read and edit the console's own files, regenerate
+                        chirp_config.py, apply and vet a schedule change
+    summary.py, backfill.py
+                        the strips' SNR/PDP summaries, and their history
+                        rebuilt from products the station already holds
     control.py          systemctl verbs and ini edits, allow-listed
     systemd/            unit files -- the migration off dombas.sh
   api/                  runs on the server: health ingest, read API, web UI
+    live.py, live_routes.py
+                        the SSE hub the live view watches
     watch.py            incremental ingest on a timer
     sources.py          emitters heard -> candidates for a schedule
     acquisition.py      which slot is being sounded, and when the next is due
+    sounder.py          the ionozond schedule document, and its checks
     sao.py              one scaling per sounding: XML, panel, interactive plot
     net.py              can this host still reach the solar index servers?
+    locale/             the pages' strings, English and Russian
     static/             plotly.min.js, vendored -- the one asset, no build step
+  publish/              the public results page: a static snapshot
+    publisher.py        allow-listed circuits, read-only db, atomic writes
+    site/               the page itself -- html, js, css; no build step
+  prediction/           forecasts from fitted models -- see docs/prediction.md
 patches/                diffs against the pinned chirpsounder2 clone
-deploy/                 Docker Compose test rig -- see deploy/README.md
-tests/                  854 tests; `python -m pytest tests -q`
+deploy/                 Compose rig, the hub and the public host -- deploy/README.md
+tests/                  2581 tests; `python -m pytest tests -q`
 ```
 
 Tests that need real recordings find them via `MUF_TEST_DATA`, and skip when it
@@ -1741,7 +1758,63 @@ server has it.
 
 It is deliberately throwaway: SQLite, plain HTTP, no migrations. See
 `architecture.md` §6 M2.5 for what it settled and what M3/M4 should not
-inherit from it.
+inherit from it. On the work server the same stack runs from prebuilt
+images (`deploy/docker-compose.hub.yml`), where the public page, the
+prediction workers and watchtower are opt-in compose profiles.
+
+### The live view
+
+`/ui/live` is what the ionozond Qt console used to show over AnyDesk, in the
+browser: the sounding being captured column by column, the last complete
+ionogram beside it, and the station's SNR and power-delay-profile strips.
+The station still never listens — `services/agent/live.py` follows the
+growing `.lfs` and the sounder's STATUS lines and posts what it sees every
+two seconds, under its own low-priority unit (`chirp-live.service`) so a
+capture that fails to parse cannot stop the health push. Watching is
+Server-Sent Events rather than a WebSocket: the stream only flows one way,
+and it survives the proxies and SSH tunnels this console is reached through.
+The feed is also the fast half of the command path — a start or stop pressed
+here lands within one interval, while the station still only ever asks.
+
+A column is one FFT window of the capture, formed exactly as `muf.spectro`
+forms it, gated to the ranges an echo on the path can occupy and folded to
+at most 400 rows: one byte per row at a quarter of a dB per count, at most
+a kilobyte a second.
+
+What the page grew, in the order it grew:
+
+- **The strips keep three days and scroll back.** A summary of each product
+  is written to a `live_summary` table and the station backfills the
+  summaries of products it already holds, so a server restart no longer
+  empties the history. The wheel zooms a transmitter's two strips together
+  from three days down to six hours; archived products are gated to their
+  path before they are folded, so history is as sharp as live.
+- **The ionogram steps through the archive**, in the live view's own grid
+  and units, so a past sounding reads exactly like the live one. Both
+  ionograms carry a height axis on the right — group path as the mirror
+  height of one hop over a spherical or a flat Earth — and the header's
+  theme label steps through six themes, kept in the browser, because the
+  light theme drew the rasters on near-white where weak blue and cyan
+  echoes vanish.
+- **The schedule panel is the Qt console's retirement.** The transmitters
+  with their bands and chirp times, the next six captures, who last changed
+  the schedule and when; editable with the station capability, each edit
+  checked by `/ionozond/check`, Apply queueing `set_ionozond` and asking
+  once more when the checks warn. The agent applies a change through the
+  console's own files — QSettings read and written as bytes,
+  `chirp_config.py` regenerated as the console does — and reports the
+  schedule in force, with two fingerprints deciding what counts as a
+  change. *Add from verified* seeds a switched-off group from
+  `/ui/sources`' verified transmitters. The station steps are in
+  `deploy/README.md`; the designs are
+  `docs/2026-10-16-ionozond-parameters-and-schedule.md` and
+  `docs/2026-10-17-ionozond-retiring-the-console.md`.
+- **A warning when echoes sit outside the path's delays.** The live rows
+  cover only the delays the path allows, so an echo the radio clock has
+  moved out of them simply vanishes. After each capture the agent sends
+  where `muf.echo_window.echo_gate` finds the echo over the whole range,
+  and the page warns under the transmitter's header when that sounding's
+  echo lies outside its window.
 
 ### On the acquisition laptop
 
@@ -1779,6 +1852,7 @@ tell" need different responses.
 - **"Files newer than me" only convicts *my* clock if my clock wrote them.** On a network archive `system_clock_s` reports the NTP state instead and carries the skew as a note — it once accused a host sitting 47 ms from its NTP server, and worse, returned before the NTP check ran at all.
 - **The digisonde receivers are watched but cannot fail the station.** Each `chirp-digisonde@…` instance is an oblique reception of a *remote vertical* sounder — an extra circuit, and one this station is normally better off without: they are ringbuffer consumers at 25 MS/s and the cause of the 45 % sample loss, which is why none should be enabled here at all. Stopped is therefore the *correct* state, and painting four permanent reds for it is how a status column stops being read. Their state is still reported, as `?` rather than `FAIL`, because "Dourbes has been down since Tuesday" is worth reading and "not running" and "wrong" are different claims. `optional_units` in `~/agent.json` is the list, matched as a substring of the unit name; set it to `[]` on a receiver that really does depend on one. The exemption is a safety net for a station whose unit list has not been cleaned up yet — it makes an enabled receiver quiet, not cheap.
 - `epoch_offset_s` **needs** `par-*.h5`, which only search mode produces. It is the only external check on the recorder's clock — it caught a 0.956 s offset that displaced every echo by 286,000 km while every product stayed self-consistent — so consider leaving `find_timings.py` running even in scheduled mode, and keep `chirp-timings.service` in `units` to match.
+- **An ionozond station has no timing solve, so its clock check comes from where its echoes begin.** `health.echo_offset` reads the six newest `lfm_ionogram-*.h5` of the last six hours under `live_dir`, asks `muf.echo_window.echo_gate` where each echo begins, and reports the median of that less the path's ground line as `epoch_offset_s`. The window is one-sided on purpose: a reflected path is always longer than the ground line, so an arrival *earlier* than it can only be a slow clock, and half a millisecond is the limit. On the real archive 17 October read +0.5 ms and passed; the 18th, after a restart, +2.14 ms and failed — where before this metric a station's echoes could wander milliseconds while its health stayed green.
 
 ### The picture the station sends of itself
 
@@ -2110,6 +2184,33 @@ and the residual panel shows the shape that number hides: IRI runs low through
 the morning rise and high after it, which is a diurnal disagreement rather than
 a scale one.
 
+### The public page
+
+Everything above lives behind the console. `services/publish/publisher.py`
+writes a public results page — ionograms, MUF/LOF series and the live
+forecast for an allow-list of circuits — as **a folder of static files**
+that the host's own nginx serves. It is deliberately not the api behind a
+proxy: the api's reads are open in every deployment so far, and its read
+router also answers `/principals`, model artifacts and station health. A
+static snapshot exposes exactly what the publisher writes, and it keeps
+serving the last good picture while the api, the archive mount or the
+publish job is down.
+
+The allow-list is applied twice — only circuits named in `PUBLISH_CIRCUITS`
+appear, and a muted one is dropped even then — and the JSON fields are
+chosen so no sounding ids, file paths or model internals leave the server.
+The database is opened read-only, every file is written to a temporary name
+and renamed into place, and each image is named for its sounding's own time
+and never rewritten, which makes an existing file its own render cache and
+lets the web server mark `img/` immutable.
+
+On the work server it is a compose profile (`--profile publish`); the
+folder, the vhost and TLS are `deploy/README.md` §2c. The public host runs
+neither the api nor the publisher: it reaches the hub only through the VPN
+and pulls the published folder with rsync every five minutes, the hub's
+host key pinned, so the api never leaves the private network —
+`deploy/README.md` §2d.
+
 ### Is this box still keeping up?
 
 `tools/benchmark.py` measures where the time goes and, more usefully, whether
@@ -2298,3 +2399,46 @@ resolution is set by the bandwidth swept during one window (14.65 km here) and
 equals the *unpadded* bin spacing. The old `-z 10` therefore cost 11x memory and
 FFT time for finer sampling of the same information. The default is now 0, and
 sub-bin precision comes from parabolic interpolation of the peak instead.
+
+---
+
+## Changes in develop since 2026-10-15
+
+What merged after the README last moved, in the order the work landed.
+
+- **The live view** (`/ui/live`, #1) — the sounding as it is captured,
+  pushed from the station over Server-Sent Events; Start and Stop queue
+  commands that land within one interval. It then kept three days of strip
+  history and learned to scroll back (#12), showed each schedule group's
+  chirp time beside its band (#14), stepped through the archive (#17),
+  gained a height axis and six themes (#19, #21), a 6 h–3 d wheel zoom on
+  the strips (#21), and a warning when a sounding's echo sits outside the
+  delays its path allows — the live rows cover only those, so a clock error
+  that moves an echo out of them simply hides it (#30).
+- **The ionozond schedule on the web** (#4, #8) — the agent reads and edits
+  the Qt console's own QSettings files, regenerates `chirp_config.py` as the
+  console does, applies a schedule change and reports the one in force; the
+  server vets every edit (`/ionozond/check`) and journals station changes.
+  This is the console's retirement, station by station.
+- **A public results page** (#24, #33) — `services/publish/` writes an
+  allow-listed static snapshot that the host's nginx serves; the api is
+  never exposed by it. The public host pulls the folder over the VPN every
+  five minutes, so the work server stays on its private network.
+- **The echo window chose an echo that stands out** (#26) — selection rule
+  2 replaced `auto_gate`, which had turned echo-less soundings into
+  undecimated windows of the whole band (3.2 GB of samples where
+  geometry-sized windows take 0.4 GB) and cut 22 real echoes; the format
+  stayed v1, with `edge_sigma` and `trace_at_edge` added. Then the station
+  began cutting its own products before the NAS copy (#37), so with
+  `save_raw_voltage = true` only the ~1.6 MB window crosses the network
+  instead of the 78 MB voltage, and an `.lfs` window began re-deriving at
+  its capture's gate. The spec is `docs/echo-window.md`.
+- **Station health learned an ionozond clock check** (#35) —
+  `epoch_offset_s` measured from where the echoes begin, on stations with
+  no timing solve; it caught +2.14 ms on a station whose health had stayed
+  green while its echoes wandered.
+- **Names and edges** — the two Yoshkar-Ola receivers, apart only by case,
+  became `yoshkar-ola-1` and `yoshkar-ola-2` as agents, with
+  `tools/rename_station.py` moving every row the old name keyed (#27); h5
+  names are read as UTF-8, so "Sodankylä" no longer lands as U+FFFD (#9);
+  and the live SILSO index test skips when the host is unreachable (#29).
