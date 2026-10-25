@@ -802,6 +802,45 @@ def test_a_future_dated_file_is_ingested_not_withheld_forever(conn, tmp_path, ma
          "held_back": 0, "loaded": 1, "skipped": 0})
 
 
+def test_a_file_stamped_in_the_tick_of_the_scan_is_not_held_back(conn, tmp_path,
+                                                                 make_chirp_h5):
+    """Windows, 2026-10-25: a full run offered `synth.lfs` but not the chirp
+    product written just before the scan (#43).
+
+    Python 3.12 reads `time.time()` from the same coarse tick NTFS stamps files
+    with, and the two round one instant to floats differently, so a file closed
+    in the scan's own tick came out one ulp younger than zero -- below
+    ``min_age_s=0`` too. Inside the future tolerance that is clock noise.
+    """
+    import math
+
+    import numpy as np
+
+    from services.api import watch
+
+    chirp = make_chirp_h5(np.full((4, 64), 100.0))
+    new, *_ = watch.find_new([tmp_path], conn, ("algo",), min_age_s=0,
+                             now=math.nextafter(chirp.stat().st_mtime, -math.inf))
+    assert [p.name for p in new] == [chirp.name], \
+        "a file stamped one ulp after the scan's clock was held back as fresh"
+
+
+def test_a_file_stamped_just_ahead_of_the_scan_still_waits_out_the_minimum_age(
+        conn, tmp_path, make_chirp_h5):
+    """Reading a stamp inside the tolerance as age zero must not let it skip
+    `min_age_s`: on a share whose clock runs a little fast, the file stamped
+    a moment ago is exactly the one still being written."""
+    import numpy as np
+
+    from services.api import watch
+
+    chirp = make_chirp_h5(np.full((4, 64), 100.0))
+    new, *_ = watch.find_new(
+        [tmp_path], conn, ("algo",), min_age_s=41,
+        now=chirp.stat().st_mtime - watch.FUTURE_MTIME_TOLERANCE_S / 3)
+    assert new == [], "a file stamped just ahead of the scan skipped the minimum age"
+
+
 def test_muted_files_do_not_eat_the_batch(conn, tmp_path, make_chirp_h5):
     """Yoshkar-Ola, 2026-09-27: "200 new, 1702 held for the next pass, loaded 0".
 
