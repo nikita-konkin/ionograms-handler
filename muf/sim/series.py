@@ -10,7 +10,10 @@ Each sounding's state is observed once and kept in ``states/``, keyed by the
 file, the code and the parameters it was observed with; a key that no longer
 matches is observed again. The truth of a pair is its sounding's own state
 when the two soundings share a range axis, as every ``.lfs`` of a circuit
-does, and is observed on the forecast's axis otherwise.
+does, and is observed on the forecast's axis otherwise. Whether the
+receiver's clock broke the pair is read off the two soundings' own states
+(:mod:`muf.sim.clock`), and goes in its line; ``muf sim summary`` sets those
+pairs apart.
 
 Every k-th sounding also runs the closed loop's level 1 on its own state
 (:func:`muf.sim.check.closed_loop`): how far ``observe`` itself is off, the
@@ -42,7 +45,7 @@ import numpy as np
 
 from .. import geometry, loader, spectro
 from ..reference import chapman
-from . import check, link, observe
+from . import check, clock, link, observe
 from . import forecast as fc
 from .state import ChannelState
 
@@ -336,6 +339,8 @@ def _score_job(job: dict) -> dict[str, list]:
                                        synthetic=made[:recovery])
             rows["recovery"] = _recovery_rows(report, origin, b.name)
         score.pair.update(method=params["method"], zenith_deg=zenith_deg(predicted),
+                          clock=clock.verdict(origin, ChannelState.load(
+                              _files(cache, b)[0])),
                           seconds=round(time.perf_counter() - start, 2))
         rows.update(modes=score.modes, carriers=score.carriers, pairs=[score.pair])
     except Exception as exc:

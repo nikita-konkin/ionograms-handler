@@ -226,9 +226,11 @@ def view(conn, tx: str, rx: str) -> dict | None:
     waiting; each lead's latest score, with its two soundings' ids for their
     ionograms; the figures (:func:`muf.sim.live.figures`) of the last hour
     and day before the newest sounding, not before the clock, so a circuit
-    whose files come late reads the same; and the latest events as lines.
+    whose files come late reads the same; and the latest events as lines,
+    each marked when the receiver's clock broke its pair. The figures leave
+    those pairs out; a latest score's own figures keep it.
     """
-    from muf.sim import live
+    from muf.sim import clock, live
 
     held = db.one(conn, "SELECT taken_at, ledger FROM live_circuit "
                         "WHERE tx = ? AND rx = ?", (tx, rx))
@@ -244,7 +246,7 @@ def view(conn, tx: str, rx: str) -> dict | None:
         lead = float(e["lead_s"])
         latest.setdefault(lead, {"event": e, "sounding_id": r["sounding_id"],
                                  "source_id": r["source_id"],
-                                 "figures": live.figures([e])[lead]})
+                                 "figures": live.figures([e], suspect=True)[lead]})
     pending = []
     for p in ledger["pending"]:
         state = p["forecast"]
@@ -263,7 +265,8 @@ def view(conn, tx: str, rx: str) -> dict | None:
             "leads": sorted({p["lead_s"] for p in pending} | set(latest)),
             "figures": {"hour": live.figures(bodies, since=now - HOUR_S),
                         "day": live.figures(bodies)},
-            "recent": [live.format_event(json.loads(r["body"])) for r in recent]}
+            "recent": [{"line": live.format_event(e), "suspect": clock.suspect(e)}
+                       for e in (json.loads(r["body"]) for r in recent)]}
 
 
 def _prune(cache: Path) -> None:

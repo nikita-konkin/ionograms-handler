@@ -142,6 +142,8 @@ MESSAGES: dict[str, str] = {
     "sim_live.col.truth": "Truth",
     "sim_live.col.error": "Error",
     "sim_live.bound": "a bound",
+    "sim_live.clock": "clock-suspect",
+    "sim_live.clock_why": "set apart from the running figures: {why}",
     "sim_live.modes": "modes: {matched} matched, {missed} missed, {false} false",
     "sim_live.delay": "delay",
     "sim_live.img.forecast": "Forecast: the {at} sounding",
@@ -151,12 +153,14 @@ MESSAGES: dict[str, str] = {
         "MUF and LOF: mean |error| over the pairs censored on neither side. "
         "Delay and C/N0: RMS over the matched modes, each weighed by the band it "
         "shares with its pair. Mode top: median |error|. Modes: matched, missed, "
-        "false.",
+        "false. Set apart: the pairs across a jump of the receiver's clock, left "
+        "out of the rest.",
     "sim_live.col.lead": "Lead",
     "sim_live.col.span": "Over",
     "sim_live.col.delay": "Delay",
     "sim_live.col.top": "Mode top",
     "sim_live.col.modes": "Modes",
+    "sim_live.col.apart": "Set apart",
     "sim_live.span.hour": "last hour",
     "sim_live.span.day": "last 24 h",
     "sim_live.nothing": "nothing scored",

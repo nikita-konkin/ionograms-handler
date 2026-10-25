@@ -140,6 +140,12 @@ def test_each_pair_knows_where_the_sun_was(tmp_path):
     assert 0.0 <= pair["zenith_deg"] <= 180.0
 
 
+def test_a_pair_on_a_steady_clock_is_not_set_apart(tmp_path):
+    paths = _soundings(tmp_path / "data", [T0, T0 + 300.0])
+    pair = _rows(_run(paths, tmp_path / "run"), "pairs")[0]
+    assert pair["clock"]["suspect"] is False, "a pair on a steady clock was set apart"
+
+
 # --- resuming (T-14) ----------------------------------------------------------
 
 def test_a_resume_recomputes_nothing(tmp_path):

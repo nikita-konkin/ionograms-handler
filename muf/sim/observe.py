@@ -327,7 +327,9 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
         spread = float(doppler)
         doppler_origin = Provenance(PRIOR, f"given: {doppler} Hz")
 
+    from .. import echo_window
     from ..pipeline import Options, band_edge_mhz, circuit_ceiling, lof_edge_mhz
+    offset = echo_window.echo_offset_s(ion)
     ion, _rejected = interference.apply(ion, Options())
     result = extractors.run(ion, methods=(method,))[method]
 
@@ -352,6 +354,9 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
                                                    circuit_ceiling(header, Options()))
     state.metrics["lof_edge_mhz"] = lof_edge_mhz(ion.cal)
     state.metrics["sweep_complete"] = float(ion.cal.sweep_complete)
+    # Where the echo begins against the ground line, as the station reads its
+    # clock: a pair whose echo jumped is set apart (muf.sim.clock).
+    state.metrics["echo_offset_us"] = None if offset is None else offset * 1e6
     if not result.ok:
         state.notes.append(f"{method} found no trace"
                            + (f": {result.error}" if result.error else ""))
