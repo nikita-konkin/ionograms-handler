@@ -20,7 +20,9 @@ Each turn runs in a process of its own (:mod:`services.api.apart`): a
 sounding is read and its state fitted, seconds of numerics. The states are
 kept :data:`KEEP_S` in :func:`folder`, under the image's build, since a
 forecast is scored against a later sounding on its own range; the events
-are kept ``LIVE_KEEP_DAYS`` days (30).
+are kept ``LIVE_KEEP_DAYS`` days (30). :func:`events` reads them out, each
+with its forecast and truth side by side, for a copy that outlasts them
+(``tools/pull_live_events.py``).
 
 The scans set the pace. At the default of a scan every 15 minutes, a
 five-minute circuit's forecasts are issued and scored three soundings at a
@@ -57,6 +59,9 @@ HOUR_S, DAY_S = 3600.0, 86400.0
 
 #: Events the page lists.
 RECENT = 40
+
+#: Events one export answers with by default, and at most.
+PAGE, PAGE_MAX = 1000, 10_000
 
 
 def interval() -> float:
@@ -113,6 +118,16 @@ def _store(conn, tx: str, rx: str, sounding: dict, events: list[dict]) -> None:
             (tx, rx, epoch, e["event"], e.get("lead_s"), sounding["id"],
              None if source is None else source["id"],
              json.dumps(e, allow_nan=False)))
+
+
+def events(conn, tx: str, rx: str, *, after: int = 0, limit: int = PAGE) -> list[dict]:
+    """The circuit's stored events after event ``after``, oldest first, at most
+    ``limit``: each as :mod:`muf.sim.live` wrote it, with the hub's ``id``,
+    ``tx`` and ``rx`` added."""
+    return [{**json.loads(r["body"]), "id": r["id"], "tx": tx, "rx": rx}
+            for r in db.rows(conn, "SELECT id, body FROM live_event "
+                                   "WHERE tx = ? AND rx = ? AND id > ? "
+                                   "ORDER BY id LIMIT ?", (tx, rx, after, limit))]
 
 
 def circuits(conn) -> list[dict]:
