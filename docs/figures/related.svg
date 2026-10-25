@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 728" width="680" height="728" role="img" aria-label="HF channel simulators compared">
+  <title>HF channel simulators compared</title>
+
+  <style>
+    svg { --bg: #FFFFFF; --ink: #2C2C2A; --muted: #5F5E5A; --line: #888780;
+          --teal-fill: #E1F5EE; --teal-stroke: #0F6E56; --teal-text: #085041;
+          --purple-fill: #EEEDFE; --purple-stroke: #534AB7; --purple-text: #3C3489;
+          --gray-fill: #F1EFE8; --gray-stroke: #5F5E5A; --gray-text: #444441; }
+    @media (prefers-color-scheme: dark) {
+      svg { --bg: #1F1F1E; --ink: #E8E6E0; --muted: #B4B2A9; --line: #888780;
+            --teal-fill: #085041; --teal-stroke: #5DCAA5; --teal-text: #9FE1CB;
+            --purple-fill: #3C3489; --purple-stroke: #AFA9EC; --purple-text: #CECBF6;
+            --gray-fill: #444441; --gray-stroke: #B4B2A9; --gray-text: #D3D1C7; }
+    }
+    .bg { fill: var(--bg); }
+    text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           fill: var(--ink); }
+    .title { font-size: 14px; font-weight: 600; }
+    .sub { font-size: 12px; fill: var(--muted); }
+    .head { font-size: 13px; font-weight: 600; fill: var(--muted); }
+    .lane { font-size: 13px; font-weight: 600; }
+    .teal rect { fill: var(--teal-fill); stroke: var(--teal-stroke); }
+    .teal .title { fill: var(--teal-text); }
+    .purple rect { fill: var(--purple-fill); stroke: var(--purple-stroke); }
+    .purple .title { fill: var(--purple-text); }
+    .gray rect { fill: var(--gray-fill); stroke: var(--gray-stroke); }
+    .gray .title { fill: var(--gray-text); }
+    .plan rect { fill: none; stroke: var(--gray-stroke); stroke-dasharray: 5 4; }
+    .plan .title { fill: var(--muted); }
+    .arrow { stroke: var(--line); stroke-width: 1.5; fill: none;
+             marker-end: url(#head); }
+    .loop { stroke: var(--teal-stroke); stroke-width: 1.5; fill: none;
+            stroke-dasharray: 6 4; marker-end: url(#head-loop); }
+    .dashed { stroke-dasharray: 5 4; }
+    #head path { fill: var(--line); }
+    #head-loop path { fill: var(--teal-stroke); }
+  </style>
+
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z"/></marker>
+    <marker id="head-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="680" height="728"/>
+  <text class="head" x="103.0" y="40" text-anchor="middle">Parameters from</text>
+  <text class="head" x="261.0" y="40" text-anchor="middle">Channel described as</text>
+  <text class="head" x="419.0" y="40" text-anchor="middle">Synthesis</text>
+  <text class="head" x="577.0" y="40" text-anchor="middle">Verification</text>
+  <text class="lane" x="40" y="80">muf.sim (this work)</text>
+  <g class="teal">
+    <rect x="40" y="90" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="103.0" y="115.0" text-anchor="middle">Chirp sounding</text>
+    <text class="sub" x="103.0" y="133.0" text-anchor="middle">the same circuit</text>
+  </g>
+  <path class="arrow" d="M166 118 L196 118"/>
+  <g class="teal">
+    <rect x="198" y="90" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="261.0" y="115.0" text-anchor="middle">Mode curves</text>
+    <text class="sub" x="261.0" y="133.0" text-anchor="middle">τ(f), C/N₀(f)</text>
+  </g>
+  <path class="arrow" d="M324 118 L354 118"/>
+  <g class="teal">
+    <rect x="356" y="90" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="419.0" y="115.0" text-anchor="middle">Sounding, signal</text>
+    <text class="sub" x="419.0" y="133.0" text-anchor="middle">full dispersion</text>
+  </g>
+  <path class="arrow" d="M482 118 L512 118"/>
+  <g class="teal">
+    <rect x="514" y="90" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="577.0" y="115.0" text-anchor="middle">Through muf</text>
+    <text class="sub" x="577.0" y="133.0" text-anchor="middle">closed loop</text>
+  </g>
+  <text class="lane" x="40" y="184">Watterson, ITU-R F.1487</text>
+  <g class="gray">
+    <rect x="40" y="194" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="103.0" y="219.0" text-anchor="middle">A table</text>
+    <text class="sub" x="103.0" y="237.0" text-anchor="middle">path conditions</text>
+  </g>
+  <path class="arrow" d="M166 222 L196 222"/>
+  <g class="gray">
+    <rect x="198" y="194" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="261.0" y="219.0" text-anchor="middle">2 paths</text>
+    <text class="sub" x="261.0" y="237.0" text-anchor="middle">no dispersion</text>
+  </g>
+  <path class="arrow" d="M324 222 L354 222"/>
+  <g class="gray">
+    <rect x="356" y="194" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="419.0" y="219.0" text-anchor="middle">Two taps</text>
+    <text class="sub" x="419.0" y="237.0" text-anchor="middle">Gaussian Doppler</text>
+  </g>
+  <path class="arrow" d="M482 222 L512 222"/>
+  <g class="gray">
+    <rect x="514" y="194" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="577.0" y="219.0" text-anchor="middle">None</text>
+    <text class="sub" x="577.0" y="237.0" text-anchor="middle">band ≤ 12 kHz</text>
+  </g>
+  <text class="lane" x="40" y="288">Vogler–Hoffmeyer, ITS (1988–1997)</text>
+  <g class="purple">
+    <rect x="40" y="298" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="103.0" y="323.0" text-anchor="middle">NRL sounder</text>
+    <text class="sub" x="103.0" y="341.0" text-anchor="middle">and ionograms</text>
+  </g>
+  <path class="arrow" d="M166 326 L196 326"/>
+  <g class="gray">
+    <rect x="198" y="298" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="261.0" y="323.0" text-anchor="middle">≤ 3 modes</text>
+    <text class="sub" x="261.0" y="341.0" text-anchor="middle">sech², slant</text>
+  </g>
+  <path class="arrow" d="M324 326 L354 326"/>
+  <g class="gray">
+    <rect x="356" y="298" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="419.0" y="323.0" text-anchor="middle">H(t, f)</text>
+    <text class="sub" x="419.0" y="341.0" text-anchor="middle">1 MHz, hardware</text>
+  </g>
+  <path class="arrow" d="M482 326 L512 326"/>
+  <g class="gray">
+    <rect x="514" y="298" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="577.0" y="323.0" text-anchor="middle">Scattering</text>
+    <text class="sub" x="577.0" y="341.0" text-anchor="middle">vs measurements</text>
+  </g>
+  <text class="lane" x="40" y="392">Physical: Gherm–Zernov, HiCIRF, Lv 2022, ISTP</text>
+  <g class="gray">
+    <rect x="40" y="402" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="103.0" y="427.0" text-anchor="middle">Medium model</text>
+    <text class="sub" x="103.0" y="445.0" text-anchor="middle">IRI, fluctuations</text>
+  </g>
+  <path class="arrow" d="M166 430 L196 430"/>
+  <g class="gray">
+    <rect x="198" y="402" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="261.0" y="427.0" text-anchor="middle">Rays and Rytov</text>
+    <text class="sub" x="261.0" y="445.0" text-anchor="middle">o and x modes</text>
+  </g>
+  <path class="arrow" d="M324 430 L354 430"/>
+  <g class="gray">
+    <rect x="356" y="402" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="419.0" y="427.0" text-anchor="middle">Realisations</text>
+    <text class="sub" x="419.0" y="445.0" text-anchor="middle">E(t), S(τ, ν)</text>
+  </g>
+  <path class="arrow" d="M482 430 L512 430"/>
+  <g class="gray">
+    <rect x="514" y="402" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="577.0" y="427.0" text-anchor="middle">Comparison</text>
+    <text class="sub" x="577.0" y="445.0" text-anchor="middle">with sounding</text>
+  </g>
+  <text class="lane" x="40" y="496">DAMSON, Warrington</text>
+  <g class="purple">
+    <rect x="40" y="506" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="103.0" y="531.0" text-anchor="middle">DAMSON sounder</text>
+    <text class="sub" x="103.0" y="549.0" text-anchor="middle">S(τ, ν), 3–12 kHz</text>
+  </g>
+  <path class="arrow" d="M166 534 L196 534"/>
+  <g class="gray">
+    <rect x="198" y="506" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="261.0" y="531.0" text-anchor="middle">Spreads</text>
+    <text class="sub" x="261.0" y="549.0" text-anchor="middle">τ and Doppler</text>
+  </g>
+  <path class="arrow" d="M324 534 L354 534"/>
+  <g class="gray">
+    <rect x="356" y="506" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="419.0" y="531.0" text-anchor="middle">Watterson+</text>
+    <text class="sub" x="419.0" y="549.0" text-anchor="middle">Lorentzian Doppler</text>
+  </g>
+  <path class="arrow" d="M482 534 L512 534"/>
+  <g class="gray">
+    <rect x="514" y="506" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="577.0" y="531.0" text-anchor="middle">Modems</text>
+    <text class="sub" x="577.0" y="549.0" text-anchor="middle">availability</text>
+  </g>
+  <text class="lane" x="40" y="600">Volgatech school: Ivanov, Ryabova</text>
+  <g class="purple">
+    <rect x="40" y="610" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="103.0" y="635.0" text-anchor="middle">Chirp sounder</text>
+    <text class="sub" x="103.0" y="653.0" text-anchor="middle">GDD and IRI</text>
+  </g>
+  <path class="arrow" d="M166 638 L196 638"/>
+  <g class="gray">
+    <rect x="198" y="610" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="261.0" y="635.0" text-anchor="middle">Dispersion</text>
+    <text class="sub" x="261.0" y="653.0" text-anchor="middle">trend and noise</text>
+  </g>
+  <path class="arrow" d="M324 638 L354 638"/>
+  <g class="gray">
+    <rect x="356" y="610" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="419.0" y="635.0" text-anchor="middle">Channel IR</text>
+    <text class="sub" x="419.0" y="653.0" text-anchor="middle">chirp, losses</text>
+  </g>
+  <path class="arrow" d="M482 638 L512 638"/>
+  <g class="gray">
+    <rect x="514" y="610" width="126" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="577.0" y="635.0" text-anchor="middle">Calculation</text>
+    <text class="sub" x="577.0" y="653.0" text-anchor="middle">and correction</text>
+  </g>
+  <g class="teal"><rect x="40.0" y="696" width="26" height="14" rx="3" stroke-width="1.5"/></g>
+  <text class="sub" x="74.0" y="707">muf.sim</text>
+  <g class="purple"><rect x="152.4" y="696" width="26" height="14" rx="3" stroke-width="1.5"/></g>
+  <text class="sub" x="186.4" y="707">parameters from measurements</text>
+  <g class="gray"><rect x="416.0" y="696" width="26" height="14" rx="3" stroke-width="1.5"/></g>
+  <text class="sub" x="450.0" y="707">a table or a medium model</text>
+</svg>

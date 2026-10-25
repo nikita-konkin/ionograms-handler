@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пульт имитатора</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --ink: #1f1e1b; --muted: #6b6a64; --line: #dcdad2;
+  --soft: #efede6; --accent: #0f6e56; --accent-soft: #d6efe7; --warn: #c2410c;
+  --warn-soft: #fde4d6; --ok: #0f6e56; --prior: #b7791f; --prior-soft: #fbeccf;
+  --model: #6b6a64; --model-soft: #ebeae5; --band: rgba(15, 110, 86, 0.10);
+  --m0: #ffffff; --m1: #f6a5c0; --m2: #ffd166; --m3: #9ad1ff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 10px rgba(0, 0, 0, 0.04);
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141412; --panel: #1d1d1a; --ink: #ecebe6; --muted: #a09e96; --line: #33322e;
+    --soft: #262622; --accent: #5ccfa8; --accent-soft: #173a30; --warn: #fb8c5a;
+    --warn-soft: #3d2216; --ok: #5ccfa8; --prior: #f2b84b; --prior-soft: #3a2d12;
+    --model: #a09e96; --model-soft: #2b2b27; --band: rgba(92, 207, 168, 0.12);
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141412; --panel: #1d1d1a; --ink: #ecebe6; --muted: #a09e96; --line: #33322e;
+  --soft: #262622; --accent: #5ccfa8; --accent-soft: #173a30; --warn: #fb8c5a;
+  --warn-soft: #3d2216; --ok: #5ccfa8; --prior: #f2b84b; --prior-soft: #3a2d12;
+  --model: #a09e96; --model-soft: #2b2b27; --band: rgba(92, 207, 168, 0.12);
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-size: 14px;
+       line-height: 1.45; }
+header { padding: 18px 24px 10px; display: flex; flex-wrap: wrap; gap: 12px 24px;
+         align-items: flex-end; justify-content: space-between; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+.sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; background: var(--soft);
+       border-radius: 8px; padding: 2px; border: 1px solid var(--line); }
+.seg button { white-space: nowrap; border: 0; background: transparent; color: var(--ink); padding: 5px 10px;
+              border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
+.seg button.on { background: var(--panel); box-shadow: var(--shadow); font-weight: 600; }
+main { padding: 4px 24px 32px; display: grid; gap: 16px; max-width: 1480px;
+       margin: 0 auto; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+        padding: 14px 16px; box-shadow: var(--shadow); min-width: 0; }
+.card h2 { font-size: 14px; margin: 0 0 2px; font-weight: 650; }
+.card .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+.row { display: grid; gap: 16px; }
+.row > * { min-width: 0; }
+.row.two { grid-template-columns: 1fr 1fr; }
+.row.three { grid-template-columns: 1.15fr 1fr 1fr; }
+.row.wide { grid-template-columns: 1.4fr 1fr; }
+@media (max-width: 1080px) {
+  .row.two, .row.three, .row.wide { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+}
+.pipe { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 900px) { .pipe { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.step { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+        background: var(--soft); position: relative; }
+.step .n { font-size: 11px; color: var(--muted); text-transform: uppercase;
+           letter-spacing: 0.04em; }
+.step .t { font-weight: 650; margin: 2px 0 4px; }
+.step .v { font-size: 12.5px; color: var(--muted); }
+.step .v b { color: var(--ink); font-weight: 600; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11.5px;
+         font-weight: 600; }
+.badge.ok { background: var(--accent-soft); color: var(--ok); }
+.badge.out { background: var(--warn-soft); color: var(--warn); }
+.badge.prior { background: var(--prior-soft); color: var(--prior); }
+.badge.model { background: var(--model-soft); color: var(--model); }
+.ion-head { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+            flex-wrap: wrap; margin-bottom: 6px; }
+.ion-head .lbl { font-weight: 600; font-size: 13px; }
+.ion { position: relative; width: 100%; }
+.ion canvas { width: 100%; height: 300px; display: block; border-radius: 6px;
+              cursor: crosshair; }
+.tip { position: absolute; pointer-events: none; background: var(--panel);
+       border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px;
+       font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; display: none;
+       z-index: 2; }
+.note { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 18px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.chk { display: inline-flex; gap: 5px; align-items: center; font-size: 13px;
+       color: var(--muted); cursor: pointer; user-select: none; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { white-space: nowrap; border: 1px solid var(--line); background: var(--soft); color: var(--ink);
+        border-radius: 999px; padding: 3px 10px 3px 8px; font: inherit; font-size: 12.5px;
+        cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.chip i { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+          border: 1px solid rgba(0, 0, 0, 0.25); }
+.cbar { display: flex; align-items: center; gap: 6px; font-size: 11.5px;
+        color: var(--muted); }
+.cbar canvas { width: 140px; height: 9px; border-radius: 3px; }
+svg { width: 100%; display: block; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; }
+svg .ink { fill: var(--ink); }
+svg .axis { stroke: var(--line); }
+svg .grid { stroke: var(--line); stroke-dasharray: 2 3; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line);
+         vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td .small { color: var(--muted); font-size: 12px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px;
+          color: var(--muted); margin-top: 6px; }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 3px;
+                       margin-right: 5px; vertical-align: middle;
+                       background: var(--c, var(--ink)); }
+.legend span.dash::before { background: repeating-linear-gradient(90deg, var(--c) 0 4px,
+                            transparent 4px 7px); }
+.legend span.dot::before { width: 7px; height: 7px; border-radius: 50%; }
+.legend span.box::before { height: 9px; opacity: 0.6; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12.5px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+footer { color: var(--muted); font-size: 12px; padding: 0 24px 28px; max-width: 1480px;
+         margin: 0 auto; }
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+       background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 data-t="title"></h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="controls">
+    <div class="seg" id="sessions"></div>
+    <div class="seg" id="lang"><button data-l="ru">RU</button><button data-l="en">EN</button></div>
+    <div class="seg" id="theme"><button data-th="light">☀</button><button data-th="dark">☾</button></div>
+  </div>
+</header>
+<main>
+  <section class="card">
+    <h2 data-t="pipe_h"></h2>
+    <p class="hint" data-t="pipe_hint"></p>
+    <div class="pipe" id="pipe"></div>
+  </section>
+
+  <section class="card">
+    <div class="ion-head">
+      <div>
+        <h2 data-t="ion_h"></h2>
+        <p class="hint" data-t="ion_hint" style="margin:0"></p>
+      </div>
+      <div class="toolbar">
+        <div class="chips" id="modechips"></div>
+      </div>
+    </div>
+    <div class="toolbar" style="margin:8px 0 10px; justify-content: space-between">
+      <div class="toolbar">
+        <label class="chk"><input type="checkbox" id="ovTrace" checked><span data-t="ov_trace"></span></label>
+        <label class="chk"><input type="checkbox" id="ovMask"><span data-t="ov_mask"></span></label>
+        <div class="seg" id="smooth"><button data-s="0" data-t="m_rows"></button><button data-s="1" data-t="m_smooth"></button></div>
+      </div>
+      <div class="cbar"><span>−5</span><canvas id="cbar" width="140" height="9"></canvas><span data-t="db30"></span></div>
+    </div>
+    <div class="row two">
+      <div>
+        <div class="ion-head"><div class="seg"><button class="on" style="cursor:default" data-t="real"></button></div></div>
+        <div class="ion"><canvas id="ionL"></canvas><div class="tip" id="tipL"></div></div>
+        <div class="note" id="realname"></div>
+      </div>
+      <div>
+        <div class="ion-head"><div class="seg" id="right"></div></div>
+        <div class="ion"><canvas id="ionR"></canvas><div class="tip" id="tipR"></div></div>
+        <div class="note" id="rightnote"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="row three">
+    <section class="card">
+      <h2 id="cut_h"></h2>
+      <p class="hint" data-t="cut_hint"></p>
+      <svg id="cut" viewBox="0 0 520 250"></svg>
+      <div class="legend" id="cutlegend"></div>
+    </section>
+    <section class="card">
+      <h2 data-t="prof_h"></h2>
+      <p class="hint" data-t="prof_hint"></p>
+      <svg id="prof" viewBox="0 0 420 230"></svg>
+      <div class="legend"><span class="box" style="--c:var(--ink)" data-t="real"></span><span class="box" style="--c:var(--accent)" data-t="synth1"></span></div>
+      <dl class="kv" id="profkv" style="margin-top:8px"></dl>
+    </section>
+    <section class="card">
+      <h2 id="cn0_h"></h2>
+      <p class="hint" data-t="cn0_hint"></p>
+      <svg id="cn0" viewBox="0 0 420 250"></svg>
+      <div class="legend"><span class="dot" style="--c:var(--muted)" data-t="rows"></span><span style="--c:var(--ink)" data-t="real_s"></span><span class="dash" style="--c:var(--accent)" data-t="synth_s"></span></div>
+    </section>
+  </div>
+
+  <div class="row wide">
+    <section class="card">
+      <h2 data-t="verd_h"></h2>
+      <p class="hint" data-t="verd_hint"></p>
+      <svg id="verd" viewBox="0 0 760 300"></svg>
+    </section>
+    <section class="card">
+      <h2 data-t="corr_h"></h2>
+      <p class="hint" data-t="corr_hint"></p>
+      <div class="seg" id="corrmap" style="margin-bottom:8px"><button data-c="rows" data-t="m_rows"></button><button data-c="smoothed" data-t="m_smooth"></button></div>
+      <svg id="corr" viewBox="0 0 520 260"></svg>
+      <div class="legend"><span class="box" style="--c:var(--muted)" data-t="ceiling"></span><span class="box" style="--c:var(--accent)" data-t="real_syn"></span><span class="box" style="--c:var(--prior)" data-t="real_next"></span></div>
+    </section>
+  </div>
+
+  <div class="row wide">
+    <section class="card">
+      <h2 data-t="state_h"></h2>
+      <p class="hint" data-t="state_hint"></p>
+      <div style="overflow-x:auto"><table id="state"></table></div>
+    </section>
+    <section class="card">
+      <h2 id="chan_h"></h2>
+      <p class="hint" data-t="chan_hint"></p>
+      <div class="ion"><canvas id="chan" style="height:200px;cursor:default"></canvas></div>
+      <svg id="taps" viewBox="0 0 420 120" style="margin-top:8px"></svg>
+    </section>
+  </div>
+</main>
+<footer id="foot"></footer>
+
+<script>
+const DATA = /*DATA*/null;
+
+const T = {
+  ru: {
+    title: "Пульт имитатора КВ-канала",
+    sub: "вариант интерфейса · прототип на реальных сеансах, данные muf.sim.check",
+    pipe_h: "Цепочка", pipe_hint: "Реальный сеанс превращается в состояние канала, состояние — в синтетические сеансы, а те прочитываются тем же трактом muf. Проверки сравнивают одно с другим.",
+    s1: "Реальный сеанс", s2: "Состояние", s3: "Синтетика", s4: "Восстановление · уровень 1", s5: "Реализм · уровень 2",
+    modes_n: "мод", measured: "измерено", prior: "априори", model: "модель",
+    soundings: "сеансов", seeds: "зёрна", delay_rms: "СКО задержки", cn0_bias: "смещение C/N₀",
+    outside: "вне разброса", of: "из", verdicts: "вердиктов",
+    ion_h: "Ионограммы", ion_hint: "Слева реальный сеанс, справа — на выбор копия состояния, следующий реальный сеанс или разность. Щелчок ставит частоту для срезов ниже, стрелки ← → двигают её.",
+    ov_trace: "кривые состояния", ov_mask: "ячейки корреляции ±5 бинов",
+    m_rows: "построчно", m_smooth: "±0,2 МГц", db30: "30 дБ",
+    real: "реальный", synth1: "синтетика", synth: "копия", next: "следующий, +{m} мин", diff: "разность",
+    diffnote: "реальный − копия 1, дБ, ±15; где обе ниже 3 дБ — не закрашено", nextnote: "тот же канал через {m} мин",
+    synthnote: "одна из 12 копий; отличаются только замираниями и шумом",
+    cut_h: "Срез строки", cut_hint: "Мощность поперёк дальности на выбранной частоте. Полоса — ±2 бина, по которым считается C/N₀ выбранной моды.",
+    prof_h: "Профиль поперёк следа", prof_hint: "Средний профиль по чистым сильным строкам, от раннего к позднему, пик = 1. Шире точечного эха — значит, у моды есть ширина по задержке.",
+    width: "ширина над точкой", within: "внутри строки", centres: "центры строк", r1: "связь соседних строк",
+    spread_state: "разброс в состоянии", scatter_yes: "рассеяние (центры независимы)", scatter_no: "когерентно (центры связаны) — не рассеяние",
+    cn0_hint: "Каждая строка дрожит от замираний; в состояние идёт среднее по ±0,2 МГц.",
+    rows: "строки", real_s: "реальный, среднее", synth_s: "копия, среднее",
+    verd_h: "Вердикты уровня 2", verd_hint: "Насколько реальное значение отстоит от 12 копий, в их σ. Внутри ±3σ реальный сеанс неотличим от ещё одной копии; для корреляции опасно только «ниже».",
+    muf: "МНЧ", level: "разброс уровня", widthv: "ширина следа", r_rows: "r построчно", r_smooth: "r ±0,2 МГц", all: "все моды",
+    corr_h: "Корреляция ионограмм", corr_hint: "Пирсон по дБ в ±5 бинах вокруг следов. Потолок — копии между собой; эталон изменчивости — следующий сеанс.",
+    ceiling: "потолок: копии между собой", real_syn: "реальный ↔ копии", real_next: "реальный ↔ следующий",
+    state_h: "Состояние канала", state_hint: "Каждая величина помечена происхождением: измерена с сеанса, априорная или задана моделью.",
+    th_mode: "мода", th_band: "полоса, МГц", th_delay: "задержка, мкс", th_cn0: "C/N₀ макс", th_dopp: "доплер", th_ds: "разброс задержки", th_ox: "o/x",
+    chan_hint: "|H(f, t)| на одной несущей: что увидит сигнал в полосе 48 кГц за 30 с; снизу — пути канала.",
+    chan: "Канал на {fc} МГц", taps: "пути: задержка относительно первого, мкс",
+    cut: "Срез строки на {f} МГц", cn0: "C/N₀ моды {m} вдоль полосы",
+    freq: "частота, МГц", range: "дальность, км", time: "время, с", dfk: "смещение, кГц",
+    foot: "Прототип: рисует то, что считает <code>muf.sim.check</code>, и ничего не считает сам. Пересобрать: <code>python docs/ui/console.py SOUNDING.lfs …</code>. Материал диссертации, только локально.",
+    none: "нет", inside: "внутри", z: "z", vs_ceiling: "при потолке",
+    few: "копий {n} < 12", nodata: "не измерено",
+  },
+  en: {
+    title: "HF channel simulator console",
+    sub: "an interface variant · a prototype on real soundings, numbers from muf.sim.check",
+    pipe_h: "The chain", pipe_hint: "A real sounding becomes a channel state, the state becomes synthetic soundings, and those are read back through the same muf processing. The checks compare one with the other.",
+    s1: "Real sounding", s2: "State", s3: "Synthetic", s4: "Recovery · level 1", s5: "Realism · level 2",
+    modes_n: "modes", measured: "measured", prior: "prior", model: "model",
+    soundings: "soundings", seeds: "seeds", delay_rms: "delay RMS", cn0_bias: "C/N₀ bias",
+    outside: "outside", of: "of", verdicts: "verdicts",
+    ion_h: "Ionograms", ion_hint: "Left the real sounding; right a copy of the state, the next real sounding or the difference. Click to set the frequency for the cuts below; ← → move it.",
+    ov_trace: "state's curves", ov_mask: "correlation cells ±5 bins",
+    m_rows: "row by row", m_smooth: "±0.2 MHz", db30: "30 dB",
+    real: "real", synth1: "synthetic", synth: "copy", next: "next, +{m} min", diff: "difference",
+    diffnote: "real − copy 1, dB, ±15; blank where both are below 3 dB", nextnote: "the same channel {m} min on",
+    synthnote: "one of 12 copies; they differ only by fading and noise",
+    cut_h: "Row cut", cut_hint: "Power across range at the chosen frequency. The band is the ±2 bins the chosen mode's C/N₀ is summed over.",
+    prof_h: "Profile across the trace", prof_hint: "Mean profile over clean strong rows, early to late, peak = 1. Wider than a point echo: the mode has a width in delay.",
+    width: "width over a point", within: "within a row", centres: "row centres", r1: "next-row correlation",
+    spread_state: "delay spread in the state", scatter_yes: "scatter (centres independent)", scatter_no: "coherent (centres correlated) — not scatter",
+    cn0_hint: "Every row fades; the state keeps the ±0.2 MHz mean.",
+    rows: "rows", real_s: "real, mean", synth_s: "copy, mean",
+    verd_h: "Level-2 verdicts", verd_hint: "How far the real value lies from the 12 copies, in their sigma. Within ±3σ the real sounding passes for one more copy; for a correlation only “below” is a defect.",
+    muf: "MUF", level: "level scatter", widthv: "trace width", r_rows: "r row by row", r_smooth: "r ±0.2 MHz", all: "all modes",
+    corr_h: "Ionogram correlation", corr_hint: "Pearson's r of dB within ±5 bins of the traces. The ceiling is the copies among themselves; the yardstick of change, the next sounding.",
+    ceiling: "ceiling: copies among themselves", real_syn: "real ↔ copies", real_next: "real ↔ next",
+    state_h: "Channel state", state_hint: "Every value carries where it came from: measured off the sounding, a prior, or set by a model.",
+    th_mode: "mode", th_band: "band, MHz", th_delay: "delay, µs", th_cn0: "C/N₀ max", th_dopp: "Doppler", th_ds: "delay spread", th_ox: "o/x",
+    chan_hint: "|H(f, t)| at one carrier: what a signal sees over 48 kHz and 30 s; below, the channel's paths.",
+    chan: "Channel at {fc} MHz", taps: "paths: delay after the first, µs",
+    cut: "Row cut at {f} MHz", cn0: "C/N₀ of {m} along its band",
+    freq: "frequency, MHz", range: "range, km", time: "time, s", dfk: "offset, kHz",
+    foot: "A prototype: it draws what <code>muf.sim.check</code> computes and computes nothing itself. Rebuild: <code>python docs/ui/console.py SOUNDING.lfs …</code>. Dissertation material, local only.",
+    none: "none", inside: "inside", z: "z", vs_ceiling: "against a ceiling of",
+    few: "{n} copies < 12", nodata: "not measured",
+  },
+};
+
+const MODE_COLORS = ["--m0", "--m1", "--m2", "--m3"];
+const DIFF_FLOOR_DB = 3;
+const st = { s: 0, lang: "ru", right: "synthetic1", smooth: false, trace: true, mask: false,
+             mode: 0, row: null, corr: "smoothed" };
+try { const saved = JSON.parse(localStorage.getItem("simconsole") || "{}");
+      if (saved.lang) st.lang = saved.lang; if (saved.theme) document.documentElement.dataset.theme = saved.theme; } catch (e) {}
+// Inside the hub (`/sim/{id}/console?embed=1&lang=..`) the hub's own language
+// switch rules, and the frame is sized to the page rather than scrolled.
+const PARAMS = new URLSearchParams(location.search);
+const EMBED = PARAMS.has("embed");
+if (PARAMS.get("lang") in T) st.lang = PARAMS.get("lang");
+
+const $ = (id) => document.getElementById(id);
+const t = (k, vars) => { let s = (T[st.lang][k] ?? k);
+  for (const [a, b] of Object.entries(vars || {})) s = s.replace(`{${a}}`, b); return s; };
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+// Minutes between the sounding and the next one of the circuit.
+const gapMin = (s) => (s.natural && s.natural.dt_s ? Math.round(s.natural.dt_s / 60) : "?");
+const fmt = (x, d = 1) => (x == null || !isFinite(x)) ? "–" :
+  (st.lang === "ru" ? x.toFixed(d).replace(".", ",").replace("-", "−") : x.toFixed(d).replace("-", "−"));
+const S = () => DATA[st.s];
+
+// --- colour maps --------------------------------------------------------------
+function lut(stops) {
+  const out = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const x = i / 255; let k = 0;
+    while (k < stops.length - 2 && x > stops[k + 1][0]) k++;
+    const [x0, c0] = stops[k], [x1, c1] = stops[k + 1];
+    const u = Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+    for (let j = 0; j < 3; j++) out[i * 3 + j] = c0[j] + u * (c1[j] - c0[j]);
+  }
+  return out;
+}
+const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const VIRIDIS = lut(["#440154", "#482878", "#3e4989", "#31688e", "#26828e", "#1f9e89",
+  "#35b779", "#6ece58", "#fde725"].map((c, i, a) => [i / (a.length - 1), hex(c)]));
+const DIVERGE = lut([[0, hex("#2166ac")], [0.25, hex("#67a9cf")], [0.5, hex("#f2f0eb")],
+  [0.75, hex("#ef8a62")], [1, hex("#b2182b")]]);
+
+// --- data ---------------------------------------------------------------------
+const cache = {};
+function decode(b64) {
+  const bin = atob(b64); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function dbMap(key) {
+  const id = `${st.s}:${key}:${st.smooth}`;
+  if (cache[id]) return cache[id];
+  const s = S(), q = decode(s.maps[key]), [lo, hi] = s.db;
+  const n = s.freq.n, m = s.range.km.length, db = new Float32Array(n * m);
+  for (let i = 0; i < q.length; i++) db[i] = lo + (q[i] / 255) * (hi - lo);
+  if (st.smooth) {
+    const h = Math.round(0.2 / s.freq.step), lin = db.map((v) => Math.pow(10, v / 10));
+    const out = new Float32Array(n * m);
+    for (let j = 0; j < m; j++) {
+      let acc = 0, cnt = 0;
+      for (let i = 0; i <= Math.min(n - 1, h); i++) { acc += lin[i * m + j]; cnt++; }
+      for (let i = 0; i < n; i++) {
+        out[i * m + j] = 10 * Math.log10(acc / cnt);
+        const add = i + h + 1, drop = i - h;
+        if (add < n) { acc += lin[add * m + j]; cnt++; }
+        if (drop >= 0) { acc -= lin[drop * m + j]; cnt--; }
+      }
+    }
+    cache[id] = out; return out;
+  }
+  cache[id] = db; return db;
+}
+const freqAt = (i) => S().freq.lo + i * S().freq.step;
+function rowOf(f) { return Math.max(0, Math.min(S().freq.n - 1, Math.round((f - S().freq.lo) / S().freq.step))); }
+
+// --- ionograms ----------------------------------------------------------------
+function sizeCanvas(c) {
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); return [g, w, h];
+}
+const PAD = { l: 58, r: 8, t: 6, b: 30 };
+function ionGeometry(w, h) {
+  const s = S(), km = s.range.km, half = s.bin_km / 2;
+  const top = km[0] + half, bot = km[km.length - 1] - half;
+  const f0 = s.freq.lo - s.freq.step / 2, f1 = s.freq.lo + (s.freq.n - 0.5) * s.freq.step;
+  const pw = w - PAD.l - PAD.r, ph = h - PAD.t - PAD.b;
+  return { x: (f) => PAD.l + (f - f0) / (f1 - f0) * pw, y: (k) => PAD.t + (top - k) / (top - bot) * ph,
+           f: (x) => f0 + (x - PAD.l) / pw * (f1 - f0), k: (y) => top - (y - PAD.t) / ph * (top - bot),
+           f0, f1, top, bot, pw, ph };
+}
+function drawIon(canvas, key) {
+  const [g, w, h] = sizeCanvas(canvas), s = S(), G = ionGeometry(w, h);
+  g.clearRect(0, 0, w, h);
+  const n = s.freq.n, m = s.range.km.length;
+  let vals, map = VIRIDIS, lo = s.db[0], hi = s.db[1];
+  if (key === "diff") {
+    const a = dbMap("real"), b = dbMap("synthetic1"); vals = new Float32Array(n * m);
+    // noise against noise only adds speckle: paint where either map clears DIFF_FLOOR_DB
+    for (let i = 0; i < vals.length; i++) vals[i] = Math.max(a[i], b[i]) < DIFF_FLOOR_DB ? 0 : a[i] - b[i];
+    map = DIVERGE; lo = -15; hi = 15;
+  } else vals = dbMap(key);
+  const img = new ImageData(n, m);
+  for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) {
+    const v = Math.max(0, Math.min(255, Math.round((vals[i * m + j] - lo) / (hi - lo) * 255)));
+    const p = (j * n + i) * 4;
+    img.data[p] = map[v * 3]; img.data[p + 1] = map[v * 3 + 1]; img.data[p + 2] = map[v * 3 + 2];
+    img.data[p + 3] = 255;
+  }
+  const off = document.createElement("canvas"); off.width = n; off.height = m;
+  off.getContext("2d").putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(off, PAD.l, PAD.t, G.pw, G.ph);
+  // overlays
+  s.modes.forEach((md, k) => {
+    const sel = k === st.mode, col = css(MODE_COLORS[k % 4]);
+    if (st.mask && sel) {
+      g.fillStyle = "rgba(255,255,255,0.16)"; g.strokeStyle = "rgba(255,255,255,0.75)";
+      g.setLineDash([3, 3]); g.lineWidth = 1;
+      const span = (s.modes[0] && md.km) ? 5.5 * s.bin_km : 0;
+      for (const sign of [1, -1]) {
+        g.beginPath(); let on = false;
+        md.km.forEach((km, i) => { if (km == null) { on = false; return; }
+          const x = G.x(freqAt(i)), y = G.y(km + sign * span);
+          on ? g.lineTo(x, y) : g.moveTo(x, y); on = true; });
+        g.stroke();
+      }
+      g.setLineDash([]);
+    }
+    if (st.trace) {
+      g.strokeStyle = col; g.lineWidth = sel ? 1.8 : 1.4; g.globalAlpha = sel ? 1 : 0.9;
+      g.beginPath(); let on = false;
+      md.km.forEach((km, i) => { if (km == null) { on = false; return; }
+        const x = G.x(freqAt(i)), y = G.y(km); on ? g.lineTo(x, y) : g.moveTo(x, y); on = true; });
+      g.stroke(); g.globalAlpha = 1;
+    }
+  });
+  if (st.row != null) {
+    const x = G.x(freqAt(st.row));
+    g.strokeStyle = "#ff8a65"; g.lineWidth = 1.2; g.setLineDash([4, 3]);
+    g.beginPath(); g.moveTo(x, PAD.t); g.lineTo(x, PAD.t + G.ph); g.stroke(); g.setLineDash([]);
+  }
+  // axes
+  g.fillStyle = css("--muted"); g.strokeStyle = css("--line"); g.font = "11px system-ui";
+  g.textAlign = "center";
+  const fstep = niceStep(G.f1 - G.f0, 7);
+  for (let f = Math.ceil(G.f0 / fstep) * fstep; f <= G.f1; f += fstep) {
+    const x = G.x(f); g.fillText(fmt(f, fstep < 1 ? 1 : 0), x, h - PAD.b + 14);
+    g.beginPath(); g.moveTo(x, PAD.t + G.ph); g.lineTo(x, PAD.t + G.ph + 4); g.stroke();
+  }
+  g.fillText(t("freq"), PAD.l + G.pw / 2, h - 3);
+  g.textAlign = "right";
+  const kstep = niceStep(G.top - G.bot, 5);
+  for (let k = Math.ceil(G.bot / kstep) * kstep; k <= G.top; k += kstep) {
+    const y = G.y(k); g.fillText(Math.round(k), PAD.l - 6, y + 4);
+  }
+  g.save(); g.translate(12, PAD.t + G.ph / 2); g.rotate(-Math.PI / 2); g.textAlign = "center";
+  g.fillText(t("range"), 0, 0); g.restore();
+}
+function niceStep(span, n) {
+  const raw = span / n, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * p) return m * p; return 10 * p;
+}
+function hookIon(canvas, tip, key) {
+  canvas.addEventListener("mousemove", (e) => {
+    const r = canvas.getBoundingClientRect(), G = ionGeometry(r.width, r.height);
+    const x = e.clientX - r.left, y = e.clientY - r.top, f = G.f(x), k = G.k(y);
+    if (x < PAD.l || x > PAD.l + G.pw || y < PAD.t || y > PAD.t + G.ph) { tip.style.display = "none"; return; }
+    const s = S(), i = rowOf(f), km = s.range.km;
+    let j = 0; for (let q = 1; q < km.length; q++) if (Math.abs(km[q] - k) < Math.abs(km[j] - k)) j = q;
+    const m = km.length, a = dbMap("real")[i * m + j];
+    const kk = key();
+    const b = kk === "diff" ? null : dbMap(kk)[i * m + j];
+    tip.innerHTML = `${fmt(freqAt(i), 3)} ${st.lang === "ru" ? "МГц" : "MHz"} · ${Math.round(km[j])} ${st.lang === "ru" ? "км" : "km"}<br>` +
+      `${t("real")} ${fmt(a)} dB` + (b != null && kk !== "real" ? ` · ${fmt(b)} dB` : "");
+    tip.style.display = "block";
+    tip.style.left = Math.min(r.width - 150, x + 12) + "px"; tip.style.top = (y + 12) + "px";
+  });
+  canvas.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  canvas.addEventListener("click", (e) => {
+    const r = canvas.getBoundingClientRect(), G = ionGeometry(r.width, r.height);
+    st.row = rowOf(G.f(e.clientX - r.left)); renderCursor();
+  });
+}
+
+// --- SVG helpers -----------------------------------------------------------------
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (text != null) e.textContent = text; if (parent) parent.appendChild(e); return e;
+}
+function frame(svg, W, H, p, xr, yr, xl, yl, ticksX, ticksY) {
+  svg.innerHTML = "";
+  const X = (v) => p.l + (v - xr[0]) / (xr[1] - xr[0]) * (W - p.l - p.r);
+  const Y = (v) => H - p.b - (v - yr[0]) / (yr[1] - yr[0]) * (H - p.t - p.b);
+  for (const v of ticksY) { el("line", { x1: p.l, x2: W - p.r, y1: Y(v), y2: Y(v), class: "grid" }, svg);
+    el("text", { x: p.l - 6, y: Y(v) + 4, "text-anchor": "end" }, svg, typeof v === "number" ? fmt(v, Math.abs(v) < 2 && v % 1 ? 1 : 0) : v); }
+  for (const v of ticksX) el("text", { x: X(v), y: H - p.b + 15, "text-anchor": "middle" }, svg, fmt(v, Math.abs(v) < 10 && v % 1 ? 1 : 0));
+  el("line", { x1: p.l, x2: W - p.r, y1: H - p.b, y2: H - p.b, class: "axis" }, svg);
+  if (xl) el("text", { x: (p.l + W - p.r) / 2, y: H - 2, "text-anchor": "middle" }, svg, xl);
+  if (yl) el("text", { x: 11, y: (p.t + H - p.b) / 2, "text-anchor": "middle", transform: `rotate(-90 11 ${(p.t + H - p.b) / 2})` }, svg, yl);
+  return [X, Y];
+}
+const range = (a, b, s) => { const o = []; for (let v = a; v <= b + 1e-9; v += s) o.push(+v.toFixed(6)); return o; };
+
+// --- panels -------------------------------------------------------------------------
+function renderCut() {
+  const s = S(), svg = $("cut"), W = 520, H = 250, i = st.row, m = s.range.km.length;
+  $("cut_h").textContent = t("cut", { f: fmt(freqAt(i), 2) });
+  const km = s.range.km, a = dbMap("real"), key = st.right === "diff" ? "synthetic1" : st.right;
+  const b = dbMap(key);
+  const xr = [km[m - 1], km[0]], yr = [-10, 35];
+  const [X, Y] = frame(svg, W, H, { l: 38, r: 8, t: 8, b: 30 }, xr, yr, t("range"), "dB",
+    range(Math.ceil(xr[0] / 100) * 100, xr[1], niceStep(xr[1] - xr[0], 6)), range(-10, 30, 10));
+  const md = s.modes[st.mode];
+  if (md && md.km[i] != null) {
+    el("rect", { x: X(md.km[i] - 2.5 * s.bin_km), width: X(md.km[i] + 2.5 * s.bin_km) - X(md.km[i] - 2.5 * s.bin_km),
+                 y: 8, height: H - 38, fill: "var(--band)" }, svg);
+  }
+  el("line", { x1: 38, x2: W - 8, y1: Y(-2.8), y2: Y(-2.8), stroke: "var(--warn)", "stroke-width": 1, "stroke-dasharray": "5 3", opacity: 0.8 }, svg);
+  const line = (vals, color, dash) => {
+    let d = ""; for (let j = 0; j < m; j++) d += `${j ? "L" : "M"}${X(km[j]).toFixed(1)},${Y(Math.max(yr[0], Math.min(yr[1], vals[i * m + j]))).toFixed(1)}`;
+    el("path", { d, fill: "none", stroke: color, "stroke-width": 1.4, "stroke-dasharray": dash || "" }, svg);
+  };
+  line(b, "var(--accent)", "5 3"); line(a, "var(--ink)");
+  let lane = 0;
+  s.modes.forEach((mo, k) => { if (mo.km[i] == null) return;
+    const ly = 20 + 13 * (lane++ % 3);
+    el("line", { x1: X(mo.km[i]), x2: X(mo.km[i]), y1: ly - 10, y2: ly + 2, stroke: css(MODE_COLORS[k % 4]) === "#ffffff" ? "var(--ink)" : css(MODE_COLORS[k % 4]), "stroke-width": 2 }, svg);
+    el("text", { x: X(mo.km[i]) + 3, y: ly, class: "ink" }, svg, mo.name); });
+  const rn = st.right === "next" ? t("next", { m: gapMin(S()) }) : st.right === "diff" ? `${t("synth")} 1` : `${t("synth")} ${st.right.slice(-1)}`;
+  $("cutlegend").innerHTML = `<span style="--c:var(--ink)">${t("real")}</span><span class="dash" style="--c:var(--accent)">${rn}</span>` +
+    `<span class="dash" style="--c:var(--warn)">${st.lang === "ru" ? "шум, −2,8 дБ" : "noise, −2.8 dB"}</span><span class="box" style="--c:var(--accent)">±2 ${st.lang === "ru" ? "бина" : "bins"}</span>`;
+}
+function renderProfile() {
+  const s = S(), md = s.modes[st.mode], svg = $("prof"), W = 420, H = 230;
+  const pr = md.profile || {}, k = [-4, -3, -2, -1, 0, 1, 2, 3, 4];
+  const bin_us = s.bin_km / (s.km_per_us || 0.3), bu = Math.round(bin_us);
+  const [X, Y] = frame(svg, W, H, { l: 34, r: 8, t: 10, b: 32 }, [-4.6, 4.6], [0, 1.08],
+    st.lang === "ru" ? `бин от следа (ранний → поздний), 1 бин ≈ ${bu} мкс` : `bin from the trace (early → late), 1 bin ≈ ${bu} µs`, null, k, [0, 0.5, 1]);
+  const bw = (X(1) - X(0)) * 0.38;
+  if (pr.real) pr.real.forEach((v, q) => el("rect", { x: X(k[q]) - bw - 1, width: bw, y: Y(Math.max(0, v)), height: Y(0) - Y(Math.max(0, v)), fill: "var(--ink)", opacity: 0.75 }, svg));
+  if (pr.synthetic) pr.synthetic.forEach((v, q) => el("rect", { x: X(k[q]) + 1, width: bw, y: Y(Math.max(0, v)), height: Y(0) - Y(Math.max(0, v)), fill: "var(--accent)", opacity: 0.8 }, svg));
+  if (!pr.real) el("text", { x: W / 2, y: H / 2, "text-anchor": "middle" }, svg, st.lang === "ru" ? "мало чистых строк" : "too few clean rows");
+  const w = md.width, sw = md.summary.width || {};
+  const syn = sw.synthetic_us || {};
+  const kv = $("profkv"); kv.innerHTML = "";
+  const add = (a, b) => { kv.insertAdjacentHTML("beforeend", `<dt>${a}</dt><dd>${b}</dd>`); };
+  if (w) {
+    add(t("width"), `<b>${fmt(w.spread_us)} ${st.lang === "ru" ? "мкс" : "µs"}</b> · ${t("synth1")} ${fmt(syn.mean)} ± ${fmt(syn.std)}` + verdictBadge(sw));
+    add(t("within"), `${fmt(w.within_us)} · ${t("centres")} ${fmt(w.centre_rms_us)} ${st.lang === "ru" ? "мкс СКО" : "µs RMS"}`);
+    add(t("r1"), `${fmt(w.centre_r1, 2)} → ${w.centre_r1 <= 0.4 ? t("scatter_yes") : t("scatter_no")}`);
+  }
+  add(t("spread_state"), `${fmt(md.delay_spread_us)} ${st.lang === "ru" ? "мкс" : "µs"} ` + originBadge(md.origin.delay_spread));
+}
+function verdictBadge(e) {
+  if (!e || e.real_inside == null) return "";
+  return ` <span class="badge ${e.real_inside ? "ok" : "out"}">${fmt(e.real_z)}σ · ${e.real_inside ? t("inside") : "OUTSIDE"}</span>`;
+}
+function originBadge(o) {
+  const cls = o === "measured" ? "ok" : o === "prior" ? "prior" : "model";
+  return o ? `<span class="badge ${cls}">${t(o) || o}</span>` : "";
+}
+function renderCn0() {
+  const s = S(), md = s.modes[st.mode], svg = $("cn0"), W = 420, H = 250, c = md.cn0;
+  $("cn0_h").textContent = t("cn0", { m: md.name });
+  const all = c.real.concat(c.real_smooth, c.synthetic_smooth).filter((v) => isFinite(v));
+  const lo = Math.max(Math.min(...c.real_smooth) - 14, Math.min(...all)), hi = Math.max(...all) + 3;
+  const xr = [md.f_lo, md.f_hi], yr = [Math.floor(lo / 5) * 5, Math.ceil(hi / 5) * 5];
+  const [X, Y] = frame(svg, W, H, { l: 40, r: 8, t: 8, b: 30 }, xr, yr, t("freq"), "dB·Hz",
+    range(Math.ceil(xr[0]), xr[1], niceStep(xr[1] - xr[0], 5)), range(yr[0], yr[1], niceStep(yr[1] - yr[0], 4)));
+  c.f.forEach((f, q) => { const v = c.real[q]; if (v < yr[0]) return;
+    el("circle", { cx: X(f), cy: Y(v), r: 1.4, fill: "var(--muted)", opacity: 0.7 }, svg); });
+  const path = (v, col, dash, wdt) => { let d = ""; c.f.forEach((f, q) => { d += `${q ? "L" : "M"}${X(f).toFixed(1)},${Y(Math.max(yr[0], v[q])).toFixed(1)}`; });
+    el("path", { d, fill: "none", stroke: col, "stroke-width": wdt, "stroke-dasharray": dash || "" }, svg); };
+  path(c.synthetic_smooth, "var(--accent)", "5 3", 1.6); path(c.real_smooth, "var(--ink)", "", 2);
+  const f = freqAt(st.row);
+  if (f >= xr[0] && f <= xr[1]) el("line", { x1: X(f), x2: X(f), y1: 8, y2: H - 30, stroke: "#ff8a65", "stroke-dasharray": "4 3" }, svg);
+  svg.onclick = (e) => { const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W;
+    const fx = xr[0] + (x - 40) / (W - 48) * (xr[1] - xr[0]); st.row = rowOf(fx); renderCursor(); };
+}
+function verdictRows() {
+  const s = S(), rows = [];
+  rows.push({ label: t("muf"), z: s.muf.z, inside: s.muf.inside, one: false,
+              note: `${fmt(s.muf.real, 3)} ${st.lang === "ru" ? "МГц" : "MHz"}` });
+  s.modes.forEach((md) => {
+    const sm = md.summary, cm = s.correlation.modes[md.name] || {};
+    rows.push({ head: md.name });
+    const why = (e, real) => e[real] == null ? t("nodata") : t("few", { n: ((Object.values(e).find((v) => v && v.n != null)) || {}).n ?? 0 });
+    const lv = sm.level || {}, wd = sm.width || {};
+    rows.push({ label: t("level"), z: lv.real_z, inside: lv.real_inside, one: false, why: why(lv, "real_std_db"),
+                note: lv.real_std_db != null ? `${fmt(lv.real_std_db)} dB` : "" });
+    rows.push({ label: t("widthv"), z: wd.real_z, inside: wd.real_inside, one: false, why: why(wd, "real_us"),
+                note: wd.real_us != null ? `${fmt(wd.real_us)} ${st.lang === "ru" ? "мкс" : "µs"}` : "" });
+    rows.push({ label: t("r_rows"), z: (cm.rows || {}).real_z, inside: (cm.rows || {}).real_inside, one: true,
+                note: (cm.rows || {}).real ? fmt(cm.rows.real.mean, 3) : "" });
+    rows.push({ label: t("r_smooth"), z: (cm.smoothed || {}).real_z, inside: (cm.smoothed || {}).real_inside, one: true,
+                note: (cm.smoothed || {}).real ? fmt(cm.smoothed.real.mean, 3) : "" });
+  });
+  rows.push({ head: t("all") });
+  for (const key of ["rows", "smoothed"]) {
+    const e = s.correlation[key] || {};
+    rows.push({ label: t(key === "rows" ? "r_rows" : "r_smooth"), z: e.real_z, inside: e.real_inside, one: true,
+                note: e.real ? fmt(e.real.mean, 3) : "" });
+  }
+  return rows;
+}
+function renderVerdicts() {
+  const svg = $("verd"), rows = verdictRows(), W = 760, rh = 19;
+  const H = 30 + rows.length * rh; svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = "";
+  const L = 170, R = W - 120, zr = 9, X = (z) => L + (Math.max(-zr, Math.min(zr, z)) + zr) / (2 * zr) * (R - L);
+  el("rect", { x: X(-3), width: X(3) - X(-3), y: 18, height: H - 24, fill: "var(--band)" }, svg);
+  for (const z of [-9, -6, -3, 0, 3, 6, 9]) {
+    el("line", { x1: X(z), x2: X(z), y1: 18, y2: H - 6, class: z === 0 ? "axis" : "grid" }, svg);
+    el("text", { x: X(z), y: 12, "text-anchor": "middle" }, svg, (z > 0 ? "+" : "") + z + "σ");
+  }
+  rows.forEach((r, q) => {
+    const y = 30 + q * rh;
+    if (r.head) { el("text", { x: 8, y: y + 4, class: "ink", "font-weight": 650 }, svg, r.head); return; }
+    el("text", { x: 22, y: y + 4 }, svg, r.label);
+    if (r.z == null) { el("text", { x: R + 8, y: y + 4 }, svg, "–");
+      el("text", { x: R + 56, y: y + 4 }, svg, r.why || ""); return; }
+    if (r.one) el("rect", { x: X(-3), width: R - X(-3), y: y - 6, height: 12, fill: "var(--band)", opacity: 0.6 }, svg);
+    const col = r.inside ? "var(--ok)" : "var(--warn)";
+    el("line", { x1: X(0), x2: X(r.z), y1: y, y2: y, stroke: col, "stroke-width": 2, opacity: 0.35 }, svg);
+    el("circle", { cx: X(r.z), cy: y, r: 5, fill: col }, svg);
+    if (Math.abs(r.z) > zr) el("text", { x: X(r.z) + (r.z > 0 ? 8 : -8), y: y + 4, "text-anchor": r.z > 0 ? "start" : "end", fill: col }, svg, r.z > 0 ? "›" : "‹");
+    el("text", { x: R + 8, y: y + 4, class: "ink" }, svg, `${fmt(r.z)}σ`);
+    el("text", { x: R + 56, y: y + 4 }, svg, r.note || "");
+  });
+}
+function renderCorr() {
+  const s = S(), svg = $("corr"), W = 520, H = 260, key = st.corr;
+  const groups = [{ name: t("all"), e: s.correlation[key], n: (s.correlation.next || {})[key] }]
+    .concat(s.modes.map((md) => ({ name: md.name, e: (s.correlation.modes[md.name] || {})[key],
+            n: (((s.correlation.next || {}).modes || {})[md.name] || {})[key] })));
+  const yr = key === "rows" ? [0.3, 1] : [0.7, 1];
+  const [X, Y] = frame(svg, W, H, { l: 38, r: 8, t: 10, b: 30 }, [0, groups.length], yr, null, "r", [],
+    range(yr[0], yr[1], key === "rows" ? 0.1 : 0.05));
+  const gw = (X(1) - X(0)), bw = gw * 0.22;
+  groups.forEach((g, q) => {
+    const x0 = X(q) + gw * 0.14;
+    const bars = [[g.e && g.e.synthetic && g.e.synthetic.mean, "var(--muted)", g.e && g.e.synthetic && g.e.synthetic.std],
+                  [g.e && g.e.real && g.e.real.mean, "var(--accent)"], [g.n, "var(--prior)"]];
+    bars.forEach(([v, col, sd], b) => { if (v == null) return;
+      const x = x0 + b * (bw + 3);
+      el("rect", { x, width: bw, y: Y(Math.max(yr[0], v)), height: Y(yr[0]) - Y(Math.max(yr[0], v)), fill: col, rx: 2, opacity: b ? 0.9 : 0.55 }, svg);
+      if (sd) el("line", { x1: x + bw / 2, x2: x + bw / 2, y1: Y(v - sd), y2: Y(v + sd), stroke: "var(--ink)", "stroke-width": 1 }, svg);
+      el("text", { x: x + bw / 2, y: Y(Math.max(yr[0], v)) - 3, "text-anchor": "middle", "font-size": 9.5 }, svg, fmt(v, 2)); });
+    el("text", { x: X(q) + gw / 2, y: H - 12, "text-anchor": "middle", class: "ink" }, svg, g.name);
+    if (g.e && g.e.real_inside != null)
+      el("text", { x: X(q) + gw / 2, y: H - 1, "text-anchor": "middle", fill: g.e.real_inside ? "var(--ok)" : "var(--warn)", "font-size": 10 }, svg,
+         `${fmt(g.e.real_z)}σ`);
+  });
+}
+function renderState() {
+  const s = S(), tb = $("state"), mu = st.lang === "ru" ? "мкс" : "µs";
+  tb.innerHTML = `<tr><th>${t("th_mode")}</th><th>${t("th_band")}</th><th>${t("th_delay")}</th><th>${t("th_cn0")}</th><th>${t("th_dopp")}</th><th>${t("th_ds")}</th><th>${t("th_ox")}</th></tr>`;
+  s.modes.forEach((md, k) => {
+    const sw = md.summary.width || {};
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td><span class="chip ${k === st.mode ? "on" : ""}" style="pointer-events:none"><i style="background:${css(MODE_COLORS[k % 4])}"></i>${md.name}</span></td>
+      <td>${fmt(md.f_lo, 2)}–${fmt(md.f_hi, 2)} ${originBadge(md.origin.delay === "measured" ? "measured" : md.origin.delay)}</td>
+      <td>${fmt(md.delay_lo, 0)}–${fmt(md.delay_hi, 0)}<div class="small">${st.lang === "ru" ? "восст." : "recovered"} ${fmt(md.summary.delay_rms_us.mean)} ${mu} ${st.lang === "ru" ? "СКО" : "RMS"}</div></td>
+      <td>${fmt(md.cn0_max)} dB·Hz ${originBadge(md.origin.cn0)}</td>
+      <td>${fmt(md.doppler_hz, 2)} Hz ${md.doppler_shape === "lorentzian" ? "Lorentz" : "Gauss"} ${originBadge(md.origin.doppler_spread)}</td>
+      <td>${fmt(md.delay_spread_us)} ${mu} ${originBadge(md.origin.delay_spread)}${sw.real_us != null ? `<div class="small">${st.lang === "ru" ? "ширина следа" : "trace width"} ${fmt(sw.real_us)} ${mu}</div>` : ""}</td>
+      <td>${md.ox_us == null ? t("none") : fmt(md.ox_us) + " " + mu} ${originBadge(md.origin.magnetoionic)}</td></tr>`);
+  });
+}
+function renderChannel() {
+  const s = S(), ch = s.channel, c = $("chan"), [g, w, h] = sizeCanvas(c);
+  $("chan_h").textContent = t("chan", { fc: fmt(ch.fc_mhz, 2) });
+  const q = decode(ch.h), nf = ch.n_f, nt = ch.n_t, img = new ImageData(nf, nt);
+  for (let i = 0; i < nt; i++) for (let j = 0; j < nf; j++) {
+    const v = q[i * nf + j], p = ((nt - 1 - i) * nf + j) * 4;
+    img.data[p] = VIRIDIS[v * 3]; img.data[p + 1] = VIRIDIS[v * 3 + 1]; img.data[p + 2] = VIRIDIS[v * 3 + 2]; img.data[p + 3] = 255;
+  }
+  const off = document.createElement("canvas"); off.width = nf; off.height = nt;
+  off.getContext("2d").putImageData(img, 0, 0);
+  const P = { l: 40, r: 8, t: 4, b: 28 }, pw = w - P.l - P.r, ph = h - P.t - P.b;
+  g.clearRect(0, 0, w, h); g.imageSmoothingEnabled = true; g.drawImage(off, P.l, P.t, pw, ph);
+  g.fillStyle = css("--muted"); g.font = "11px system-ui"; g.textAlign = "center";
+  for (const k of [-24, -12, 0, 12, 24]) g.fillText(k, P.l + (k + 24) / 48 * pw, h - P.b + 14);
+  g.fillText(t("dfk"), P.l + pw / 2, h - 2);
+  g.textAlign = "right";
+  for (const s2 of [0, 10, 20, 30]) g.fillText(s2, P.l - 6, P.t + ph - s2 / ch.seconds * ph + 4);
+  g.save(); g.translate(10, P.t + ph / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillText(t("time"), 0, 0); g.restore();
+  // taps
+  const svg = $("taps"), W = 420, H = 120, ps = ch.paths;
+  const dmax = Math.max(50, ...ps.map((p) => p.delay_us)) * 1.08, top = Math.max(...ps.map((p) => p.db));
+  const [X, Y] = frame(svg, W, H, { l: 34, r: 8, t: 8, b: 30 }, [0, dmax], [top - 30, top + 3], t("taps"), "dB", range(0, dmax, niceStep(dmax, 6)), [top - 30, top - 15, top]);
+  ps.forEach((p) => { el("line", { x1: X(p.delay_us), x2: X(p.delay_us), y1: Y(top - 30), y2: Y(Math.max(top - 30, p.db)), stroke: "var(--accent)", "stroke-width": 2 }, svg);
+    el("circle", { cx: X(p.delay_us), cy: Y(Math.max(top - 30, p.db)), r: 3, fill: "var(--accent)" }, svg); });
+  const lbl = {}; ps.forEach((p) => { const name = p.label.split(/[+\-]\d/)[0]; if (!(name in lbl) || p.db > lbl[name].db) lbl[name] = p; });
+  Object.values(lbl).forEach((p) => el("text", { x: X(p.delay_us) + 4, y: Y(p.db) - 4, class: "ink" }, svg, p.label.split(/[+\-]\d/)[0]));
+}
+function renderPipe() {
+  const s = S(), pipe = $("pipe"), mu = st.lang === "ru" ? "мкс" : "µs";
+  const counts = { measured: 0, prior: 0, model: 0 };
+  s.modes.forEach((md) => Object.values(md.origin).forEach((o) => { if (o in counts) counts[o]++; }));
+  const v = verdictRows().filter((r) => r.z != null), out = v.filter((r) => !r.inside).length;
+  const main = s.modes.reduce((a, b) => (b.f_hi - b.f_lo > a.f_hi - a.f_lo ? b : a));
+  pipe.innerHTML = [
+    [1, t("s1"), `<b>${s.utc}</b><br>${s.circuit}<br>${t("muf")} <b>${fmt(s.muf.real, 3)}</b> ${st.lang === "ru" ? "МГц" : "MHz"}`],
+    [2, t("s2"), `<b>${s.modes.length}</b> ${t("modes_n")}: ${s.modes.map((m) => m.name).join(", ")}<br>` +
+      `<span class="badge ok">${counts.measured} ${t("measured")}</span> <span class="badge prior">${counts.prior} ${t("prior")}</span>`],
+    [3, t("s3"), `<b>${s.realisations}</b> ${t("soundings")} · ${t("seeds")} 0–${s.realisations - 1}<br>${st.lang === "ru" ? "тот же свип, окно, тракт muf" : "same sweep, window, muf processing"}`],
+    [4, t("s4"), `${main.name}: ${t("delay_rms")} <b>${fmt(main.summary.delay_rms_us.mean)}</b> ${mu}<br>${t("cn0_bias")} <b>${fmt(main.summary.cn0_bias_db.mean)}</b> dB`],
+    [5, t("s5"), `<span class="badge ${out ? "out" : "ok"}">${out} ${t("of")} ${v.length}</span> ${t("outside")}<br>` +
+      `r ${t("m_smooth")}: <b>${fmt((s.correlation.smoothed.real || {}).mean, 3)}</b> ${t("vs_ceiling")} ${fmt((s.correlation.smoothed.synthetic || {}).mean, 3)}`],
+  ].map(([n, h, b]) => `<div class="step"><div class="n">${n}</div><div class="t">${h}</div><div class="v">${b}</div></div>`).join("");
+}
+function renderChips() {
+  const s = S(), box = $("modechips"); box.innerHTML = "";
+  s.modes.forEach((md, k) => {
+    const b = document.createElement("button"); b.className = "chip" + (k === st.mode ? " on" : "");
+    b.innerHTML = `<i style="background:${css(MODE_COLORS[k % 4])}"></i>${md.name}`;
+    b.onclick = () => { st.mode = k; renderAll(); }; box.appendChild(b);
+  });
+}
+function renderRightSeg() {
+  const s = S(), box = $("right"); box.innerHTML = "";
+  const keys = ["synthetic1", "synthetic2", "synthetic3"].filter((k) => s.maps[k]).concat(s.maps.next ? ["next"] : [], ["diff"]);
+  if (!keys.includes(st.right)) st.right = "synthetic1";
+  keys.forEach((k) => {
+    const b = document.createElement("button"); b.className = k === st.right ? "on" : "";
+    b.textContent = k.startsWith("synthetic") ? `${t("synth")} ${k.slice(-1)}` : t(k, { m: gapMin(s) });
+    b.onclick = () => { st.right = k; renderAll(); }; box.appendChild(b);
+  });
+  $("rightnote").textContent = st.right === "diff" ? t("diffnote") : st.right === "next" ? `${t("nextnote", { m: gapMin(s) })} · ${s.next}` : t("synthnote");
+}
+function renderCbar() {
+  const c = $("cbar"), g = c.getContext("2d"), img = g.createImageData(140, 9);
+  for (let x = 0; x < 140; x++) { const v = Math.round(x / 139 * 255);
+    for (let y = 0; y < 9; y++) { const p = (y * 140 + x) * 4;
+      img.data[p] = VIRIDIS[v * 3]; img.data[p + 1] = VIRIDIS[v * 3 + 1]; img.data[p + 2] = VIRIDIS[v * 3 + 2]; img.data[p + 3] = 255; } }
+  g.putImageData(img, 0, 0);
+}
+function renderCursor() {
+  drawIon($("ionL"), "real"); drawIon($("ionR"), st.right); renderCut(); renderCn0();
+}
+function renderAll() {
+  document.documentElement.lang = st.lang;
+  document.querySelectorAll("[data-t]").forEach((e) => { e.innerHTML = t(e.dataset.t); });
+  document.title = t("title");
+  $("subtitle").textContent = t("sub");
+  $("foot").innerHTML = t("foot");
+  $("realname").textContent = `${S().source} · ${S().utc}`;
+  document.querySelectorAll("#lang button").forEach((b) => b.classList.toggle("on", b.dataset.l === st.lang));
+  const theme = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.querySelectorAll("#theme button").forEach((b) => b.classList.toggle("on", b.dataset.th === theme));
+  document.querySelectorAll("#smooth button").forEach((b) => b.classList.toggle("on", (b.dataset.s === "1") === st.smooth));
+  document.querySelectorAll("#corrmap button").forEach((b) => b.classList.toggle("on", b.dataset.c === st.corr));
+  const ses = $("sessions"); ses.innerHTML = "";
+  DATA.forEach((d, k) => { const b = document.createElement("button"); b.textContent = d.utc.slice(11, 16);
+    b.className = k === st.s ? "on" : ""; b.onclick = () => { st.s = k; st.mode = 0; st.row = null; renderAll(); }; ses.appendChild(b); });
+  if (st.mode >= S().modes.length) st.mode = 0;
+  if (st.row == null) { const md = S().modes[st.mode]; st.row = rowOf(md.f_lo + 0.6 * (md.f_hi - md.f_lo)); }
+  renderChips(); renderRightSeg(); renderPipe(); renderCursor(); renderProfile();
+  renderVerdicts(); renderCorr(); renderState(); renderChannel(); renderCbar();
+}
+function save() { try { localStorage.setItem("simconsole", JSON.stringify({ lang: st.lang, theme: document.documentElement.dataset.theme })); } catch (e) {} }
+
+document.querySelectorAll("#lang button").forEach((b) => b.onclick = () => { st.lang = b.dataset.l; save(); renderAll(); });
+document.querySelectorAll("#theme button").forEach((b) => b.onclick = () => { document.documentElement.dataset.theme = b.dataset.th; save(); renderAll(); });
+document.querySelectorAll("#smooth button").forEach((b) => b.onclick = () => { st.smooth = b.dataset.s === "1"; renderAll(); });
+document.querySelectorAll("#corrmap button").forEach((b) => b.onclick = () => { st.corr = b.dataset.c; renderCorr(); renderAll(); });
+$("ovTrace").onchange = (e) => { st.trace = e.target.checked; renderCursor(); };
+$("ovMask").onchange = (e) => { st.mask = e.target.checked; renderCursor(); };
+hookIon($("ionL"), $("tipL"), () => "real");
+hookIon($("ionR"), $("tipR"), () => st.right);
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    st.row = Math.max(0, Math.min(S().freq.n - 1, st.row + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 10 : 1)));
+    renderCursor(); e.preventDefault();
+  }
+});
+let resizeTimer; window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderAll, 120); });
+if (EMBED) {
+  $("lang").style.display = "none";
+  $("foot").style.display = "none";
+  document.documentElement.style.overflow = "hidden";
+  new ResizeObserver(() => parent.postMessage(
+    { simHeight: document.documentElement.scrollHeight }, location.origin)).observe(document.body);
+}
+renderAll();
+</script>
+</body>
+</html>

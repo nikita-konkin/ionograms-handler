@@ -36,6 +36,9 @@ from . import (
     live_routes,
     net,
     read_routes,
+    sim,
+    sim_live,
+    sim_routes,
     sounder_routes,
     sources,
     web_routes,
@@ -90,6 +93,7 @@ async def lifespan(app: FastAPI):
     app.state.live = live.Hub(
         keep=lambda station, summary: db.keep_summary(app.state.db, station, summary))
     app.state.archive_root = Path(os.environ.get("ARCHIVE_ROOT", "."))
+    app.state.sim_cache = sim.folder()
     stamp = build.info()
     print(f"api {VERSION}{' ' + stamp['sha'] if stamp['sha'] else ''}"
           f"{'  committed ' + stamp['committed_at'] if stamp['committed_at'] else ''}"
@@ -111,6 +115,10 @@ async def lifespan(app: FastAPI):
     # archive, unlike a census of write-once files, gains files while the
     # server runs. ARCHIVE_SCAN_INTERVAL_S=0 turns it off.
     app.state.archive_scan = archives.start_periodic(app)
+
+    # The simulator's forecasts, issued and scored as the scans store
+    # soundings. LIVE_INTERVAL_S=0 turns it off.
+    stop_live = sim_live.start(app)
 
     # No candidate survey here, deliberately. It is a recursive walk of the
     # archive, and doing it at boot means every restart walks the whole mount
@@ -137,6 +145,7 @@ async def lifespan(app: FastAPI):
         app.state.census_warm.start()
     yield
     app.state.live.close()
+    stop_live()
     app.state.db.close()
 
 
@@ -165,6 +174,7 @@ app.include_router(archive_routes.router)
 app.include_router(control_routes.router)
 app.include_router(live_routes.router)
 app.include_router(read_routes.router)
+app.include_router(sim_routes.router)
 app.include_router(sounder_routes.router)
 app.include_router(web_routes.router)
 

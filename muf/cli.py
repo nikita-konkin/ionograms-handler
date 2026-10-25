@@ -1231,6 +1231,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "server.ini over the built-in table")
     sta.set_defaults(func=cmd_stations)
 
+    from .sim import cli as sim_cli
+    sim_cli.register(sub)
+
     return parser
 
 

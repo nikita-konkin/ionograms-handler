@@ -643,6 +643,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS muted_circuit_identity
 
 
 -- --------------------------------------------------------------------------
+-- The simulator's live forecasts (services/api/sim_live.py)
+-- --------------------------------------------------------------------------
+
+-- One row a circuit the loop follows: the newest sounding it took, by the
+-- `sounding.datetime` it was stored with, and its ledger -- the forecasts
+-- waiting for their soundings and when the circuit's last soundings were, as
+-- `muf.sim.live.Ledger.to_dict` writes it. No foreign key: a circuit's
+-- soundings may be deleted, and the loop should not stop that.
+CREATE TABLE IF NOT EXISTS live_circuit (
+    tx          TEXT NOT NULL,
+    rx          TEXT NOT NULL,
+    taken_at    TEXT NOT NULL,
+    ledger      TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (tx, rx)
+);
+
+-- Every event of the loop, as `muf.sim.live` writes it, in `body`: a forecast
+-- issued, scored or lapsed, a sounding with no trace or not observed.
+-- `epoch` and `sounding_id` are the sounding whose turn it was; `source_id`
+-- the one the event names in its `from`, a forecast's own sounding.
+CREATE TABLE IF NOT EXISTS live_event (
+    id           INTEGER PRIMARY KEY,
+    tx           TEXT NOT NULL,
+    rx           TEXT NOT NULL,
+    epoch        REAL NOT NULL,
+    kind         TEXT NOT NULL,
+    lead_s       REAL,
+    sounding_id  INTEGER,
+    source_id    INTEGER,
+    body         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS live_event_circuit ON live_event(tx, rx, epoch);
+
+
+-- --------------------------------------------------------------------------
 -- Accounts
 -- --------------------------------------------------------------------------
 

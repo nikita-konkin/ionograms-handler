@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 660" width="680" height="660" role="img" aria-label="muf.sim: гибридный имитатор КВ-канала">
+  <title>muf.sim: гибридный имитатор КВ-канала</title>
+
+  <style>
+    svg { --bg: #FFFFFF; --ink: #2C2C2A; --muted: #5F5E5A; --line: #888780;
+          --teal-fill: #E1F5EE; --teal-stroke: #0F6E56; --teal-text: #085041;
+          --purple-fill: #EEEDFE; --purple-stroke: #534AB7; --purple-text: #3C3489;
+          --gray-fill: #F1EFE8; --gray-stroke: #5F5E5A; --gray-text: #444441; }
+    @media (prefers-color-scheme: dark) {
+      svg { --bg: #1F1F1E; --ink: #E8E6E0; --muted: #B4B2A9; --line: #888780;
+            --teal-fill: #085041; --teal-stroke: #5DCAA5; --teal-text: #9FE1CB;
+            --purple-fill: #3C3489; --purple-stroke: #AFA9EC; --purple-text: #CECBF6;
+            --gray-fill: #444441; --gray-stroke: #B4B2A9; --gray-text: #D3D1C7; }
+    }
+    .bg { fill: var(--bg); }
+    text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           fill: var(--ink); }
+    .title { font-size: 14px; font-weight: 600; }
+    .sub { font-size: 12px; fill: var(--muted); }
+    .head { font-size: 13px; font-weight: 600; fill: var(--muted); }
+    .lane { font-size: 13px; font-weight: 600; }
+    .teal rect { fill: var(--teal-fill); stroke: var(--teal-stroke); }
+    .teal .title { fill: var(--teal-text); }
+    .purple rect { fill: var(--purple-fill); stroke: var(--purple-stroke); }
+    .purple .title { fill: var(--purple-text); }
+    .gray rect { fill: var(--gray-fill); stroke: var(--gray-stroke); }
+    .gray .title { fill: var(--gray-text); }
+    .plan rect { fill: none; stroke: var(--gray-stroke); stroke-dasharray: 5 4; }
+    .plan .title { fill: var(--muted); }
+    .arrow { stroke: var(--line); stroke-width: 1.5; fill: none;
+             marker-end: url(#head); }
+    .loop { stroke: var(--teal-stroke); stroke-width: 1.5; fill: none;
+            stroke-dasharray: 6 4; marker-end: url(#head-loop); }
+    .dashed { stroke-dasharray: 5 4; }
+    #head path { fill: var(--line); }
+    #head-loop path { fill: var(--teal-stroke); }
+  </style>
+
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z"/></marker>
+    <marker id="head-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="680" height="660"/>
+  <g class="teal">
+    <rect x="40" y="40" width="180" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="130.0" y="65.0" text-anchor="middle">Реальный сеанс</text>
+    <text class="sub" x="130.0" y="83.0" text-anchor="middle">.lfs или .h5</text>
+  </g>
+  <g class="plan">
+    <rect x="250" y="40" width="180" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="340.0" y="65.0" text-anchor="middle">Прогноз</text>
+    <text class="sub" x="340.0" y="83.0" text-anchor="middle">этап 3, план</text>
+  </g>
+  <g class="purple">
+    <rect x="460" y="40" width="180" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="550.0" y="65.0" text-anchor="middle">Априорные модели</text>
+    <text class="sub" x="550.0" y="83.0" text-anchor="middle">F.1487, b = 7,52 мкс/МГц</text>
+  </g>
+  <g class="teal">
+    <rect x="40" y="130" width="180" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="130.0" y="155.0" text-anchor="middle">Обработка muf</text>
+    <text class="sub" x="130.0" y="173.0" text-anchor="middle">след, моды, МНЧ</text>
+  </g>
+  <g class="teal">
+    <rect x="250" y="130" width="180" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="340.0" y="155.0" text-anchor="middle">Быстрая часть по фазе</text>
+    <text class="sub" x="340.0" y="173.0" text-anchor="middle">разброс, K Райса, o/x</text>
+  </g>
+  <g class="gray">
+    <rect x="40" y="230" width="600" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="340.0" y="255.0" text-anchor="middle">Состояние канала</text>
+    <text class="sub" x="340.0" y="273.0" text-anchor="middle">моды: τ(f), C/N₀(f), доплер, замирания, o/x</text>
+  </g>
+  <g class="gray">
+    <rect x="40" y="330" width="280" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="180.0" y="355.0" text-anchor="middle">Синтетический сеанс</text>
+    <text class="sub" x="180.0" y="373.0" text-anchor="middle">ЛЧМ-тракт, файл .lfs</text>
+  </g>
+  <g class="gray">
+    <rect x="360" y="330" width="280" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="500.0" y="355.0" text-anchor="middle">Канал для сигнала</text>
+    <text class="sub" x="500.0" y="373.0" text-anchor="middle">дисперсия, замирания, шум</text>
+  </g>
+  <g class="gray">
+    <rect x="40" y="430" width="280" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="180.0" y="455.0" text-anchor="middle">Повторная обработка</text>
+    <text class="sub" x="180.0" y="473.0" text-anchor="middle">тот же muf</text>
+  </g>
+  <g class="gray">
+    <rect x="360" y="430" width="280" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="500.0" y="455.0" text-anchor="middle">Сигнал на выходе</text>
+    <text class="sub" x="500.0" y="473.0" text-anchor="middle">модемы, эквалайзеры</text>
+  </g>
+  <g class="gray">
+    <rect x="40" y="530" width="280" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="180.0" y="555.0" text-anchor="middle">Сравнение состояний</text>
+    <text class="sub" x="180.0" y="573.0" text-anchor="middle">уровни 1–2: цикл, реализм</text>
+  </g>
+  <g class="gray">
+    <rect x="360" y="530" width="280" height="56" rx="8" stroke-width="1.5"/>
+    <text class="title" x="500.0" y="555.0" text-anchor="middle">Проверка по теории</text>
+    <text class="sub" x="500.0" y="573.0" text-anchor="middle">уровень 0: F.1487, Райс, DBPSK</text>
+  </g>
+  <path class="arrow" d="M130 96 L130 128"/>
+  <path class="arrow" d="M190 96 L190 112 L340 112 L340 128"/>
+  <path class="arrow" d="M220 158 L248 158"/>
+  <path class="arrow" d="M130 186 L130 228"/>
+  <path class="arrow" d="M340 186 L340 228"/>
+  <path class="arrow dashed" d="M430 68 L445 68 L445 228"/>
+  <path class="arrow" d="M550 96 L550 228"/>
+  <path class="arrow" d="M180 286 L180 328"/>
+  <path class="arrow" d="M500 286 L500 328"/>
+  <path class="arrow" d="M180 386 L180 428"/>
+  <path class="arrow" d="M500 386 L500 428"/>
+  <path class="arrow" d="M180 486 L180 528"/>
+  <path class="arrow" d="M500 486 L500 528"/>
+  <path class="loop" d="M40 558 L22 558 L22 258 L38 258"/>
+  <g class="teal"><rect x="40.0" y="622" width="26" height="14" rx="3" stroke-width="1.5"/></g>
+  <text class="sub" x="74.0" y="633">измерено</text>
+  <g class="purple"><rect x="159.6" y="622" width="26" height="14" rx="3" stroke-width="1.5"/></g>
+  <text class="sub" x="193.6" y="633">априори или модель</text>
+  <g class="plan"><rect x="351.2" y="622" width="26" height="14" rx="3" stroke-width="1.5"/></g>
+  <text class="sub" x="385.2" y="633">запланировано</text>
+  <path class="loop" d="M506.8 629 L532.8 629"/>
+  <text class="sub" x="540.8" y="633">замкнутый цикл</text>
+</svg>

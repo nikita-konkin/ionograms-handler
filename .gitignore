@@ -171,6 +171,9 @@ data/
 out/
 imgs/
 *.png
+# The simulator's offline console embeds the sounding it was built from
+# (docs/ui/console.py), so it stays on the machine that built it.
+docs/ui/console.html
 # `muf export` defaults to --out sao (muf/cli.py), so a plain run drops its
 # XML here. 288 of them were committed once; nothing reads them, and
 # tests/test_saoxml.py builds every fixture it needs in tmp_path.

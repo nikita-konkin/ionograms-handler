@@ -46,7 +46,7 @@ muf = "muf.cli:main"
 # Only the pipeline package. The inherited top-level scripts (MUF.py, stuffr.py,
 # data_handler/, ...) were never shipped and are no longer in the tree either --
 # removed in `f94f561`, readable from its parent.
-packages = ["muf", "muf.extractors", "muf.reference", "services",
+packages = ["muf", "muf.extractors", "muf.reference", "muf.sim", "services",
             "services.agent", "services.api", "services.api.locale",
             "services.prediction", "services.publish"]
 

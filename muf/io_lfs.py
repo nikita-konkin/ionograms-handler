@@ -200,6 +200,33 @@ def parse_header(blob: bytes, path: str | Path,
     return _with_registry_coordinates(header, stations)
 
 
+def pack_header(fields: Mapping[str, object]) -> bytes:
+    """The 512 bytes :func:`parse_header` reads, from a field mapping.
+
+    The inverse of the parser over ``_LAYOUT``, for a writer that makes
+    recordings rather than reads them -- the simulator's synthetic soundings
+    (``muf.sim.sounding``). Every layout field is required: a default here
+    would be a guess written into a file that looks measured. Strings are
+    NUL-padded and must fit their field.
+    """
+    blob = bytearray(HEADER_SIZE)
+    missing = [name for name, _offset, _fmt in _LAYOUT if name not in fields]
+    if missing:
+        raise ValueError(f"header fields missing: {', '.join(missing)}")
+    for name, offset, fmt in _LAYOUT:
+        value = fields[name]
+        if fmt.endswith("s"):
+            raw = str(value).encode("ascii")
+            if len(raw) > int(fmt[:-1]):
+                raise ValueError(f"{name} {value!r} is longer than {fmt[:-1]} bytes")
+            struct.pack_into("<" + fmt, blob, offset, raw)
+        elif fmt == "f":
+            struct.pack_into("<f", blob, offset, float(value))
+        else:
+            struct.pack_into("<" + fmt, blob, offset, int(value))
+    return bytes(blob)
+
+
 def _with_registry_coordinates(
         header: LfsHeader,
         stations: Mapping[str, tuple[float, float]] | None) -> LfsHeader:

@@ -407,6 +407,55 @@ SOUNDING_SORTS = {
 }
 
 
+#: Soundings the simulator page offers, newest first.
+SIM_SOUNDINGS = 2000
+
+
+@router.get("/ui/sim")
+def sim_page(request: Request, id: int | None = None):
+    """The simulator's console for one sounding, built when asked for.
+
+    The soundings are listed by day, newest first, each marked when its
+    console is built already. The console itself is framed, from
+    ``/sim/{id}/console``; see ``templates/sim.html`` for why.
+    """
+    from . import sim
+
+    found = db.rows(request.app.state.db,
+                    "SELECT id, file, datetime, tx, rx FROM sounding "
+                    "ORDER BY datetime DESC, id DESC LIMIT ?", (SIM_SOUNDINGS,))
+    days: dict[str, list[dict]] = {}
+    for row in found:
+        days.setdefault(str(row["datetime"])[:10], []).append(row)
+    return templates.TemplateResponse(request, "sim.html", {
+        "days": days,
+        "built": sim.built(request.app.state.sim_cache),
+        "chosen": id if id is not None else (found[0]["id"] if found else None),
+    })
+
+
+@router.get("/ui/sim/live")
+def sim_live_page(request: Request, tx: str | None = None, rx: str | None = None):
+    """The simulator's live forecasts: what waits, what scored, and how well.
+
+    Every circuit the hub holds is listed, the followed first, with a
+    button to follow or stop it; the first is shown unless one is asked for.
+    Read from what :mod:`services.api.sim_live` stores, and reloaded every half
+    minute while the loop runs.
+    """
+    from . import sim_live
+
+    conn = request.app.state.db
+    circuits = sim_live.circuits(conn)
+    chosen = next((c for c in circuits if (c["tx"], c["rx"]) == (tx, rx)),
+                  circuits[0] if circuits else None)
+    return templates.TemplateResponse(request, "sim_live.html", {
+        "circuits": circuits, "chosen": chosen, "every": sim_live.interval(),
+        "view": (sim_live.view(conn, chosen["tx"], chosen["rx"])
+                 if chosen and chosen["followed"] else None),
+    })
+
+
 @router.get("/ui/archives")
 def archives_page(request: Request):
     """The folders this server indexes, and what each pass did.
