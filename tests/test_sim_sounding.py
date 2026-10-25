@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import dataclasses
 import json
 import math
+import random
 import warnings
 
 import numpy as np
@@ -169,6 +171,19 @@ def test_closed_loop_refuses_the_fast_part_from_shared_copies(tmp_path):
     shared = [_load(sounding.write_lfs(truth, tmp_path / "c0.lfs", seed=0))]
     with pytest.raises(ValueError, match="fast part"):
         check.closed_loop(truth, realisations=1, fast=True, synthetic=shared)
+
+
+def test_check_sounding_says_a_sounding_without_a_trace_has_none_to_simulate(tmp_path):
+    path = sounding.write_lfs(_state(), tmp_path, seed=random.randrange(2**31))
+    with pytest.raises(ValueError, match="no trace to simulate"):
+        check.check_sounding(path, realisations=2, workdir=tmp_path / "loop")
+
+
+def test_check_sounding_runs_no_loop_on_a_sounding_without_a_trace(tmp_path):
+    path = sounding.write_lfs(_state(), tmp_path, seed=random.randrange(2**31))
+    with contextlib.suppress(ValueError):
+        check.check_sounding(path, realisations=2, workdir=tmp_path / "loop")
+    assert not (tmp_path / "loop").exists(), "the loop ran on a traceless sounding"
 
 
 def test_trace_mask_is_around_the_trace(tmp_path):

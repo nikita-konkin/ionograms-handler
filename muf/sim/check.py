@@ -521,11 +521,14 @@ def check_sounding(path: str | Path, *, next_sounding: str | Path | None = None,
     ``next_sounding``, the circuit's following sounding, adds the natural
     change between the two as the scale the recovery errors are read on.
     ``fast`` measures the state's fast part from the sounding's phase first,
-    and reads it back from every synthetic sounding.
+    and reads it back from every synthetic sounding. A sounding the reader
+    finds no trace in is refused before the loop, which would recover nothing.
     """
     method = options.get("method", "contour")
     real = observe.load(path)
     truth = observe.from_ionogram(real, method=method, source=Path(path).name)
+    if not truth.modes:
+        raise ValueError("the sounding has no trace to simulate")
     if fast:
         from . import fast as fast_part
 

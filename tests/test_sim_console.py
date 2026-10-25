@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
+
+import pytest
 
 from muf.sim import console, presets, sounding
 from muf.sim.state import ChannelState, Sweep
@@ -47,6 +50,13 @@ def test_the_page_gets_the_real_ionogram_its_copies_and_the_next(tmp_path):
 def test_every_mode_of_the_state_is_drawn(tmp_path):
     a, _ = _soundings(tmp_path)
     assert [m["name"] for m in console.build(a, realisations=2)["modes"]] == ["1F"]
+
+
+def test_a_sounding_without_a_trace_fails_saying_so(tmp_path):
+    state = ChannelState(presets.cyprus1_circuit(), T0, [], sweep=SHORT, source="test")
+    path = sounding.write_lfs(state, tmp_path, seed=random.randrange(2**31))
+    with pytest.raises(ValueError, match="no trace to simulate"):
+        console.build(path, realisations=2)
 
 
 def test_the_copies_shown_leave_no_file_behind(tmp_path):
