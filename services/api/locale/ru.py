@@ -97,6 +97,7 @@ MESSAGES: dict[str, str] = {
     "sim.js.absent": "Ещё не построено. Запустите симулятор.",
     "sim.js.queued": "В очереди, перед ним: {ahead}",
     "sim.js.running": "Симулятор работает на этом зондировании…",
+    "sim.js.progress": "Симулятор работает: шаг {done} из {total}, прошло {s} с",
     "sim.js.failed": "Запуск не удался: {error}",
     "sim.live": "Прогноз в реальном времени",
 

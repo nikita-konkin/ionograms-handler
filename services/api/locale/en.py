@@ -107,6 +107,7 @@ MESSAGES: dict[str, str] = {
     "sim.js.absent": "Not built yet. Run the simulator to build it.",
     "sim.js.queued": "Queued, {ahead} ahead of it",
     "sim.js.running": "The simulator is running on this sounding…",
+    "sim.js.progress": "The simulator is running: step {done} of {total}, {s} s so far",
     "sim.js.failed": "The run failed: {error}",
     "sim.live": "Live forecasts",
 

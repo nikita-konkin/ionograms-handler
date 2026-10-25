@@ -356,3 +356,11 @@ def test_a_coherent_width_is_not_taken_for_scatter(tmp_path, monkeypatch):
     assert back.modes[0].delay_spread_us == 0.0
     assert "coherent" in back.modes[0].provenance["delay_spread"].note
     assert back.metrics["cross_trace"][back.modes[0].name]["spread_us"] > 20.0
+
+
+def test_closed_loop_reports_each_realisation_as_it_is_read_back(tmp_path):
+    calls = []
+    check.closed_loop(_state(_law(spread_hz=0.5)), realisations=2, workdir=tmp_path,
+                      progress=lambda done, total: calls.append((done, total)))
+    assert calls == [(0, 2), (1, 2), (2, 2)], \
+        f"the closed loop did not report each realisation: {calls}"

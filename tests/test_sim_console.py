@@ -53,3 +53,13 @@ def test_the_copies_shown_leave_no_file_behind(tmp_path):
     a, b = _soundings(tmp_path)
     console.build(a, realisations=2)
     assert sorted(tmp_path.iterdir()) == sorted([a, b]), "a copy shown was left on disk"
+
+
+def test_a_build_reports_each_step_it_takes(tmp_path):
+    a, _ = _soundings(tmp_path)
+    calls = []
+    console.build(a, realisations=2,
+                  progress=lambda done, total: calls.append((done, total)))
+    total = 2 + console.SHOWN + 1
+    assert calls == [(k, total) for k in range(total + 1)], \
+        f"the build did not report each step: {calls}"
