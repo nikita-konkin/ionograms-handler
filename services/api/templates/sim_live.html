@@ -49,8 +49,11 @@
   {% set s = view.latest.get(lead) %}
   {% if s %}
   {% set e = s.event %}
+  {% set suspect = e.clock and e.clock.suspect %}
   <p><b>{{ t('sim_live.latest') }}</b>: {{ t('sim_live.pair', at=e.issued_at[11:19], due=e.at[11:19]) }}</p>
-  <div class="scroll"><table>
+  {% if suspect %}<p><span class="pill warn">{{ t('sim_live.clock') }}</span>
+    <span class="note">{{ t('sim_live.clock_why', why=e.clock.why) }}</span></p>{% endif %}
+  <div class="scroll{% if suspect %} muted{% endif %}"><table>
     <tr><th></th><th>{{ t('sim_live.col.forecast') }}</th><th>{{ t('sim_live.col.truth') }}</th><th>{{ t('sim_live.col.error') }}</th></tr>
     {% for key, label in (('muf_mhz', t('sim_live.muf')), ('lof_mhz', t('sim_live.lof'))) %}
     {% set b = e.pair[key] %}
@@ -61,7 +64,7 @@
         {%- if b.censored_truth or b.censored_forecast %} <span class="note">{{ t('sim_live.bound') }}</span>{% endif %}</td></tr>
     {% endfor %}
   </table></div>
-  <p class="note">{{ t('sim_live.modes', matched=e.pair.modes.matched, missed=e.pair.modes.missed, false=e.pair.modes['false']) }}
+  <p class="note{% if suspect %} muted{% endif %}">{{ t('sim_live.modes', matched=e.pair.modes.matched, missed=e.pair.modes.missed, false=e.pair.modes['false']) }}
     · {{ t('sim_live.delay') }} {{ num(s.figures.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}
     · C/N0 {{ num(s.figures.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}</p>
   <div class="pair">
@@ -81,7 +84,8 @@
   <div class="scroll"><table>
     <tr><th>{{ t('sim_live.col.lead') }}</th><th>{{ t('sim_live.col.span') }}</th><th>n</th>
       <th>{{ t('sim_live.muf') }}</th><th>{{ t('sim_live.lof') }}</th><th>{{ t('sim_live.col.delay') }}</th>
-      <th>C/N0</th><th>{{ t('sim_live.col.top') }}</th><th>{{ t('sim_live.col.modes') }}</th></tr>
+      <th>C/N0</th><th>{{ t('sim_live.col.top') }}</th><th>{{ t('sim_live.col.modes') }}</th>
+      <th>{{ t('sim_live.col.apart') }}</th></tr>
     {% for lead in view.leads %}
     {% for span, label in (('hour', t('sim_live.span.hour')), ('day', t('sim_live.span.day'))) %}
     {% set f = view.figures[span].get(lead) %}
@@ -94,8 +98,9 @@
       <td>{{ num(f.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}</td>
       <td>{{ num(f.top_median_mhz, '%.2f', t('sim_live.unit.mhz')) }}</td>
       <td>{{ f.modes.matched }} / {{ f.modes.missed }} / {{ f.modes['false'] }}</td>
+      <td{% if f.set_apart %} class="warn"{% endif %}>{{ f.set_apart }}</td>
       {% else %}
-      <td colspan="7" class="muted">{{ t('sim_live.nothing') }}</td>
+      <td colspan="8" class="muted">{{ t('sim_live.nothing') }}</td>
       {% endif %}</tr>
     {% endfor %}
     {% endfor %}
@@ -105,7 +110,7 @@
 
 <div class="panel">
   <h2>{{ t('sim_live.events') }}</h2>
-  <pre style="white-space:pre-wrap;font-size:.8rem;margin:0">{% for line in view.recent %}{{ line }}
+  <pre style="white-space:pre-wrap;font-size:.8rem;margin:0">{% for r in view.recent %}<span{% if r.suspect %} class="muted"{% endif %}>{{ r.line }}</span>
 {% endfor %}</pre>
 </div>
 {% endif %}

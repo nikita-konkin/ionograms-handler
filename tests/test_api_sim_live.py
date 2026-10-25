@@ -226,12 +226,16 @@ def _held(conn, pending=()) -> None:
 
 
 def _scored(conn, epoch: float, muf_error: float, *, sounding_id=None,
-            source_id=None, tx: str = "NIC2") -> None:
+            source_id=None, tx: str = "NIC2", suspect: bool = False) -> None:
     bounded = {"forecast": 20.0, "truth": 20.0 - muf_error, "error": muf_error,
                "censored_truth": False, "censored_forecast": False}
     body = {"schema": "muf.sim.live.event", "version": 1, "event": "scored",
             "at": _utc(epoch), "from": "a.h5", "to": "b.h5", "lead_s": 600.0,
             "issued_at": _utc(epoch - 600.0), "valid_at": _utc(epoch),
+            "clock": {"suspect": suspect, "jump_us": 1520.0 if suspect else 40.0,
+                      "offsets_us": [480.0, 2000.0 if suspect else 520.0],
+                      "why": "the echo moved 1520 us between the soundings"
+                             if suspect else ""},
             "pair": {"muf_mhz": bounded, "lof_mhz": bounded,
                      "modes": {"matched": 1, "missed": 0, "false": 0}},
             "modes": [{"status": "matched", "delay_rms_us": 10.0, "cn0_rms_db": 1.0,
@@ -344,6 +348,54 @@ def test_the_live_page_offers_a_circuit_not_followed(client):
     _sounding(client.app.state.db, "2026-10-24 12:00:15", tx="NIC1")
     page = client.get("/ui/sim/live?tx=NIC1&rx=yoshkar-ola").text
     assert 'id="liveFollow"' in page, "the page did not offer to follow the circuit"
+
+
+def test_the_view_leaves_clock_suspect_pairs_out_of_its_figures(tmp_path):
+    conn = _conn(tmp_path)
+    _held(conn)
+    _scored(conn, T - 600.0, 1.0)
+    _scored(conn, T, 9.0, suspect=True)
+    assert sim_live.view(conn, "NIC2", "yoshkar-ola")["figures"]["hour"][600.0]["n"] \
+        == 1, "a clock-suspect pair was counted in the view's figures"
+
+
+def test_the_view_keeps_a_clock_suspect_latest_score_in_its_own_figures(tmp_path):
+    conn = _conn(tmp_path)
+    _held(conn)
+    _scored(conn, T, 9.0, suspect=True)
+    assert sim_live.view(conn, "NIC2", "yoshkar-ola")["latest"][600.0]["figures"][
+        "n"] == 1, "the latest score's own figures left it out"
+
+
+def test_the_view_marks_the_clock_suspect_events(tmp_path):
+    conn = _conn(tmp_path)
+    _held(conn)
+    _scored(conn, T - 600.0, 1.0)
+    _scored(conn, T, 9.0, suspect=True)
+    recent = sim_live.view(conn, "NIC2", "yoshkar-ola")["recent"]
+    assert [r["suspect"] for r in recent] == [True, False], \
+        "the view did not mark the clock-suspect events"
+
+
+def test_the_live_page_says_a_score_was_set_apart(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 9.0, suspect=True)
+    assert "set apart from the running figures" in client.get("/ui/sim/live").text, \
+        "the page did not say the score was set apart"
+
+
+def test_the_live_page_counts_the_pairs_set_apart(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 9.0, suspect=True)
+    assert "Set apart" in client.get("/ui/sim/live").text, \
+        "the page did not count the pairs set apart"
+
+
+def test_an_exported_event_says_whether_the_clock_broke_it(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T, 9.0, suspect=True)
+    event = sim_live.events(conn, "NIC2", "yoshkar-ola")[0]
+    assert event["clock"]["suspect"] is True, "the export lost the clock's verdict"
 
 
 def test_the_events_after_an_id_are_exported_oldest_first(tmp_path):

@@ -19,6 +19,11 @@ mode's delay, C/N0 and top (:func:`muf.sim.forecast.score` with no
 carriers) -- and the ionograms are not: they are for the eye. The running
 figures (:func:`figures`) are plain sums over the pairs scored, by lead,
 with no intervals; ``muf sim series`` and ``muf sim summary`` give those.
+
+A pair across a jump of the receiver's clock is scored like any other, with
+the verdict beside its values, and set apart from the figures
+(:mod:`muf.sim.clock`). Every sounding says where its echo began against
+the ground line, so one with no trace can say where its echo went.
 """
 
 from __future__ import annotations
@@ -34,8 +39,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import clock, series, summary
 from . import forecast as fc
-from . import series, summary
 from .state import ChannelState
 
 EVENT_SCHEMA = "muf.sim.live.event"
@@ -142,7 +147,7 @@ def _settle(p: Pending, session: series.Session, state: ChannelState | None,
         return _waited(p, "lapsed", at, reason="no trace in the truth's sounding")
     score = fc.score(p.forecast, found, carriers=[])
     return _waited(p, "scored", at, to=session.path.name, pair=score.pair,
-                   modes=score.modes)
+                   modes=score.modes, clock=clock.verdict(p.forecast, state))
 
 
 def step(ledger: Ledger, session: series.Session, state: ChannelState | None,
@@ -169,7 +174,8 @@ def step(ledger: Ledger, session: series.Session, state: ChannelState | None,
             waiting.append(p)
     times = (*ledger.times, at)[-(GAPS + 1):]
     if state is not None and not state.modes:
-        events.append(event("untraced", at, **{"from": session.path.name}))
+        events.append(event("untraced", at, **{
+            "from": session.path.name, "echo_offset_us": clock.offset_us(state)}))
     elif state is not None:
         interval = cadence(times)
         ahead = (list(leads) if leads is not None
@@ -183,7 +189,8 @@ def step(ledger: Ledger, session: series.Session, state: ChannelState | None,
                 "from": session.path.name, "lead_s": float(lead),
                 "valid_at": _utc(p.forecast.epoch),
                 "muf_mhz": muf,
-                "modes": len(state.modes)}))
+                "modes": len(state.modes),
+                "echo_offset_us": clock.offset_us(state)}))
     return Ledger(tuple(waiting), times), events
 
 
@@ -252,7 +259,8 @@ def _figures(rows: list[dict]) -> dict:
             "top_median_mhz": _summed(_weighed(tops, TOP), n, "median")}
 
 
-def figures(events: Iterable[dict], *, since: float | None = None) -> dict[float, dict]:
+def figures(events: Iterable[dict], *, since: float | None = None,
+            suspect: bool = False) -> dict[float, dict]:
     """The scored pairs' figures from ``since`` on, by lead.
 
     n; the MUF's and LOF's mean |error| over the pairs censored on neither
@@ -261,12 +269,17 @@ def figures(events: Iterable[dict], *, since: float | None = None) -> dict[float
     censored on either side left out. A mode weighs by the band it shares
     with its pair, as in ``muf sim summary``: these are its
     :func:`muf.sim.summary.metrics`, with no intervals.
+
+    The clock-suspect pairs are left out and counted, ``set_apart``;
+    ``suspect`` keeps them in, as one pair's own figures want.
     """
     by: dict[float, list[dict]] = {}
     for e in events:
         if e["event"] == "scored" and (since is None or _epoch(e["at"]) >= since):
             by.setdefault(float(e["lead_s"]), []).append(e)
-    return {lead: _figures(rows) for lead, rows in sorted(by.items())}
+    return {lead: {**_figures([r for r in rows if suspect or not clock.suspect(r)]),
+                   "set_apart": 0 if suspect else sum(map(clock.suspect, rows))}
+            for lead, rows in sorted(by.items())}
 
 
 def _ahead(lead_s: float) -> str:
@@ -302,12 +315,17 @@ def format_event(e: dict) -> str:
         return (f"{at}  scored  {_ahead(e['lead_s'])} from {_clock(e['issued_at'])}: "
                 f"MUF {_error(pair['muf_mhz'])}, LOF {_error(pair['lof_mhz'])}, "
                 f"modes {counts['matched']} matched, {counts['missed']} missed, "
-                f"{counts['false']} false, delay {_number(delay, '.0f', 'us')} RMS")
+                f"{counts['false']} false, delay {_number(delay, '.0f', 'us')} RMS"
+                + (f" -- clock-suspect: {e['clock']['why']}" if clock.suspect(e)
+                   else ""))
     if kind == "lapsed":
         return (f"{at}  lapsed  {_ahead(e['lead_s'])} from {_clock(e['issued_at'])}: "
                 f"{e['reason']}")
     if kind == "untraced":
-        return f"{at}  no trace in {e['from']}, so nothing issued"
+        offset = e.get("echo_offset_us")
+        return (f"{at}  no trace in {e['from']}, so nothing issued"
+                + ("" if offset is None else
+                   f"; its echo begins {offset / 1e3:+.2f} ms from the ground line"))
     return f"{at}  {e['from']} not observed: {e['reason']}"
 
 
@@ -323,6 +341,8 @@ def format_figures(found: Mapping[float, dict], label: str) -> str:
         f"C/N0 {_number(f['cn0_rms_db'], '.1f', 'dB')}, "
         f"top {_number(f['top_median_mhz'], '.2f', 'MHz')}, modes "
         f"{f['modes']['matched']}/{f['modes']['missed']}/{f['modes']['false']}"
+        + (f"; {f['set_apart']} set apart, clock-suspect" if f.get("set_apart")
+           else "")
         for lead, f in found.items())
 
 
