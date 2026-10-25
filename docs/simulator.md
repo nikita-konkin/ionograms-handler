@@ -89,7 +89,11 @@ paired at the nose. Each track becomes one mode:
 - **delay**: `muf.trace.reconstruct`'s smoothing spline on 0.1 MHz knots,
   converted from range with the format's own axis -- `.lfs` is calibrated
   with c = 3e5 km/s and divides by 2 for vertical sounding, v2 uses c exact
-  and no divisor;
+  and no divisor. Across a gap without points wider than 0.5 MHz the knots
+  join the gap's edges in a straight line instead: the spline has no data
+  there to hold it, and can swing thousands of km off the trace while still
+  passing close to every point. A lone point beyond such a gap is taken as
+  it is;
 - **band**: the extent of the track;
 - **C/N0**: the ionogram's power along the curve, summed over the five range
   bins around it (a Hann window spreads a tone over 1.5 bins, so the sum does
