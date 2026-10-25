@@ -14,6 +14,8 @@ than what is there.**
 from __future__ import annotations
 
 import datetime as dt
+import os
+import random
 import urllib.error
 from pathlib import Path
 
@@ -159,6 +161,38 @@ def test_cache_state_still_reports_a_real_file(cache):
         (cache / source.filename).write_text(GOOD)
     state = indices.cache_state(cache)
     assert all(age is not None and age >= 0 for age in state.values()), state
+
+
+def a_stamp_the_float_clock_reads_early(path: Path) -> int:
+    """An instant whose float form, as `time.time()` makes it, lands one ulp
+    before the ``st_mtime`` of a file stamped with that same instant."""
+    for stamp in random.sample(range(17 * 10**17, 19 * 10**17, 100), 1000):
+        os.utime(path, ns=(stamp, stamp))
+        if stamp / 1e9 < path.stat().st_mtime:
+            return stamp
+    raise AssertionError("no instant out of 1000 rounded the float clock early")
+
+
+def test_cache_state_reads_a_file_stamped_at_its_own_instant_as_no_age(
+        cache, tmp_path):
+    """Windows, 2026-10-25: the test above failed the full suite with an age
+    of -2.384e-07 s (#48).
+
+    NTFS stamps a file with the same coarse tick Python 3.12's clock reads, so
+    a file written just before `cache_state` often carries the very instant it
+    measures from. As floats the two came out up to a microsecond apart, the
+    clock behind the file.
+    """
+    probe = tmp_path / "probe"
+    probe.write_text(GOOD)
+    stamp = a_stamp_the_float_clock_reads_early(probe)
+    for source in indices.SOURCES:
+        (cache / source.filename).write_text(GOOD)
+        os.utime(cache / source.filename, ns=(stamp, stamp))
+    state = indices.cache_state(cache, now_ns=stamp)
+    assert all(age == 0 for age in state.values()), (
+        f"a file stamped at the instant measured from was not zero seconds old: "
+        f"{state}")
 
 
 # --------------------------------------------------------------------------
