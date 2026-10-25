@@ -226,7 +226,7 @@ def _held(conn, pending=()) -> None:
 
 
 def _scored(conn, epoch: float, muf_error: float, *, sounding_id=None,
-            source_id=None) -> None:
+            source_id=None, tx: str = "NIC2") -> None:
     bounded = {"forecast": 20.0, "truth": 20.0 - muf_error, "error": muf_error,
                "censored_truth": False, "censored_forecast": False}
     body = {"schema": "muf.sim.live.event", "version": 1, "event": "scored",
@@ -239,7 +239,7 @@ def _scored(conn, epoch: float, muf_error: float, *, sounding_id=None,
                        "f_hi_censored_forecast": False, "overlap_mhz": 1.0}]}
     conn.execute("INSERT INTO live_event (tx, rx, epoch, kind, lead_s, sounding_id, "
                  "source_id, body) VALUES (?,?,?,?,?,?,?,?)",
-                 ("NIC2", "yoshkar-ola", epoch, "scored", 600.0, sounding_id,
+                 (tx, "yoshkar-ola", epoch, "scored", 600.0, sounding_id,
                   source_id, json.dumps(body)))
     conn.commit()
 
@@ -344,3 +344,68 @@ def test_the_live_page_offers_a_circuit_not_followed(client):
     _sounding(client.app.state.db, "2026-10-24 12:00:15", tx="NIC1")
     page = client.get("/ui/sim/live?tx=NIC1&rx=yoshkar-ola").text
     assert 'id="liveFollow"' in page, "the page did not offer to follow the circuit"
+
+
+def test_the_events_after_an_id_are_exported_oldest_first(tmp_path):
+    conn = _conn(tmp_path)
+    for epoch in (T - 1200.0, T - 600.0, T):
+        _scored(conn, epoch, 1.0)
+    assert [e["id"] for e in sim_live.events(conn, "NIC2", "yoshkar-ola", after=1)] \
+        == [2, 3], "the export did not carry on after the id it was given"
+
+
+def test_an_exported_event_keeps_its_forecast_and_its_truth(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T, 0.5)
+    pair = sim_live.events(conn, "NIC2", "yoshkar-ola")[0]["pair"]
+    assert (pair["muf_mhz"]["forecast"], pair["muf_mhz"]["truth"]) == (20.0, 19.5), \
+        "the export lost the forecast's or the truth's value"
+
+
+def test_an_exported_event_names_its_circuit(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T, 0.5)
+    event = sim_live.events(conn, "NIC2", "yoshkar-ola")[0]
+    assert (event["tx"], event["rx"]) == ("NIC2", "yoshkar-ola"), \
+        "the exported event does not name its circuit"
+
+
+def test_the_export_leaves_other_circuits_out(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T - 600.0, 1.0, tx="NIC1")
+    _scored(conn, T, 0.5)
+    assert [e["tx"] for e in sim_live.events(conn, "NIC2", "yoshkar-ola")] \
+        == ["NIC2"], "another circuit's events were exported"
+
+
+def test_the_export_stops_at_its_limit(tmp_path):
+    conn = _conn(tmp_path)
+    for epoch in (T - 1200.0, T - 600.0, T):
+        _scored(conn, epoch, 1.0)
+    assert len(sim_live.events(conn, "NIC2", "yoshkar-ola", limit=2)) == 2, \
+        "the export went past its limit"
+
+
+def test_the_events_route_answers_in_json_lines(client):
+    _scored(client.app.state.db, T, 0.5)
+    line = client.get("/sim/live/NIC2/yoshkar-ola/events").text.splitlines()[0]
+    assert json.loads(line)["event"] == "scored", "the route's line is not the event"
+
+
+def test_the_events_route_says_it_answers_in_json_lines(client):
+    _scored(client.app.state.db, T, 0.5)
+    assert client.get("/sim/live/NIC2/yoshkar-ola/events").headers["content-type"] \
+        .startswith("application/x-ndjson"), "the route did not say it is JSON Lines"
+
+
+def test_the_events_route_carries_on_after_an_id(client):
+    _scored(client.app.state.db, T - 600.0, 1.0)
+    _scored(client.app.state.db, T, 0.5)
+    lines = client.get("/sim/live/NIC2/yoshkar-ola/events?after=1").text.splitlines()
+    assert [json.loads(line)["id"] for line in lines] == [2], \
+        "the route did not carry on after the id it was given"
+
+
+def test_the_events_route_refuses_an_unbounded_page(client):
+    assert client.get("/sim/live/NIC2/yoshkar-ola/events?limit=100000").status_code \
+        == 422, "the route took a page past its bound"

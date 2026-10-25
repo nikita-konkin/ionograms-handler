@@ -602,6 +602,13 @@ default scan of every 15 minutes a five-minute circuit is forecast and
 scored three soundings at a time, so a hub that shows it sets
 `ARCHIVE_SCAN_INTERVAL_S` to 60-120.
 
+`GET /sim/live/{tx}/{rx}/events?after=ID` reads a circuit's events out as
+JSON Lines, oldest first, each as `muf sim live --out` writes it -- a score
+with its forecast and truth side by side -- with the hub's id added.
+`tools/pull_live_events.py --hub URL --out DIR TX:RX ...` appends each
+circuit's new events to `DIR/TX__RX.jsonl`, carrying on after the last id the
+file holds; run more often than every `LIVE_KEEP_DAYS`, it keeps everything.
+
 ## Related work
 
 ![HF channel simulators compared](figures/related.svg)
