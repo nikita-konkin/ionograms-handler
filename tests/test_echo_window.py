@@ -13,6 +13,7 @@ and passes every test that does not ask *where the echo went*.
 from __future__ import annotations
 
 import hashlib
+import random
 import warnings
 
 import numpy as np
@@ -21,7 +22,7 @@ import pytest
 h5py = pytest.importorskip("h5py")
 signal = pytest.importorskip("scipy.signal")
 
-from conftest import ECHO_RANGE_KM, make_header_bytes  # noqa: E402
+from conftest import ECHO_RANGE_KM, chirp_range_gates_m, make_header_bytes  # noqa: E402
 
 from muf import cli, echo_window, io_chirp, loader, spectro  # noqa: E402
 
@@ -789,3 +790,38 @@ def test_cli_writes_and_info_reports_it(make_lfs_iq, tmp_path, capsys):
     assert cli.main(["info", str(target)]) == 0
     text = capsys.readouterr().out
     assert "echo window" in text and "Hz (/" in text
+
+
+# --------------------------------------------------------------------------
+# Where the echo begins
+# --------------------------------------------------------------------------
+
+#: NIC to Yoshkar-Ola along the ground, by the station registry.
+NIC_GROUND_KM = 2587.8
+
+
+def _ionozond(make_chirp_h5, start_km):
+    """An ionozond product of NIC1 at Yoshkar-Ola, its echo beginning
+    ``start_km`` along the path, or none at all for ``None``."""
+    rows = random.randint(16, 24)
+    power = np.random.exponential(1.0, (rows, 8192))
+    if start_km is not None:
+        km = chirp_range_gates_m(8192, 40_000.0, 100_000.0) / 1e3
+        power[rows // 4:, (km >= start_km) & (km < start_km + 60.0)] *= 1e3
+    return loader.load(make_chirp_h5(
+        power, t0=1792843215.0, txname="NIC1", station_name="yoshkar-ola",
+        max_range_extent_km=8000.0,
+        name="lfm_ionogram-NIC1-yoshkar-ola-ch0-000-1792843215.00.h5"))
+
+
+def test_the_echo_offset_is_where_the_echo_begins_against_the_ground_line(
+        make_chirp_h5):
+    start = NIC_GROUND_KM + random.uniform(-900.0, 600.0)
+    offset = echo_window.echo_offset_s(_ionozond(make_chirp_h5, start))
+    assert abs(offset - (start - NIC_GROUND_KM) / 299792.458) < 0.2e-3, \
+        "the echo offset is not where the echo begins against the ground line"
+
+
+def test_a_sounding_with_no_echo_has_no_echo_offset(make_chirp_h5):
+    assert echo_window.echo_offset_s(_ionozond(make_chirp_h5, None)) is None, \
+        "a sounding with no echo was given an echo offset"

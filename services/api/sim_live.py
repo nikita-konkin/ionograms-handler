@@ -20,7 +20,9 @@ Each turn runs in a process of its own (:mod:`services.api.apart`): a
 sounding is read and its state fitted, seconds of numerics. The states are
 kept :data:`KEEP_S` in :func:`folder`, under the image's build, since a
 forecast is scored against a later sounding on its own range; the events
-are kept ``LIVE_KEEP_DAYS`` days (30).
+are kept ``LIVE_KEEP_DAYS`` days (30). :func:`events` reads them out, each
+with its forecast and truth side by side, for a copy that outlasts them
+(``tools/pull_live_events.py``).
 
 The scans set the pace. At the default of a scan every 15 minutes, a
 five-minute circuit's forecasts are issued and scored three soundings at a
@@ -57,6 +59,9 @@ HOUR_S, DAY_S = 3600.0, 86400.0
 
 #: Events the page lists.
 RECENT = 40
+
+#: Events one export answers with by default, and at most.
+PAGE, PAGE_MAX = 1000, 10_000
 
 
 def interval() -> float:
@@ -113,6 +118,16 @@ def _store(conn, tx: str, rx: str, sounding: dict, events: list[dict]) -> None:
             (tx, rx, epoch, e["event"], e.get("lead_s"), sounding["id"],
              None if source is None else source["id"],
              json.dumps(e, allow_nan=False)))
+
+
+def events(conn, tx: str, rx: str, *, after: int = 0, limit: int = PAGE) -> list[dict]:
+    """The circuit's stored events after event ``after``, oldest first, at most
+    ``limit``: each as :mod:`muf.sim.live` wrote it, with the hub's ``id``,
+    ``tx`` and ``rx`` added."""
+    return [{**json.loads(r["body"]), "id": r["id"], "tx": tx, "rx": rx}
+            for r in db.rows(conn, "SELECT id, body FROM live_event "
+                                   "WHERE tx = ? AND rx = ? AND id > ? "
+                                   "ORDER BY id LIMIT ?", (tx, rx, after, limit))]
 
 
 def circuits(conn) -> list[dict]:
@@ -211,9 +226,11 @@ def view(conn, tx: str, rx: str) -> dict | None:
     waiting; each lead's latest score, with its two soundings' ids for their
     ionograms; the figures (:func:`muf.sim.live.figures`) of the last hour
     and day before the newest sounding, not before the clock, so a circuit
-    whose files come late reads the same; and the latest events as lines.
+    whose files come late reads the same; and the latest events as lines,
+    each marked when the receiver's clock broke its pair. The figures leave
+    those pairs out; a latest score's own figures keep it.
     """
-    from muf.sim import live
+    from muf.sim import clock, live
 
     held = db.one(conn, "SELECT taken_at, ledger FROM live_circuit "
                         "WHERE tx = ? AND rx = ?", (tx, rx))
@@ -229,7 +246,7 @@ def view(conn, tx: str, rx: str) -> dict | None:
         lead = float(e["lead_s"])
         latest.setdefault(lead, {"event": e, "sounding_id": r["sounding_id"],
                                  "source_id": r["source_id"],
-                                 "figures": live.figures([e])[lead]})
+                                 "figures": live.figures([e], suspect=True)[lead]})
     pending = []
     for p in ledger["pending"]:
         state = p["forecast"]
@@ -248,7 +265,8 @@ def view(conn, tx: str, rx: str) -> dict | None:
             "leads": sorted({p["lead_s"] for p in pending} | set(latest)),
             "figures": {"hour": live.figures(bodies, since=now - HOUR_S),
                         "day": live.figures(bodies)},
-            "recent": [live.format_event(json.loads(r["body"])) for r in recent]}
+            "recent": [{"line": live.format_event(e), "suspect": clock.suspect(e)}
+                       for e in (json.loads(r["body"]) for r in recent)]}
 
 
 def _prune(cache: Path) -> None:

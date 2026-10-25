@@ -133,6 +133,8 @@ MESSAGES: dict[str, str] = {
     "sim_live.col.truth": "Факт",
     "sim_live.col.error": "Ошибка",
     "sim_live.bound": "граница",
+    "sim_live.clock": "подозрение на сбой часов",
+    "sim_live.clock_why": "исключена из текущих показателей: {why}",
     "sim_live.modes": "моды: совпали {matched}, пропущены {missed}, ложные {false}",
     "sim_live.delay": "задержка",
     "sim_live.img.forecast": "Прогноз: сеанс {at}",
@@ -141,12 +143,15 @@ MESSAGES: dict[str, str] = {
     "sim_live.figures_note":
         "МПЧ и НПЧ: средняя |ошибка| по парам без цензурирования. Задержка и "
         "C/N0: СКО по совпавшим модам, каждая с весом по общей с парой полосе. "
-        "Верх моды: медиана |ошибки|. Моды: совпали, пропущены, ложные.",
+        "Верх моды: медиана |ошибки|. Моды: совпали, пропущены, ложные. "
+        "Исключено: пары, разделённые скачком часов приёмника; в остальные "
+        "показатели они не входят.",
     "sim_live.col.lead": "Упреждение",
     "sim_live.col.span": "За",
     "sim_live.col.delay": "Задержка",
     "sim_live.col.top": "Верх моды",
     "sim_live.col.modes": "Моды",
+    "sim_live.col.apart": "Исключено",
     "sim_live.span.hour": "последний час",
     "sim_live.span.day": "последние 24 ч",
     "sim_live.nothing": "оценок нет",

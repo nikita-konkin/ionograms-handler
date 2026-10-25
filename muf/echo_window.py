@@ -550,6 +550,24 @@ def echo_gate(power, vrange, geometry: tuple[float, float] | None = None, *,
                     sigma=main[0], reach=reach, runs=len(kept))
 
 
+def echo_offset_s(ion: Ionogram) -> float | None:
+    """Where the sounding's echo begins against its path's ground line, seconds.
+
+    No echo can begin before the ground line, so on a receiver that records
+    on a schedule this is its clock's error with the ionosphere's excess
+    inside it: what the station's ``epoch_offset_s`` reads on an ionozond
+    receiver, and what the simulator sets a forecast's pair apart by
+    (:mod:`muf.sim.clock`). ``None`` on a path of unknown geometry, or when
+    no range stands out (:func:`echo_gate`).
+    """
+    ground = calibrate.ground_range_km(ion.header)
+    if ground is None:
+        return None
+    gate = echo_gate(ion.power, ion.vrange,
+                     calibrate.geometry_gate(ion.header, margin_km=0.0))
+    return None if gate is None else (gate.lo_km - ground) / (io_chirp.C_M_S / 1e3)
+
+
 def _edge_sigma(profile, vrange, outer: float, inner: float) -> float:
     """The echo statistic's peak between the window's edge ``outer`` and
     ``inner``, a margin inside it. Half-open at ``inner``: that is where a

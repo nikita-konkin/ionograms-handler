@@ -606,6 +606,27 @@ default scan of every 15 minutes a five-minute circuit is forecast and
 scored three soundings at a time, so a hub that shows it sets
 `ARCHIVE_SCAN_INTERVAL_S` to 60-120.
 
+`GET /sim/live/{tx}/{rx}/events?after=ID` reads a circuit's events out as
+JSON Lines, oldest first, each as `muf sim live --out` writes it -- a score
+with its forecast and truth side by side -- with the hub's id added.
+`tools/pull_live_events.py --hub URL --out DIR TX:RX ...` appends each
+circuit's new events to `DIR/TX__RX.jsonl`, carrying on after the last id the
+file holds; run more often than every `LIVE_KEEP_DAYS`, it keeps everything.
+
+A receiver whose GPSDO has lost lock free-runs, and its echoes jump with its
+clock from one sounding to the next. A forecast scored across such a jump
+measures the clock, so each pair is checked (`muf/sim/clock.py`): every
+sounding records where its echo begins against the ground line, the reading
+the station's `epoch_offset_s` takes, and a pair is **clock-suspect** when
+that moved more than 250 us between its two soundings, or when either
+echo begins outside the station's window (0.5 ms before the ground line to
+two hops at 450 km). A suspect pair is still scored, with the verdict
+beside its values (`clock` in a live event and in a series' `pairs.jsonl`),
+and set apart: the live figures, the page and `muf sim summary` leave it
+out and count it. The jump is not taken out of the truth, since it also
+holds the ionosphere's own change. A run observed before the check carries
+no verdict, so nothing in it is set apart until it is run again.
+
 ## Related work
 
 ![HF channel simulators compared](figures/related.svg)

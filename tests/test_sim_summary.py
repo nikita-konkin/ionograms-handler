@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from pathlib import Path
 
 import numpy as np
@@ -155,7 +156,7 @@ def _write(run: Path, name: str, rows: list[dict]) -> None:
             handle.write(json.dumps(row) + "\n")
 
 
-def _run(tmp_path, n=48, seed=1, edge=99.0) -> Path:
+def _run(tmp_path, n=48, seed=1, edge=99.0, suspect=()) -> Path:
     run = tmp_path / "run"
     run.mkdir()
     (run / "run.json").write_text(json.dumps(
@@ -168,6 +169,8 @@ def _run(tmp_path, n=48, seed=1, edge=99.0) -> Path:
         b = _state(T0 + 300.0 * (k + 1), delay[k + 1], top[k + 1], top[k + 1], edge)
         score = forecast.score(forecast.persist(a, 300.0), b)
         score.pair["zenith_deg"] = 60.0 + k
+        score.pair["clock"] = {"suspect": k in suspect, "jump_us": None,
+                               "offsets_us": [None, None], "why": ""}
         _write(run, "modes", score.modes)
         _write(run, "carriers", score.carriers)
         _write(run, "pairs", [score.pair])
@@ -280,3 +283,28 @@ def test_rows_in_another_order_sum_up_the_same(tmp_path):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert json.dumps(summary.summarise(run, reps=50)) == before, \
         "the summary hangs on the order the rows were written in"
+
+
+def test_clock_suspect_pairs_are_left_out_of_the_summary(tmp_path):
+    k = random.randint(1, 9)
+    out = summary.summarise(_run(tmp_path, suspect=set(random.sample(range(48), k))))
+    assert out["pairs"] == 48 - k, "a clock-suspect pair was summed up"
+
+
+def test_a_clock_suspect_pairs_modes_are_left_out_of_the_summary(tmp_path):
+    k = random.randint(1, 9)
+    out = summary.summarise(_run(tmp_path, suspect=set(random.sample(range(48), k))))
+    assert out["all"]["mode_counts"]["hits"] == 48 - k, \
+        "a clock-suspect pair's modes were summed up"
+
+
+def test_the_summary_counts_the_pairs_it_set_apart(tmp_path):
+    k = random.randint(1, 9)
+    out = summary.summarise(_run(tmp_path, suspect=set(random.sample(range(48), k))))
+    assert out["set_apart"] == k, "the summary did not count the pairs it set apart"
+
+
+def test_the_summary_says_how_many_pairs_it_set_apart(tmp_path):
+    out = summary.summarise(_run(tmp_path, suspect={3, 17}))
+    assert "2 clock-suspect pairs set apart" in summary.format_summary(out), \
+        "the summary did not say how many pairs it set apart"

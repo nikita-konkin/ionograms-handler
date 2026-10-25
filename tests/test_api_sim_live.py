@@ -226,12 +226,16 @@ def _held(conn, pending=()) -> None:
 
 
 def _scored(conn, epoch: float, muf_error: float, *, sounding_id=None,
-            source_id=None) -> None:
+            source_id=None, tx: str = "NIC2", suspect: bool = False) -> None:
     bounded = {"forecast": 20.0, "truth": 20.0 - muf_error, "error": muf_error,
                "censored_truth": False, "censored_forecast": False}
     body = {"schema": "muf.sim.live.event", "version": 1, "event": "scored",
             "at": _utc(epoch), "from": "a.h5", "to": "b.h5", "lead_s": 600.0,
             "issued_at": _utc(epoch - 600.0), "valid_at": _utc(epoch),
+            "clock": {"suspect": suspect, "jump_us": 1520.0 if suspect else 40.0,
+                      "offsets_us": [480.0, 2000.0 if suspect else 520.0],
+                      "why": "the echo moved 1520 us between the soundings"
+                             if suspect else ""},
             "pair": {"muf_mhz": bounded, "lof_mhz": bounded,
                      "modes": {"matched": 1, "missed": 0, "false": 0}},
             "modes": [{"status": "matched", "delay_rms_us": 10.0, "cn0_rms_db": 1.0,
@@ -239,7 +243,7 @@ def _scored(conn, epoch: float, muf_error: float, *, sounding_id=None,
                        "f_hi_censored_forecast": False, "overlap_mhz": 1.0}]}
     conn.execute("INSERT INTO live_event (tx, rx, epoch, kind, lead_s, sounding_id, "
                  "source_id, body) VALUES (?,?,?,?,?,?,?,?)",
-                 ("NIC2", "yoshkar-ola", epoch, "scored", 600.0, sounding_id,
+                 (tx, "yoshkar-ola", epoch, "scored", 600.0, sounding_id,
                   source_id, json.dumps(body)))
     conn.commit()
 
@@ -344,3 +348,116 @@ def test_the_live_page_offers_a_circuit_not_followed(client):
     _sounding(client.app.state.db, "2026-10-24 12:00:15", tx="NIC1")
     page = client.get("/ui/sim/live?tx=NIC1&rx=yoshkar-ola").text
     assert 'id="liveFollow"' in page, "the page did not offer to follow the circuit"
+
+
+def test_the_view_leaves_clock_suspect_pairs_out_of_its_figures(tmp_path):
+    conn = _conn(tmp_path)
+    _held(conn)
+    _scored(conn, T - 600.0, 1.0)
+    _scored(conn, T, 9.0, suspect=True)
+    assert sim_live.view(conn, "NIC2", "yoshkar-ola")["figures"]["hour"][600.0]["n"] \
+        == 1, "a clock-suspect pair was counted in the view's figures"
+
+
+def test_the_view_keeps_a_clock_suspect_latest_score_in_its_own_figures(tmp_path):
+    conn = _conn(tmp_path)
+    _held(conn)
+    _scored(conn, T, 9.0, suspect=True)
+    assert sim_live.view(conn, "NIC2", "yoshkar-ola")["latest"][600.0]["figures"][
+        "n"] == 1, "the latest score's own figures left it out"
+
+
+def test_the_view_marks_the_clock_suspect_events(tmp_path):
+    conn = _conn(tmp_path)
+    _held(conn)
+    _scored(conn, T - 600.0, 1.0)
+    _scored(conn, T, 9.0, suspect=True)
+    recent = sim_live.view(conn, "NIC2", "yoshkar-ola")["recent"]
+    assert [r["suspect"] for r in recent] == [True, False], \
+        "the view did not mark the clock-suspect events"
+
+
+def test_the_live_page_says_a_score_was_set_apart(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 9.0, suspect=True)
+    assert "set apart from the running figures" in client.get("/ui/sim/live").text, \
+        "the page did not say the score was set apart"
+
+
+def test_the_live_page_counts_the_pairs_set_apart(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 9.0, suspect=True)
+    assert "Set apart" in client.get("/ui/sim/live").text, \
+        "the page did not count the pairs set apart"
+
+
+def test_an_exported_event_says_whether_the_clock_broke_it(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T, 9.0, suspect=True)
+    event = sim_live.events(conn, "NIC2", "yoshkar-ola")[0]
+    assert event["clock"]["suspect"] is True, "the export lost the clock's verdict"
+
+
+def test_the_events_after_an_id_are_exported_oldest_first(tmp_path):
+    conn = _conn(tmp_path)
+    for epoch in (T - 1200.0, T - 600.0, T):
+        _scored(conn, epoch, 1.0)
+    assert [e["id"] for e in sim_live.events(conn, "NIC2", "yoshkar-ola", after=1)] \
+        == [2, 3], "the export did not carry on after the id it was given"
+
+
+def test_an_exported_event_keeps_its_forecast_and_its_truth(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T, 0.5)
+    pair = sim_live.events(conn, "NIC2", "yoshkar-ola")[0]["pair"]
+    assert (pair["muf_mhz"]["forecast"], pair["muf_mhz"]["truth"]) == (20.0, 19.5), \
+        "the export lost the forecast's or the truth's value"
+
+
+def test_an_exported_event_names_its_circuit(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T, 0.5)
+    event = sim_live.events(conn, "NIC2", "yoshkar-ola")[0]
+    assert (event["tx"], event["rx"]) == ("NIC2", "yoshkar-ola"), \
+        "the exported event does not name its circuit"
+
+
+def test_the_export_leaves_other_circuits_out(tmp_path):
+    conn = _conn(tmp_path)
+    _scored(conn, T - 600.0, 1.0, tx="NIC1")
+    _scored(conn, T, 0.5)
+    assert [e["tx"] for e in sim_live.events(conn, "NIC2", "yoshkar-ola")] \
+        == ["NIC2"], "another circuit's events were exported"
+
+
+def test_the_export_stops_at_its_limit(tmp_path):
+    conn = _conn(tmp_path)
+    for epoch in (T - 1200.0, T - 600.0, T):
+        _scored(conn, epoch, 1.0)
+    assert len(sim_live.events(conn, "NIC2", "yoshkar-ola", limit=2)) == 2, \
+        "the export went past its limit"
+
+
+def test_the_events_route_answers_in_json_lines(client):
+    _scored(client.app.state.db, T, 0.5)
+    line = client.get("/sim/live/NIC2/yoshkar-ola/events").text.splitlines()[0]
+    assert json.loads(line)["event"] == "scored", "the route's line is not the event"
+
+
+def test_the_events_route_says_it_answers_in_json_lines(client):
+    _scored(client.app.state.db, T, 0.5)
+    assert client.get("/sim/live/NIC2/yoshkar-ola/events").headers["content-type"] \
+        .startswith("application/x-ndjson"), "the route did not say it is JSON Lines"
+
+
+def test_the_events_route_carries_on_after_an_id(client):
+    _scored(client.app.state.db, T - 600.0, 1.0)
+    _scored(client.app.state.db, T, 0.5)
+    lines = client.get("/sim/live/NIC2/yoshkar-ola/events?after=1").text.splitlines()
+    assert [json.loads(line)["id"] for line in lines] == [2], \
+        "the route did not carry on after the id it was given"
+
+
+def test_the_events_route_refuses_an_unbounded_page(client):
+    assert client.get("/sim/live/NIC2/yoshkar-ola/events?limit=100000").status_code \
+        == 422, "the route took a page past its bound"

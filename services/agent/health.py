@@ -1456,13 +1456,9 @@ def echo_offset(config: StationConfig, max_age_s: float = 6 * 3600.0) -> Metric:
             ion = loader.load(path)
         except Exception:
             continue
-        ground = calibrate.ground_range_km(ion.header)
-        if ground is None:
-            continue
-        gate = echo_window.echo_gate(ion.power, ion.vrange,
-                                     calibrate.geometry_gate(ion.header, margin_km=0.0))
-        if gate is not None:
-            measured.append(((gate.lo_km - ground) / C_KM_S, ground,
+        offset = echo_window.echo_offset_s(ion)
+        if offset is not None:
+            measured.append((offset, calibrate.ground_range_km(ion.header),
                              ion.header.tx_name))
     if len(measured) < ECHO_QUORUM:
         return Metric.unknown(

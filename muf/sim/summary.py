@@ -21,6 +21,9 @@ circuit's control point (day, the transition of zenith angles 85-100 deg,
 night), by the lead actually achieved, and the carriers by their frequency
 over the truth's MUF.
 
+The pairs the receiver's clock broke (:mod:`muf.sim.clock`) are set apart,
+their rows with them, and counted: their errors are the clock's.
+
 ``q``, the closed loop's RMS error over the forecast's, says whether the
 forecast's error is the channel's change at all: with no change it is
 1/sqrt 2, the forecast's error then two measurements' noise. Over
@@ -38,7 +41,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from . import forecast, link
+from . import clock, forecast, link
 from .series import RECOVERY_ERRORS, read_rows
 
 SUMMARY_SCHEMA = "muf.sim.forecast.summary"
@@ -241,14 +244,17 @@ class _Run:
 
     Rows are put in one order whatever order the workers wrote them in, so
     that every sum adds the same numbers the same way and two runs of the
-    same pairs give the same summary to the last bit.
+    same pairs give the same summary to the last bit. A clock-suspect pair
+    has no place, and its rows go with it.
     """
 
     def __init__(self, folder: Path) -> None:
         record = json.loads((folder / "run.json").read_text(encoding="utf-8"))
         self.params = record["params"]
-        self.pairs = sorted(read_rows(folder / "pairs.jsonl"),
+        rows = read_rows(folder / "pairs.jsonl")
+        self.pairs = sorted((r for r in rows if not clock.suspect(r)),
                             key=lambda r: (r["issued_at"], r["from"]))
+        self.set_apart = len(rows) - len(self.pairs)
         index = {(r["from"], r["to"]): k for k, r in enumerate(self.pairs)}
 
         def placed(name: str) -> list[tuple[int, dict]]:
@@ -451,7 +457,8 @@ def summarise(folder: str | Path, *, by: Sequence[str] = BY, block: int = BLOCK,
     """The run in ``folder`` summed up: ``summary.json``'s content.
 
     ``by`` names the cuts, of :data:`BY` (``mode`` is accepted and always
-    made: every section sums the mode classes apart).
+    made: every section sums the mode classes apart). ``set_apart`` counts
+    the clock-suspect pairs left out.
     """
     unknown = set(by) - set(BY) - {"mode"}
     if unknown:
@@ -464,8 +471,8 @@ def summarise(folder: str | Path, *, by: Sequence[str] = BY, block: int = BLOCK,
     draws = {b: resamples(stretches, block=b, reps=reps, rng=np.random.default_rng(0))
              .astype(np.float64) for b in sorted({*BLOCKS, block})} if run.pairs else {}
     out = {"schema": SUMMARY_SCHEMA, "version": VERSION, "pairs": len(run.pairs),
-           "stretches": len(stretches), "block": block, "reps": reps, "level": LEVEL,
-           "min_pairs": MIN_PAIRS, "params": params}
+           "set_apart": run.set_apart, "stretches": len(stretches), "block": block,
+           "reps": reps, "level": LEVEL, "min_pairs": MIN_PAIRS, "params": params}
     if not run.pairs:
         return {**out, "reason": "no pairs scored"}
     drawn = draws[block]
@@ -535,7 +542,9 @@ def format_summary(s: dict) -> str:
     """The headline figures, a few lines; the rest is ``summary.json``."""
     head = (f"{s['pairs']} pairs in {s['stretches']} unbroken stretches; "
             f"{s['level']:.0%} intervals from {s['reps']} resamples in blocks of "
-            f"{s['block']} pairs")
+            f"{s['block']} pairs"
+            + (f"; {s['set_apart']} clock-suspect pairs set apart"
+               if s.get("set_apart") else ""))
     if "all" not in s:
         return head + f"\n  {s.get('reason', '')}"
     a = s["all"]

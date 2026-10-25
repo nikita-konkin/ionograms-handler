@@ -42,6 +42,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 import warnings
@@ -284,23 +285,31 @@ def _fetch(url: str, cache_dir: Path, name: str, offline: bool = False) -> str:
     return text
 
 
-def cache_state(cache_dir: Path | None = None) -> dict[str, float | None]:
+def cache_state(cache_dir: Path | None = None,
+                now_ns: int | None = None) -> dict[str, float | None]:
     """Age in seconds of each source's cached copy, ``None`` when absent.
 
     The indicator shows this beside reachability because they fail
     independently and mean different things: unreachable with a fresh cache is
     a model still answering correctly, while reachable with no cache is a
     model that has never run.
+
+    ``now_ns`` is the instant to measure from, ``time.time_ns()`` when omitted.
+    The subtraction stays in integer nanoseconds. On Windows, Python 3.12 reads
+    its clock from the same coarse tick NTFS stamps files with, and as floats a
+    file written in that tick came out up to a microsecond younger than zero
+    (#48).
     """
     cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE
-    now = dt.datetime.now().timestamp()
+    now_ns = time.time_ns() if now_ns is None else now_ns
     out: dict[str, float | None] = {}
     for source in SOURCES:
         path = cache_dir / source.filename
         # An unusable file reports as absent, which is what it is. Reporting
         # its age instead is how an empty cache looked healthy for two days.
         try:
-            out[source.key] = now - path.stat().st_mtime if _usable(path) else None
+            out[source.key] = ((now_ns - path.stat().st_mtime_ns) / 1e9
+                               if _usable(path) else None)
         except OSError:
             out[source.key] = None
     return out
