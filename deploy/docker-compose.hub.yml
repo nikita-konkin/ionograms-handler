@@ -62,6 +62,12 @@ services:
       # 2.7x faster on the 10-core work server, and 8 was *slower* than
       # 4, because each chunk builds its own pool. Raise CHUNK with it.
       ARCHIVE_SCAN_JOBS: "${ARCHIVE_SCAN_JOBS:-1}"
+      # The simulator's live forecasts (services/api/sim_live.py): how often the
+      # loop looks for soundings the scans stored, 0 to turn it off, and how
+      # many days of its events are kept. It can only be as live as the scans
+      # are: a hub that shows it scans every minute or two, not every 15.
+      LIVE_INTERVAL_S: "${LIVE_INTERVAL_S:-60}"
+      LIVE_KEEP_DAYS: "${LIVE_KEEP_DAYS:-30}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.

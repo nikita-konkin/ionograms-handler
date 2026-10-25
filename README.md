@@ -1055,6 +1055,7 @@ different interpretations of one ionogram, not something to merge.
 | `muf detect TARGET`   | census a chirpsounder2 detection tree: which transmitters, on what schedule |
 | `muf stations`        | print the station coordinate registry                                       |
 | `muf echo-window TARGET` | keep the dechirped voltage around the echoes ([`docs/echo-window.md`](docs/echo-window.md)) |
+| `muf sim ...`          | HF channel simulator: states from soundings, synthetic `.lfs`, a signal through the channel ([`docs/simulator.md`](docs/simulator.md)) |
 
 ### Which commands read which format
 
@@ -1657,6 +1658,7 @@ muf/                    the pipeline
   interference.py       rejecting burst rows that cannot be echoes
   carriers.py           rejecting narrow features with no trace around them
   render.py, cli.py
+  sim/                  the channel simulator: state, observe, channel, sounding
 services/
   agent/                runs ON the station: health push, control, logs,
                         live feed, the echo-window cut, the ionozond schedule

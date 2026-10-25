@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ t('sim_live.title') }}{% endblock %}
+{% block hint %}{{ t('sim_live.hint') }}{% endblock %}
+{% block body %}
+<style>
+  .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(22rem, 1fr));
+          gap:.75rem; }
+  .pair figure { margin:0; }
+  .pair img { width:100%; height:auto; }
+</style>
+{%- macro num(value, spec, unit) -%}
+  {%- if value is none %}-{% else %}{{ spec|format(value) }} {{ unit }}{% endif -%}
+{%- endmacro -%}
+{%- macro ahead(seconds) -%}{{ t('sim_live.ahead', min='%g'|format(seconds / 60)) }}{%- endmacro -%}
+
+<div class="panel">
+  <h2>{{ t('sim_live.title') }}</h2>
+  {% if every <= 0 %}<p class="warn">{{ t('sim_live.off') }}</p>{% endif %}
+  {% if chosen %}
+  <p>{% for c in circuits %}<a class="pill{% if c.followed %} ok{% endif %}"
+       href="/ui/sim/live?tx={{ c.tx|urlencode }}&rx={{ c.rx|urlencode }}">
+       {%- if c == chosen %}<b>{{ c.tx }} → {{ c.rx }}</b>{% else %}{{ c.tx }} → {{ c.rx }}{% endif %}</a> {% endfor %}</p>
+  <p class="note">{{ t('sim_live.legend') }}</p>
+  <p>{% if view %}<button id="liveStop" class="pill" data-needs="archive">{{ t('sim_live.stop') }}</button>
+    {%- else %}<button id="liveFollow" class="pill" data-needs="archive">{{ t('sim_live.follow') }}</button>{% endif %}
+    <span id="liveSay" class="note"></span></p>
+  {% if view %}
+  <p class="note">{{ t('sim_live.taken', at=view.taken_at) }}
+    {%- if view.interval_s %} · {{ t('sim_live.interval', min='%g'|format(view.interval_s / 60)) }}{% endif %}
+    {%- if every > 0 %} · {{ t('sim_live.every', s='%g'|format(every)) }}{% endif %}</p>
+  {% else %}
+  <p class="muted">{{ t('sim_live.not_followed') }}</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">{{ t('sim_live.none') }}</p>
+  {% endif %}
+  <p class="note"><a href="/ui/sim">{{ t('sim_live.back') }}</a></p>
+</div>
+
+{% if view %}
+{% for lead in view.leads %}
+<div class="panel">
+  <h2>{{ ahead(lead) }}</h2>
+  {% set waiting = view.pending|selectattr('lead_s', 'equalto', lead)|list %}
+  <p><b>{{ t('sim_live.waiting') }}</b>:
+  {% for p in waiting %}{{ t('sim_live.issued', at=p.issued, due=p.valid) }}:
+    {{ t('sim_live.muf') }} {{ num(p.muf_mhz, '%.2f', t('sim_live.unit.mhz')) }}, {{ t('sim_live.modes_n', n=p.modes) }}{% if not loop.last %}; {% endif %}
+  {% else %}<span class="muted">{{ t('sim_live.waiting_none') }}</span>{% endfor %}</p>
+  {% set s = view.latest.get(lead) %}
+  {% if s %}
+  {% set e = s.event %}
+  <p><b>{{ t('sim_live.latest') }}</b>: {{ t('sim_live.pair', at=e.issued_at[11:19], due=e.at[11:19]) }}</p>
+  <div class="scroll"><table>
+    <tr><th></th><th>{{ t('sim_live.col.forecast') }}</th><th>{{ t('sim_live.col.truth') }}</th><th>{{ t('sim_live.col.error') }}</th></tr>
+    {% for key, label in (('muf_mhz', t('sim_live.muf')), ('lof_mhz', t('sim_live.lof'))) %}
+    {% set b = e.pair[key] %}
+    <tr><td>{{ label }}</td>
+      <td>{{ num(b.forecast, '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ num(b.truth, '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ num(b.error, '%+.2f', t('sim_live.unit.mhz')) }}
+        {%- if b.censored_truth or b.censored_forecast %} <span class="note">{{ t('sim_live.bound') }}</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="note">{{ t('sim_live.modes', matched=e.pair.modes.matched, missed=e.pair.modes.missed, false=e.pair.modes['false']) }}
+    · {{ t('sim_live.delay') }} {{ num(s.figures.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}
+    · C/N0 {{ num(s.figures.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}</p>
+  <div class="pair">
+    {% if s.source_id %}<figure><img src="/ionogram/{{ s.source_id }}.png?gate=auto&amp;dpi=80" alt="" loading="lazy">
+      <figcaption class="note">{{ t('sim_live.img.forecast', at=e.issued_at[11:19]) }}</figcaption></figure>{% endif %}
+    {% if s.sounding_id %}<figure><img src="/ionogram/{{ s.sounding_id }}.png?gate=auto&amp;dpi=80" alt="" loading="lazy">
+      <figcaption class="note">{{ t('sim_live.img.truth', at=e.at[11:19]) }}</figcaption></figure>{% endif %}
+  </div>
+  {% else %}
+  <p class="muted">{{ t('sim_live.latest_none') }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="panel">
+  <h2>{{ t('sim_live.figures') }}</h2>
+  <div class="scroll"><table>
+    <tr><th>{{ t('sim_live.col.lead') }}</th><th>{{ t('sim_live.col.span') }}</th><th>n</th>
+      <th>{{ t('sim_live.muf') }}</th><th>{{ t('sim_live.lof') }}</th><th>{{ t('sim_live.col.delay') }}</th>
+      <th>C/N0</th><th>{{ t('sim_live.col.top') }}</th><th>{{ t('sim_live.col.modes') }}</th></tr>
+    {% for lead in view.leads %}
+    {% for span, label in (('hour', t('sim_live.span.hour')), ('day', t('sim_live.span.day'))) %}
+    {% set f = view.figures[span].get(lead) %}
+    <tr><td>{{ ahead(lead) }}</td><td>{{ label }}</td>
+      {% if f %}
+      <td>{{ f.n }}</td>
+      <td>{{ num(f.muf_mae_mhz, '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ num(f.lof_mae_mhz, '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ num(f.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}</td>
+      <td>{{ num(f.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}</td>
+      <td>{{ num(f.top_median_mhz, '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ f.modes.matched }} / {{ f.modes.missed }} / {{ f.modes['false'] }}</td>
+      {% else %}
+      <td colspan="7" class="muted">{{ t('sim_live.nothing') }}</td>
+      {% endif %}</tr>
+    {% endfor %}
+    {% endfor %}
+  </table></div>
+  <p class="note">{{ t('sim_live.figures_note') }}</p>
+</div>
+
+<div class="panel">
+  <h2>{{ t('sim_live.events') }}</h2>
+  <pre style="white-space:pre-wrap;font-size:.8rem;margin:0">{% for line in view.recent %}{{ line }}
+{% endfor %}</pre>
+</div>
+{% endif %}
+
+{% if chosen %}
+<script>
+const CIRCUIT = {{ {'tx': chosen.tx, 'rx': chosen.rx}|tojson }};
+const toggle = document.getElementById('liveFollow') || document.getElementById('liveStop');
+toggle.addEventListener('click', async () => {
+  const r = await control('/sim/live/' + encodeURIComponent(CIRCUIT.tx) + '/'
+                          + encodeURIComponent(CIRCUIT.rx),
+                          toggle.id === 'liveFollow' ? 'POST' : 'DELETE');
+  if (!r.ok) { document.getElementById('liveSay').textContent = r.detail; return; }
+  location.href = '/ui/sim/live?tx=' + encodeURIComponent(CIRCUIT.tx)
+                  + '&rx=' + encodeURIComponent(CIRCUIT.rx);
+});
+gate('archive');
+</script>
+{% endif %}
+{% if every > 0 %}<script>setTimeout(() => location.reload(), 30000);</script>{% endif %}
+{% endblock %}

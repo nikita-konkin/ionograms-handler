@@ -48,6 +48,7 @@ MESSAGES: dict[str, str] = {
     "nav.sources": "Sources",
     "nav.archives": "Archives",
     "nav.forecast": "Forecast",
+    "nav.sim": "Simulator",
     "nav.api": "API",
 
     # -- units ------------------------------------------------------------
@@ -93,6 +94,76 @@ MESSAGES: dict[str, str] = {
     "soundings.col.picks": "Picks",
     "soundings.empty": "Nothing matches these filters.",
     "soundings.empty.clear": "Clear them.",
+
+    # -- simulator --------------------------------------------------------
+    "sim.title": "Simulator",
+    "sim.hint": "The simulator's closed loop on one sounding",
+    "sim.pick": "Sounding",
+    "sim.run": "Run the simulator",
+    "sim.cost":
+        "A run takes about half a minute of the server's CPU, one at a time, "
+        "and its result is kept: a sounding built before opens at once.",
+    "sim.none": "No soundings are indexed yet. Register an archive first.",
+    "sim.js.absent": "Not built yet. Run the simulator to build it.",
+    "sim.js.queued": "Queued, {ahead} ahead of it",
+    "sim.js.running": "The simulator is running on this sounding…",
+    "sim.js.failed": "The run failed: {error}",
+    "sim.live": "Live forecasts",
+
+    # -- live forecasts ---------------------------------------------------
+    "sim_live.title": "Live forecasts",
+    "sim_live.hint":
+        "Persistence for each circuit's next two soundings, scored as they come",
+    "sim_live.off": "The live loop is off on this hub: LIVE_INTERVAL_S is 0.",
+    "sim_live.none": "No soundings yet, so no circuit to follow.",
+    "sim_live.legend":
+        "Followed circuits are in green. A circuit followed begins at its newest "
+        "sounding, and its first forecasts come from the next one.",
+    "sim_live.follow": "Follow",
+    "sim_live.stop": "Stop following",
+    "sim_live.not_followed":
+        "This circuit is not followed. Follow it to forecast it from its next "
+        "sounding on.",
+    "sim_live.back": "Back to the simulator",
+    "sim_live.taken": "Last sounding taken {at} UTC",
+    "sim_live.interval": "an interval of {min} min",
+    "sim_live.every": "new soundings looked for every {s} s",
+    "sim_live.ahead": "{min} min ahead",
+    "sim_live.waiting": "Waiting",
+    "sim_live.waiting_none": "nothing",
+    "sim_live.issued": "issued from {at}, due {due}",
+    "sim_live.modes_n": "{n} modes",
+    "sim_live.latest": "Last scored",
+    "sim_live.latest_none": "Nothing scored yet.",
+    "sim_live.pair": "the {at} forecast against the {due} sounding",
+    "sim_live.muf": "MUF",
+    "sim_live.lof": "LOF",
+    "sim_live.col.forecast": "Forecast",
+    "sim_live.col.truth": "Truth",
+    "sim_live.col.error": "Error",
+    "sim_live.bound": "a bound",
+    "sim_live.modes": "modes: {matched} matched, {missed} missed, {false} false",
+    "sim_live.delay": "delay",
+    "sim_live.img.forecast": "Forecast: the {at} sounding",
+    "sim_live.img.truth": "Truth: the {at} sounding",
+    "sim_live.figures": "Running figures",
+    "sim_live.figures_note":
+        "MUF and LOF: mean |error| over the pairs censored on neither side. "
+        "Delay and C/N0: RMS over the matched modes, each weighed by the band it "
+        "shares with its pair. Mode top: median |error|. Modes: matched, missed, "
+        "false.",
+    "sim_live.col.lead": "Lead",
+    "sim_live.col.span": "Over",
+    "sim_live.col.delay": "Delay",
+    "sim_live.col.top": "Mode top",
+    "sim_live.col.modes": "Modes",
+    "sim_live.span.hour": "last hour",
+    "sim_live.span.day": "last 24 h",
+    "sim_live.nothing": "nothing scored",
+    "sim_live.events": "Latest events",
+    "sim_live.unit.mhz": "MHz",
+    "sim_live.unit.us": "µs",
+    "sim_live.unit.db": "dB",
 
     # -- one sounding -----------------------------------------------------
     "sounding.notfound": "Not found",

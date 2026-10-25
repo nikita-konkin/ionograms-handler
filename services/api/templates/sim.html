@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ t('sim.title') }}{% endblock %}
+{% block hint %}{{ t('sim.hint') }}{% endblock %}
+{% block body %}
+
+<div class="panel">
+  <h2>{{ t('sim.title') }}</h2>
+  <p class="note"><a href="/ui/sim/live">{{ t('sim.live') }}</a></p>
+  {% if days %}
+  <label class="muted" style="font-size:.85rem">{{ t('sim.pick') }}
+    <select id="simPick">
+      {% for day, items in days.items() %}
+      <optgroup label="{{ day }}">
+        {% for s in items %}
+        <option value="{{ s.id }}"{% if s.id in built %} data-built{% endif %}{% if s.id == chosen %} selected{% endif %}>
+          {{- s.datetime[11:19] }} {{ s.tx }} → {{ s.rx }} · {{ s.file }}{% if s.id in built %} ✓{% endif -%}
+        </option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select></label>
+  <button id="simRun" class="pill" data-needs="archive">{{ t('sim.run') }}</button>
+  <span id="simSay" class="note"></span>
+  <p class="note">{{ t('sim.cost') }}</p>
+  {% else %}
+  <p class="muted">{{ t('sim.none') }}</p>
+  {% endif %}
+</div>
+
+{# A frame rather than the console's markup inlined here: the console is a
+   self-contained page with its own styles and script, and the same file is
+   the offline docs/ui/console.html. It reports its height so the frame never
+   scrolls inside the page. #}
+<iframe id="simFrame" title="{{ t('sim.title') }}"
+        style="display:none;width:100%;min-height:40rem;border:0"></iframe>
+
+{% if days %}
+<script>
+const pick = document.getElementById('simPick');
+const run = document.getElementById('simRun');
+const say = document.getElementById('simSay');
+const frame = document.getElementById('simFrame');
+let polling = null;
+
+async function look(id) {
+  clearTimeout(polling);
+  const r = await fetch('/sim/' + id).then(x => x.json()).catch(() => null);
+  if (!r || pick.value !== String(id)) return;
+  run.style.display = r.state === 'done' ? 'none' : '';
+  if (r.state === 'done') {
+    const chosen = pick.selectedOptions[0];
+    if (!('built' in chosen.dataset)) {
+      chosen.dataset.built = '';
+      chosen.textContent += ' ✓';
+    }
+    say.textContent = '';
+    frame.src = '/sim/' + id + '/console?embed=1&lang=' + I18N.lang;
+    frame.style.display = '';
+    return;
+  }
+  frame.style.display = 'none';
+  frame.removeAttribute('src');
+  say.textContent = r.state === 'queued' ? T('sim.js.queued', {ahead: r.ahead})
+    : r.state === 'running' ? T('sim.js.running')
+    : r.state === 'failed' ? T('sim.js.failed', {error: r.error})
+    : T('sim.js.absent');
+  if (r.state === 'queued' || r.state === 'running')
+    polling = setTimeout(() => look(id), 2000);
+}
+
+pick.addEventListener('change', () => {
+  history.replaceState(null, '', '/ui/sim?id=' + pick.value);
+  look(pick.value);
+});
+
+run.addEventListener('click', async () => {
+  const id = pick.value;
+  const r = await control('/sim/' + id, 'POST');
+  if (!r.ok) { say.textContent = r.detail; return; }
+  look(id);
+});
+
+window.addEventListener('message', e => {
+  if (e.origin === location.origin && e.source === frame.contentWindow
+      && e.data && e.data.simHeight)
+    frame.style.height = e.data.simHeight + 'px';
+});
+
+gate('archive');
+look(pick.value);
+</script>
+{% endif %}
+{% endblock %}

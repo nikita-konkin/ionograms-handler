@@ -123,6 +123,21 @@ def lof_floor_mhz(cal, band_floor_mhz: float | None = None) -> float | None:
     return max(band_floor_mhz or cal.freq_floor, cal.freq_floor)
 
 
+def lof_edge_mhz(cal, band_floor_mhz: float | None = None) -> float:
+    """At or below this frequency an LOF is an upper bound, not a measurement.
+
+    The LOF's side of `band_edge_mhz`, for an LOF that is not a pick -- the
+    lowest frequency of a state's modes: `muf.lof.pick_lof`'s bins over the
+    floor, and the whole band when the bottom of the sweep was never
+    computed, as `lof_bounded` has it.
+    """
+    if cal.freq_floor is not None:
+        return float(cal.freq_stop)
+    floor = lof_floor_mhz(cal, band_floor_mhz)
+    floor = float(cal.freq_lo) if floor is None else floor
+    return floor + lof_module.BAND_FLOOR_BINS * cal.freq_step_mhz
+
+
 def lof_bounded(cal, low):
     """``low`` with ``at_band_floor`` set wherever the LOF is not a measurement.
 
