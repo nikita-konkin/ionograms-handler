@@ -49,6 +49,12 @@ DEFAULT_MIN_AGE_S = 60.0
 #: fresh", which is the most reassuring possible word for "nothing will ever be
 #: ingested". Timestamps on a network share belong to the file server; this
 #: watcher must not assume they belong to it.
+#:
+#: Inside the tolerance a stamp ahead of us reads as age zero. On Windows,
+#: Python 3.12's `time.time()` and NTFS share one coarse tick, and the two
+#: round the same instant to floats differently: a file closed in the scan's
+#: own tick came out one ulp younger than zero, and so "too fresh" even at
+#: ``min_age_s=0`` (#43).
 FUTURE_MTIME_TOLERANCE_S = 5.0
 
 #: How long to wait for a writer to release the database before giving up.
@@ -210,7 +216,7 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
                 # parse and simply returns on the next pass -- which is exactly
                 # what `skipped` already exists to absorb.
                 skewed += 1
-            elif age < min_age_s:
+            elif max(age, 0.0) < min_age_s:
                 fresh += 1
                 continue
             new.append(path)
