@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}{{ t('sim_period.title') }}{% endblock %}
+{% block hint %}{{ t('sim_period.hint') }}{% endblock %}
+{% block body %}
+{%- macro fig(m, key, spec, unit) -%}
+  {%- if m.get(key) is none -%}-
+  {%- else -%}{{ spec|format(m[key]) }} {{ unit }}
+    {%- set ci = (m.get('ci') or {}).get(key) -%}
+    {%- if ci and ci[0] is not none %} <span class="note">[{{ spec|format(ci[0]) }}, {{ spec|format(ci[1]) }}]</span>{% endif -%}
+  {%- endif -%}
+{%- endmacro -%}
+{%- macro errors(label, m, spec, unit) -%}
+  <tr><td>{{ label }}</td><td>{{ m.n }}</td>
+  {%- if m.reason is defined %}<td colspan="4" class="muted">{{ t('sim_period.few', n=m.pairs, min=summary.min_pairs) }}</td>
+  {%- else %}<td>{{ fig(m, 'mae', spec, unit) }}</td><td>{{ fig(m, 'rmse', spec, unit) }}</td>
+    <td>{{ fig(m, 'bias', spec, unit) }}</td><td>{{ fig(m, 'median', spec, unit) }}</td>{% endif %}</tr>
+{%- endmacro -%}
+{%- macro cut(rows, label, names={}) -%}
+  <div class="scroll"><table>
+    <tr><th>{{ label }}</th><th>{{ t('sim_period.col.pairs') }}</th><th>{{ t('sim_live.muf') }} MAE</th>
+      <th>{{ t('sim_live.muf') }} {{ t('sim_period.bias') }}</th><th>{{ t('sim_live.lof') }} MAE</th>
+      <th>{{ t('sim_live.col.delay') }} RMSE</th></tr>
+    {% for name, s in rows %}
+    <tr><td>{{ names.get(name, name) }}</td><td>{{ s.pairs }}</td>
+      {% if s.muf_mhz.reason is defined %}<td colspan="4" class="muted">{{ t('sim_period.few', n=s.muf_mhz.pairs, min=summary.min_pairs) }}</td>
+      {% else %}<td>{{ fig(s.muf_mhz, 'mae', '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ fig(s.muf_mhz, 'bias', '%+.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ fig(s.lof_mhz, 'mae', '%.2f', t('sim_live.unit.mhz')) }}</td>
+      <td>{{ fig(s.modes.all.delay_rms_us, 'rmse', '%.0f', t('sim_live.unit.us')) }}</td>{% endif %}</tr>
+    {% endfor %}
+  </table></div>
+{%- endmacro -%}
+{%- macro minutes(seconds) -%}{{ '%g'|format((seconds / 60)|round(1)) }}{%- endmacro -%}
+
+<div class="panel">
+  <h2>{{ t('sim_period.title') }}</h2>
+  <p class="note">{{ t('sim_period.what', days=limits.days, soundings=limits.soundings) }}</p>
+  {% if circuits %}
+  <p>
+    <label class="muted" style="font-size:.85rem">{{ t('sim_period.circuit') }}
+      <select id="perCircuit">
+        {% for c in circuits %}<option value="{{ loop.index0 }}">{{ c.tx }} → {{ c.rx }} · {{ c.first }} – {{ c.last }}</option>{% endfor %}
+      </select></label>
+    <label class="muted" style="font-size:.85rem">{{ t('sim_period.first') }} <input type="date" id="perFirst"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('sim_period.last') }} <input type="date" id="perLast"></label>
+    <label class="muted" style="font-size:.85rem">{{ t('sim_period.lead') }}
+      <input type="number" id="perLead" min="1" step="any" style="width:5rem"></label>
+    <button id="perRun" class="pill" data-needs="archive">{{ t('sim_period.run') }}</button>
+    <span id="perSay" class="note"></span>
+  </p>
+  {% else %}
+  <p class="muted">{{ t('sim.none') }}</p>
+  {% endif %}
+  <p class="note"><a href="/ui/sim">{{ t('sim_live.back') }}</a></p>
+</div>
+
+<div class="panel">
+  <h2>{{ t('sim_period.runs') }}</h2>
+  {% if runs %}
+  <div class="scroll"><table>
+    <tr><th>#</th><th>{{ t('sim_period.circuit') }}</th><th>{{ t('sim_period.col.days') }}</th>
+      <th>{{ t('sim_period.col.lead') }}</th><th>{{ t('sim_period.col.soundings') }}</th>
+      <th>{{ t('sim_period.col.state') }}</th></tr>
+    {% for r in runs %}
+    <tr{% if chosen and r.id == chosen.id %} class="ok"{% endif %}>
+      <td><a href="/ui/sim/periods?id={{ r.id }}">{{ r.id }}</a></td>
+      <td>{{ r.tx }} → {{ r.rx }}</td>
+      <td>{{ r.first }}{% if r.last != r.first %} – {{ r.last }}{% endif %}</td>
+      <td>{{ t('sim_period.min', min=minutes(r.lead_s)) }}</td>
+      <td>{{ r.soundings }}</td>
+      <td>
+        {%- if r.state == 'done' %}{{ t('sim_period.done', min=minutes(r.seconds or 0)) }}
+        {%- elif r.state == 'failed' %}<span class="warn">{{ t('sim_period.failed', error=r.error) }}</span>
+        {%- else %}<span class="note" data-follow="{{ r.id }}">{{ t('sim_period.js.queued', ahead=r.ahead) if r.state == 'queued' else t('sim_period.js.running') }}</span>
+          <progress data-bar="{{ r.id }}" style="display:none;width:100%;max-width:16rem"></progress>{% endif -%}
+      </td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">{{ t('sim_period.runs_none') }}</p>
+  {% endif %}
+</div>
+
+{% if chosen %}
+<div class="panel" id="periodSummary">
+  <h2>{{ t('sim_period.result', id=chosen.id, tx=chosen.tx, rx=chosen.rx) }}</h2>
+  <p class="note">{{ t('sim_period.asked', first=chosen.first, last=chosen.last, min=minutes(chosen.lead_s), n=chosen.soundings) }}</p>
+  {% if summary %}
+  {% set skipped = (summary.get('skipped') or {}).get('by_stage', {}).values()|sum %}
+  <p>{{ t('sim_period.pairs', pairs=summary.pairs, stretches=summary.stretches) }}
+    {%- if summary.set_apart %} · <span class="warn">{{ t('sim_period.set_apart', n=summary.set_apart) }}</span>{% endif %}
+    {%- if skipped %} · {{ t('sim_period.skipped', n=skipped) }}{% endif %}</p>
+  {% if summary['all'] is defined %}
+  {% set a = summary['all'] %}
+  <h3>{{ t('sim_period.figures') }}</h3>
+  <div class="scroll"><table>
+    <tr><th></th><th>n</th><th>MAE</th><th>RMSE</th><th>{{ t('sim_period.bias') }}</th><th>{{ t('sim_period.median') }}</th></tr>
+    {{ errors(t('sim_live.muf'), a.muf_mhz, '%.2f', t('sim_live.unit.mhz')) }}
+    {{ errors(t('sim_live.lof'), a.lof_mhz, '%.2f', t('sim_live.unit.mhz')) }}
+    {{ errors(t('sim_live.col.delay'), a.modes.all.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}
+    {{ errors('C/N0', a.modes.all.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}
+    {{ errors(t('sim_live.col.top'), a.modes.all.f_hi_error_mhz, '%.2f', t('sim_live.unit.mhz')) }}
+  </table></div>
+  <p class="note">{{ t('sim_period.censored', truth=a.muf_mhz.censored.truth, forecast=a.muf_mhz.censored.forecast) }}
+    · {{ t('sim_live.modes', matched=a.mode_counts.hits, missed=a.mode_counts.misses, false=a.mode_counts.false_alarms) }}
+    {%- for key in ('pod', 'far', 'csi') %}{% if a.mode_counts[key] is not none %} · {{ key|upper }} {{ '%.2f'|format(a.mode_counts[key]) }}{% endif %}{% endfor %}</p>
+  {% if a.carriers.rows %}
+  <h3>{{ t('sim_period.carriers', n=a.carriers.rows) }}</h3>
+  <div class="scroll"><table>
+    <tr><th></th><th>POD</th><th>FAR</th><th>CSI</th><th>{{ t('sim_period.base_rate') }}</th></tr>
+    {% for event, label in (('mode', t('sim_period.event.mode')), ('usable', t('sim_period.event.usable'))) %}
+    {% set e = a.carriers.events[event] %}
+    <tr><td>{{ label }}</td>
+      {% for key in ('pod', 'far', 'csi', 'base_rate') %}<td>{{ fig(e, key, '%.2f', '') }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+  <p class="note">{{ t('sim_period.figures_note', min=summary.min_pairs) }}</p>
+  {% if summary.by and summary.by.hour %}
+  <h3>{{ t('sim_period.by_hour') }}</h3>
+  {{ cut(summary.by.hour.items(), t('sim_period.col.hour')) }}
+  {% endif %}
+  {% if summary.by and summary.by.sun %}
+  <h3>{{ t('sim_period.by_sun') }}</h3>
+  {{ cut(summary.by.sun.items(), t('sim_period.col.sun'),
+         {'day': t('sim_period.sun.day'), 'transition': t('sim_period.sun.transition'),
+          'night': t('sim_period.sun.night'), 'unknown': t('sim_period.sun.unknown')}) }}
+  {% endif %}
+  {% else %}
+  <p class="muted">{{ t('sim_period.no_pairs') }}</p>
+  {% endif %}
+  {% if files %}
+  <p>{{ t('sim_period.downloads') }}:
+    {% for name in files %}<a class="pill" href="/sim/periods/{{ chosen.id }}/{{ name }}" download>{{ name }}</a> {% endfor %}</p>
+  {% endif %}
+  {% elif chosen.state == 'failed' %}
+  <p class="warn">{{ t('sim_period.failed', error=chosen.error) }}</p>
+  {% else %}
+  <p class="muted">{{ t('sim_period.waiting') }}</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<script>
+{% if circuits %}
+const CIRCUITS = {{ circuits|tojson }};
+const pick = document.getElementById('perCircuit');
+const first = document.getElementById('perFirst');
+const last = document.getElementById('perLast');
+const lead = document.getElementById('perLead');
+const say = document.getElementById('perSay');
+
+function fill() {
+  const c = CIRCUITS[pick.value];
+  first.min = last.min = c.first;
+  first.max = last.max = c.last;
+  first.value = last.value = c.last;
+  lead.value = c.interval_s ? Math.round(c.interval_s / 6) / 10 : '';
+}
+
+pick.addEventListener('change', fill);
+fill();
+
+document.getElementById('perRun').addEventListener('click', async () => {
+  const c = CIRCUITS[pick.value];
+  const r = await control('/sim/periods', 'POST', {
+    tx: c.tx, rx: c.rx, first: first.value, last: last.value,
+    lead_s: lead.value ? Number(lead.value) * 60 : null});
+  if (!r.ok) { say.textContent = r.detail; return; }
+  location.href = '/ui/sim/periods?id=' + r.body.id;
+});
+gate('archive');
+{% endif %}
+
+async function follow(span) {
+  const id = span.dataset.follow;
+  const bar = document.querySelector('[data-bar="' + id + '"]');
+  const r = await fetch('/sim/periods/' + id).then(x => x.json()).catch(() => null);
+  if (r && (r.state === 'done' || r.state === 'failed')) {
+    location.href = '/ui/sim/periods?id=' + id;
+    return;
+  }
+  if (r && r.state === 'queued') span.textContent = T('sim_period.js.queued', {ahead: r.ahead});
+  const p = r && r.state === 'running' ? r.progress : null;
+  bar.style.display = p ? '' : 'none';
+  if (p) {
+    bar.max = p.total || 1;
+    bar.value = p.done;
+    span.textContent = T('sim_period.js.progress', {done: p.done, total: p.total,
+                                                    min: Math.round(p.elapsed_s / 6) / 10});
+  } else if (r && r.state === 'running') span.textContent = T('sim_period.js.running');
+  setTimeout(() => follow(span), 3000);
+}
+
+document.querySelectorAll('[data-follow]').forEach(follow);
+</script>
+{% endblock %}

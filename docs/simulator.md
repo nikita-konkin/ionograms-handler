@@ -584,7 +584,8 @@ queued, runs one at a time in a process of its own, stops after 15 minutes,
 and is kept in `SIM_CACHE` (default `sim/` beside the database) under the
 image's build stamp, so a new image builds a console again rather than show
 an old simulator's. On the work PC, in Docker, a 2026-02-04 `.lfs` took
-about 15 s.
+about 15 s. While it runs, the page shows how far it has got: the sounding
+observed, each synthetic sounding read back, and the page drawn.
 
 The hub also runs `muf sim live`'s loop on the soundings its scans store,
 and shows it at `/ui/sim/live` (`services/api/sim_live.py`): each circuit's
@@ -608,6 +609,25 @@ with its forecast and truth side by side -- with the hub's id added.
 `tools/pull_live_events.py --hub URL --out DIR TX:RX ...` appends each
 circuit's new events to `DIR/TX__RX.jsonl`, carrying on after the last id the
 file holds; run more often than every `LIVE_KEEP_DAYS`, it keeps everything.
+
+The live loop scores only what comes after a circuit is followed.
+`/ui/sim/periods` (`services/api/sim_period.py`) scores the past instead:
+choose a circuit, a first and last day (UTC) and a lead, by default the
+soundings' interval, and press *Score* (the archive capability). The hub
+runs `muf sim series` on the circuit's soundings of those days with
+`--copies 0 --recovery-every 0`, then `muf sim summary`, one run at a time in
+a process of its own, and the page follows it with a progress bar: each
+sounding observed, each pair scored, then the summary. A finished run shows
+its summary -- pairs and those set apart for the clock, the MUF's, LOF's and
+modes' errors with their intervals, mode counts, carriers, and the MUF by
+hour and by the sun -- and offers `summary.json`, `run.json` and the rows to
+download. Runs are kept in `SIM_CACHE/periods/`, without their states. A run
+covers at most 7 days and 2000 soundings; one the hub restarted during reads
+as failed. On the work PC, in Docker, a day of 129 `.h5` soundings took
+about 5.5 minutes. A figure needs 30 pairs. A day of a ten-minute circuit
+makes at most 143, fewer once the pairs with no trace or a broken clock drop
+out, so it gives the whole day's figures at best and none by the hour; the
+hours need five days or more.
 
 A receiver whose GPSDO has lost lock free-runs, and its echoes jump with its
 clock from one sounding to the next. A forecast scored across such a jump

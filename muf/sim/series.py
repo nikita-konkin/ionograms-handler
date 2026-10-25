@@ -477,7 +477,8 @@ def run_series(paths: Iterable, out: str | Path, *, circuit: str | None = None,
     record and the state cache's key. ``jobs`` processes score pairs side by
     side. ``resume`` carries on the run already in ``out``, with the same
     parameters, scoring only what it did not finish. ``progress`` hears
-    (pairs done, pairs to do) as each one is.
+    (steps done, steps) as each is: every sounding observed, then every pair
+    scored.
     """
     out = Path(out)
     begun = time.perf_counter()
@@ -504,17 +505,20 @@ def run_series(paths: Iterable, out: str | Path, *, circuit: str | None = None,
     failed = {r["from"] for r in skipped if r["stage"] == "state"}
     states = [{**common, "path": str(s.path)} for s in chosen
               if s.path.name not in failed]
-    for row in _map(_observe_job, states, jobs):
+    found_pairs, unpaired = pairs(chosen, lead_s=lead_s, tolerance_s=tolerance_s)
+    owed = [(a, b) for a, b in found_pairs if (a.path.name, b.path.name) not in done]
+    steps = len(states) + len(owed)
+    tell = progress or (lambda done, total: None)
+    tell(0, steps)
+    for k, row in enumerate(_map(_observe_job, states, jobs), 1):
         if row is not None:
             writer.skip([row])
             failed.add(row["from"])
-    found_pairs, unpaired = pairs(chosen, lead_s=lead_s, tolerance_s=tolerance_s)
+        tell(k, steps)
     writer.skip(unpaired)
     order = {s.path: k for k, s in enumerate(chosen)}
     todo = []
-    for a, b in found_pairs:
-        if (a.path.name, b.path.name) in done:
-            continue
+    for a, b in owed:
         lost = [s.path.name for s in (a, b) if s.path.name in failed]
         if lost:
             writer.skip([_skipped(a.path.name, b.path.name, "pair",
@@ -527,10 +531,9 @@ def run_series(paths: Iterable, out: str | Path, *, circuit: str | None = None,
                      "carriers": params["carriers"],
                      "bandwidth_hz": float(bandwidth_hz),
                      "snr_min_db": float(snr_min_db)})
-    for k, rows in enumerate(_map(_score_job, todo, jobs), 1):
+    for k, rows in enumerate(_map(_score_job, todo, jobs), steps - len(todo) + 1):
         writer.write(rows)
-        if progress is not None:
-            progress(k, len(todo))
+        tell(k, steps)
     record["runs"][-1].update(finished=_utc_now(),
                               seconds=round(time.perf_counter() - begun, 1),
                               written=dict(writer.counts), cpus=os.cpu_count())

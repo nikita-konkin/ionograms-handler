@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 from pathlib import Path
 
@@ -97,6 +98,14 @@ def test_a_run_scores_every_pair(tmp_path):
                tmp_path / "run")
     assert len(_rows(run, "pairs")) == 2
 
+
+def test_a_run_reports_each_sounding_observed_and_each_pair_scored(tmp_path):
+    n = random.randint(2, 4)
+    calls = []
+    _run(_soundings(tmp_path / "in", [T0 + 300.0 * k for k in range(n)]),
+         tmp_path / "run", progress=lambda done, total: calls.append((done, total)))
+    assert calls == [(k, 2 * n - 1) for k in range(2 * n)], \
+        "the run did not report each sounding observed and each pair scored"
 
 def test_an_unreadable_sounding_is_skipped(tmp_path):
     _soundings(tmp_path / "data", [T0 + 300.0 * k for k in range(3)])
