@@ -43,7 +43,7 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -379,7 +379,8 @@ def closed_loop(truth: ChannelState, *, realisations: int = REALISM_SOUNDINGS,
                 workdir: str | Path | None = None, keep: bool = False,
                 real_muf_mhz: float | None = None, fast: bool = False,
                 fast_realisations: int = FAST_REALISATIONS, real=None,
-                synthetic: Sequence = ()) -> dict:
+                synthetic: Sequence = (),
+                progress: Callable[[int, int], None] | None = None) -> dict:
     """Sound ``truth`` ``realisations`` times, read each back, and compare.
 
     ``real``, the ionogram ``truth`` was read from, is correlated with every
@@ -392,6 +393,9 @@ def closed_loop(truth: ChannelState, *, realisations: int = REALISM_SOUNDINGS,
     copies a forecast of the same curves was scored with -- seeds ``seed``
     on and loaded on ``real``'s axis; only the rest are sounded. Their files
     are gone, so the fast part cannot be read back from them.
+
+    ``progress`` hears (realisations read back, realisations) before the
+    first and after each.
     """
     if truth.sweep is None:
         raise ValueError("the state has no sweep to sound")
@@ -403,6 +407,8 @@ def closed_loop(truth: ChannelState, *, realisations: int = REALISM_SOUNDINGS,
     folder.mkdir(parents=True, exist_ok=True)
     gate = gate_of(real) if real is not None else None
     runs, ionograms = [], []
+    if progress is not None:
+        progress(0, realisations)
     try:
         for k in range(realisations):
             path = folder / sounding.default_name(truth, tag=f"sim{k:02d}")
@@ -432,6 +438,8 @@ def closed_loop(truth: ChannelState, *, realisations: int = REALISM_SOUNDINGS,
             runs.append(run)
             if not keep and path.exists():
                 path.unlink()
+            if progress is not None:
+                progress(k + 1, realisations)
     finally:
         if own and not keep:
             shutil.rmtree(folder, ignore_errors=True)

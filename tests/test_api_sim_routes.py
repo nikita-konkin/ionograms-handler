@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import random
+import threading
 import time
 
 import pytest
@@ -18,8 +21,9 @@ CTL = {"Authorization": "Bearer ctl"}
 def made(monkeypatch):
     calls = []
 
-    def build(path):
+    def build(path, progress):
         calls.append(path.name)
+        progress(1, 2)
         if path.name.startswith("bad"):
             raise ValueError(f"no trace in {path.name}")
         return {"source": path.name, "utc": "2026-02-04 12:00 UTC", "modes": []}
@@ -59,6 +63,16 @@ def _settled(client, sounding_id: int, timeout_s: float = 10.0) -> dict:
             return got
         time.sleep(0.02)
     raise AssertionError(f"the build of {sounding_id} never settled")
+
+
+def _reporting(client, sounding_id: int, timeout_s: float = 10.0) -> dict:
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        got = client.get(f"/sim/{sounding_id}").json()
+        if got.get("progress"):
+            return got["progress"]
+        time.sleep(0.02)
+    raise AssertionError(f"the build of {sounding_id} never reported its progress")
 
 
 def test_a_sounding_not_yet_run_is_absent(client, tmp_path):
@@ -131,3 +145,55 @@ def test_the_page_marks_a_sounding_already_built(client, tmp_path):
 
 def test_the_navigation_leads_to_the_simulator(client):
     assert 'href="/ui/sim"' in client.get("/ui").text
+
+
+def test_a_running_build_says_how_far_it_has_got(client, tmp_path, monkeypatch):
+    done, total, release = random.randint(1, 12), random.randint(13, 20), \
+        threading.Event()
+
+    def build(path, progress):
+        progress(done, total)
+        release.wait(10.0)
+        return {"source": path.name, "modes": []}
+
+    monkeypatch.setattr(sim, "_execute", build)
+    k = _sounding(client, tmp_path)
+    client.post(f"/sim/{k}", headers=CTL)
+    seen = _reporting(client, k)
+    release.set()
+    _settled(client, k)
+    assert (seen["done"], seen["total"]) == (done, total), \
+        "a running build did not say how far it had got"
+
+
+def test_a_finished_build_leaves_no_progress_behind(client, tmp_path):
+    k = _sounding(client, tmp_path)
+    client.post(f"/sim/{k}", headers=CTL)
+    _settled(client, k)
+    assert list(client.app.state.sim_cache.glob("*.progress")) == [], \
+        "a finished build left its progress behind"
+
+
+def test_the_page_has_a_progress_bar(client, tmp_path):
+    _sounding(client, tmp_path)
+    assert 'id="simBar"' in client.get("/ui/sim").text, \
+        "the page has no progress bar"
+
+
+def test_a_progress_held_open_does_not_stop_later_builds(client, tmp_path, monkeypatch):
+    with contextlib.ExitStack() as held:
+
+        def build(path, progress):
+            progress(1, 2)
+            held.enter_context(open(progress.path, encoding="utf-8"))
+            return {"source": path.name, "modes": []}
+
+        monkeypatch.setattr(sim, "_execute", build)
+        first = _sounding(client, tmp_path)
+        client.post(f"/sim/{first}", headers=CTL)
+        _settled(client, first)
+        later = _sounding(client, tmp_path,
+                          f"cyprus1_20260204_12{random.randint(10, 59)}10.lfs")
+        client.post(f"/sim/{later}", headers=CTL)
+        state = _settled(client, later)["state"]
+    assert state == "done", "a progress held open stopped later builds"

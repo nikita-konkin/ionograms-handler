@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import math
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -120,14 +121,23 @@ def _channel(state, mode) -> dict:
             "paths": paths}
 
 
-def build(path: str | Path, *, realisations: int = REALISATIONS) -> dict:
-    """Everything the page draws of the sounding at ``path``, JSON without NaN."""
+def build(path: str | Path, *, realisations: int = REALISATIONS,
+          progress: Callable[[int, int], None] | None = None) -> dict:
+    """Everything the page draws of the sounding at ``path``, JSON without NaN.
+
+    ``progress`` hears (steps done, steps) as the build goes: the sounding
+    observed, each of the closed loop's ``realisations`` read back, each of
+    the :data:`SHOWN` copies sounded, and the page drawn.
+    """
     from . import check, observe, sounding
 
+    steps = realisations + SHOWN + 1
+    tell = progress or (lambda done, total: None)
     path = Path(path)
     nxt = next_of(path)
-    truth, report = check.check_sounding(path, next_sounding=nxt,
-                                         realisations=realisations)
+    truth, report = check.check_sounding(
+        path, next_sounding=nxt, realisations=realisations,
+        progress=lambda done, total: tell(done, steps))
     real = observe.load(path)
     scale = observe.km_per_us(real.header)
     freq, vrange = np.asarray(real.freq), np.asarray(real.vrange)
@@ -151,6 +161,7 @@ def build(path: str | Path, *, realisations: int = REALISATIONS) -> dict:
             sounding.write_lfs(truth, p, seed=report["seed"] + k)
             shown.append(observe.load(p, gate_km=gate))
             p.unlink()
+            tell(realisations + k + 1, steps)
     for k, ion in enumerate(shown):
         maps[f"synthetic{k + 1}"] = crop(ion)
     later = observe.load(nxt, gate_km=gate) if nxt is not None else None
@@ -192,6 +203,7 @@ def build(path: str | Path, *, realisations: int = REALISATIONS) -> dict:
                                           "cn0_bias_db", "level", "width")},
         })
     main = max(truth.modes, key=lambda m: m.f_hi - m.f_lo)
+    tell(steps, steps)
     corr = report.get("correlation", {})
     natural = report.get("natural") or {}
     return plain({
