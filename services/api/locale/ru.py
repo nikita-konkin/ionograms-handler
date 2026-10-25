@@ -100,6 +100,7 @@ MESSAGES: dict[str, str] = {
     "sim.js.progress": "Симулятор работает: шаг {done} из {total}, прошло {s} с",
     "sim.js.failed": "Запуск не удался: {error}",
     "sim.live": "Прогноз в реальном времени",
+    "sim.periods": "Оценка за период",
 
     # -- live forecasts ---------------------------------------------------
     "sim_live.title": "Прогноз в реальном времени",
@@ -160,6 +161,66 @@ MESSAGES: dict[str, str] = {
     "sim_live.unit.mhz": "МГц",
     "sim_live.unit.us": "мкс",
     "sim_live.unit.db": "дБ",
+    "sim_period.title": "Оценка за период",
+    "sim_period.hint": "Прогноз сохранения, оценённый по дням архива",
+    "sim_period.what": (
+        "Выберите трассу, её дни и упреждение. Каждое зондирование сопоставляется "
+        "с тем, что идёт на упреждение позже, с ним сравнивается прогноз «ничего "
+        "не меняется», а ошибки сводятся с 95-процентными интервалами. Пары, "
+        "испорченные часами приёмника, откладываются. Прогон охватывает не больше "
+        "{days} суток и {soundings} зондирований и не строит синтетических копий, "
+        "поэтому сутки считаются за минуты."),
+    "sim_period.circuit": "Трасса",
+    "sim_period.first": "Первый день, UTC",
+    "sim_period.last": "Последний день, UTC",
+    "sim_period.lead": "Упреждение, мин",
+    "sim_period.run": "Оценить",
+    "sim_period.runs": "Прогоны",
+    "sim_period.runs_none": "Ещё ничего не оценено.",
+    "sim_period.col.days": "Дни, UTC",
+    "sim_period.col.lead": "Упреждение",
+    "sim_period.col.soundings": "Зондирования",
+    "sim_period.col.state": "Состояние",
+    "sim_period.col.pairs": "Пары",
+    "sim_period.col.hour": "Час, UTC",
+    "sim_period.col.sun": "Солнце",
+    "sim_period.min": "{min} мин",
+    "sim_period.done": "готово за {min} мин",
+    "sim_period.failed": "сбой: {error}",
+    "sim_period.waiting": "Ещё не закончено.",
+    "sim_period.js.queued": "в очереди, впереди {ahead}",
+    "sim_period.js.running": "запускается",
+    "sim_period.js.progress": "шаг {done} из {total}, прошло {min} мин",
+    "sim_period.result": "Прогон {id}: {tx} → {rx}",
+    "sim_period.asked":
+        "с {first} по {last} UTC · упреждение {min} мин · зондирований: {n}",
+    "sim_period.pairs": "Оценено пар: {pairs}; непрерывных отрезков: {stretches}",
+    "sim_period.set_apart": "отложено из-за часов приёмника: {n}",
+    "sim_period.skipped": "не оценено: {n}",
+    "sim_period.no_pairs": "Ни одна пара не оценена.",
+    "sim_period.figures": "Ошибки за весь период",
+    "sim_period.bias": "смещение",
+    "sim_period.median": "медиана |e|",
+    "sim_period.few": "пар: {n}, меньше {min}",
+    "sim_period.censored":
+        "МПЧ на границе полосы: истина {truth}, прогноз {forecast}",
+    "sim_period.carriers": "Несущие: оценено {n}",
+    "sim_period.base_rate": "В истине",
+    "sim_period.event.mode": "Мода видна",
+    "sim_period.event.usable": "Пригодна",
+    "sim_period.figures_note": (
+        "Прогноз — сохранение: состояние раннего зондирования, выданное на "
+        "позднее. Интервалы 95-процентные, по блочному бутстрепу внутри "
+        "непрерывных отрезков; по меньше чем {min} парам величины не даются. "
+        "Задержка и C/N0 — среднеквадратичные ошибки пар мод; верх моды — её "
+        "наибольшая частота."),
+    "sim_period.by_hour": "По часу, на который выдан прогноз",
+    "sim_period.by_sun": "По солнцу в точке отражения",
+    "sim_period.sun.day": "День",
+    "sim_period.sun.transition": "Переход",
+    "sim_period.sun.night": "Ночь",
+    "sim_period.sun.unknown": "Неизвестно",
+    "sim_period.downloads": "Скачать",
 
     # -- one sounding -----------------------------------------------------
     "sounding.notfound": "Не найдено",

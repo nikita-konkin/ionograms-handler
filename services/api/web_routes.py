@@ -434,6 +434,31 @@ def sim_page(request: Request, id: int | None = None):
     })
 
 
+@router.get("/ui/sim/periods")
+def sim_periods_page(request: Request, id: int | None = None):
+    """The persistence forecast scored over a period of the archive.
+
+    A form that queues a run, the runs kept, newest first, and the summary of
+    the run asked for, or of the newest finished one. Read from what
+    :mod:`services.api.sim_period` keeps; a run under way is followed from
+    the page's script.
+    """
+    from . import sim_period
+
+    cache = request.app.state.sim_cache
+    runs = sim_period.runs(cache)
+    chosen = next((r for r in runs if r["id"] == id), None) or next(
+        (r for r in runs if r["state"] == "done"), None)
+    done = chosen is not None and chosen["state"] == "done"
+    return templates.TemplateResponse(request, "sim_periods.html", {
+        "circuits": sim_period.circuits(request.app.state.db),
+        "runs": runs, "chosen": chosen,
+        "summary": sim_period.summary(cache, chosen["id"]) if done else None,
+        "files": sim_period.files(cache, chosen["id"]) if done else [],
+        "limits": {"days": sim_period.MAX_DAYS, "soundings": sim_period.MAX_SOUNDINGS},
+    })
+
+
 @router.get("/ui/sim/live")
 def sim_live_page(request: Request, tx: str | None = None, rx: str | None = None):
     """The simulator's live forecasts: what waits, what scored, and how well.

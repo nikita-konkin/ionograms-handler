@@ -248,7 +248,8 @@ def cmd_series(args) -> int:
     from . import series
 
     def progress(done, total):
-        print(f"\r{done}/{total} pairs", end="", file=sys.stderr, flush=True)
+        print(f"\r{done}/{total} soundings observed and pairs scored", end="",
+              file=sys.stderr, flush=True)
 
     out = series.run_series(args.paths, args.out, circuit=args.circuit,
                             lead_s=args.lead, tolerance_s=args.tolerance,
