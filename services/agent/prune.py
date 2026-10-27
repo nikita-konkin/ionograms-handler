@@ -77,13 +77,19 @@ def is_safe_to_delete(local: Path, local_root: Path, remote_root: Path) -> bool:
 
 def prunable(local_root: Path, remote_root: Path, *, min_age_s: float,
              now: float | None = None) -> list[Path]:
-    """Local products old enough, and verified present on the remote."""
+    """Local products old enough, and verified present on the remote.
+
+    An age below zero reads as zero. On Windows, Python 3.12's clock and NTFS
+    share one coarse tick and round an instant to floats differently, so a
+    product written in this call's own tick came out one ulp younger than zero
+    (#51).
+    """
     now = time.time() if now is None else now
     out: list[Path] = []
     for pattern in PATTERNS:
         for path in sorted(local_root.rglob(pattern)):
             try:
-                if now - path.stat().st_mtime < min_age_s:
+                if max(now - path.stat().st_mtime, 0.0) < min_age_s:
                     continue
             except OSError:
                 continue

@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import configparser
 import json
+import math
 import os
 import random
 import re
@@ -282,6 +283,31 @@ def test_recent_products_are_left_alone(staging):
 
     assert prune.run(local, remote, min_age_s=86400)["removed"] == 0
     assert (local / name).exists()
+
+
+def test_a_copy_stamped_in_the_prunes_own_tick_is_not_held_back(staging):
+    """Windows, 2026-10-25: Python 3.12's clock and NTFS share one coarse tick
+    and round an instant to floats differently, so a copy written in the
+    prune's own tick read one ulp younger than zero, too young even for
+    ``min_age_s=0`` (#51)."""
+    prune, local, remote, name = staging
+    found = prune.prunable(
+        local, remote, min_age_s=0,
+        now=math.nextafter((local / name).stat().st_mtime, -math.inf))
+    assert found == [local / name], \
+        "a verified copy stamped one ulp after the prune's clock was held back"
+
+
+def test_a_copy_stamped_ahead_of_the_prune_still_waits_out_the_minimum_age(
+        staging):
+    """Reading a negative age as zero must not let it skip `min_age_s`: the
+    prune deletes, and a file stamped ahead of its clock may be mid-write."""
+    prune, local, remote, name = staging
+    found = prune.prunable(
+        local, remote, min_age_s=random.uniform(3600, 86400),
+        now=(local / name).stat().st_mtime - random.uniform(1, 3600))
+    assert found == [], \
+        "a copy stamped ahead of the prune was offered before its minimum age"
 
 
 def test_dry_run_deletes_nothing_but_reports(staging):

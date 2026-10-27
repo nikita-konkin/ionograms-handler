@@ -45,12 +45,18 @@ PATTERN = "lfm_ionogram-*.h5"
 
 def candidates(root: Path, *, min_age_s: float,
                now: float | None = None) -> list[Path]:
-    """Products old enough to be finished, oldest first by name."""
+    """Products old enough to be finished, oldest first by name.
+
+    An age below zero reads as zero. On Windows, Python 3.12's clock and NTFS
+    share one coarse tick and round an instant to floats differently, so a
+    product written in this call's own tick came out one ulp younger than zero
+    (#51).
+    """
     now = time.time() if now is None else now
     out: list[Path] = []
     for path in sorted(root.rglob(PATTERN)):
         try:
-            if now - path.stat().st_mtime >= min_age_s:
+            if max(now - path.stat().st_mtime, 0.0) >= min_age_s:
                 out.append(path)
         except OSError:
             continue

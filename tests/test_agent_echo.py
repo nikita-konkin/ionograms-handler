@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import random
 import time
@@ -53,6 +54,31 @@ def test_a_young_product_is_left_untouched(make_chirp_z_h5):
     echo.run(path.parent, min_age_s=random.uniform(120, 600))
     assert digest(path) == before, \
         "a product that may still be mid-write was rewritten"
+
+
+def test_a_product_stamped_in_the_sweeps_own_tick_is_not_held_back(tmp_path):
+    """Windows, 2026-10-25: Python 3.12's clock and NTFS share one coarse tick
+    and round an instant to floats differently, so a product written in the
+    sweep's own tick read one ulp younger than zero, too young even for
+    ``min_age_s=0`` (#51)."""
+    path = tmp_path / f"lfm_ionogram-{random.randint(0, 10**9)}.h5"
+    path.write_bytes(os.urandom(random.randint(1, 4096)))
+    found = echo.candidates(tmp_path, min_age_s=0,
+                            now=math.nextafter(path.stat().st_mtime, -math.inf))
+    assert found == [path], \
+        "a product stamped one ulp after the sweep's clock was held back"
+
+
+def test_a_product_stamped_ahead_of_the_sweep_still_waits_out_the_minimum_age(
+        tmp_path):
+    """Reading a negative age as zero must not let it skip `min_age_s`: a
+    product stamped ahead of the clock may be the one still being written."""
+    path = tmp_path / f"lfm_ionogram-{random.randint(0, 10**9)}.h5"
+    path.write_bytes(os.urandom(random.randint(1, 4096)))
+    found = echo.candidates(tmp_path, min_age_s=random.uniform(60, 600),
+                            now=path.stat().st_mtime - random.uniform(1, 3600))
+    assert found == [], \
+        "a product stamped ahead of the sweep skipped the minimum age"
 
 
 def test_a_cut_product_is_left_untouched(make_chirp_z_h5):
