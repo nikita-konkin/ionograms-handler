@@ -234,7 +234,10 @@ def run_once(config: StationConfig, *, opener: Callable | None = None,
             result.pushed = True
         except client.TransportError as exc:
             result.errors.append(f"push: {exc}")
-        if result.pushed and sounder is not None and report.sounder_config is whole:
+        # `whole` is None on a station that does not run ionozond, and then
+        # there is no block to remember.
+        if (result.pushed and sounder is not None and whole is not None
+                and report.sounder_config is whole):
             sounder.summary, sounder.at = ionozond.summary(whole), time.time()
 
         if scan is not None:

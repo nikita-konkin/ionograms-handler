@@ -119,3 +119,26 @@ def test_the_health_loop_sends_an_unchanged_block_short(monkeypatch):
                                      server_url="http://server/api", preview=False),
                        opener=opener, sleep=lambda s: None, max_passes=2)
     assert "document" not in sent[1], "the health loop sent an unchanged block whole"
+
+
+def test_a_station_without_ionozond_still_takes_its_commands(monkeypatch):
+    # yoshkar-ola-1 on 2026-10-27: no block, so `report.sounder_config is whole`
+    # held for None, and the pass died after the health push -- every 30 s, on
+    # restart, with no preview sent and no command ever pulled.
+    monkeypatch.setattr(health, "collect", lambda config, **kw: health.HealthReport(
+        station="yoshkar-ola", timestamp=time.time()))
+    pulled = []
+
+    def opener(request, timeout=None):
+        if request.full_url.endswith("/commands"):
+            pulled.append(request.full_url)
+        return Reply({"commands": []} if request.full_url.endswith("/commands")
+                     else {"ok": True})
+
+    config = StationConfig(station="yoshkar-ola", server_url="http://server/api",
+                           preview=False)
+    passes = random.randint(2, 4)
+    for _ in range(passes):
+        runner.run_once(config, opener=opener, include_epoch=False,
+                        sounder=runner.SounderState())
+    assert len(pulled) == passes, "a station without ionozond did not pull its commands"
