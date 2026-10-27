@@ -64,12 +64,14 @@ def _compression(samples: np.ndarray, scratch: Path) -> float:
     return 1.0 - stored / samples.nbytes
 
 
-def _trace(x, fs, rate, noise_band=None):
+def _trace(x, fs, rate, noise_band=None, beat_hz=TRACE_BEAT_HZ):
     """Per-segment 1F beat and SNR, as ``lfs_trace.trace``.
 
     ``noise_band`` limits the noise median to beats inside it: a
     reconstructed window is zero outside its band, and a median taken over
     the whole spectrum would then report a noise floor that is not there.
+    ``beat_hz`` is where the peak is looked for; the default is cyprus1's 1F
+    at 100 kHz/s, and a window's own band serves on any other circuit.
     """
     n = round(SEG_S * fs)
     nseg = len(x) // n
@@ -82,7 +84,7 @@ def _trace(x, fs, rate, noise_band=None):
     in_band = np.ones(fb.size, bool) if noise_band is None else (
         (fb >= noise_band[0]) & (fb <= noise_band[1]))
     noise = np.median(power[:, in_band], axis=1)
-    sel = (fb >= TRACE_BEAT_HZ[0]) & (fb <= TRACE_BEAT_HZ[1])
+    sel = (fb >= beat_hz[0]) & (fb <= beat_hz[1])
     k = np.argmax(power[:, sel], axis=1)
     peak = power[:, sel][np.arange(nseg), k]
     snr = 10 * np.log10(peak / noise)
@@ -104,9 +106,10 @@ def _width(z, fsd):
     return rms, shift
 
 
-def trajectory(x, fs, rate, f0_mhz, band_mhz, noise_band=None):
+def trajectory(x, fs, rate, f0_mhz, band_mhz, noise_band=None,
+               beat_hz=TRACE_BEAT_HZ):
     """Cubic fit of the 1F beat along ``band_mhz``, outliers dropped."""
-    tseg, fb, snr = _trace(x, fs, rate, noise_band)
+    tseg, fb, snr = _trace(x, fs, rate, noise_band, beat_hz)
     f = f0_mhz + rate * tseg / 1e6
     m = (snr >= TRACE_SNR_DB) & (f >= band_mhz[0]) & (f <= band_mhz[1])
     idx = np.where(m)[0]
@@ -118,24 +121,30 @@ def trajectory(x, fs, rate, f0_mhz, band_mhz, noise_band=None):
     return c, int(m.sum())
 
 
-def doppler(x, fs, rate, f0_mhz, band_mhz, noise_band=None, fit=None):
-    """RMS Doppler width and residual shift of 1F along ``band_mhz``.
-
-    ``fit`` reuses a trajectory instead of tracing ``x`` -- which separates
-    what the window changed in the *signal* from what it changed in which
-    segments the tracer accepted.
-    """
-    c, segments = fit if fit is not None else trajectory(
-        x, fs, rate, f0_mhz, band_mhz, noise_band)
+def along(x, fs, rate, f0_mhz, band_mhz, c, block=BLOCK):
+    """1F's complex amplitude along ``band_mhz``: ``x`` dechirped a second time
+    on the trajectory ``c`` and block-averaged to ``fs / block``."""
     t1 = (band_mhz[0] - f0_mhz) / (rate / 1e6)
     t2 = (band_mhz[1] - f0_mhz) / (rate / 1e6)
     i0, i1 = int(t1 * fs), int(t2 * fs)
     ts = np.arange(i0, i1) / fs
     phase = 2 * np.pi * np.cumsum(np.polyval(c, ts)) / fs
     z = np.asarray(x[i0:i1]) * np.exp(-1j * phase)
-    n = len(z) // BLOCK * BLOCK
-    zd = z[:n].reshape(-1, BLOCK).mean(axis=1)
-    rms, shift = _width(zd, fs / BLOCK)
+    n = len(z) // block * block
+    return z[:n].reshape(-1, block).mean(axis=1)
+
+
+def doppler(x, fs, rate, f0_mhz, band_mhz, noise_band=None, fit=None,
+            beat_hz=TRACE_BEAT_HZ, block=BLOCK):
+    """RMS Doppler width and residual shift of 1F along ``band_mhz``.
+
+    ``fit`` reuses a trajectory instead of tracing ``x`` -- which separates
+    what the window changed in the *signal* from what it changed in which
+    segments the tracer accepted. ``block`` is 400 at 40 kHz, to 100 Hz.
+    """
+    c, segments = fit if fit is not None else trajectory(
+        x, fs, rate, f0_mhz, band_mhz, noise_band, beat_hz)
+    rms, shift = _width(along(x, fs, rate, f0_mhz, band_mhz, c, block), fs / block)
     return {"rms_hz": rms, "shift_hz": shift, "segments": segments}
 
 
