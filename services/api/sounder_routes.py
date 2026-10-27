@@ -29,12 +29,14 @@ def schedule(station: str, request: Request) -> dict:
     if not config:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             f"{station} reports no ionozond schedule")
-    document = config.get("document")
+    document, epoch, now = (config.get("document"), db.open_epoch(conn, station),
+                            time.time())
     return {"station": station, "reported_at": row["received_at"],
             "sounder_config": config,
-            "next": (ionozond.captures(document, time.time(), sounder.AHEAD)
+            "next": (ionozond.captures(document, now, sounder.AHEAD)
                      if isinstance(document, dict) else []),
-            "epoch": db.open_epoch(conn, station)}
+            "epoch": epoch,
+            "tally": sounder.tally(conn, station, config, epoch, now)}
 
 
 @router.post("/stations/{station}/ionozond/check")

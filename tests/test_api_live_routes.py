@@ -618,3 +618,79 @@ def test_an_unknown_path_is_not_measured(client):
     got = client.get("/stations/yoshkar-ola/live/path",
                      params={"tx": "nowhere%d" % random.randint(0, 999)})
     assert got.status_code == 404, "a path nobody can place was measured"
+
+
+def picked(client, t0, muf, lof=None, tx="cyprus1", rx="YOS", method="contour",
+           limited=0, loflim=0):
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(t0))
+    conn = client.app.state.db
+    cur = conn.execute("INSERT INTO sounding (file, path, datetime, tx, rx,"
+                       " ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
+                       ("%s-%s-%d.h5" % (tx, rx, t0), "x.h5", when, tx, rx, when))
+    conn.execute("INSERT INTO extraction (sounding_id, method, muf, lof, limited,"
+                 " loflim) VALUES (?, ?, ?, ?, ?, ?)",
+                 (cur.lastrowid, method, muf, lof, limited, loflim))
+    conn.commit()
+
+
+def muf(client, tx="cyprus1", **params):
+    return client.get("/stations/YOS/live/muf", params=dict(params, tx=tx))
+
+
+def test_the_live_muf_is_the_newest_soundings(client):
+    t0, value = 1792161010 + 300 * random.randint(0, 99), random.uniform(5, 30)
+    picked(client, t0 - 300, value + 1)
+    picked(client, t0, value)
+    assert muf(client).json()["muf"] == pytest.approx(value), (
+        "the live MUF was not the newest sounding's")
+
+
+def test_the_live_muf_says_which_sounding_it_is(client):
+    t0 = 1792161010 + 300 * random.randint(0, 99)
+    picked(client, t0, 20.0)
+    assert muf(client).json()["t0"] == t0, "the live MUF did not say its sounding"
+
+
+def test_the_live_muf_says_when_it_is_a_lower_bound(client):
+    picked(client, 1792161010, 30.0, limited=1)
+    assert muf(client).json()["limited"] is True, (
+        "a MUF at the top of the sweep was not marked a lower bound")
+
+
+def test_a_newest_sounding_without_a_pick_is_not_covered_by_an_older_one(client):
+    t0 = 1792161010 + 300 * random.randint(1, 99)
+    picked(client, t0 - 300, 20.0)
+    picked(client, t0, None)
+    assert muf(client).json()["muf"] is None, (
+        "an older pick stood in for the newest sounding, which had none")
+
+
+def test_the_live_muf_keeps_to_its_station(client):
+    picked(client, 1792161010, 20.0, rx="DOB")
+    assert muf(client).status_code == 404, "the live MUF came from another station"
+
+
+def test_the_live_muf_reads_the_method_asked_for(client):
+    picked(client, 1792161010, 20.0, method="algo")
+    assert muf(client, method="algo").json()["muf"] == 20.0, (
+        "the live MUF did not read the method asked for")
+
+
+def test_the_live_muf_refuses_a_method_that_does_not_exist(client):
+    assert muf(client, method="guess").status_code == 400, (
+        "the live MUF accepted a method that does not exist")
+
+
+def test_live_page_asks_for_each_transmitters_muf(client):
+    assert "/live/muf?tx=" in page(client), (
+        "the live page does not show the pipeline's MUF")
+
+
+def test_live_page_shows_planned_against_recorded(client):
+    assert 'id="tally"' in page(client), (
+        "the live page does not show the planned and recorded captures")
+
+
+def test_live_page_names_planned_against_recorded_in_russian(client):
+    assert "Запланировано и записано" in page(client, "?station=YOS&lang=ru"), (
+        "the planned and recorded table was not titled in Russian")

@@ -29,13 +29,22 @@ server keeps the last whole block, and :func:`latest` hands it out, marked
 transmitter table into a group for the schedule, switched off, which then goes
 through the ordinary check and Apply. Here rather than on the page, so the
 conversion the page offers is the one the tests check.
+
+**Planned against recorded** (:func:`tally`) holds the schedule's own replay,
+the one that lists the next captures, to the soundings the live view has
+summarised: what the checker predicts about lost sessions, checked against
+what the sounder did.
 """
 
 from __future__ import annotations
 
+import calendar
+import collections
 import json
 import math
 import sqlite3
+import statistics
+import time
 
 from muf.stations import default_registry
 from services.agent import control, ionozond, schedulecheck, siteconfig
@@ -44,6 +53,24 @@ from . import db
 
 #: How many captures to show ahead of now.
 AHEAD = 6
+
+#: The longest span the planned-and-recorded counts cover.
+TALLY_S = 86400.0
+
+#: How far a summarised sounding may start from a planned capture and still be
+#: that capture. The sounder starts each one on its scheduled second -- a
+#: product's start, modulo the period, is its offset, which
+#: `tools/rename_transmitter.py` relies on -- so this only absorbs rounding.
+#: Two captures of one transmitter are a whole period apart.
+MATCH_S = 5.0
+
+#: How long after a planned capture ends before a missing summary counts. The
+#: live feed sends one with the last column; this is room for the products and
+#: a post or two.
+DUE_S = 120.0
+
+#: Unseen captures listed by their start, the newest.
+UNSEEN_LISTED = 10
 
 
 class Unvetted(Exception):
@@ -222,6 +249,68 @@ def observe(conn: sqlite3.Connection, station: str, previous: dict | None,
                                      _read(conn, station, new, after)),
         changed_by="station", config_hash=new,
         note="chirp_config.py changed on the station, not by a queued command")
+
+
+def tally(conn: sqlite3.Connection, station: str, config: dict,
+          epoch: dict | None, now: float) -> dict | None:
+    """The captures the schedule plans, beside the soundings summarised.
+
+    Per transmitter. ``planned`` is :func:`ionozond.planned`, the schedule
+    replayed as the sounder picks its captures, counting those that have
+    ended. ``recorded`` is a planned capture with a summary, live or archived,
+    within ``MATCH_S`` of its start; ``unseen`` one that ended ``DUE_S`` ago
+    with none -- not recorded, or not yet backfilled from the station's
+    archive. ``unplanned`` is a summary no planned capture accounts for, and
+    ``offset_s`` the median of recorded less planned start.
+
+    Over the last ``TALLY_S``, or since the open epoch began if that is later:
+    the schedule in force did not make the soundings before it.
+    ``comparable`` is false when the schedule reported is not the one the
+    sounder runs -- drifted, written but not yet taken up, or a stale block.
+    None when the report holds no schedule.
+    """
+    document = config.get("document")
+    if not isinstance(document, dict) or not isinstance(document.get("schedule"), dict):
+        return None
+    since = max(now - TALLY_S, _seconds_of((epoch or {}).get("valid_from")) or 0.0)
+    plan = collections.defaultdict(list)
+    for capture in ionozond.planned(document, since, now):
+        plan[capture["tx"]].append(capture)
+    seen = db.summary_starts(conn, station, since - MATCH_S, now)
+    return {"since": since, "until": now,
+            "comparable": not any(config.get(k) for k in ("drift", "pending", "stale")),
+            "rows": [_counted(tx, plan.get(tx, []), seen.get(tx, []), since, now)
+                     for tx in sorted(set(plan) | set(seen))]}
+
+
+def _counted(tx: str, planned: list, recorded: list, since: float,
+             now: float) -> dict:
+    """One transmitter's planned captures matched to its summaries, in order."""
+    taken, offsets, unseen, i = set(), [], [], 0
+    for capture in planned:
+        start = capture["start"]
+        while i < len(recorded) and recorded[i] < start - MATCH_S:
+            i += 1
+        if i < len(recorded) and recorded[i] <= start + MATCH_S:
+            taken.add(i)
+            offsets.append(recorded[i] - start)
+            i += 1
+        elif start + capture["dur"] + DUE_S <= now:
+            unseen.append(start)
+    return {"tx": tx, "planned": len(offsets) + len(unseen), "recorded": len(offsets),
+            "unseen": len(unseen), "unseen_at": unseen[-UNSEEN_LISTED:],
+            "unplanned": sum(1 for k, t0 in enumerate(recorded)
+                             if k not in taken and t0 >= since),
+            "offset_s": round(statistics.median(offsets), 1) if offsets else None}
+
+
+def _seconds_of(text) -> float | None:
+    """A database instant, ``db.TIME_FORMAT`` or with a space, as unix seconds."""
+    try:
+        return float(calendar.timegm(time.strptime(
+            str(text).replace(" ", "T")[:19], "%Y-%m-%dT%H:%M:%S")))
+    except ValueError:
+        return None
 
 
 def _fitted(full: float, limit: float | None) -> float:

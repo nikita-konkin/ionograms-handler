@@ -17,6 +17,7 @@
   .tx-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.3rem 1rem; margin-bottom:.6rem; }
   .tx-head h2 { margin:0; }
   .tx-head .meta { color:var(--dim); font-variant-numeric:tabular-nums; }
+  .tx-head .pick { font-variant-numeric:tabular-nums; }
   .tx-head .state { margin-left:auto; }
   .echo-warn { color:var(--warn); margin:0 0 .6rem; font-size:.85rem; }
   .state.capturing, .state.clean { color:var(--ok); border-color:var(--ok); }
@@ -125,6 +126,20 @@
     <button data-needs="station" id="sched-reset" disabled>{{ t('live.sched.reset') }}</button>
     <button data-needs="station" id="sched-add">{{ t('live.sched.add') }}</button>
     <span id="sched-said" class="note"></span>
+  </div>
+  <div id="tally-box" hidden>
+  <h3>{{ t('live.tally.title') }}</h3>
+  <p id="tally-span" class="note"></p>
+  <div class="wide"><table id="tally">
+    <thead><tr>
+      <th>{{ t('live.sched.tx') }}</th><th>{{ t('live.tally.planned') }}</th>
+      <th>{{ t('live.tally.recorded') }}</th>
+      <th title="{{ t('live.tally.unseen_hint') }}">{{ t('live.tally.unseen') }}</th>
+      <th title="{{ t('live.tally.unplanned_hint') }}">{{ t('live.tally.unplanned') }}</th>
+      <th title="{{ t('live.tally.offset_hint') }}">{{ t('live.tally.offset') }}</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
   </div>
   <h3>{{ t('live.seed.title') }}</h3>
   <p class="note">{{ t('live.seed.note') }}</p>
@@ -267,7 +282,7 @@
     document.getElementById('empty').hidden = true;
     const el = document.createElement('section');
     el.className = 'panel';
-    el.innerHTML = '<div class="tx-head"><h2></h2><span class="meta"></span><span class="pill state"></span></div>'
+    el.innerHTML = '<div class="tx-head"><h2></h2><span class="meta"></span><span class="pick"></span><span class="pill state"></span></div>'
       + '<p class="echo-warn" hidden></p>'
       + '<div class="bar"><i></i></div><div class="plots">'
       + ['ctrl', 'current', 'snr', 'pdp'].map(k => '<figure><figcaption><b></b><span data-m="' + k + '"></span>'
@@ -280,7 +295,9 @@
     const one = {el, tx, cur: null, last: null, past: null, status: null, echo: null, history: new Map(), earliest: null, back: 0, span: SPAN_S, loading: false};
     txs[tx] = one;
     if (scheduled) el.hidden = !scheduled.has(tx);
+    el.querySelector('.pick').title = T('live.js.pick_hint');
     place(one);
+    pick(one);
     el.querySelectorAll('.step button').forEach(b => {
       b.title = TEXT[{'-1': 'older', '1': 'newer', '0': 'latest'}[b.dataset.s]];
       b.addEventListener('click', () => step(one, +b.dataset.s));
@@ -321,6 +338,20 @@
       const r = await fetch('/stations/' + encodeURIComponent(STATION) + '/live/path?tx=' + encodeURIComponent(one.tx), tok ? {headers: {Authorization: 'Bearer ' + tok}} : {});
       if (r.ok) { one.ground = (await r.json()).ground_km; dirty = true; redraw(); }
     } catch (e) { /* no height axis for a path nobody can place */ }
+  }
+
+  // The pipeline's own MUF and LOF for the newest archived sounding. It
+  // arrives an ingest after the sounding ends, so it says which sounding.
+  const mhz = (v, bound) => v === null ? '—' : (bound ? bound + ' ' : '') + v.toFixed(2);
+  async function pick(one) {
+    const tok = sessionStorage.getItem('tok') || '', out = one.el.querySelector('.pick');
+    try {
+      const r = await fetch('/stations/' + encodeURIComponent(STATION) + '/live/muf?tx=' + encodeURIComponent(one.tx), tok ? {headers: {Authorization: 'Bearer ' + tok}} : {});
+      if (!r.ok) { out.textContent = ''; return; }
+      const p = await r.json();
+      out.textContent = T('live.js.pick', {method: p.method, when: p.t0 === null ? '—' : dmy(p.t0) + ' ' + hms(p.t0),
+        muf: mhz(p.muf, p.limited ? '≥' : ''), lof: mhz(p.lof, p.loflim ? '≤' : '')});
+    } catch (e) { /* the line keeps what it had */ }
   }
 
   let scheduled = null;
@@ -659,7 +690,7 @@
   window.addEventListener('resize', () => { dirty = true; redraw(); });
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { dirty = true; redraw(); });
   window.addEventListener('themechange', () => { dirty = true; redraw(); });
-  if (STATION) listen(); else connection(false);
+  if (STATION) { listen(); setInterval(() => Object.values(txs).forEach(pick), 60000); } else connection(false);
 })();
 </script>
 
@@ -674,6 +705,7 @@
   const pad = n => String(n).padStart(2, '0');
   const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
   const stamp = text => String(text || '').replace('T', ' ').replace('Z', '');
+  const dayTime = s => { const d = new Date(s * 1000); return pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1) + ' ' + hms(s); };
   const on = v => !['', '0', 'false'].includes(String(v === undefined ? '' : v).toLowerCase());
   const copy = v => JSON.parse(JSON.stringify(v));
   const plain = v => v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
@@ -809,6 +841,31 @@
     $('sched-nas').textContent = cfg.nas_dest ? T('live.js.sched_nas', {dest: cfg.nas_dest}) : T('live.js.sched_nas_none');
     regeneration();
     sites();
+    tally();
+  }
+
+  // Planned against recorded: the schedule replayed as the sounder picks its
+  // captures, beside the soundings this server holds a summary of. The server
+  // counts (`sounder.tally`); this only lays the counts out.
+  function tally() {
+    const found = shown.tally, out = $('tally').tBodies[0];
+    $('tally-box').hidden = !found;
+    out.textContent = '';
+    if (!found) return;
+    $('tally-span').textContent = [T('live.js.tally_span', {since: dayTime(found.since), until: dayTime(found.until)}),
+      found.rows.length ? '' : T('live.js.tally_none'),
+      found.comparable ? '' : T('live.js.tally_not_comparable')].filter(Boolean).join(' ');
+    for (const row of found.rows) {
+      const tr = out.insertRow();
+      tr.insertCell().textContent = row.tx;
+      for (const key of ['planned', 'recorded', 'unseen', 'unplanned']) {
+        const cell = tr.insertCell();
+        cell.textContent = row[key];
+        if (key !== 'planned' && key !== 'recorded' && row[key]) cell.className = 'warn';
+        if (key === 'unseen' && row.unseen_at.length) cell.title = T('live.js.tally_unseen_at', {list: row.unseen_at.map(dayTime).join(', ')});
+      }
+      tr.insertCell().textContent = row.offset_s === null ? '—' : (row.offset_s > 0 ? '+' : '') + row.offset_s.toFixed(1);
+    }
   }
 
   // Regenerate after a hand edit: what the sounder would read differently is

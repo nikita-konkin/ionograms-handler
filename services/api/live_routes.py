@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from muf import calibrate
+from muf.extractors import ALL_METHODS
 from muf.stations import default_registry
 from services.agent import product, schedulecheck
 
@@ -63,6 +64,10 @@ def live_snapshot(station: str, request: Request) -> dict:
 #: some to spare for a schedule that sounds more often.
 MAX_SUMMARIES = 2000
 
+#: Whose pick the live view shows: the method forecasts are trained on, and
+#: the public page's default (`PUBLISH_METHOD`).
+PICK_METHOD = "contour"
+
 
 @router.get("/stations/{station}/live/summaries", dependencies=[Depends(require_read)])
 def live_summaries(station: str, tx: str, since: float, until: float,
@@ -103,6 +108,29 @@ def live_archive(station: str, tx: str, request: Request, before: float | None =
                             "cannot read %s: %s" % (row["file"], exc)) from None
     return dict(head, tx=tx, data={str(i): base64.b64encode(column.tobytes()).decode()
                                    for i, column in enumerate(cells)})
+
+
+@router.get("/stations/{station}/live/muf", dependencies=[Depends(require_read)])
+def live_muf(station: str, tx: str, request: Request,
+             method: str = PICK_METHOD) -> dict:
+    """The pipeline's MUF and LOF for the newest archived sounding of ``tx``.
+
+    From the archive, not the live columns: those are folded and rounded for
+    the screen, and a MUF read off them would disagree with the one every
+    other page shows. So it arrives once the hub has ingested the product, up
+    to an ingest interval after the sounding ends.
+    """
+    if method not in ALL_METHODS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "method must be one of %s" % ", ".join(ALL_METHODS))
+    row = db.latest_pick(request.app.state.db, station, tx, method)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "%s has not run on any %s sounding at %s"
+                            % (method, tx, station))
+    return {"tx": tx, "method": method, "t0": sounder._seconds_of(row["datetime"]),
+            "muf": row["muf"], "lof": row["lof"],
+            "limited": bool(row["limited"]), "loflim": bool(row["loflim"])}
 
 
 @router.get("/stations/{station}/live/path", dependencies=[Depends(require_read)])

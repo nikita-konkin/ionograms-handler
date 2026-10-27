@@ -12,6 +12,7 @@ from services.agent.schedulecheck import (
     Entry,
     Settings,
     SimStation,
+    between,
     check,
     simulate,
     upcoming,
@@ -289,3 +290,30 @@ def test_the_next_capture_after_midnight_is_at_its_chirptime():
 def test_the_next_captures_skip_the_one_being_recorded():
     starts = [c.start for c in upcoming([SimStation(300, 10, 250, 17)], 0.0, 3)]
     assert starts == [10.0, 310.0, 610.0], "the next captures were not a period apart"
+
+
+def test_a_span_holds_every_capture_a_running_sounder_starts_in_it():
+    midnight = 86400.0 * random.randint(20000, 21000)
+    hours = random.randint(1, 23)
+    starts = [c.start for c in between([SimStation(300, 10, 250, 17)], midnight,
+                                       midnight + 3600 * hours)]
+    assert starts == [midnight + 10 + 300 * k for k in range(12 * hours)], (
+        "a span did not hold one capture a period from its chirptime")
+
+
+def test_a_span_omits_the_capture_already_running_at_its_start():
+    midnight = 86400.0 * random.randint(20000, 21000)
+    starts = [c.start for c in between([SimStation(300, 10, 250, 17)],
+                                       midnight + 100, midnight + 700)]
+    assert starts == [midnight + 310, midnight + 610], (
+        "a span counted a capture that began before it")
+
+
+def test_a_span_follows_the_captures_before_it():
+    """Two transmitters a few seconds apart: the second is never reached, because
+    the first is still being recorded. Replayed from the span's own start, with no
+    past, the second would look free at first."""
+    midnight = 86400.0 * random.randint(20000, 21000)
+    sounder = [SimStation(300, 10, 250, 17), SimStation(300, 20, 50, 5)]
+    tx = {c.station for c in between(sounder, midnight + 15, midnight + 3600)}
+    assert tx == {0}, "a span ignored the capture running when it began"

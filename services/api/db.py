@@ -459,6 +459,17 @@ def summary_days(conn: sqlite3.Connection, station: str) -> dict:
     return out
 
 
+def summary_starts(conn: sqlite3.Connection, station: str, since: float,
+                   until: float) -> dict:
+    """The start of every summarised sounding from ``since`` to ``until``, by
+    transmitter, oldest first."""
+    out: dict = {}
+    for row in rows(conn, "SELECT tx, t0 FROM live_summary WHERE station = ?"
+                    " AND t0 BETWEEN ? AND ? ORDER BY t0", (station, since, until)):
+        out.setdefault(row["tx"], []).append(row["t0"])
+    return out
+
+
 def save_preview(conn: sqlite3.Connection, station: str, tx: str,
                  image: bytes, **meta: Any) -> None:
     """Store, or replace, one station's newest picture of one transmitter.
@@ -1281,3 +1292,17 @@ def archived(conn: sqlite3.Connection, station: str, tx: str, *,
                      " AND file LIKE 'lfm_ionogram-%'"
                      f" AND datetime {cmp} ? ORDER BY datetime {order} LIMIT 1",
                (tx, *names, bound))
+
+
+def latest_pick(conn: sqlite3.Connection, station: str, tx: str, method: str):
+    """What ``method`` made of the newest sounding of ``tx`` at this station.
+
+    The newest sounding it ran on, picked or not: one whose trace it could not
+    find is the answer for that sounding, and an older pick in its place would
+    say the band was open when it was not seen to be. None if it never ran.
+    """
+    owned, names = receiver_clause(conn, station, "s.rx")
+    return one(conn, "SELECT s.datetime, e.muf, e.lof, e.limited, e.loflim"
+                     " FROM sounding s JOIN extraction e ON e.sounding_id = s.id"
+                     f" WHERE s.tx = ? AND {owned} AND e.method = ?"
+                     " ORDER BY s.datetime DESC LIMIT 1", (tx, *names, method))

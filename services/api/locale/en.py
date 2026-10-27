@@ -1661,6 +1661,30 @@ MESSAGES: dict[str, str] = {
     "live.jobs.prune": "Pruning",
     "live.jobs.run": "Run now",
     "live.sched.next": "Next captures",
+    "live.tally.title": "Planned and recorded",
+    "live.tally.planned": "Planned",
+    "live.tally.recorded": "Recorded",
+    "live.tally.unseen": "Not seen",
+    "live.tally.unseen_hint": (
+        "Planned captures that ended two minutes ago or more with no summary "
+        "here: not recorded, or not yet sent from the station's archive"),
+    "live.tally.unplanned": "Unplanned",
+    "live.tally.unplanned_hint":
+        "Soundings summarised here that no planned capture accounts for",
+    "live.tally.offset": "Offset, s",
+    "live.tally.offset_hint":
+        "Median start of a recorded sounding less the start the schedule planned",
+    "live.js.tally_span": "From {since} to {until} UTC: the last day, or since "
+                          "the schedule last changed.",
+    "live.js.tally_none": "Nothing was planned or recorded in that time.",
+    "live.js.tally_not_comparable":
+        "The schedule reported is not the one the sounder runs, so these counts "
+        "are against the wrong schedule.",
+    "live.js.tally_unseen_at": "Not seen at {list} UTC",
+    "live.js.pick": "{method}, {when} UTC: MUF {muf} MHz, LOF {lof} MHz",
+    "live.js.pick_hint": (
+        "The pipeline's pick for the newest archived sounding of this "
+        "transmitter. It arrives once the server has ingested the product."),
     "live.sched.apply": "Apply",
     "live.sched.reset": "Discard edits",
     "live.sched.add": "Add transmitter",

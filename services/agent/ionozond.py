@@ -382,6 +382,20 @@ def regenerable(params: dict, reported: dict) -> None:
 
 def captures(wanted: dict, now: float, count: int) -> list:
     """The next ``count`` captures a document would make, as the sounder picks them."""
+    names, stations = _simulated(wanted)
+    return [{"tx": names[c.station], "start": c.start}
+            for c in schedulecheck.upcoming(stations, now, count)]
+
+
+def planned(wanted: dict, start: float, stop: float) -> list:
+    """Every capture a document makes in ``[start, stop)``, with its duration."""
+    names, stations = _simulated(wanted)
+    return [{"tx": names[c.station], "start": c.start, "dur": stations[c.station].dur}
+            for c in schedulecheck.between(stations, start, stop)]
+
+
+def _simulated(wanted: dict) -> tuple:
+    """The switched-on transmitters of a document, as the sounder schedules them."""
     names, stations = [], []
     for name in sorted(wanted["schedule"]):
         fields = wanted["schedule"][name]
@@ -392,8 +406,7 @@ def captures(wanted: dict, now: float, count: int) -> list:
         names.append(name)
         stations.append(schedulecheck.SimStation(
             rep, chirpt, dur, schedulecheck.processing_estimate_s(dur)))
-    return [{"tx": names[c.station], "start": c.start}
-            for c in schedulecheck.upcoming(stations, now, count)]
+    return names, stations
 
 
 def _state(config: StationConfig) -> dict:

@@ -201,6 +201,15 @@ def upcoming(stations: list[SimStation], now: float, count: int) -> list[Capture
     return out
 
 
+def between(stations: list[SimStation], start: float, stop: float) -> list[Capture]:
+    """The captures in ``[start, stop)``, unix time, of a sounder already running.
+
+    Replayed from a day earlier, so the first choice in the span follows from
+    the captures before it, as it does on the station.
+    """
+    return _replayed(stations, start - DAY_S, start, stop)
+
+
 def _replayed(stations, now, start, stop) -> list[Capture]:
     out: list[Capture] = []
     if not stations or not all(s.rep > 0.0 for s in stations):

@@ -574,3 +574,114 @@ def test_the_seed_route_asks_for_the_station_capability(client):
         "from": "Yoshkar-Ola", "code": "NIC1", "slot": 0,
         "low_edge_khz": 7500}).status_code == 401, (
         "an anonymous caller could seed a group")
+
+
+# --- planned against recorded --------------------------------------------------
+
+def summarised(conn, t0, tx="cyprus1", station="yoshkar-ola"):
+    db.keep_summary(conn, station, {
+        "tx": tx, "t0": t0, "source": "live", "f_lo_mhz": 7.5, "f_step_mhz": 0.04,
+        "columns": 1, "range_lo_km": 2500.0, "range_step_km": 7.3, "rows": 1,
+        "km_per_ms": 300.0, "snr": "AA==", "pdp": "AA=="})
+
+
+def tallied(client, starts, now, config=None, epoch=None, station="yoshkar-ola"):
+    """The tally after a summary at each of ``starts``: cyprus1 is planned at
+    second 10 of every 300 s, for 250 s."""
+    conn = client.app.state.db
+    for t0 in starts:
+        summarised(conn, t0)
+    found = sounder.tally(conn, station, config or reported(), epoch, now)
+    return {row["tx"]: row for row in found["rows"]}, found
+
+
+def midday() -> float:
+    return 86400.0 * random.randint(20700, 20800) + 43200.0
+
+
+def planned(now, since=None) -> list:
+    since = now - sounder.TALLY_S if since is None else since
+    return [c["start"] for c in ionozond.planned(reported()["document"], since, now)
+            if c["start"] + c["dur"] + sounder.DUE_S <= now]
+
+
+def test_a_tally_counts_every_planned_capture_that_was_recorded(client):
+    now = midday()
+    starts = planned(now)
+    rows, _ = tallied(client, [int(t) for t in starts], now)
+    assert (rows["cyprus1"]["planned"], rows["cyprus1"]["recorded"]) == (
+        len(starts), len(starts)), (
+        "a day of captures recorded as planned did not count as recorded")
+
+
+def test_a_tally_counts_a_planned_capture_with_no_summary_as_unseen(client):
+    now = midday()
+    starts = planned(now)
+    gone = random.randrange(len(starts))
+    rows, _ = tallied(client, [int(t) for k, t in enumerate(starts) if k != gone], now)
+    assert (rows["cyprus1"]["unseen"], rows["cyprus1"]["unseen_at"]) == (
+        1, [starts[gone]]), "a capture with no summary was not counted unseen"
+
+
+def test_a_tally_counts_a_summary_off_the_schedule_as_unplanned(client):
+    now = midday()
+    rows, _ = tallied(client, [int(planned(now)[0]) + 150], now)
+    assert rows["cyprus1"]["unplanned"] == 1, (
+        "a summary halfway between two planned captures was not unplanned")
+
+
+def test_a_tally_does_not_count_a_capture_still_running(client):
+    running = midday() + 10
+    rows, _ = tallied(client, [], running + random.randint(0, 200))
+    assert running not in rows["cyprus1"]["unseen_at"], (
+        "a capture still being recorded was counted unseen")
+
+
+def test_a_tally_says_how_far_recorded_starts_are_from_planned_ones(client):
+    now, late = midday(), random.randint(1, int(sounder.MATCH_S))
+    rows, _ = tallied(client, [int(t) + late for t in planned(now)], now)
+    assert rows["cyprus1"]["offset_s"] == late, (
+        "the tally did not say how late the recorded soundings started")
+
+
+def test_a_tally_begins_when_the_schedule_last_changed(client):
+    now, hours = midday(), random.randint(1, 6)
+    changed = now - 3600 * hours
+    epoch = {"valid_from": time.strftime(db.TIME_FORMAT, time.gmtime(changed))}
+    rows, found = tallied(client, [], now, epoch=epoch)
+    assert (found["since"], rows["cyprus1"]["planned"]) == (
+        changed, len(planned(now, changed))), (
+        "the tally counted captures from before the schedule last changed")
+
+
+def test_a_tally_ignores_soundings_from_before_the_schedule_changed(client):
+    now = midday()
+    changed = now - 3600
+    epoch = {"valid_from": time.strftime(db.TIME_FORMAT, time.gmtime(changed))}
+    rows, _ = tallied(client, [int(changed) - 300 * random.randint(1, 9) - 150], now,
+                      epoch=epoch)
+    assert rows["cyprus1"]["unplanned"] == 0, (
+        "a sounding from before the schedule changed counted as unplanned")
+
+
+def test_a_tally_keeps_to_its_station(client):
+    now = midday()
+    for t0 in planned(now):
+        summarised(client.app.state.db, int(t0), station="yoshkar-ola-1")
+    rows, _ = tallied(client, [], now)
+    assert rows["cyprus1"]["recorded"] == 0, (
+        "the tally counted another station's soundings")
+
+
+@pytest.mark.parametrize("flag", ["drift", "pending", "stale"])
+def test_a_tally_against_a_schedule_the_sounder_does_not_run_says_so(client, flag):
+    _, found = tallied(client, [], midday(), config=dict(reported(), **{flag: True}))
+    assert found["comparable"] is False, (
+        "a tally against a %s schedule claimed to be comparable" % flag)
+
+
+def test_the_schedule_route_carries_the_tally(client):
+    health(client)
+    found = client.get("/stations/yoshkar-ola/ionozond").json()["tally"]
+    assert "cyprus1" in {row["tx"] for row in found["rows"]}, (
+        "the schedule route carried no planned-and-recorded counts")
