@@ -11,13 +11,20 @@ again rather than served, since the simulator it shows may have changed.
 The process is for the server's sake, not the build's. The loop is heavy
 numerics with long stretches of Python between them; on a thread it would
 hold the interpreter the request path runs on, and every page would wait.
+While it runs it says how far it has got in a file beside the console's
+(:class:`services.api.apart.Progress`), which :func:`status` reads. The
+file goes when the build ends, under the lock :func:`status` reads it in,
+since Windows cannot remove a file being read; one another program holds
+open stays behind, harmless, as it is read only while its build runs.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -74,7 +81,7 @@ def status(cache: Path, sounding_id: int) -> dict:
 def _standing(cache: Path, sounding_id: int) -> dict:
     target = _file(cache, sounding_id)
     if _running == target:
-        return {"state": "running"}
+        return {"state": "running", "progress": apart.progress(_told(target))}
     waiting = [t for t, _ in _queue]
     if target in waiting:
         return {"state": "queued", "ahead": waiting.index(target)}
@@ -113,7 +120,8 @@ def _work() -> None:
             target, path = _queue.popleft()
             _running = target
         try:
-            _keep(target, _execute(path))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _keep(target, _execute(path, apart.Progress(_told(target), time.time())))
             error = None
         except Exception as exc:
             error = str(exc) or type(exc).__name__
@@ -121,6 +129,13 @@ def _work() -> None:
             _running = None
             if error is not None:
                 _failed[target] = error
+            with contextlib.suppress(OSError):
+                _told(target).unlink(missing_ok=True)
+
+
+def _told(target: Path) -> Path:
+    """Where the build of ``target`` says how far it has got."""
+    return target.with_suffix(".progress")
 
 
 def _keep(target: Path, built: dict) -> None:
@@ -131,16 +146,17 @@ def _keep(target: Path, built: dict) -> None:
     os.replace(partial, target)
 
 
-def _execute(path: Path) -> dict:
-    """The console's data, built in a process of its own and stopped if it hangs."""
-    return apart.run(_build, str(path), timeout_s=TIMEOUT_S,
+def _execute(path: Path, progress: apart.Progress) -> dict:
+    """The console's data, built in a process of its own and stopped if it hangs,
+    telling ``progress`` how far it has got."""
+    return apart.run(_build, str(path), progress, timeout_s=TIMEOUT_S,
                      what=f"the simulator on {Path(path).name}")
 
 
-def _build(path: str) -> dict:
+def _build(path: str, progress: apart.Progress) -> dict:
     from muf.sim import console
 
-    return console.build(path)
+    return console.build(path, progress=progress)
 
 
 def page(built: dict) -> str:

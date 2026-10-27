@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
+import functools
+import json
+import random
+import threading
 import time
+from pathlib import Path
 
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from services.api import auth, db, main, sim  # noqa: E402
+from services.api import auth, db, main, sim, sim_period  # noqa: E402
 
 CTL = {"Authorization": "Bearer ctl"}
 
@@ -18,8 +25,9 @@ CTL = {"Authorization": "Bearer ctl"}
 def made(monkeypatch):
     calls = []
 
-    def build(path):
+    def build(path, progress):
         calls.append(path.name)
+        progress(1, 2)
         if path.name.startswith("bad"):
             raise ValueError(f"no trace in {path.name}")
         return {"source": path.name, "utc": "2026-02-04 12:00 UTC", "modes": []}
@@ -59,6 +67,16 @@ def _settled(client, sounding_id: int, timeout_s: float = 10.0) -> dict:
             return got
         time.sleep(0.02)
     raise AssertionError(f"the build of {sounding_id} never settled")
+
+
+def _reporting(client, sounding_id: int, timeout_s: float = 10.0) -> dict:
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        got = client.get(f"/sim/{sounding_id}").json()
+        if got.get("progress"):
+            return got["progress"]
+        time.sleep(0.02)
+    raise AssertionError(f"the build of {sounding_id} never reported its progress")
 
 
 def test_a_sounding_not_yet_run_is_absent(client, tmp_path):
@@ -131,3 +149,207 @@ def test_the_page_marks_a_sounding_already_built(client, tmp_path):
 
 def test_the_navigation_leads_to_the_simulator(client):
     assert 'href="/ui/sim"' in client.get("/ui").text
+
+
+def test_a_running_build_says_how_far_it_has_got(client, tmp_path, monkeypatch):
+    done, total, release = random.randint(1, 12), random.randint(13, 20), \
+        threading.Event()
+
+    def build(path, progress):
+        progress(done, total)
+        release.wait(10.0)
+        return {"source": path.name, "modes": []}
+
+    monkeypatch.setattr(sim, "_execute", build)
+    k = _sounding(client, tmp_path)
+    client.post(f"/sim/{k}", headers=CTL)
+    seen = _reporting(client, k)
+    release.set()
+    _settled(client, k)
+    assert (seen["done"], seen["total"]) == (done, total), \
+        "a running build did not say how far it had got"
+
+
+def test_a_finished_build_leaves_no_progress_behind(client, tmp_path):
+    k = _sounding(client, tmp_path)
+    client.post(f"/sim/{k}", headers=CTL)
+    _settled(client, k)
+    assert list(client.app.state.sim_cache.glob("*.progress")) == [], \
+        "a finished build left its progress behind"
+
+
+def test_the_page_has_a_progress_bar(client, tmp_path):
+    _sounding(client, tmp_path)
+    assert 'id="simBar"' in client.get("/ui/sim").text, \
+        "the page has no progress bar"
+
+
+def test_a_progress_held_open_does_not_stop_later_builds(client, tmp_path, monkeypatch):
+    with contextlib.ExitStack() as held:
+
+        def build(path, progress):
+            progress(1, 2)
+            held.enter_context(open(progress.path, encoding="utf-8"))
+            return {"source": path.name, "modes": []}
+
+        monkeypatch.setattr(sim, "_execute", build)
+        first = _sounding(client, tmp_path)
+        client.post(f"/sim/{first}", headers=CTL)
+        _settled(client, first)
+        later = _sounding(client, tmp_path,
+                          f"cyprus1_20260204_12{random.randint(10, 59)}10.lfs")
+        client.post(f"/sim/{later}", headers=CTL)
+        state = _settled(client, later)["state"]
+    assert state == "done", "a progress held open stopped later builds"
+
+
+@pytest.fixture
+def scored(monkeypatch):
+    def execute(paths, out, lead_s, progress):
+        progress(1, 2)
+        Path(out).mkdir(parents=True)
+        (Path(out) / "summary.json").write_text(json.dumps(
+            {"pairs": 0, "set_apart": 0, "stretches": 0, "reason": "no pairs scored"}),
+            encoding="utf-8")
+
+    monkeypatch.setattr(sim_period, "_execute", execute)
+
+
+def _day() -> dt.date:
+    return dt.date(2031, 1, 1) + dt.timedelta(days=random.randint(0, 3000))
+
+
+def _circuit(client, day: dt.date, count: int = 3, step_s: float = 600.0,
+             files=None) -> None:
+    conn = client.app.state.db
+    start = dt.datetime.combine(day, dt.time(random.randint(0, 3), 5, 15))
+    for k in range(count):
+        when = start + dt.timedelta(seconds=step_s * k)
+        name = files[k] if files else f"NIC2-yoshkar-ola-{when:%Y%m%d%H%M%S}.h5"
+        conn.execute("INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at) "
+                     "VALUES (?,?,?,?,?,?)",
+                     (name, name, f"{when:%Y-%m-%d %H:%M:%S}", "NIC2", "yoshkar-ola",
+                      db.utcnow()))
+    conn.commit()
+
+
+def _ask(day: dt.date, **kw) -> dict:
+    return {"tx": "NIC2", "rx": "yoshkar-ola", "first": day.isoformat(),
+            "last": day.isoformat(), **kw}
+
+
+def _period_settled(client, run_id: int, timeout_s: float = 10.0) -> dict:
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        got = client.get(f"/sim/periods/{run_id}").json()
+        if got["state"] not in ("queued", "running"):
+            return got
+        time.sleep(0.02)
+    raise AssertionError(f"period run {run_id} never settled")
+
+
+def _scored_period(client, day: dt.date) -> int:
+    _circuit(client, day)
+    run_id = client.post("/sim/periods", json=_ask(day), headers=CTL).json()["id"]
+    _period_settled(client, run_id)
+    return run_id
+
+
+def test_scoring_a_period_needs_the_control_token(client, scored):
+    day = _day()
+    _circuit(client, day)
+    assert client.post("/sim/periods", json=_ask(day)).status_code == 401, \
+        "a period was scored without the control token"
+
+
+def test_a_period_is_scored_on_request(client, scored):
+    assert _period_settled(client, _scored_period(client, _day()))["state"] == "done", \
+        "a period asked for was not scored"
+
+
+def test_a_period_with_a_malformed_day_is_refused(client, scored):
+    day = _day()
+    _circuit(client, day)
+    assert client.post("/sim/periods", json=_ask(day, first=random.choice(
+        ("tomorrow", "2031-13-01", "", None))), headers=CTL).status_code == 422, \
+        "a malformed day was not refused"
+
+
+def test_a_period_longer_than_the_limit_is_refused(client, scored):
+    day = _day()
+    _circuit(client, day)
+    last = day + dt.timedelta(days=sim_period.MAX_DAYS + random.randint(0, 30))
+    assert client.post("/sim/periods", json=_ask(day, last=last.isoformat()),
+                       headers=CTL).status_code == 422, \
+        "a period longer than the limit was not refused"
+
+
+def test_a_period_with_no_soundings_is_not_found(client, scored):
+    day = _day()
+    _circuit(client, day)
+    assert client.post("/sim/periods",
+                       json=_ask(day + dt.timedelta(days=random.randint(2, 9))),
+                       headers=CTL).status_code == 404, \
+        "a period with no soundings was found"
+
+
+def test_the_periods_are_listed(client, scored):
+    run_id = _scored_period(client, _day())
+    assert [r["id"] for r in client.get("/sim/periods").json()] == [run_id], \
+        "the period runs were not listed"
+
+
+def test_an_unknown_period_is_not_found(client):
+    assert client.get(f"/sim/periods/{random.randint(1, 999)}").status_code == 404, \
+        "a period never asked for was found"
+
+
+def test_a_finished_periods_summary_can_be_downloaded(client, scored):
+    run_id = _scored_period(client, _day())
+    assert client.get(f"/sim/periods/{run_id}/summary.json").json()["pairs"] == 0, \
+        "a finished period's summary could not be downloaded"
+
+
+def test_a_file_not_offered_is_not_found(client, scored):
+    run_id = _scored_period(client, _day())
+    assert client.get(f"/sim/periods/{run_id}/job.json").status_code == 404, \
+        "a file not offered for download was served"
+
+
+def test_the_simulator_page_leads_to_the_periods(client, tmp_path):
+    _sounding(client, tmp_path)
+    assert 'href="/ui/sim/periods"' in client.get("/ui/sim").text, \
+        "the simulator page does not lead to the periods"
+
+
+def test_the_periods_page_offers_the_circuits(client):
+    _circuit(client, _day())
+    assert "NIC2 → yoshkar-ola" in client.get("/ui/sim/periods").text, \
+        "the periods page did not offer the circuit"
+
+
+def test_the_periods_page_shows_a_finished_runs_figures(client, tmp_path, monkeypatch):
+    from muf.sim import presets, sounding, summary
+    from muf.sim.state import ChannelState, Sweep
+
+    monkeypatch.setattr(summary, "metrics",
+                        functools.partial(summary.metrics, minimum=1))
+    monkeypatch.setattr(sim_period, "_execute", sim_period._score)
+    sweep = Sweep(start_mhz=10.0, rate_hz_s=100e3, duration_s=40.0, sample_rate_hz=40e3)
+    day = _day()
+    start = dt.datetime.combine(day, dt.time(9, 0), tzinfo=dt.timezone.utc).timestamp()
+    files = []
+    for k in range(3):
+        law = presets.law_mode(muf_mhz=12.5 + random.random(), f_lo_mhz=10.5,
+                               cn0_dbhz=45.0, spread_hz=0.5)
+        state = ChannelState(presets.cyprus1_circuit(), start + 600.0 * k, [law],
+                             sweep=sweep, source="test")
+        files.append(sounding.write_lfs(state, tmp_path / sounding.default_name(state),
+                                        seed=k).name)
+    _circuit(client, day, files=files)
+    run_id = client.post("/sim/periods", json=_ask(day), headers=CTL).json()["id"]
+    _period_settled(client, run_id, timeout_s=120.0)
+    mae = sim_period.summary(client.app.state.sim_cache,
+                             run_id)["all"]["muf_mhz"]["mae"]
+    assert f"{mae:.2f}" in client.get(f"/ui/sim/periods?id={run_id}").text, \
+        "the periods page did not show the run's MUF error"

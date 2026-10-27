@@ -107,8 +107,10 @@ MESSAGES: dict[str, str] = {
     "sim.js.absent": "Not built yet. Run the simulator to build it.",
     "sim.js.queued": "Queued, {ahead} ahead of it",
     "sim.js.running": "The simulator is running on this sounding…",
+    "sim.js.progress": "The simulator is running: step {done} of {total}, {s} s so far",
     "sim.js.failed": "The run failed: {error}",
     "sim.live": "Live forecasts",
+    "sim.periods": "Score a period",
 
     # -- live forecasts ---------------------------------------------------
     "sim_live.title": "Live forecasts",
@@ -168,6 +170,65 @@ MESSAGES: dict[str, str] = {
     "sim_live.unit.mhz": "MHz",
     "sim_live.unit.us": "µs",
     "sim_live.unit.db": "dB",
+    "sim_period.title": "Score a period",
+    "sim_period.hint": "The persistence forecast scored over days of the archive",
+    "sim_period.what": (
+        "Choose a circuit, its days and a lead. Each sounding is paired with the "
+        "one a lead later, the forecast that nothing changes is scored against "
+        "it, and the errors are summed up with 95 % intervals. Pairs the "
+        "receiver's clock broke are set apart. A run covers at most {days} days "
+        "and {soundings} soundings, and makes no synthetic copies, so a day "
+        "takes minutes."),
+    "sim_period.circuit": "Circuit",
+    "sim_period.first": "First day, UTC",
+    "sim_period.last": "Last day, UTC",
+    "sim_period.lead": "Lead, min",
+    "sim_period.run": "Score",
+    "sim_period.runs": "Runs",
+    "sim_period.runs_none": "Nothing scored yet.",
+    "sim_period.col.days": "Days, UTC",
+    "sim_period.col.lead": "Lead",
+    "sim_period.col.soundings": "Soundings",
+    "sim_period.col.state": "State",
+    "sim_period.col.pairs": "Pairs",
+    "sim_period.col.hour": "Hour, UTC",
+    "sim_period.col.sun": "Sun",
+    "sim_period.min": "{min} min",
+    "sim_period.done": "done in {min} min",
+    "sim_period.failed": "failed: {error}",
+    "sim_period.waiting": "Not finished yet.",
+    "sim_period.js.queued": "queued, {ahead} ahead of it",
+    "sim_period.js.running": "starting",
+    "sim_period.js.progress": "step {done} of {total}, {min} min so far",
+    "sim_period.result": "Run {id}: {tx} → {rx}",
+    "sim_period.asked": "{first} to {last} UTC · a lead of {min} min · soundings: {n}",
+    "sim_period.pairs": "Pairs scored: {pairs}; unbroken stretches: {stretches}",
+    "sim_period.set_apart": "set apart for the receiver's clock: {n}",
+    "sim_period.skipped": "not scored: {n}",
+    "sim_period.no_pairs": "No pair was scored.",
+    "sim_period.figures": "Errors over the whole period",
+    "sim_period.bias": "bias",
+    "sim_period.median": "median |e|",
+    "sim_period.few": "pairs: {n}, fewer than {min}",
+    "sim_period.censored":
+        "MUF at a bound of the band: truth {truth}, forecast {forecast}",
+    "sim_period.carriers": "Carriers: {n} scored",
+    "sim_period.base_rate": "In the truth",
+    "sim_period.event.mode": "A mode seen",
+    "sim_period.event.usable": "Usable",
+    "sim_period.figures_note": (
+        "The forecast is persistence: the earlier sounding's state, issued for "
+        "the later one. Each interval is 95 %, from a block bootstrap within "
+        "unbroken stretches, and no figure is given from fewer than {min} pairs. "
+        "Delay and C/N0 are the mode pairs' RMS errors; a mode's top is its "
+        "highest frequency."),
+    "sim_period.by_hour": "By the hour the forecast was for",
+    "sim_period.by_sun": "By the sun at the control point",
+    "sim_period.sun.day": "Day",
+    "sim_period.sun.transition": "Transition",
+    "sim_period.sun.night": "Night",
+    "sim_period.sun.unknown": "Unknown",
+    "sim_period.downloads": "Download",
 
     # -- one sounding -----------------------------------------------------
     "sounding.notfound": "Not found",

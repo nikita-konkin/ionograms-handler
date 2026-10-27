@@ -5,7 +5,8 @@
 
 <div class="panel">
   <h2>{{ t('sim.title') }}</h2>
-  <p class="note"><a href="/ui/sim/live">{{ t('sim.live') }}</a></p>
+  <p class="note"><a href="/ui/sim/live">{{ t('sim.live') }}</a> ·
+    <a href="/ui/sim/periods">{{ t('sim.periods') }}</a></p>
   {% if days %}
   <label class="muted" style="font-size:.85rem">{{ t('sim.pick') }}
     <select id="simPick">
@@ -21,6 +22,7 @@
     </select></label>
   <button id="simRun" class="pill" data-needs="archive">{{ t('sim.run') }}</button>
   <span id="simSay" class="note"></span>
+  <progress id="simBar" style="display:none;width:100%;max-width:24rem"></progress>
   <p class="note">{{ t('sim.cost') }}</p>
   {% else %}
   <p class="muted">{{ t('sim.none') }}</p>
@@ -40,13 +42,22 @@ const pick = document.getElementById('simPick');
 const run = document.getElementById('simRun');
 const say = document.getElementById('simSay');
 const frame = document.getElementById('simFrame');
+const bar = document.getElementById('simBar');
 let polling = null;
+
+function measure(p) {
+  bar.style.display = p ? '' : 'none';
+  if (!p) return;
+  bar.max = p.total || 1;
+  bar.value = p.done;
+}
 
 async function look(id) {
   clearTimeout(polling);
   const r = await fetch('/sim/' + id).then(x => x.json()).catch(() => null);
   if (!r || pick.value !== String(id)) return;
   run.style.display = r.state === 'done' ? 'none' : '';
+  measure(r.state === 'running' ? r.progress : null);
   if (r.state === 'done') {
     const chosen = pick.selectedOptions[0];
     if (!('built' in chosen.dataset)) {
@@ -61,6 +72,9 @@ async function look(id) {
   frame.style.display = 'none';
   frame.removeAttribute('src');
   say.textContent = r.state === 'queued' ? T('sim.js.queued', {ahead: r.ahead})
+    : r.state === 'running' && r.progress
+      ? T('sim.js.progress', {done: r.progress.done, total: r.progress.total,
+                              s: Math.round(r.progress.elapsed_s)})
     : r.state === 'running' ? T('sim.js.running')
     : r.state === 'failed' ? T('sim.js.failed', {error: r.error})
     : T('sim.js.absent');
