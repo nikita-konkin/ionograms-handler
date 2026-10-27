@@ -54,6 +54,13 @@ TONE_PER_CN0_SECOND = 1.0 / (6.0 * math.log(2.0) ** 2)
 #: Default knot spacing, MHz.
 KNOT_MHZ = 0.1
 
+#: A gap without points wider than this is joined straight, not by the
+#: spline, MHz; the delay's provenance names the widest. A smoothing spline's
+#: knots sit on its points, so across a gap one knot interval holds no data:
+#: only continuity holds the cubic there, and it can swing thousands of km off
+#: the trace while passing close to every point.
+FIT_GAP_MHZ = 0.5
+
 #: Half-width over which the C/N0 along a mode is averaged, MHz. A
 #: Rayleigh-fading echo's level is the mean of its power, not a sample of it.
 SMOOTH_MHZ = 0.2
@@ -261,7 +268,7 @@ def _curve(seg) -> tuple[np.ndarray, np.ndarray, str]:
     if rec.ok and rec.freq.size >= 2:
         how = (f"muf.trace.reconstruct, rms residual {rec.rms_residual_km:.1f} km"
                if np.isfinite(rec.rms_residual_km) else "muf.trace.reconstruct")
-        return rec.freq, rec.vrange, how
+        return (*_bridged(seg, rec.freq, rec.vrange), how)
     # Too short to reconstruct: medians per 0.1 MHz, the data as it is.
     edges = np.arange(seg.freq.min(), seg.freq.max() + KNOT_MHZ, KNOT_MHZ)
     idx = np.clip(np.digitize(seg.freq, edges) - 1, 0, edges.size - 1)
@@ -271,6 +278,33 @@ def _curve(seg) -> tuple[np.ndarray, np.ndarray, str]:
         f.append(float(np.median(seg.freq[sel])))
         r.append(float(np.median(seg.vrange[sel])))
     return np.asarray(f), np.asarray(r), f"bin medians ({rec.reason})"
+
+
+def _bridged(seg, f: np.ndarray, r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A segment's spline with no samples in its gaps, so the mode joins them straight.
+
+    The gaps are those without points wider than :data:`FIT_GAP_MHZ`. Between
+    them the spline is kept as it is, held by points on either side; a
+    stretch it has no sample within -- a lone point beyond a gap -- is its
+    points' median, since the spline's samples beside it can be anywhere. The
+    mode's knots inside a gap then lie on the line between its edges: a fade
+    says nothing of the curve, and a line claims least.
+
+    The two other ways out were worse. Fitting each stretch apart leaves short
+    stretches to splines of their own, which overshoot a step in range the
+    whole fit followed. Splitting the mode at the gap shortens the bands that
+    scoring and the top's error read, where :mod:`muf.trace` follows a track
+    across a fade as one on purpose.
+    """
+    cut = np.flatnonzero(np.diff(seg.freq) > FIT_GAP_MHZ) + 1
+    if cut.size == 0:
+        return f, r
+    kept = []
+    for freq, vrange in zip(np.split(seg.freq, cut), np.split(seg.vrange, cut)):
+        inside = (f >= freq[0]) & (f <= freq[-1])
+        kept.append((f[inside], r[inside]) if inside.any() else
+                    (np.median(freq, keepdims=True), np.median(vrange, keepdims=True)))
+    return tuple(np.concatenate(x) for x in zip(*kept))
 
 
 def _cn0_along(ion, f_curve: np.ndarray, r_curve: np.ndarray,
@@ -405,8 +439,9 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
             hops=seg.hops, branch=seg.branch,
             provenance={
                 "delay": Provenance(MEASURED, f"{method} trace, {how}"
-                                    + (f"; widest gap without points {widest:.2f} MHz"
-                                       if widest > 0.5 else "")),
+                                    + (f"; widest gap without points {widest:.2f} MHz, "
+                                       f"gaps over {FIT_GAP_MHZ:g} MHz joined straight"
+                                       if widest > FIT_GAP_MHZ else "")),
                 "band": Provenance(MEASURED, "extent of the trace segment"),
                 "cn0": Provenance(MEASURED, f"ionogram power along the trace, "
                                             f"+-{SUM_HALF_BINS} bins, "

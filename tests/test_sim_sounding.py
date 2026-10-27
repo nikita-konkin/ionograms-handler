@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 import pytest
 
-from muf import cli, io_lfs, loader, spectro
+from muf import cli, io_lfs, loader, spectro, trace
 from muf.sim import check, observe, presets, sounding
 from muf.sim.state import ChannelState, Mode, Sweep
 
