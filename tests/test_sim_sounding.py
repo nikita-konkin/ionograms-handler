@@ -379,3 +379,52 @@ def test_closed_loop_reports_each_realisation_as_it_is_read_back(tmp_path):
                       progress=lambda done, total: calls.append((done, total)))
     assert calls == [(0, 2), (1, 2), (2, 2)], \
         f"the closed loop did not report each realisation: {calls}"
+
+
+def _gapped(rng) -> trace.Segment:
+    """Rows of a trace, the last a step lower, and one point at that range 3 MHz on.
+
+    The smoothing spline's knot interval across the gap holds no data, so it
+    passes close to every point and swings far off the trace between them.
+    """
+    n = int(rng.integers(10, 13))
+    near = (rng.uniform(10.2, 10.4) + 0.0205 * np.arange(n)
+            + rng.uniform(-0.004, 0.004, n))
+    km = rng.uniform(2650.0, 2750.0) + rng.normal(0.0, 4.0, n)
+    km[-1] -= rng.uniform(60.0, 80.0)
+    return trace.Segment(np.append(near, near[-1] + rng.uniform(3.0, 3.3)),
+                         np.append(km, km[-1]))
+
+
+def _across(seg, rng, tmp_path, monkeypatch) -> Mode:
+    """The one mode from_ionogram makes of ``seg``, on a sounding of its band."""
+    ion = _load(sounding.write_lfs(_state(_flat()), tmp_path,
+                                   seed=int(rng.integers(1 << 16))))
+    monkeypatch.setattr(observe.trace, "group_tracks", lambda *_: [seg])
+    (mode,) = observe.from_ionogram(ion).modes
+    return mode
+
+
+def test_a_gap_in_a_trace_keeps_its_mode_on_its_points(tmp_path, monkeypatch):
+    rng = np.random.default_rng()
+    seg = _gapped(rng)
+    km = _across(seg, rng, tmp_path, monkeypatch).delay_us * KM_PER_US
+    assert max(km.max() - seg.vrange.max(), seg.vrange.min() - km.min()) < 30.0, \
+        "the mode's delay does not stay within 30 km of its points across the gap"
+
+
+def test_a_gap_in_a_trace_leaves_its_mode_the_whole_band(tmp_path, monkeypatch):
+    rng = np.random.default_rng()
+    seg = _gapped(rng)
+    mode = _across(seg, rng, tmp_path, monkeypatch)
+    assert (mode.f_lo, mode.f_hi) == pytest.approx(seg.freq_span), \
+        "the mode does not span its whole trace across the gap"
+
+
+def test_a_trace_without_a_gap_keeps_its_spline():
+    rng = np.random.default_rng()
+    freq = np.linspace(10.0, 14.0, 90) + rng.uniform(-0.01, 0.01, 90)
+    seg = trace.Segment(freq, rng.uniform(2650.0, 2750.0) + 30.0 * (freq - 10.0) ** 2
+                        + rng.normal(0.0, 5.0, freq.size))
+    assert np.array_equal(observe._curve(seg)[1], trace.reconstruct(seg).vrange), \
+        "a trace with no gap does not keep muf.trace.reconstruct's curve"
