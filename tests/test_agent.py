@@ -2755,6 +2755,21 @@ def test_a_missing_chirpsounder2_ini_fails_nothing_on_ionozond(tmp_path, monkeyp
     assert failing == [], "a healthy ionozond station reported a failure"
 
 
+def test_a_chirpsounder2_station_reports_its_raw_voltage(station):
+    assert health.raw_voltage(station).value is False
+    station.chirp_config.write_text(
+        station.chirp_config.read_text().replace(
+            "save_raw_voltage = false", "save_raw_voltage = true"))
+    assert health.raw_voltage(station).value is True
+
+
+def test_raw_voltage_absent_from_the_ini_is_off(station):
+    station.chirp_config.write_text(
+        station.chirp_config.read_text().replace("save_raw_voltage = false\n", ""))
+    metric = health.raw_voltage(station)
+    assert metric.value is False and metric.ok is True
+
+
 def test_a_chirpsounder2_station_still_reports_its_band(station):
     names = [m.name for m in health.collect(station, include_epoch=False).metrics]
     assert "center_freq_hz" in names, "a chirpsounder2 station lost its band"

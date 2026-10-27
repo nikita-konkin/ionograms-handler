@@ -204,10 +204,11 @@ def test_settings_outside_the_web_list_are_refused(client):
     the operator does not always have a session onto the station, and because
     the agent now refuses a path outside the folder the archive jobs copy
     from -- so a typo lands somewhere still copied and still pruned, rather
-    than somewhere nothing is looking. These two remain off the list: both
-    need a considered decision and neither is worth a form field.
+    than somewhere nothing is looking. `save_raw_voltage` joined it on
+    2026-10-27, for the same reason. `max_range_extent` remains off the list:
+    it needs a considered decision and is not worth a form field.
     """
-    for name in ("max_range_extent", "save_raw_voltage"):
+    for name in ("max_range_extent",):
         r = client.post("/stations/SIM/commands", headers=CTL, json={
             "name": "set_config", "params": {"changes": {name: "1"}}})
         assert r.status_code == 400, name
@@ -235,6 +236,21 @@ def test_a_storage_path_is_queued_for_the_agent_to_vet(client):
         "name": "set_config",
         "params": {"changes": {"output_dir": "/home/ionouser/ionozond_data2/2026-09"}}})
     assert r.status_code == 200
+
+
+def test_raw_voltage_is_queued_as_a_boolean(client):
+    for value in ("true", "false"):
+        r = client.post("/stations/SIM/commands", headers=CTL, json={
+            "name": "set_config",
+            "params": {"changes": {"save_raw_voltage": value}}})
+        assert r.status_code == 200, value
+
+
+def test_raw_voltage_that_is_not_a_boolean_is_refused(client):
+    r = client.post("/stations/SIM/commands", headers=CTL, json={
+        "name": "set_config", "params": {"changes": {"save_raw_voltage": "1"}}})
+    assert r.status_code == 400
+    assert "true or false" in r.json()["detail"]
 
 
 def test_leaving_search_mode_without_a_schedule_is_refused(client):
@@ -347,6 +363,29 @@ def test_a_station_in_storage_drift_shows_it_and_prefills_nothing(client):
 
     assert "reclaimed by nothing" in page
     assert "storagePath-SIM" not in page
+
+
+def _with_raw(client, value):
+    body = report()
+    body["metrics"].append({"name": "save_raw_voltage", "value": value,
+                            "ok": True if value is not None else None,
+                            "detail": ""})
+    client.post("/stations/health", json=body, headers=CTL)
+    return client.get("/ui").text
+
+
+def test_the_console_shows_the_raw_voltage_the_station_reported(client):
+    page = _with_raw(client, True)
+    assert 'id="rawVoltage-SIM" type="checkbox"\n                    checked' in page
+
+    page = _with_raw(client, False)
+    assert 'id="rawVoltage-SIM"' in page
+    assert 'id="rawVoltage-SIM" type="checkbox"\n                    checked' not in page
+
+
+def test_no_raw_voltage_toggle_without_a_report_of_it(client):
+    """A toggle ticked by guess is worse than none."""
+    assert 'id="rawVoltage-SIM"' not in _with_raw(client, None)
 
 
 def test_acking_an_unknown_command_is_accepted(client):

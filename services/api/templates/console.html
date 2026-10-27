@@ -410,10 +410,21 @@
               onclick="applyStorage('{{ s.name }}')">{{ t('console.apply_storage') }}</button>
     </div>
     <p class="note">{{ t('console.storage_hint') }}</p>
-    <div id="storageSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
     {% else %}
     <p class="note" style="margin-top:.45rem">{{ s.storage.why_not }}</p>
     {% endif %}
+    {% if s.raw.known %}
+    <div style="margin-top:.6rem; display:flex; gap:.6rem; align-items:baseline;
+                flex-wrap:wrap">
+      <label><input id="rawVoltage-{{ s.name }}" type="checkbox"
+                    {% if s.raw.on %}checked{% endif %}>
+        {{ t('console.raw_voltage') }}</label>
+      <button data-needs="station"
+              onclick="applyRaw('{{ s.name }}')">{{ t('console.apply_raw') }}</button>
+    </div>
+    <p class="note">{{ t('console.raw_hint') }}</p>
+    {% endif %}
+    <div id="storageSay-{{ s.name }}" class="note" style="margin-top:.45rem"></div>
   </div>
 
   <div style="margin-top:.8rem">
@@ -871,6 +882,23 @@
     }
     queued(station, storageSay, T('console.js.storage_queued',
       {id: (r.body.id || '').slice(0, 8)}));
+  }
+
+  // Shares the storage line: both say what lands on the station's disk.
+  async function applyRaw(station) {
+    const on = document.getElementById('rawVoltage-' + station).checked;
+    storageSay(station, T('console.js.storage_sending'));
+    const r = await control('/stations/' + encodeURIComponent(station)
+                            + '/commands', 'POST',
+                            {name: 'set_config', issued_by: 'web',
+                             params: {changes: {save_raw_voltage: on ? 'true' : 'false'}}});
+    if (!r.ok) {
+      storageSay(station, r.needsToken ? r.detail
+                 : T('console.js.refused', {detail: r.detail}), true);
+      return;
+    }
+    queued(station, storageSay, T('console.js.raw_queued',
+      {id: (r.body.id || '').slice(0, 8), state: on ? 'true' : 'false'}));
   }
 
   for (const station of Object.keys(BAND)) bandPreview(station);

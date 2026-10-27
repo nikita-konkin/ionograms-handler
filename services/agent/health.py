@@ -1116,6 +1116,28 @@ def band(config: StationConfig) -> list[Metric]:
     return out
 
 
+def raw_voltage(config: StationConfig) -> Metric:
+    """Whether products carry the dechirped voltage `z`.
+
+    Reported, never judged, like :func:`band`: either setting is a choice, and
+    the console needs the current one to show its toggle. Absent means off,
+    which is chirpsounder2's own default (docs/chirpsounder2-config.md).
+    """
+    import configparser
+
+    parser = configparser.ConfigParser()
+    try:
+        path = Path(config.chirp_config)
+        if not path.is_file():
+            raise FileNotFoundError(f"{path}: no such file")
+        parser.read(path)
+        value = parser.getboolean("lfm", "save_raw_voltage", fallback=False)
+    except Exception as exc:
+        return Metric.unknown("save_raw_voltage", f"{type(exc).__name__}: {exc}")
+    return Metric("save_raw_voltage", value, ok=True,
+                  detail="products carry z" if value else "products carry no z")
+
+
 def _recorder_metric(config: StationConfig) -> Metric:
     from . import control
 
@@ -1566,6 +1588,7 @@ def collect(config: StationConfig | None = None, *,
     if not ionozond:
         metrics.append(sample_rate(config))
         metrics.extend(band(config))
+        metrics.append(raw_voltage(config))
     metrics.append(uptime_s())
     metrics.append(system_clock(config))
     if include_epoch:

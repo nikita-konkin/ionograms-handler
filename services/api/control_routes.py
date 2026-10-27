@@ -9,13 +9,14 @@ is deliberate: the agent's list is the last line, and a server that will queue
 anything means an unreachable station accumulates commands nobody vetted. Two
 checks, and the outer one is the one an operator can see.
 
-**Process verbs, plus one parameter edit.** ``control.py`` implements
+**Process verbs, plus parameter edits.** ``control.py`` implements
 validated edits to mode, sounder_timings, output_dir, max_range_extent and
-save_raw_voltage. Only ``mode`` and ``sounder_timings`` are routed here, and
+save_raw_voltage. ``mode`` and ``sounder_timings`` are routed here, and
 only together, because those two are the sounding mode -- what the station
 records at all -- and an operator who can see the emitter census on
 ``/ui/sources`` has no other way to act on it than editing the ini by hand on
-the station.
+the station. ``output_dir`` and ``save_raw_voltage`` are routed too; see
+`WEB_EDITABLE`.
 
 **Naming a transmitter is here too, and it is not an aside.** A detection is
 anonymous: the census can tell you a 100 kHz/s emitter arrives at second 235
@@ -28,9 +29,8 @@ judgement that resolved ``cyprus1`` to ``NIC`` -- is the hinge the whole
 downstream chain turns on, and it is recorded, with its evidence, before it
 can be scheduled.
 
-The rest stay unrouted. ``output_dir`` decides where a week of data lands and
-a typo is unrecoverable from here; the other two change how products are
-formed and want a considered decision rather than a button.
+``max_range_extent`` stays unrouted: it changes how products are formed and
+wants a considered decision rather than a button.
 
 This is a widening of what the web can do to a radio, so it is narrow on
 purpose:
@@ -95,7 +95,13 @@ QUEUEABLE = ("start", "stop", "restart", "set_config", "set_ionozond",
 #: `prune` recurse, so a subfolder needs no unit edit, and anything outside is
 #: copied by nothing and reclaimed by nothing. Moving the staging root itself
 #: is still a change made on the station.
-WEB_EDITABLE = ("mode", "sounder_timings", "set_band", "output_dir")
+#: ``save_raw_voltage`` is here for the same reason: whether a station keeps
+#: the dechirped voltage is the operator's call, and making it should not
+#: wait on a session onto the station. It is a boolean the agent writes as
+#: one, so a wrong click costs disk, not data, and is undone the same way.
+WEB_EDITABLE = ("mode", "sounder_timings", "set_band", "output_dir",
+                "save_raw_voltage")
+
 
 
 @router.post("/stations/{station}/commands")
@@ -234,6 +240,11 @@ def _vet_config(params: dict) -> dict:
                 "agent checks the rest when it applies the change: that the "
                 "parent exists, and that it sits inside the folder the "
                 "archive jobs copy from.")
+    if ("save_raw_voltage" in changes
+            and str(changes["save_raw_voltage"]).lower()
+            not in ("true", "false")):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "save_raw_voltage must be true or false")
 
     return {"changes": changes}
 

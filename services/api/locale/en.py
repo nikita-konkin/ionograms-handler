@@ -1277,6 +1277,13 @@ MESSAGES: dict[str, str] = {
         "recurse, so a subfolder is carried to the NAS and reclaimed "
         "afterwards with no change on the station. Anywhere else is copied by "
         "nothing and reclaimed by nothing, and the agent refuses it.",
+    "console.raw_voltage": "Save raw voltage (save_raw_voltage)",
+    "console.apply_raw": "Apply",
+    "console.raw_hint":
+        "A product with the raw voltage is ~78 MB instead of ~1.6 MB, and the "
+        "station's disk lasts hours rather than days. With "
+        "chirp-echo-window.service running, only the echo window reaches the "
+        "NAS.",
     "console.band_start": "Band start",
     "console.analyse_from": "Analyse from",
     "console.apply_band": "Apply band",
@@ -1553,6 +1560,9 @@ MESSAGES: dict[str, str] = {
     "console.js.sweep_ok": "{code}: {sweep} s sweep of its {rep} s cycle",
     "console.js.band_sending": "Sending \u2026",
     "console.js.storage_sending": "Sending \u2026",
+    "console.js.raw_queued":
+        "save_raw_voltage = {state} queued as {id} — the station applies "
+        "it on its next pull and it takes effect when acquisition restarts.",
     "console.js.storage_queued":
         "Storage folder queued as {id} \u2014 the station applies it on its "
         "next pull and it takes effect when acquisition restarts, so press "

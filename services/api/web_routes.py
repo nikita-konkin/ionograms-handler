@@ -193,6 +193,19 @@ def _storage(metrics: list[dict]) -> dict:
             "why_not": "" if path else found.get("detail", "")}
 
 
+def _raw_voltage(metrics: list[dict]) -> dict:
+    """Whether the station keeps `z`, as its ini says.
+
+    ``known`` is False when no report carried it -- an ionozond station, or an
+    agent older than the metric -- and then the console offers no toggle
+    rather than one ticked by guess. Values arrive as stored text.
+    """
+    found = next((m for m in metrics if m["name"] == "save_raw_voltage"), None)
+    if found is None or found.get("value") is None:
+        return {"known": False, "on": False}
+    return {"known": True, "on": str(found["value"]).lower() == "true"}
+
+
 @router.get("/ui")
 def console(request: Request):
     conn = request.app.state.db
@@ -216,6 +229,7 @@ def console(request: Request):
             # Where those products land, and whether the archive jobs
             # agree about it. See `_storage`.
             "storage": _storage(shown_metrics),
+            "raw": _raw_voltage(shown_metrics),
             "commands": [_command(c) for c in db.recent_commands(conn, station, 8)],
             # What it is sounding this minute, which is the question the unit
             # states cannot answer: every process can be active while the
