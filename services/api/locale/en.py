@@ -222,6 +222,17 @@ MESSAGES: dict[str, str] = {
         "unbroken stretches, and no figure is given from fewer than {min} pairs. "
         "Delay and C/N0 are the mode pairs' RMS errors; a mode's top is its "
         "highest frequency."),
+    "sim_period.scores_note": (
+        "POD (probability of detection) is the share of the truth's events the "
+        "forecast said: a/(a+c). FAR (false alarm ratio) is the share of the "
+        "forecast's yeses that did not happen: b/(a+b). CSI (critical success "
+        "index) is a/(a+b+c), counting misses and false alarms alike. Here a "
+        "is hits, b false alarms, c misses and n every pair. “In the truth” is "
+        "how often the true sounding had the event, (a+c)/n, without which POD "
+        "and FAR cannot be read: a forecast of “always yes” scores POD 1 and a "
+        "FAR of 1 − “In the truth”. “A mode seen” is at least one mode at the "
+        "carrier; “Usable” is that and an SNR of {snr} dB or more in {bw} Hz. "
+        "The modes line counts the same over mode pairs."),
     "sim_period.by_hour": "By the hour the forecast was for",
     "sim_period.by_sun": "By the sun at the control point",
     "sim_period.sun.day": "Day",

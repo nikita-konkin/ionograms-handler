@@ -116,6 +116,7 @@
   </table></div>
   {% endif %}
   <p class="note">{{ t('sim_period.figures_note', min=summary.min_pairs) }}</p>
+  <p class="note" id="scores-note">{{ t('sim_period.scores_note', snr='%g'|format(link.snr_min_db), bw='%g'|format(link.bandwidth_hz)) }}</p>
   {% if summary.by and summary.by.hour %}
   <h3>{{ t('sim_period.by_hour') }}</h3>
   {{ cut(summary.by.hour.items(), t('sim_period.col.hour')) }}

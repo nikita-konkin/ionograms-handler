@@ -443,6 +443,8 @@ def sim_periods_page(request: Request, id: int | None = None):
     :mod:`services.api.sim_period` keeps; a run under way is followed from
     the page's script.
     """
+    from muf.sim import link
+
     from . import sim_period
 
     cache = request.app.state.sim_cache
@@ -456,6 +458,8 @@ def sim_periods_page(request: Request, id: int | None = None):
         "summary": sim_period.summary(cache, chosen["id"]) if done else None,
         "files": sim_period.files(cache, chosen["id"]) if done else [],
         "limits": {"days": sim_period.MAX_DAYS, "soundings": sim_period.MAX_SOUNDINGS},
+        # What the scores note names as "usable", from where it is decided.
+        "link": {"snr_min_db": link.SNR_MIN_DB, "bandwidth_hz": link.BANDWIDTH_HZ},
     })
 
 

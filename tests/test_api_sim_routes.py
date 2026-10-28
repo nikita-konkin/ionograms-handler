@@ -329,7 +329,7 @@ def test_the_periods_page_offers_the_circuits(client):
 
 
 def test_the_periods_page_shows_a_finished_runs_figures(client, tmp_path, monkeypatch):
-    from muf.sim import presets, sounding, summary
+    from muf.sim import link, presets, sounding, summary
     from muf.sim.state import ChannelState, Sweep
 
     monkeypatch.setattr(summary, "metrics",
@@ -351,5 +351,10 @@ def test_the_periods_page_shows_a_finished_runs_figures(client, tmp_path, monkey
     _period_settled(client, run_id, timeout_s=120.0)
     mae = sim_period.summary(client.app.state.sim_cache,
                              run_id)["all"]["muf_mhz"]["mae"]
-    assert f"{mae:.2f}" in client.get(f"/ui/sim/periods?id={run_id}").text, \
-        "the periods page did not show the run's MUF error"
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    assert f"{mae:.2f}" in page, "the periods page did not show the run's MUF error"
+    note = page[page.index('id="scores-note"'):].split("</p>", 1)[0]
+    assert all(name in note for name in ("POD", "FAR", "CSI")), \
+        "the scores note does not say what the scores are"
+    assert f"{link.SNR_MIN_DB:g}" in note and f"{link.BANDWIDTH_HZ:g}" in note, \
+        "the scores note's usable threshold is not the one the link decides on"
