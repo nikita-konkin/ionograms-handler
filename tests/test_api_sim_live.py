@@ -301,6 +301,14 @@ def test_the_live_page_shows_the_circuit(client):
     assert "NIC2" in client.get("/ui/sim/live").text, "the circuit is not on the page"
 
 
+def test_the_live_page_shows_the_time_in_utc_and_moscow(client):
+    """Every time on the page is UTC; the clock says so and gives Moscow's."""
+    page = client.get("/ui/sim/live").text
+    assert 'id="simClock"' in page
+    assert 'data-zone="utc"' in page and 'data-zone="msk"' in page
+    assert "MSK_S = 3 * 3600" in page
+
+
 def test_the_live_page_shows_both_ionograms_of_a_score(client):
     _held(client.app.state.db)
     _scored(client.app.state.db, T, 0.5, sounding_id=7, source_id=6)

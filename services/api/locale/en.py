@@ -127,6 +127,8 @@ MESSAGES: dict[str, str] = {
         "This circuit is not followed. Follow it to forecast it from its next "
         "sounding on.",
     "sim_live.back": "Back to the simulator",
+    "sim_live.now": "Now:",
+    "sim_live.times_utc": "every other time on this page is UTC",
     "sim_live.taken": "Last sounding taken {at} UTC",
     "sim_live.interval": "an interval of {min} min",
     "sim_live.every": "new soundings looked for every {s} s",
