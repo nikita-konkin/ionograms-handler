@@ -31,7 +31,7 @@ MESSAGES: dict[str, str] = {
     "chrome.build_source": "source",
     "chrome.build_title":
         "Code committed {committed} · image built {built} · "
-        "running since {started} (UTC)",
+        "running since {started}",
     "chrome.theme": "Theme: click for the next one",
     "chrome.theme_auto": "Auto",
     "chrome.theme_light": "Light",
@@ -63,6 +63,7 @@ MESSAGES: dict[str, str] = {
     "unit.mhz": "MHz",
 
     # -- shared -----------------------------------------------------------
+    "common.js.msk": "MSK",
     "common.from": "From",
     "common.to": "To",
     "common.apply": "Apply",
@@ -86,7 +87,7 @@ MESSAGES: dict[str, str] = {
     "soundings.filter.picks.any": "Any",
     "soundings.filter.picks.some": "At least one",
     "soundings.filter.picks.none": "None",
-    "soundings.col.time": "Time (UTC)",
+    "soundings.col.time": "Time",
     "soundings.col.format": "Format",
     "soundings.col.sweep": "Sweep MHz",
     "soundings.col.gate": "Gate km",
@@ -128,8 +129,7 @@ MESSAGES: dict[str, str] = {
         "sounding on.",
     "sim_live.back": "Back to the simulator",
     "sim_live.now": "Now:",
-    "sim_live.times_utc": "every other time on this page is UTC",
-    "sim_live.taken": "Last sounding taken {at} UTC",
+    "sim_live.taken": "Last sounding taken {at}",
     "sim_live.interval": "an interval of {min} min",
     "sim_live.every": "new soundings looked for every {s} s",
     "sim_live.ahead": "{min} min ahead",
@@ -1590,7 +1590,6 @@ MESSAGES: dict[str, str] = {
     "live.js.lost": "reconnecting",
     "live.js.span_h": "{n} h",
     "live.js.span_d": "{n} d",
-    "live.js.msk": "MSK",
     "live.js.echo_outside": ("Echoes at {at} ms, outside the {window} ms"
                              " this path allows: the station's timing is probably off"),
     "live.js.archived": "archive",
@@ -1677,8 +1676,8 @@ MESSAGES: dict[str, str] = {
     "live.js.sched_queued":
         "Queued as {id}. The station writes it on its next pull, and a running "
         "sounder takes it up after the sounding in progress.",
-    "live.js.sched_reported": "As reported at {when} UTC.",
-    "live.js.sched_changed": "Last changed by {who} at {when} UTC.",
+    "live.js.sched_reported": "As reported at {when}.",
+    "live.js.sched_changed": "Last changed by {who} at {when}.",
     "live.js.sched_never": "No change has been recorded yet.",
     "live.js.sched_pending": "Written; takes effect after the sounding in progress.",
     "live.js.sched_drift":

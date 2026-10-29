@@ -424,7 +424,7 @@ function renderVerified() {
       <td>${t.timings.map(e => e.chirpt + 's').join(', ')}
           <span class="muted">${T('sources.js.of_rep',
             {rep: (t.timings[0] || {}).rep})}</span></td>
-      <td class="muted">${t.verified_at}${t.verified_by ? ' &middot; ' + t.verified_by : ''}</td>
+      <td class="muted">${T.mskText(t.verified_at)}${t.verified_by ? ' &middot; ' + t.verified_by : ''}</td>
       <td class="wrap">${t.note || ''}</td>
       <td><button class="forget" data-code="${t.code}">${T('sources.js.forget')}</button></td>
     </tr>`).join('');
@@ -509,7 +509,7 @@ async function toggleExamples(button) {
              style="width:240px;height:120px;object-fit:fill;display:block;
                     border:1px solid var(--line, #ccc)"></a>
       <div class="muted" style="font-size:.75rem">${x.why === 'best' ? T('sources.js.examples_best') : T('sources.js.examples_newest')}
-        · ${x.datetime.slice(5, 16)}${x.snr != null ? ' · ' + x.snr.toFixed(1) + ' dB' : ''}</div>`).join('');
+        · ${T.mskText(x.datetime, 5, 16)}${x.snr != null ? ' · ' + x.snr.toFixed(1) + ' dB' : ''}</div>`).join('');
     return `<figure>
       <figcaption><b>${slot.second} s</b>
         <span class="muted">${T('sources.js.examples_count', {n: slot.count})}</span></figcaption>

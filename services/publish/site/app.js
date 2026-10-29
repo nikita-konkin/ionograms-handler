@@ -55,12 +55,22 @@
 
   function pad(n) { return (n < 10 ? "0" : "") + n; }
 
+  // Moscow has kept UTC+3 all year since 2014, so its zone is a fixed offset.
+  var MSK_MS = 3 * 3600 * 1000;
+
+  function ymd(d) {
+    return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
+  }
+
+  function hhmm(d) { return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()); }
+
+  // `2026-10-29 06:45 UTC · 09:45 МСК`; Moscow's date only when it is not
+  // UTC's. `withDate === false` is the bare UTC time an axis tick wants.
   function fmtTime(ms, withDate) {
-    var d = new Date(ms);
-    var hm = pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes());
-    if (withDate === false) return hm;
-    return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" +
-      pad(d.getUTCDate()) + " " + hm + " " + t("utc");
+    var d = new Date(ms), m = new Date(ms + MSK_MS);
+    if (withDate === false) return hhmm(d);
+    return ymd(d) + " " + hhmm(d) + " " + t("utc") + " · " +
+      (ymd(m) === ymd(d) ? "" : ymd(m) + " ") + hhmm(m) + " " + t("msk");
   }
 
   function fmtDay(ms) {

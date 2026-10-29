@@ -23,7 +23,7 @@ MESSAGES: dict[str, str] = {
     "chrome.build_source": "исходники",
     "chrome.build_title":
         "Код от {committed} · образ собран {built} · "
-        "запущен {started} (UTC)",
+        "запущен {started}",
     "chrome.theme": "Тема: нажмите, чтобы сменить",
     "chrome.theme_auto": "Авто",
     "chrome.theme_light": "Светлая",
@@ -53,6 +53,7 @@ MESSAGES: dict[str, str] = {
     "unit.mhz": "МГц",
 
     # -- shared -----------------------------------------------------------
+    "common.js.msk": "МСК",
     "common.from": "С",
     "common.to": "По",
     "common.apply": "Применить",
@@ -76,7 +77,7 @@ MESSAGES: dict[str, str] = {
     "soundings.filter.picks.any": "Любые",
     "soundings.filter.picks.some": "Хотя бы одно",
     "soundings.filter.picks.none": "Нет",
-    "soundings.col.time": "Время (UTC)",
+    "soundings.col.time": "Время",
     "soundings.col.format": "Формат",
     "soundings.col.sweep": "Полоса, МГц",
     "soundings.col.gate": "Строб, км",
@@ -119,8 +120,7 @@ MESSAGES: dict[str, str] = {
         "следующего сеанса.",
     "sim_live.back": "Назад к симулятору",
     "sim_live.now": "Сейчас:",
-    "sim_live.times_utc": "остальное время на странице указано в UTC",
-    "sim_live.taken": "Последний принятый сеанс {at} UTC",
+    "sim_live.taken": "Последний принятый сеанс {at}",
     "sim_live.interval": "интервал {min} мин",
     "sim_live.every": "новые сеансы ищутся каждые {s} с",
     "sim_live.ahead": "на {min} мин вперёд",
@@ -1607,7 +1607,6 @@ MESSAGES: dict[str, str] = {
     "live.js.lost": "переподключение",
     "live.js.span_h": "{n} ч",
     "live.js.span_d": "{n} сут",
-    "live.js.msk": "МСК",
     "live.js.echo_outside": ("Отражения на {at} мс, вне {window} мс,"
                              " допустимых для этой трассы:"
                              " вероятно, сбита синхронизация станции"),
@@ -1697,8 +1696,8 @@ MESSAGES: dict[str, str] = {
     "live.js.sched_queued":
         "Поставлено в очередь как {id}. Станция запишет изменение при следующем "
         "опросе, а работающий зонд примет его после текущего зондирования.",
-    "live.js.sched_reported": "По отчёту от {when} UTC.",
-    "live.js.sched_changed": "Последнее изменение: {who}, {when} UTC.",
+    "live.js.sched_reported": "По отчёту от {when}.",
+    "live.js.sched_changed": "Последнее изменение: {who}, {when}.",
     "live.js.sched_never": "Изменений пока не записано.",
     "live.js.sched_pending": "Записано; вступит в силу после текущего зондирования.",
     "live.js.sched_drift":

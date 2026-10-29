@@ -26,7 +26,7 @@
       <td>{% if row.model %}{{ row.model.name }}
           <span class="muted">{{ row.model.origin }}</span>
           {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
-      <td class="muted">{{ row.issued_at or '—' }}</td>
+      <td class="muted">{{ row.issued_at|msk or '—' }}</td>
       <td>
         {%- if not row.model %}<span class="pill unk">{{ t('forecast.no_model') }}</span>
         {%- elif row.stale %}<span class="pill warn">{{ t('forecast.stale') }}
@@ -61,7 +61,7 @@
     <tr>
       <td><b>{{ r.tx }} &rarr; {{ r.rx }}</b></td>
       <td class="muted">{{ r.param|upper }}</td>
-      <td class="muted">{{ r.requested_at }}</td>
+      <td class="muted">{{ r.requested_at|msk }}</td>
       {# "has not run" and "ran and wrote nothing" are different answers, and
          the second is the interesting one, so the column never prints 0 for
          the first. #}
@@ -332,7 +332,7 @@
       <td class="muted">{{ u.param|upper }}</td>
       <td class="muted">{% if u.tx %}{{ u.tx }} &rarr; {{ u.rx }}
           {%- else %}<span class="note">{{ t('forecast.unbound') }}</span>{% endif %}</td>
-      <td class="muted">{{ u.uploaded_at }}</td>
+      <td class="muted">{{ u.uploaded_at|msk }}</td>
       <td>{% if u.state == 'pending' %}<span class="pill unk">{{ t('forecast.state.pending') }}</span>
           {%- else %}<span class="pill fail">{{ t('forecast.state.refused') }}</span>{% endif %}</td>
       {# Wrapped and in full. These are the importer's own sentences, and they
@@ -438,7 +438,7 @@
       <td class="muted">{{ j.spec.estimator }}
         {%- if j.spec.members %}<br><span class="note">{{ j.spec.members|join(' + ') }}</span>{% endif %}
         {%- if j.spec.time %}<br><span class="note">{{ t('forecast.train.with_time') }}</span>{% endif %}</td>
-      <td class="muted">{{ j.requested_at }}</td>
+      <td class="muted">{{ j.requested_at|msk }}</td>
       {# Spelled out rather than built from `j.state`: a key assembled at
          render time is a key `tests/test_i18n.py` cannot see, and the first
          thing that goes wrong is a raw `forecast.state.running` on screen. #}
