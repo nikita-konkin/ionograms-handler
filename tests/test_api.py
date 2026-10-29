@@ -380,7 +380,8 @@ def test_the_console_shows_the_raw_voltage_the_station_reported(client):
 
     page = _with_raw(client, False)
     assert 'id="rawVoltage-SIM"' in page
-    assert 'id="rawVoltage-SIM" type="checkbox"\n                    checked' not in page
+    assert ('id="rawVoltage-SIM" type="checkbox"\n'
+            '                    checked') not in page
 
 
 def test_no_raw_voltage_toggle_without_a_report_of_it(client):
