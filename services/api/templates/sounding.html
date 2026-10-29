@@ -25,7 +25,7 @@
 <div class="panel">
   <h2>{{ sounding.file }}</h2>
   <div class="scroll"><table>
-    <tr><th>{{ t('soundings.col.time') }}</th><td>{{ sounding.datetime }}</td>
+    <tr><th>{{ t('soundings.col.time') }}</th><td>{{ sounding.datetime|msk }}</td>
         <th>{{ t('sounding.col.path') }}</th><td>{{ sounding.tx }} &rarr; {{ sounding.rx }}
             {% if sounding.path_km %}({{ '%.0f'|format(sounding.path_km) }} {{ t('unit.km') }},
             {{ sounding.path_type }}){% else %}<span class="muted"

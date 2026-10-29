@@ -136,7 +136,7 @@
           ranks=a.contended|join(', ')) }}</span>
       {% endif %}
       <span class="muted" style="font-size:.85rem">
-        {% if a.epoch %}{{ t('console.configured_at', when=a.epoch.valid_from) }}
+        {% if a.epoch %}{{ t('console.configured_at', when=a.epoch.valid_from|msk) }}
           {% if a.epoch.changed_by %}{{ t('console.changed_by',
             who=a.epoch.changed_by) }}{% endif %}
         {% endif %}
@@ -301,7 +301,7 @@
             slots=tx.timings|map(attribute='chirpt')|join('s, '),
             rep='%g'|format(tx.timings[0]['rep'])) }}
           {%- else %}{{ tx.timings|map(attribute='chirpt')|join('s, ') }}s{% endif %}</td>
-        <td class="muted">{{ tx.verified_at }}</td>
+        <td class="muted">{{ tx.verified_at|msk }}</td>
         <td class="wrap muted">{{ tx.note or '' }}</td>
       </tr>
       {% endfor %}
@@ -437,8 +437,8 @@
             {% else %}<span class="pill fail">{{ t('console.failed') }}</span>{% endif %}
           {% elif c.state == 'delivered' %}<span class="pill unk">{{ t('console.delivered') }}</span>
           {% else %}<span class="pill">{{ t('console.pending') }}</span>{% endif %}</td>
-      <td class="muted">{{ c.issued_at }}</td>
-      <td class="muted">{{ c.acked_at or '&mdash;'|safe }}</td>
+      <td class="muted">{{ c.issued_at|msk }}</td>
+      <td class="muted">{{ c.acked_at|msk or '&mdash;'|safe }}</td>
       {# The agent's reason first. A refusal echoing back the request is not a
          result, and it is what this column showed for every failed command. #}
       <td class="wrap">{% if c.detail %}<b>{{ c.detail }}</b>
@@ -941,7 +941,7 @@
                           ? held.map(c => CAP_NAME[c] || c).join(', ')
                           : T('accounts.js.reads_only')));
       tr.appendChild(cell(p.last_seen_at
-                          ? p.last_seen_at.slice(0, 16).replace('T', ' ')
+                          ? T.mskText(p.last_seen_at, 0, 16)
                           : T('accounts.js.never')));
 
       const actions = document.createElement('td');

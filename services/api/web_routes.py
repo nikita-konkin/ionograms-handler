@@ -13,6 +13,7 @@ into a page that might be left open.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -101,6 +102,56 @@ templates.env.filters["duration"] = pass_context(
     lambda ctx, seconds: _duration(seconds, ctx.get("lang", i18n.DEFAULT)))
 templates.env.filters["lead"] = pass_context(
     lambda ctx, seconds: _lead(seconds, ctx.get("lang", i18n.DEFAULT)))
+
+
+#: Moscow has kept UTC+3 all year since 2014, so its zone is a fixed offset.
+#: `base.html` carries the same constant for the times JavaScript writes.
+MSK = timedelta(hours=3)
+
+
+def _msk(value, start: int = 0, stop: int | None = None,
+         lang: str = i18n.DEFAULT) -> str:
+    """A UTC stamp as the page showed it, and the same moment in Moscow.
+
+    ``2026-10-29 06:45:26`` becomes ``2026-10-29 06:45:26 UTC · 09:45:26 МСК``:
+    the operators read Moscow time, and every stamp this service stores is
+    UTC. ``start``/``stop`` slice both sides alike, so ``|msk(11, 19)`` is
+    the time of day where a template used to print ``[11:19]``. Moscow's
+    date is printed only when it is not UTC's. A stamp with no zone is UTC;
+    a bare date, and anything that does not parse, comes back as it was,
+    never as an error.
+    """
+    if value is None or value == "":
+        return value
+    if isinstance(value, datetime):
+        when = value
+        text = value.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        text = str(value).strip().replace("T", " ")
+        if len(text) < 16 or text[13] != ":":
+            return value      # a day, or a time of day with no day: not a moment
+        try:
+            when = datetime.fromisoformat(
+                text[:-1] + "+00:00" if text.endswith("Z") else text)
+        except ValueError:
+            return value
+        text = text.removesuffix("Z")
+        if "+" in text[10:]:
+            text = text[:10] + text[10:].split("+")[0]
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc).replace(tzinfo=None)
+    text = text.split(".")[0]
+    stop = len(text) if stop is None else stop
+    utc = when.strftime("%Y-%m-%d %H:%M:%S")[start:stop]
+    there = (when + MSK).strftime("%Y-%m-%d %H:%M:%S")
+    same_day = there[:10] == when.strftime("%Y-%m-%d")
+    there = there[max(start, 11) if same_day and start < 11 else start:stop]
+    return f"{utc} UTC · {there} {i18n.t('common.js.msk', lang)}"
+
+
+templates.env.filters["msk"] = pass_context(
+    lambda ctx, value, start=0, stop=None: _msk(
+        value, start, stop, ctx.get("lang", i18n.DEFAULT)))
 
 
 #: How far the observed band may sit inside the configured one before the

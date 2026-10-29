@@ -118,7 +118,7 @@
           <div id="missing-{{ a.id }}" class="note"><a href="#"
              onclick="checkMissing({{ a.id }}); return false">{{ t('archives.check_files') }}</a></div>
           {%- else %}<span class="muted">0</span>{% endif %}</td>
-      <td class="muted">{{ a.last_scan_at or '&mdash;'|safe }}</td>
+      <td class="muted">{{ a.last_scan_at|msk or '&mdash;'|safe }}</td>
       {# A scan result is a sentence, and `table {width:100%}` will squeeze
          it into whatever the other columns leave -- at a narrow window
          that was six lines, making every row tall. A floor keeps it a
@@ -202,7 +202,7 @@
   <ul class="note">
     {% for m in muted %}
     <li><code>{{ m.tx }}</code> &rarr; <code>{{ m.rx or t('circuits.any_rx') }}</code>
-      &middot; {{ m.muted_at[:16] }}{% if m.muted_by %} &middot; {{ m.muted_by }}{% endif %}
+      &middot; {{ m.muted_at|msk(0, 16) }}{% if m.muted_by %} &middot; {{ m.muted_by }}{% endif %}
       <button onclick="unmuteCircuit({{ m.id }})">{{ t('circuits.unmute') }}</button></li>
     {% endfor %}
   </ul>

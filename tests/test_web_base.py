@@ -52,3 +52,45 @@ def test_a_chosen_light_theme_wins_over_a_dark_system(client):
 def test_a_chosen_dark_theme_wins_over_a_light_system(client):
     assert ':root:not([data-theme])' in client.get(random.choice(PAGES)).text, (
         "a chosen dark theme does not override the system's light one")
+
+
+# --------------------------------------------------------------------------
+# Times in UTC and Moscow
+# --------------------------------------------------------------------------
+
+def test_a_stamp_is_shown_in_utc_and_moscow():
+    from services.api.web_routes import _msk
+
+    assert _msk("2026-10-29 06:45:26", lang="ru") == (
+        "2026-10-29 06:45:26 UTC · 09:45:26 МСК")
+    assert _msk("2026-10-29 06:45Z", lang="en") == "2026-10-29 06:45 UTC · 09:45 MSK"
+
+
+def test_moscow_names_its_own_date_after_utc_midnight():
+    from services.api.web_routes import _msk
+
+    assert _msk("2026-10-29T22:10:05Z", lang="ru") == (
+        "2026-10-29 22:10:05 UTC · 2026-10-30 01:10:05 МСК")
+
+
+def test_a_sliced_stamp_keeps_its_slice_on_both_sides():
+    from services.api.web_routes import _msk
+
+    assert _msk("2026-10-29T06:45:26.5+00:00", 11, 19, "ru") == (
+        "06:45:26 UTC · 09:45:26 МСК")
+    assert _msk("2026-10-29 06:45:26", 0, 16, "ru") == (
+        "2026-10-29 06:45 UTC · 09:45 МСК")
+
+
+def test_a_stamp_in_another_zone_is_converted_first():
+    from services.api.web_routes import _msk
+
+    assert _msk("2026-08-13T21:12:05+03:00", lang="ru") == (
+        "2026-08-13 18:12:05 UTC · 21:12:05 МСК")
+
+
+def test_what_is_not_a_stamp_is_left_as_it_was():
+    from services.api.web_routes import _msk
+
+    for value in (None, "", "garbage", "06:45:26", "2026-10-29", 42):
+        assert _msk(value) == value

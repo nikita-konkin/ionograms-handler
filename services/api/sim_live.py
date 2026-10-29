@@ -219,6 +219,12 @@ def _clock(epoch: float) -> str:
     return _dt.datetime.fromtimestamp(epoch, tz=_dt.timezone.utc).strftime("%H:%M:%S")
 
 
+def _stamp(epoch: float) -> str:
+    """The whole moment, for the page to show in UTC and Moscow alike."""
+    return _dt.datetime.fromtimestamp(epoch, tz=_dt.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S")
+
+
 def view(conn, tx: str, rx: str) -> dict | None:
     """What the live page shows of a circuit; None for one the loop has not begun.
 
@@ -254,6 +260,8 @@ def view(conn, tx: str, rx: str) -> dict | None:
         pending.append({"lead_s": lead, "source": Path(p["source"]).name,
                         "issued": _clock(state["epoch"] - lead),
                         "valid": _clock(state["epoch"]),
+                        "issued_at": _stamp(state["epoch"] - lead),
+                        "valid_at": _stamp(state["epoch"]),
                         "muf_mhz": state["metrics"].get("muf_mhz"),
                         "modes": len(state["modes"])})
     pending.sort(key=lambda p: p["lead_s"])

@@ -140,6 +140,36 @@
     return forms[form] || forms.other || key;
   };
 
+  /* Mirrors `web_routes._msk`: a UTC moment as `… UTC · … МСК`. Moscow has
+     kept UTC+3 all year since 2014, so the zone is a fixed offset.
+     `T.msk(seconds)` is the time of day of a unix time; `T.msk(seconds, true)`
+     adds the date, and Moscow's date appears only when it is not UTC's.
+     `T.mskText(stamp, start, stop)` does the same for a stored ISO stamp
+     sliced as the page used to slice it; a bare date, or one that does not
+     parse, is returned as it was. */
+  (() => {
+    const MSK_S = 3 * 3600;
+    const pad2 = n => String(n).padStart(2, '0');
+    const isoOf = s => { const d = new Date(s * 1000);
+      return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate())
+        + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds()); };
+    const bothZones = (s, start, stop) => {
+      const utc = isoOf(s), there = isoOf(s + MSK_S);
+      const from = start < 11 && there.slice(0, 10) === utc.slice(0, 10) ? 11 : start;
+      return utc.slice(start, stop) + ' UTC · ' + there.slice(from, stop) + ' ' + T('common.js.msk');
+    };
+    T.msk = (s, withDate) => bothZones(s, withDate ? 0 : 11, 19);
+    T.mskText = (stamp, start, stop) => {
+      if (!stamp) return stamp;
+      const raw = String(stamp).trim(), zone = (raw.match(/(Z|[+-]\d\d:\d\d)$/) || ['Z'])[0];
+      const text = raw.replace(/(Z|[+-]\d\d:\d\d)$/, '').replace('T', ' ').split('.')[0];
+      if (!/^\d{4}-\d\d-\d\d \d\d:\d\d/.test(text)) return stamp;
+      const ms = Date.parse(text.replace(' ', 'T') + zone);
+      if (isNaN(ms)) return stamp;
+      return bothZones(ms / 1000, start || 0, stop === undefined ? text.length : stop);
+    };
+  })();
+
   /* Who this browser is, and what it may do.
 
      One copy, here, because four pages each carry their own `control()` and a
@@ -332,11 +362,11 @@
        `build.py` for why not the image's. #}
     <span class="note build"
           title="{{ t('chrome.build_title',
-                      committed=build.committed_at or '—',
-                      built=build.built_at or '—',
-                      started=build.started_at) }}">{{ t('chrome.build',
+                      committed=build.committed_at|msk or '—',
+                      built=build.built_at|msk or '—',
+                      started=build.started_at|msk) }}">{{ t('chrome.build',
             sha=build.sha or t('chrome.build_source'),
-            date=build.updated) }}</span>
+            date=build.updated|msk) }}</span>
     <span class="note">{% block hint %}{% endblock %}</span>
     {# The toggle carries the whole query string across, so changing language
        while looking at a filtered, sorted table does not also reset the

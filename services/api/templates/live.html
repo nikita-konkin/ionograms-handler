@@ -66,7 +66,7 @@
     <button data-needs="station" data-command="start">{{ t('live.start') }}</button>
     <button data-needs="station" data-command="stop">{{ t('live.stop') }}</button>
   </span>
-  <span class="clock"><span id="clock">--:--:--</span> UTC</span>
+  <span class="clock"><span id="clock">--:--:-- UTC</span></span>
   <span id="said" class="note"></span>
 </div>
 
@@ -213,8 +213,9 @@
   const txs = {};
   const pad = n => String(n).padStart(2, '0');
   const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
-  const dmy = s => { const d = new Date(s * 1000); return pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1) + '.' + d.getUTCFullYear(); };
-  const moment = s => dmy(s) + ' ' + hms(s) + ' UTC · ' + hms(s + MSK_S) + ' ' + T('live.js.msk');
+  const moment = s => T.msk(s, true);
+  // A span of one day, `06:40:00–06:45:00 UTC · 09:40:00–09:45:00 МСК`.
+  const span = (a, b) => hms(a) + '–' + hms(b) + ' UTC · ' + hms(a + MSK_S) + '–' + hms(b + MSK_S) + ' ' + T('common.js.msk');
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   const MAPS = {
@@ -510,7 +511,7 @@
       one.el.querySelector('.bar > i').style.width = st && st.state === 'capturing' ? (100 * (st.progress || 0)) + '%' : st && ENDINGS.has(st.state) ? '100%' : '0';
       one.el.querySelector('.meta').textContent = head
         ? head.f_lo_mhz.toFixed(1) + '–' + (head.f_lo_mhz + head.columns * head.f_step_mhz).toFixed(1) + ' MHz · '
-          + (st && st.state === 'waiting' && st.t0 ? hms(st.t0) + '–' + hms(st.t1) : hms(head.t0)) + ' UTC'
+          + (st && st.state === 'waiting' && st.t0 ? span(st.t0, st.t1) : T.msk(head.t0))
         : '';
       const meta = (k, text) => { one.el.querySelector('[data-m="' + k + '"]').textContent = text; };
       // The rows cover only the delays this path allows, so an echo the
@@ -531,8 +532,8 @@
         if (!pic) { plot(cv, null); meta(k, ''); continue; }
         const a = axis(pic.head), live = k === 'current' && pic.filled < pic.head.columns;
         meta(k, live ? pic.filled + '/' + pic.head.columns
-          : k === 'ctrl' && pic === one.past ? dmy(pic.head.t0) + ' ' + hms(pic.head.t0) + ' UTC · ' + T('live.js.archived')
-          : hms(pic.head.t0) + ' UTC');
+          : k === 'ctrl' && pic === one.past ? T.msk(pic.head.t0, true) + ' · ' + T('live.js.archived')
+          : T.msk(pic.head.t0));
         const y2 = one.ground ? {model, ground: one.ground, kpm: pic.head.km_per_ms} : null;
         plot(cv, {img: pic.cv, x: a.f, y: a.t, xlab: TEXT.f, ylab: TEXT.t, map: 'iono', y2,
                   cursor: live ? a.f[0] + pic.filled * pic.head.f_step_mhz : null,
@@ -655,7 +656,7 @@
   document.querySelectorAll('[data-command]').forEach(b => { b.disabled = !STATION; b.addEventListener('click', () => send(b)); });
   gate('station');
 
-  setInterval(() => { document.getElementById('clock').textContent = hms(Date.now() / 1000); }, 1000);
+  setInterval(() => { document.getElementById('clock').textContent = T.msk(Date.now() / 1000); }, 1000);
   window.addEventListener('resize', () => { dirty = true; redraw(); });
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { dirty = true; redraw(); });
   window.addEventListener('themechange', () => { dirty = true; redraw(); });
@@ -673,7 +674,6 @@
   const $ = id => document.getElementById(id);
   const pad = n => String(n).padStart(2, '0');
   const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
-  const stamp = text => String(text || '').replace('T', ' ').replace('Z', '');
   const on = v => !['', '0', 'false'].includes(String(v === undefined ? '' : v).toLowerCase());
   const copy = v => JSON.parse(JSON.stringify(v));
   const plain = v => v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
@@ -746,7 +746,7 @@
   function captures(list) {
     const out = $('sched-next');
     out.textContent = '';
-    for (const c of list || []) out.appendChild(document.createElement('li')).textContent = hms(c.start) + ' UTC  ' + c.tx;
+    for (const c of list || []) out.appendChild(document.createElement('li')).textContent = T.msk(c.start) + '  ' + c.tx;
   }
   function findings(issues, edits, refusal) {
     const out = $('sched-issues');
@@ -797,8 +797,8 @@
 
   function state() {
     const cfg = shown.sounder_config, epoch = shown.epoch, problems = cfg.problems || [];
-    $('sched-state').textContent = T('live.js.sched_reported', {when: stamp(shown.reported_at)}) + ' '
-      + (epoch ? T('live.js.sched_changed', {who: epoch.changed_by || '—', when: stamp(epoch.valid_from)}) : T('live.js.sched_never'));
+    $('sched-state').textContent = T('live.js.sched_reported', {when: T.mskText(shown.reported_at)}) + ' '
+      + (epoch ? T('live.js.sched_changed', {who: epoch.changed_by || '—', when: T.mskText(epoch.valid_from)}) : T('live.js.sched_never'));
     $('sched-pending').hidden = !cfg.pending;
     $('sched-pending').textContent = T('live.js.sched_pending');
     $('sched-drift').hidden = !cfg.drift;

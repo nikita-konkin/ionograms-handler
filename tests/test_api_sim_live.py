@@ -302,11 +302,10 @@ def test_the_live_page_shows_the_circuit(client):
 
 
 def test_the_live_page_shows_the_time_in_utc_and_moscow(client):
-    """Every time on the page is UTC; the clock says so and gives Moscow's."""
+    """The clock ticks through the shared `T.msk`, which names both zones."""
     page = client.get("/ui/sim/live").text
     assert 'id="simClock"' in page
-    assert 'data-zone="utc"' in page and 'data-zone="msk"' in page
-    assert "MSK_S = 3 * 3600" in page
+    assert "T.msk(Date.now() / 1000, true)" in page
 
 
 def test_the_live_page_shows_both_ionograms_of_a_score(client):

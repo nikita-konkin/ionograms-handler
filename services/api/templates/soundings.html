@@ -60,7 +60,7 @@
         {{ th('picks', t('soundings.col.picks')) }}<th></th></tr>
     {% for s in soundings %}
     <tr>
-      <td>{{ s.datetime }}</td>
+      <td>{{ s.datetime|msk }}</td>
       <td>{{ s.tx }} &rarr; {{ s.rx }}</td>
       <td class="muted">{{ s.format or '?' }}</td>
       <td class="muted">{{ '%.2f'|format(s.freq_start or 0) }}&ndash;{{ '%.2f'|format(s.freq_stop or 0) }}</td>

@@ -2263,12 +2263,13 @@ def test_every_page_says_which_build_and_how_new(client, monkeypatch):
     monkeypatch.setattr(build, "SHA", "ee29d76aaaa")
     monkeypatch.setattr(build, "COMMIT_TIME", "2026-09-29T07:30:00Z")
     page = client.get("/ui").text
-    assert "ee29d76" in page and "2026-09-29 07:30Z" in page
+    # In UTC and in Moscow, as every time on the console is.
+    assert "ee29d76" in page and "2026-09-29 07:30 UTC · 10:30 MSK" in page
 
     # An overlay build that inherited a stale stamp must not be believed over
     # the commit: the commit date is the one shown.
     monkeypatch.setattr(build, "BUILD_TIME", "2026-09-27T09:29:31Z")
-    assert "2026-09-29 07:30Z" in client.get("/ui").text
+    assert "2026-09-29 07:30 UTC · 10:30 MSK" in client.get("/ui").text
 
 
 def test_an_unstamped_checkout_still_says_something_true(client, monkeypatch):

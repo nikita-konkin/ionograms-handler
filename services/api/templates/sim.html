@@ -14,7 +14,7 @@
       <optgroup label="{{ day }}">
         {% for s in items %}
         <option value="{{ s.id }}"{% if s.id in built %} data-built{% endif %}{% if s.id == chosen %} selected{% endif %}>
-          {{- s.datetime[11:19] }} {{ s.tx }} → {{ s.rx }} · {{ s.file }}{% if s.id in built %} ✓{% endif -%}
+          {{- s.datetime|msk(11, 19) }} {{ s.tx }} → {{ s.rx }} · {{ s.file }}{% if s.id in built %} ✓{% endif -%}
         </option>
         {% endfor %}
       </optgroup>
