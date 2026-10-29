@@ -15,6 +15,10 @@
 
 <div class="panel">
   <h2>{{ t('sim_live.title') }}</h2>
+  <p id="simClock"><b>{{ t('sim_live.now') }}</b>
+    <span data-zone="utc">--.--.---- --:--:--</span> UTC ·
+    <span data-zone="msk">--.--.---- --:--:--</span> {{ t('live.js.msk') }}
+    <span class="note">· {{ t('sim_live.times_utc') }}</span></p>
   {% if every <= 0 %}<p class="warn">{{ t('sim_live.off') }}</p>{% endif %}
   {% if chosen %}
   <p>{% for c in circuits %}<a class="pill{% if c.followed %} ok{% endif %}"
@@ -130,5 +134,21 @@ toggle.addEventListener('click', async () => {
 gate('archive');
 </script>
 {% endif %}
+<script>
+// Moscow has kept UTC+3 all year since 2014, so a fixed offset is the zone,
+// as on /ui/live. Ticks between the 30 s reloads.
+(() => {
+  const MSK_S = 3 * 3600;
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = s => { const d = new Date(s * 1000);
+    return pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1) + '.' + d.getUTCFullYear() + ' '
+         + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); };
+  const box = document.getElementById('simClock');
+  const tick = () => { const now = Date.now() / 1000;
+    box.querySelector('[data-zone="utc"]').textContent = stamp(now);
+    box.querySelector('[data-zone="msk"]').textContent = stamp(now + MSK_S); };
+  tick(); setInterval(tick, 1000);
+})();
+</script>
 {% if every > 0 %}<script>setTimeout(() => location.reload(), 30000);</script>{% endif %}
 {% endblock %}
