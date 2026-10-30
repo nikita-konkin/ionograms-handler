@@ -231,3 +231,91 @@ def test_a_scored_period_keeps_its_summary_and_not_its_states(tmp_path):
     kept = {p.name for p in (tmp_path / "run").iterdir()}
     assert "summary.json" in kept and "states" not in kept, \
         "a scored period did not keep its summary without its states"
+
+
+def _live(conn, day: dt.date, count: int, *, step_s: float = 600.0) -> list[dict]:
+    """A followed circuit's live events over ``count`` soundings of ``day``,
+    stored as the loop stores them."""
+    from muf.sim import live, presets, series
+    from muf.sim.state import ChannelState, Sweep
+
+    sweep = Sweep(start_mhz=10.0, rate_hz_s=100e3, duration_s=40.0,
+                  sample_rate_hz=40e3)
+    start = dt.datetime.combine(day, dt.time(random.randint(0, 3), 5, 15),
+                                tzinfo=dt.timezone.utc).timestamp()
+    ledger, events = live.Ledger(), []
+    for k in range(count):
+        epoch = start + step_s * k
+        law = presets.law_mode(muf_mhz=13.6 + 0.1 * k, f_lo_mhz=10.5, cn0_dbhz=45.0,
+                               spread_hz=0.5)
+        state = ChannelState(presets.cyprus1_circuit(), epoch, [law], sweep=sweep,
+                             source=f"s{k}.h5")
+        ledger, got = live.step(ledger, series.Session(Path(f"s{k}.h5"), epoch, "NIC2",
+                                                       "yoshkar-ola"),
+                                state, lambda pending, s=state: s)
+        for e in got:
+            conn.execute("INSERT INTO live_event (tx, rx, epoch, kind, lead_s, "
+                         "sounding_id, source_id, body) VALUES (?,?,?,?,?,?,?,?)",
+                         ("NIC2", "yoshkar-ola", epoch, e["event"], e.get("lead_s"),
+                          k + 1, None, json.dumps(e)))
+        events.extend(got)
+    conn.commit()
+    return events
+
+
+def _live_conn(tmp_path: Path):
+    return db.init(db.connect(tmp_path / "hub.sqlite3"))
+
+
+def test_a_period_of_live_forecasts_is_summed_up(tmp_path):
+    conn, day = _live_conn(tmp_path), _day()
+    events = _live(conn, day, 6)
+    run = _submit(conn, tmp_path, day, source="live", lead_s=600.0)
+    _settled(tmp_path / "sim", run["id"], timeout_s=120.0)
+    scored = sum(e["event"] == "scored" and e["lead_s"] == 600.0 for e in events)
+    assert sim_period.summary(tmp_path / "sim", run["id"])["pairs"] == scored > 0, \
+        "a period of live forecasts was not summed up over its pairs"
+
+
+def test_a_period_with_no_live_forecasts_is_not_found(tmp_path):
+    conn, day = _live_conn(tmp_path), _day()
+    _live(conn, day, 6)
+    with pytest.raises(LookupError):
+        _submit(conn, tmp_path, day + dt.timedelta(days=1), source="live")
+
+
+def test_a_live_period_defaults_to_the_shortest_lead_kept(tmp_path):
+    conn, day = _live_conn(tmp_path), _day()
+    _live(conn, day, 6)
+    assert _submit(conn, tmp_path, day, source="live")["lead_s"] == 600.0, \
+        "a live period did not default to the shortest lead kept"
+
+
+def test_a_live_period_at_a_lead_never_forecast_is_not_found(tmp_path):
+    conn, day = _live_conn(tmp_path), _day()
+    _live(conn, day, 6)
+    with pytest.raises(LookupError):
+        _submit(conn, tmp_path, day, source="live", lead_s=900.0)
+
+
+def test_a_live_run_says_it_was_live(tmp_path):
+    conn, day = _live_conn(tmp_path), _day()
+    _live(conn, day, 6)
+    assert _submit(conn, tmp_path, day, source="live")["source"] == "live", \
+        "a live run does not say it was live"
+
+
+def test_an_unknown_source_is_refused(tmp_path, scored):
+    conn, day = _live_conn(tmp_path), _day()
+    _hub(tmp_path, day, 3, 600.0, conn=conn)
+    with pytest.raises(ValueError):
+        _submit(conn, tmp_path, day, source="forecast")
+
+
+def test_the_live_circuits_are_offered_with_the_leads_kept(tmp_path):
+    conn, day = _live_conn(tmp_path), _day()
+    _live(conn, day, 6)
+    found = sim_period.live_circuits(conn)
+    assert [(c["tx"], c["rx"], c["leads"]) for c in found] == [
+        ("NIC2", "yoshkar-ola", [600.0, 1200.0])], \
+        "the live circuits were not offered with the leads kept"

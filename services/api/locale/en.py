@@ -173,7 +173,8 @@ MESSAGES: dict[str, str] = {
     "sim_live.unit.us": "µs",
     "sim_live.unit.db": "dB",
     "sim_period.title": "Score a period",
-    "sim_period.hint": "The persistence forecast scored over days of the archive",
+    "sim_period.hint":
+        "The persistence forecast scored over chosen days, of the archive or live",
     "sim_period.what": (
         "Choose a circuit, its days and a lead. Each sounding is paired with the "
         "one a lead later, the forecast that nothing changes is scored against "
@@ -181,6 +182,15 @@ MESSAGES: dict[str, str] = {
         "receiver's clock broke are set apart. A run covers at most {days} days "
         "and {soundings} soundings, and makes no synthetic copies, so a day "
         "takes minutes."),
+    "sim_period.what_live": (
+        "Or choose the live forecasts: those the live loop issued for a followed "
+        "circuit as each sounding came in, and scored when the sounding a lead "
+        "later arrived. The hub keeps them for good, and a run sums them up as it "
+        "sums the archive, at one of the leads they were issued at, without "
+        "scoring them again."),
+    "sim_period.source": "Source",
+    "sim_period.source.archive": "Archive",
+    "sim_period.source.live": "Live forecasts",
     "sim_period.circuit": "Circuit",
     "sim_period.first": "First day, UTC",
     "sim_period.last": "Last day, UTC",
@@ -188,6 +198,7 @@ MESSAGES: dict[str, str] = {
     "sim_period.run": "Score",
     "sim_period.runs": "Runs",
     "sim_period.runs_none": "Nothing scored yet.",
+    "sim_period.col.source": "Source",
     "sim_period.col.days": "Days, UTC",
     "sim_period.col.lead": "Lead",
     "sim_period.col.soundings": "Soundings",
@@ -205,6 +216,8 @@ MESSAGES: dict[str, str] = {
     "sim_period.result": "Run {id}: {tx} → {rx}",
     "sim_period.asked": "{first} to {last} UTC · a lead of {min} min · soundings: {n}",
     "sim_period.pairs": "Pairs scored: {pairs}; unbroken stretches: {stretches}",
+    "sim_period.from_live":
+        "The forecasts the live loop issued and scored as the soundings came in",
     "sim_period.set_apart": "set apart for the receiver's clock: {n}",
     "sim_period.skipped": "not scored: {n}",
     "sim_period.no_pairs": "No pair was scored.",
@@ -224,7 +237,41 @@ MESSAGES: dict[str, str] = {
     "sim_period.sun.transition": "Transition",
     "sim_period.sun.night": "Night",
     "sim_period.sun.unknown": "Unknown",
-    "sim_period.downloads": "Download",
+    "sim_period.downloads": "Files to download",
+    "sim_period.file.summary":
+        "The summary on this page, in JSON: the pair counts, every figure with its "
+        "95 % interval, the working-frequency scores, the cuts by hour and by sun, "
+        "and the settings it was scored with.",
+    "sim_period.file.pairs":
+        "A JSON line per pair: the forecast's and the truth's soundings, when the "
+        "forecast was issued and when it was due, the lead, the MUF and the LOF of "
+        "both with their errors, the mode counts, the working-frequency tallies, the "
+        "receiver clock's verdict and the sun's zenith angle.",
+    "sim_period.file.modes":
+        "A JSON line per mode of each pair: matched, in both soundings; missed, in "
+        "the truth alone; or false, in the forecast alone. A matched one carries the "
+        "errors of its group delay, its C/N0 and its lowest and highest frequency.",
+    "sim_period.file.carriers":
+        "A JSON line per working frequency of each pair: the frequency and its ratio "
+        "to the MUF; whether a mode was seen there and whether it was usable, in the "
+        "forecast and in the truth; and the link there — the modes, delay, "
+        "multipath, delay spread, coherence bandwidth and time, dispersion, C/N0 and "
+        "SNR — in the forecast, in the truth and their difference.",
+    "sim_period.file.carriers_live":
+        "A JSON line per working frequency of each pair: the frequency and its ratio "
+        "to the MUF; whether a mode was seen there and whether it was usable, in the "
+        "forecast and in the truth; and the SNR in both and their difference. The "
+        "live loop keeps no other figure per frequency, so the rest are empty.",
+    "sim_period.file.skipped":
+        "A JSON line per sounding or pair that could not be scored: the stage it "
+        "stopped at and why.",
+    "sim_period.file.skipped_live":
+        "A JSON line per forecast that lapsed, no sounding coming a lead after it: "
+        "the sounding it was issued from and why.",
+    "sim_period.file.run":
+        "How the run was made: the lead, the pairing tolerance, the usable threshold "
+        "and the working frequencies; for the archive also the program's version and "
+        "every file read.",
     "sim_period.notes": "Notes on the figures",
     "sim_period.note.pair":
         "<b>Pairs</b>: each sounding with the first one a lead later, within "
@@ -236,6 +283,15 @@ MESSAGES: dict[str, str] = {
         "figure. <b>Not scored</b> are the soundings and pairs that could not be: an "
         "unreadable file, an ionogram with no trace to build a channel state from, or "
         "no sounding a lead later.",
+    "sim_period.note.live":
+        "<b>Live forecasts</b>: each pair is a forecast the live loop issued from a "
+        "sounding of a followed circuit and scored when the sounding a lead later "
+        "came, read back from the hub's database rather than scored again. The leads "
+        "are one and two of the circuit's intervals between soundings. A forecast "
+        "that lapsed, no sounding coming a lead later, is counted as not scored. At "
+        "each working frequency the loop keeps only the two events and the SNR, so "
+        "the frequencies are scored as for the archive, but carriers.jsonl holds no "
+        "other figure.",
     "sim_period.note.errors":
         "<b>Errors</b>: an error e is the forecast less the truth, so a positive one "
         "is a forecast too high. Brackets give the 95 % interval from a moving block "

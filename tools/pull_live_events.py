@@ -1,11 +1,10 @@
 """Pull the hub's live forecasts into JSON Lines files, one per circuit.
 
 The hub keeps every live event -- each forecast issued, each one scored
-against its truth with both values side by side, each one that lapsed -- for
-LIVE_KEEP_DAYS (30), then deletes it (`services/api/sim_live.py`). This copies
-a circuit's events to OUT/TX__RX.jsonl and carries on after the last id the
-file holds, so a pull run more often than that keeps everything, and a pull
-run twice writes nothing twice.
+against its truth with both values side by side, each one that lapsed --
+for good, unless LIVE_KEEP_DAYS says how many days (`services/api/sim_live.py`).
+This copies a circuit's events to OUT/TX__RX.jsonl and carries on after the
+last id the file holds, so a pull run twice writes nothing twice.
 
     python tools/pull_live_events.py --hub http://10.0.0.130:8002 \\
         --out out/article/hub NIC2:yoshkar-ola NIC1:yoshkar-ola

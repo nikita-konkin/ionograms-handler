@@ -45,8 +45,9 @@ def period_runs(request: Request) -> list[dict]:
 @router.post("/sim/periods")
 def period_run(request: Request, payload: dict = Body(...),
                _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
-    """Score the persistence forecast over a circuit's soundings from ``first``
-    to ``last``, at ``lead_s`` or the soundings' interval."""
+    """Sum up the persistence forecast over a circuit's days from ``first`` to
+    ``last``, at ``lead_s``: scored afresh on its soundings, or as the live loop
+    scored it, by ``source`` (:data:`services.api.sim_period.SOURCES`)."""
     try:
         lead = payload.get("lead_s")
         lead = None if lead in (None, "") else float(lead)
@@ -59,7 +60,8 @@ def period_run(request: Request, payload: dict = Body(...),
                                  request.app.state.archive_root,
                                  tx=str(payload.get("tx")), rx=str(payload.get("rx")),
                                  first=_day(payload, "first"),
-                                 last=_day(payload, "last"), lead_s=lead)
+                                 last=_day(payload, "last"), lead_s=lead,
+                                 source=str(payload.get("source", "archive")))
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     except ValueError as exc:

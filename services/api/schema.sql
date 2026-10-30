@@ -677,6 +677,9 @@ CREATE TABLE IF NOT EXISTS live_event (
 );
 
 CREATE INDEX IF NOT EXISTS live_event_circuit ON live_event(tx, rx, epoch);
+-- The leads each circuit's forecasts were scored at, read without the bodies:
+-- the events are kept for good, so a scan of them grows without end.
+CREATE INDEX IF NOT EXISTS live_event_lead ON live_event(kind, tx, rx, lead_s);
 
 
 -- --------------------------------------------------------------------------

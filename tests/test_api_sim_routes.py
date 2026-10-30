@@ -399,3 +399,87 @@ def test_the_russian_periods_page_asks_for_no_missing_string(client, tmp_path,
     i18n.MISSES.clear()
     client.get(f"/ui/sim/periods?id={run_id}&lang=ru")
     assert not i18n.MISSES, f"the Russian periods page misses {sorted(i18n.MISSES)}"
+
+
+def _live_run(client, monkeypatch) -> int:
+    """A finished run over a day of the live loop's forecasts, summed up here
+    rather than in a process of its own."""
+    from muf.sim import summary
+    from tests.test_api_sim_period import _live
+
+    monkeypatch.setattr(summary, "metrics",
+                        functools.partial(summary.metrics, minimum=1))
+    monkeypatch.setattr(sim_period, "_sum", sim_period._summarise)
+    day = _day()
+    _live(client.app.state.db, day, 6)
+    run_id = client.post("/sim/periods", json=_ask(day, source="live"),
+                         headers=CTL).json()["id"]
+    _period_settled(client, run_id, timeout_s=120.0)
+    return run_id
+
+
+def _explained(page: str) -> set[str]:
+    import re
+    return {name for name, text in re.findall(r'<td data-file="([^"]+)">([^<]*)</td>',
+                                              page) if text.strip()}
+
+
+def test_a_live_period_is_summed_up_on_request(client, monkeypatch):
+    assert _period_settled(client, _live_run(client, monkeypatch))["state"] == "done", \
+        "a live period asked for was not summed up"
+
+
+def test_a_period_from_an_unknown_source_is_refused(client, scored):
+    day = _day()
+    _circuit(client, day)
+    assert client.post("/sim/periods", json=_ask(day, source=random.choice(
+        ("forecast", "LIVE", "", None))), headers=CTL).status_code == 422, \
+        "a period from an unknown source was not refused"
+
+
+def test_the_periods_page_offers_the_live_loop(client):
+    from tests.test_api_sim_period import _live
+
+    _live(client.app.state.db, _day(), 6)
+    assert 'value="live"' in client.get("/ui/sim/periods").text, \
+        "the periods page did not offer the live loop's forecasts"
+
+
+def test_a_live_runs_notes_say_where_its_forecasts_came_from(client, monkeypatch):
+    run_id = _live_run(client, monkeypatch)
+    assert 'id="note-live"' in client.get(f"/ui/sim/periods?id={run_id}").text, \
+        "a live run's notes do not say where its forecasts came from"
+
+
+def test_every_note_on_a_live_periods_page_is_marked_where_it_applies(client,
+                                                                      monkeypatch):
+    run_id = _live_run(client, monkeypatch)
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    assert set() != _notes(page, "id") == _notes(page, "href"), \
+        "a note on a live periods page is marked nowhere, or no notes are shown"
+
+
+def test_every_file_of_a_period_is_explained(client, tmp_path, monkeypatch):
+    run_id = _finished_run(client, tmp_path, monkeypatch)
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    assert set(sim_period.files(client.app.state.sim_cache,
+                                run_id)) == _explained(page), \
+        "a file of a period offered for download is not explained"
+
+
+def test_every_file_of_a_live_period_is_explained(client, monkeypatch):
+    run_id = _live_run(client, monkeypatch)
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    assert set(sim_period.files(client.app.state.sim_cache,
+                                run_id)) == _explained(page), \
+        "a file of a live period offered for download is not explained"
+
+
+def test_the_russian_live_periods_page_asks_for_no_missing_string(client, monkeypatch):
+    from services.api import i18n
+
+    run_id = _live_run(client, monkeypatch)
+    i18n.MISSES.clear()
+    client.get(f"/ui/sim/periods?id={run_id}&lang=ru")
+    assert not i18n.MISSES, \
+        f"the Russian live periods page misses {sorted(i18n.MISSES)}"

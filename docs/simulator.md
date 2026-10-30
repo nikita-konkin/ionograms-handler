@@ -601,8 +601,11 @@ others cost nothing. A thread looks every `LIVE_INTERVAL_S` (60 s; 0 turns
 it off) for a followed circuit's soundings newer than the last it took and
 runs each turn in a process of its own. A circuit followed begins at its
 newest sounding, so the archive's past is not replayed, and a sounding
-stored after a later one was taken is passed over. Events are kept
-`LIVE_KEEP_DAYS` (30). The loop is only as live as the scans: at the
+stored after a later one was taken is passed over. Events are kept for
+good; `LIVE_KEEP_DAYS` above 0 forgets the older ones. A scored event keeps
+the pair's working frequencies too, each frequency's two events and its
+SNR, and the sun's zenith angle at the control point. The loop is only as
+live as the scans: at the
 default scan of every 15 minutes a five-minute circuit is forecast and
 scored three soundings at a time, so a hub that shows it sets
 `ARCHIVE_SCAN_INTERVAL_S` to 60-120.
@@ -612,7 +615,7 @@ JSON Lines, oldest first, each as `muf sim live --out` writes it -- a score
 with its forecast and truth side by side -- with the hub's id added.
 `tools/pull_live_events.py --hub URL --out DIR TX:RX ...` appends each
 circuit's new events to `DIR/TX__RX.jsonl`, carrying on after the last id the
-file holds; run more often than every `LIVE_KEEP_DAYS`, it keeps everything.
+file holds, so a copy kept elsewhere never repeats a line.
 
 The live loop scores only what comes after a circuit is followed.
 `/ui/sim/periods` (`services/api/sim_period.py`) scores the past instead:
@@ -632,6 +635,16 @@ about 5.5 minutes. A figure needs 30 pairs. A day of a ten-minute circuit
 makes at most 143, fewer once the pairs with no trace or a broken clock drop
 out, so it gives the whole day's figures at best and none by the hour; the
 hours need five days or more.
+
+The same page sums up the live loop's own forecasts: choose *Live forecasts*
+as the source, a circuit the loop scored, its days and one of the leads it
+forecast. Nothing is scored again. The scored and lapsed events of those days
+are written out as a series' rows (`muf.sim.live.as_run`), a lapsed forecast
+as a pair not scored, and summed up as a period of the archive is, in
+seconds. Its `carriers.jsonl` holds each frequency's two events and SNR
+only, as the loop keeps them, and its `run.json` says `"source": "live"`.
+The 7-day limit holds; the soundings one does not, as none is read. Under a
+finished run the page says what each file offered for download holds.
 
 A receiver whose GPSDO has lost lock free-runs, and its echoes jump with its
 clock from one sounding to the next. A forecast scored across such a jump

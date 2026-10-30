@@ -253,3 +253,79 @@ def test_a_replay_waits_out_the_gaps_at_its_pace(tmp_path):
     waits = []
     live.replay(paths, pace=60.0, emit=lambda line: None, sleep=waits.append)
     assert waits == [5.0, 5.0], "the replay did not wait the gaps over its pace"
+
+
+def _first_scored(events) -> dict:
+    return next(e for e in events if e["event"] == "scored")
+
+
+def test_a_scored_forecast_carries_its_working_frequencies():
+    found = _first_scored(_turns([T0, T0 + 600, T0 + 1200]))["carriers"]
+    assert found["f0_mhz"], "a scored forecast carries no working frequencies"
+
+
+def test_a_working_frequency_keeps_both_sides_of_both_events():
+    found = _first_scored(_turns([T0, T0 + 600, T0 + 1200]))["carriers"]
+    lengths = {len(found[event][side]) for event in ("mode", "usable")
+               for side in ("forecast", "truth")}
+    assert lengths == {len(found["f0_mhz"])}, \
+        "a working frequency lost a side of one of its events"
+
+
+def test_a_working_frequency_keeps_its_snr_on_both_sides():
+    found = _first_scored(_turns([T0, T0 + 600, T0 + 1200]))["carriers"]["snr_db"]
+    assert len(found["forecast"]) == len(found["truth"]) == len(found["error"]) > 0, \
+        "a working frequency did not keep its SNR on both sides"
+
+
+def test_a_scored_pair_says_where_the_sun_was():
+    pair = _first_scored(_turns([T0, T0 + 600, T0 + 1200]))["pair"]
+    assert 0.0 <= pair["zenith_deg"] <= 180.0, \
+        "a scored pair does not say where the sun was"
+
+
+def test_the_live_forecasts_sum_up_as_a_run_does(tmp_path):
+    from muf.sim import summary
+
+    events = _turns([T0 + 600.0 * k for k in range(6)])
+    live.as_run(events, tmp_path / "run", lead_s=600.0)
+    scored = sum(e["event"] == "scored" and e["lead_s"] == 600.0 for e in events)
+    assert summary.summarise(tmp_path / "run")["pairs"] == scored > 0, \
+        "the live forecasts did not sum up as a run of their pairs"
+
+
+def test_a_run_of_live_forecasts_takes_only_the_lead_asked_for(tmp_path):
+    live.as_run(_turns([T0 + 600.0 * k for k in range(6)]), tmp_path / "run",
+                lead_s=1200.0)
+    rows = series.read_rows(tmp_path / "run" / "pairs.jsonl")
+    assert {r["lead_s"] for r in rows} == {1200.0}, \
+        "a run of live forecasts took a lead it was not asked for"
+
+
+def test_a_run_of_live_forecasts_scores_the_working_frequencies(tmp_path):
+    from muf.sim import summary
+
+    live.as_run(_turns([T0 + 600.0 * k for k in range(6)]), tmp_path / "run",
+                lead_s=600.0)
+    found = summary.summarise(tmp_path / "run")["all"]["carriers"]
+    assert found["events"]["usable"]["base_rate"] is not None, \
+        "a run of live forecasts did not score the working frequencies"
+
+
+def test_a_lapsed_live_forecast_is_a_pair_the_run_could_not_score(tmp_path):
+    live.as_run(_turns([T0, T0 + 600.0, T0 + 1200.0, T0 + 2400.0]), tmp_path / "run",
+                lead_s=600.0)
+    rows = series.read_rows(tmp_path / "run" / "skipped.jsonl")
+    assert [r["stage"] for r in rows] == ["pair"], \
+        "a lapsed live forecast was not kept as a pair the run could not score"
+
+
+def test_a_clock_suspect_live_pair_is_set_apart_by_the_run(tmp_path):
+    from muf.sim import summary
+
+    a = random.uniform(100.0, 700.0)
+    events = _turns([T0, T0 + 300.0, T0 + 600.0], leads=[300.0],
+                    offsets=[a, a, a + random.uniform(400.0, 1200.0)])
+    live.as_run(events, tmp_path / "run", lead_s=300.0)
+    assert summary.summarise(tmp_path / "run")["set_apart"] == 1, \
+        "a clock-suspect live pair was not set apart by the run"
