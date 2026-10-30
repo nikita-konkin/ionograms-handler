@@ -31,6 +31,7 @@
   </table></div>
 {%- endmacro -%}
 {%- macro minutes(seconds) -%}{{ '%g'|format((seconds / 60)|round(1)) }}{%- endmacro -%}
+{%- macro ref(key) -%}<sup><a href="#note-{{ key }}">{{ order.index(key) + 1 }}</a></sup>{%- endmacro -%}
 
 <div class="panel">
   <h2>{{ t('sim_period.title') }}</h2>
@@ -87,27 +88,50 @@
   <p class="note">{{ t('sim_period.asked', first=chosen.first, last=chosen.last, min=minutes(chosen.lead_s), n=chosen.soundings) }}</p>
   {% if summary %}
   {% set skipped = (summary.get('skipped') or {}).get('by_stage', {}).values()|sum %}
-  <p>{{ t('sim_period.pairs', pairs=summary.pairs, stretches=summary.stretches) }}
+  {% set notes = [('pair', t('sim_period.note.pair', tolerance='%g'|format(scoring.tolerance_s)))] %}
+  {% if summary['all'] is defined %}
+  {% set notes = notes + [
+      ('errors', t('sim_period.note.errors', reps=summary.reps, block=summary.block, min=summary.min_pairs)),
+      ('n', t('sim_period.note.n')), ('mae', t('sim_period.note.mae')), ('rmse', t('sim_period.note.rmse')),
+      ('bias', t('sim_period.note.bias')), ('median', t('sim_period.note.median')),
+      ('muf', t('sim_period.note.muf')), ('delay', t('sim_period.note.delay')),
+      ('cn0', t('sim_period.note.cn0', cn0='%g'|format(scoring.cn0_dbhz))), ('top', t('sim_period.note.top')),
+      ('modes', t('sim_period.note.modes')), ('scores', t('sim_period.note.scores'))] %}
+  {% if summary['all'].carriers.rows %}
+  {% set notes = notes + [
+      ('carriers', t('sim_period.note.carriers', step='%g'|format(scoring.carrier_step_mhz),
+                     cn0='%g'|format(scoring.cn0_dbhz), snr='%g'|format(scoring.snr_min_db),
+                     bw='%g'|format(scoring.bandwidth_hz))),
+      ('base_rate', t('sim_period.note.base_rate'))] %}
+  {% endif %}
+  {% if summary.by and summary.by.hour %}{% set notes = notes + [('by_hour', t('sim_period.note.by_hour'))] %}{% endif %}
+  {% if summary.by and summary.by.sun %}{% set notes = notes + [('by_sun', t('sim_period.note.by_sun',
+      day='%g'|format(scoring.sun_deg[0]), night='%g'|format(scoring.sun_deg[1])))] %}{% endif %}
+  {% endif %}
+  {% set order = notes|map(attribute=0)|list %}
+  <p>{{ t('sim_period.pairs', pairs=summary.pairs, stretches=summary.stretches) }}{{ ref('pair') }}
     {%- if summary.set_apart %} · <span class="warn">{{ t('sim_period.set_apart', n=summary.set_apart) }}</span>{% endif %}
     {%- if skipped %} · {{ t('sim_period.skipped', n=skipped) }}{% endif %}</p>
   {% if summary['all'] is defined %}
   {% set a = summary['all'] %}
-  <h3>{{ t('sim_period.figures') }}</h3>
+  <h3>{{ t('sim_period.figures') }}{{ ref('errors') }}</h3>
   <div class="scroll"><table>
-    <tr><th></th><th>n</th><th>MAE</th><th>RMSE</th><th>{{ t('sim_period.bias') }}</th><th>{{ t('sim_period.median') }}</th></tr>
-    {{ errors(t('sim_live.muf'), a.muf_mhz, '%.2f', t('sim_live.unit.mhz')) }}
-    {{ errors(t('sim_live.lof'), a.lof_mhz, '%.2f', t('sim_live.unit.mhz')) }}
-    {{ errors(t('sim_live.col.delay'), a.modes.all.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}
-    {{ errors('C/N0', a.modes.all.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}
-    {{ errors(t('sim_live.col.top'), a.modes.all.f_hi_error_mhz, '%.2f', t('sim_live.unit.mhz')) }}
+    <tr><th></th><th>n{{ ref('n') }}</th><th>MAE{{ ref('mae') }}</th><th>RMSE{{ ref('rmse') }}</th>
+      <th>{{ t('sim_period.bias') }}{{ ref('bias') }}</th><th>{{ t('sim_period.median') }}{{ ref('median') }}</th></tr>
+    {{ errors(t('sim_live.muf') ~ ref('muf'), a.muf_mhz, '%.2f', t('sim_live.unit.mhz')) }}
+    {{ errors(t('sim_live.lof') ~ ref('muf'), a.lof_mhz, '%.2f', t('sim_live.unit.mhz')) }}
+    {{ errors(t('sim_live.col.delay') ~ ref('delay'), a.modes.all.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}
+    {{ errors('C/N0' ~ ref('cn0'), a.modes.all.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}
+    {{ errors(t('sim_live.col.top') ~ ref('top'), a.modes.all.f_hi_error_mhz, '%.2f', t('sim_live.unit.mhz')) }}
   </table></div>
   <p class="note">{{ t('sim_period.censored', truth=a.muf_mhz.censored.truth, forecast=a.muf_mhz.censored.forecast) }}
-    · {{ t('sim_live.modes', matched=a.mode_counts.hits, missed=a.mode_counts.misses, false=a.mode_counts.false_alarms) }}
-    {%- for key in ('pod', 'far', 'csi') %}{% if a.mode_counts[key] is not none %} · {{ key|upper }} {{ '%.2f'|format(a.mode_counts[key]) }}{% endif %}{% endfor %}</p>
+    · {{ t('sim_live.modes', matched=a.mode_counts.hits, missed=a.mode_counts.misses, false=a.mode_counts.false_alarms) }}{{ ref('modes') }}
+    {%- for key in ('pod', 'far', 'csi') %}{% if a.mode_counts[key] is not none %} · {{ key|upper }} {{ '%.2f'|format(a.mode_counts[key]) }}{% endif %}{% endfor %}{{ ref('scores') }}</p>
   {% if a.carriers.rows %}
-  <h3>{{ t('sim_period.carriers', n=a.carriers.rows) }}</h3>
+  <h3>{{ t('sim_period.carriers', n=a.carriers.rows) }}{{ ref('carriers') }}</h3>
   <div class="scroll"><table>
-    <tr><th></th><th>POD</th><th>FAR</th><th>CSI</th><th>{{ t('sim_period.base_rate') }}</th></tr>
+    <tr><th></th><th>POD{{ ref('scores') }}</th><th>FAR{{ ref('scores') }}</th><th>CSI{{ ref('scores') }}</th>
+      <th>{{ t('sim_period.base_rate') }}{{ ref('base_rate') }}</th></tr>
     {% for event, label in (('mode', t('sim_period.event.mode')), ('usable', t('sim_period.event.usable'))) %}
     {% set e = a.carriers.events[event] %}
     <tr><td>{{ label }}</td>
@@ -115,13 +139,12 @@
     {% endfor %}
   </table></div>
   {% endif %}
-  <p class="note">{{ t('sim_period.figures_note', min=summary.min_pairs) }}</p>
   {% if summary.by and summary.by.hour %}
-  <h3>{{ t('sim_period.by_hour') }}</h3>
+  <h3>{{ t('sim_period.by_hour') }}{{ ref('by_hour') }}</h3>
   {{ cut(summary.by.hour.items(), t('sim_period.col.hour')) }}
   {% endif %}
   {% if summary.by and summary.by.sun %}
-  <h3>{{ t('sim_period.by_sun') }}</h3>
+  <h3>{{ t('sim_period.by_sun') }}{{ ref('by_sun') }}</h3>
   {{ cut(summary.by.sun.items(), t('sim_period.col.sun'),
          {'day': t('sim_period.sun.day'), 'transition': t('sim_period.sun.transition'),
           'night': t('sim_period.sun.night'), 'unknown': t('sim_period.sun.unknown')}) }}
@@ -133,6 +156,11 @@
   <p>{{ t('sim_period.downloads') }}:
     {% for name in files %}<a class="pill" href="/sim/periods/{{ chosen.id }}/{{ name }}" download>{{ name }}</a> {% endfor %}</p>
   {% endif %}
+  <h3>{{ t('sim_period.notes') }}</h3>
+  <ol class="note">
+    {% for key, text in notes %}<li id="note-{{ key }}">{{ text }}</li>
+    {% endfor %}
+  </ol>
   {% elif chosen.state == 'failed' %}
   <p class="warn">{{ t('sim_period.failed', error=chosen.error) }}</p>
   {% else %}
