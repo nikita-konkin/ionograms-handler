@@ -328,7 +328,7 @@ def test_the_periods_page_offers_the_circuits(client):
         "the periods page did not offer the circuit"
 
 
-def test_the_periods_page_shows_a_finished_runs_figures(client, tmp_path, monkeypatch):
+def _finished_run(client, tmp_path, monkeypatch) -> int:
     from muf.sim import presets, sounding, summary
     from muf.sim.state import ChannelState, Sweep
 
@@ -349,7 +349,53 @@ def test_the_periods_page_shows_a_finished_runs_figures(client, tmp_path, monkey
     _circuit(client, day, files=files)
     run_id = client.post("/sim/periods", json=_ask(day), headers=CTL).json()["id"]
     _period_settled(client, run_id, timeout_s=120.0)
+    return run_id
+
+
+def _notes(page: str, attribute: str) -> set[str]:
+    import re
+    return set(re.findall(attribute + r'="#?note-([a-z_]+)"', page))
+
+
+def test_the_periods_page_shows_a_finished_runs_figures(client, tmp_path, monkeypatch):
+    run_id = _finished_run(client, tmp_path, monkeypatch)
     mae = sim_period.summary(client.app.state.sim_cache,
                              run_id)["all"]["muf_mhz"]["mae"]
     assert f"{mae:.2f}" in client.get(f"/ui/sim/periods?id={run_id}").text, \
         "the periods page did not show the run's MUF error"
+
+
+def test_every_footnote_mark_on_the_periods_page_leads_to_a_note(client, tmp_path,
+                                                                 monkeypatch):
+    run_id = _finished_run(client, tmp_path, monkeypatch)
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    assert set() != _notes(page, "href") <= _notes(page, "id"), \
+        "a footnote mark on the periods page leads to no note, or none is shown"
+
+
+def test_every_note_on_the_periods_page_is_marked_where_it_applies(client, tmp_path,
+                                                                   monkeypatch):
+    run_id = _finished_run(client, tmp_path, monkeypatch)
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    assert set() != _notes(page, "id") == _notes(page, "href"), \
+        "a note on the periods page is marked nowhere, or no notes are shown"
+
+
+def test_the_notes_give_the_usable_threshold_the_run_was_scored_with(client, tmp_path,
+                                                                     monkeypatch):
+    run_id = _finished_run(client, tmp_path, monkeypatch)
+    params = sim_period.summary(client.app.state.sim_cache, run_id)["params"]
+    page = client.get(f"/ui/sim/periods?id={run_id}").text
+    note = page[page.index('id="note-carriers"'):].split("</li>", 1)[0]
+    assert f"{params['snr_min_db']:g} dB in {params['bandwidth_hz']:g} Hz" in note, \
+        "the notes do not give the usable threshold the run was scored with"
+
+
+def test_the_russian_periods_page_asks_for_no_missing_string(client, tmp_path,
+                                                             monkeypatch):
+    from services.api import i18n
+
+    run_id = _finished_run(client, tmp_path, monkeypatch)
+    i18n.MISSES.clear()
+    client.get(f"/ui/sim/periods?id={run_id}&lang=ru")
+    assert not i18n.MISSES, f"the Russian periods page misses {sorted(i18n.MISSES)}"

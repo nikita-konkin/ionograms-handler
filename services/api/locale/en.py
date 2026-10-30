@@ -218,12 +218,6 @@ MESSAGES: dict[str, str] = {
     "sim_period.base_rate": "In the truth",
     "sim_period.event.mode": "A mode seen",
     "sim_period.event.usable": "Usable",
-    "sim_period.figures_note": (
-        "The forecast is persistence: the earlier sounding's state, issued for "
-        "the later one. Each interval is 95 %, from a block bootstrap within "
-        "unbroken stretches, and no figure is given from fewer than {min} pairs. "
-        "Delay and C/N0 are the mode pairs' RMS errors; a mode's top is its "
-        "highest frequency."),
     "sim_period.by_hour": "By the hour the forecast was for",
     "sim_period.by_sun": "By the sun at the control point",
     "sim_period.sun.day": "Day",
@@ -231,6 +225,86 @@ MESSAGES: dict[str, str] = {
     "sim_period.sun.night": "Night",
     "sim_period.sun.unknown": "Unknown",
     "sim_period.downloads": "Download",
+    "sim_period.notes": "Notes on the figures",
+    "sim_period.note.pair":
+        "<b>Pairs</b>: each sounding with the first one a lead later, within "
+        "{tolerance} s. The earlier sounding's state is issued as the forecast and "
+        "scored against the later one, the truth. An <b>unbroken stretch</b> is a run "
+        "of pairs with no gap longer than the lead and that tolerance. Pairs <b>set "
+        "apart</b> span a jump of the receiver's clock: their delays moved with the "
+        "clock, not with the channel, so they are counted and kept out of every "
+        "figure. <b>Not scored</b> are the soundings and pairs that could not be: an "
+        "unreadable file, an ionogram with no trace to build a channel state from, or "
+        "no sounding a lead later.",
+    "sim_period.note.errors":
+        "<b>Errors</b>: an error e is the forecast less the truth, so a positive one "
+        "is a forecast too high. Brackets give the 95 % interval from a moving block "
+        "bootstrap: {reps} resamples in blocks of {block} pairs, drawn within the "
+        "unbroken stretches. Neighbouring errors are not independent — a MUF climbing "
+        "through a sunrise is wrong the same way for an hour — and resampling single "
+        "pairs would narrow the interval several times over. No figure is given from "
+        "fewer than {min} pairs.",
+    "sim_period.note.n":
+        "<b>n</b>: how many errors a row is computed from — pairs for the MUF and the "
+        "LOF, pairs of matched modes for the delay, C/N0 and a mode's top.",
+    "sim_period.note.mae": "<b>MAE</b>, the mean absolute error: the mean of |e|.",
+    "sim_period.note.rmse":
+        "<b>RMSE</b>, the root-mean-square error: the square root of the mean of e². "
+        "Large errors weigh more in it than in the MAE, so an RMSE well over the MAE "
+        "means a few large misses.",
+    "sim_period.note.bias":
+        "<b>Bias</b>: the mean of e, the systematic part of the error. Positive means "
+        "the forecast runs high, negative that it runs low.",
+    "sim_period.note.median":
+        "<b>Median |e|</b>: half the errors are smaller than this. Unlike the MAE, a "
+        "few outliers do not move it.",
+    "sim_period.note.muf":
+        "<b>MUF</b> and <b>LOF</b>: the maximum and the lowest observed frequency of "
+        "the oblique ionogram. A value at an edge of the band is a bound, not a "
+        "measurement — a MUF at the top may be higher, a LOF at the floor lower — so "
+        "such pairs are left out of the figures; the line under the table counts them "
+        "for the MUF.",
+    "sim_period.note.delay":
+        "<b>Delay</b>: for each pair of matched modes, the RMS difference of their "
+        "group delays across the band the two share, in µs; a mode pair weighs as that "
+        "band. Being an RMS it is never negative, so its bias equals its MAE and says "
+        "nothing of direction.",
+    "sim_period.note.cn0":
+        "<b>C/N0</b>: the carrier-to-noise-density ratio, in dB·Hz. Its error is the "
+        "RMS difference over the frequencies where both modes are over {cn0} dB·Hz, "
+        "weighed as the delay's, and is never negative either.",
+    "sim_period.note.top":
+        "<b>A mode's top</b>: the highest frequency a mode is seen at, its own MUF. "
+        "The error is the forecast mode's top less the truth mode's; a top at an edge "
+        "of the band is left out as a MUF is.",
+    "sim_period.note.modes":
+        "<b>Modes</b> are paired by delay, not by name. <i>Matched</i> is a mode in "
+        "both; <i>missed</i>, one in the truth alone — it appeared; <i>false</i>, one "
+        "in the forecast alone — it went. The POD, FAR and CSI on that line count mode "
+        "pairs.",
+    "sim_period.note.scores":
+        "<b>POD</b>, the probability of detection: of the cases the truth had the "
+        "event, the share the forecast said yes to, a/(a+c). <b>FAR</b>, the false "
+        "alarm ratio: of the forecast's yeses, the share that did not happen, b/(a+b). "
+        "<b>CSI</b>, the critical success index: a/(a+b+c), lowered by misses and "
+        "false alarms alike. Here a are hits, b false alarms, c misses and d correct "
+        "noes.",
+    "sim_period.note.carriers":
+        "<b>Working frequencies</b>: a grid every {step} MHz across the sweep, "
+        "wherever both soundings observed the band; each pair gives a row per "
+        "frequency. Two events are scored there. <i>A mode seen</i>: at least one mode "
+        "over {cn0} dB·Hz. <i>Usable</i>: that, and an SNR of {snr} dB in {bw} Hz or "
+        "more.",
+    "sim_period.note.base_rate":
+        "<b>In the truth</b>: the base rate, how often the truth had the event, "
+        "(a+c)/(a+b+c+d). POD and FAR cannot be read without it: a forecast of “always "
+        "yes” scores a POD of 1 and a FAR of 1 less the base rate.",
+    "sim_period.note.by_hour":
+        "<b>By the hour</b>: the pairs grouped by the UTC hour the forecast was for.",
+    "sim_period.note.by_sun":
+        "<b>By the sun</b>: the pairs grouped by the sun's zenith angle at the path's "
+        "control point when the forecast was due — day under {day}°, the transition "
+        "from {day}° to {night}°, night over {night}°.",
 
     # -- one sounding -----------------------------------------------------
     "sounding.notfound": "Not found",

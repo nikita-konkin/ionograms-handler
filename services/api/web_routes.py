@@ -494,6 +494,9 @@ def sim_periods_page(request: Request, id: int | None = None):
     :mod:`services.api.sim_period` keeps; a run under way is followed from
     the page's script.
     """
+    from muf.sim import check, link, series
+    from muf.sim import summary as summing
+
     from . import sim_period
 
     cache = request.app.state.sim_cache
@@ -501,12 +504,21 @@ def sim_periods_page(request: Request, id: int | None = None):
     chosen = next((r for r in runs if r["id"] == id), None) or next(
         (r for r in runs if r["state"] == "done"), None)
     done = chosen is not None and chosen["state"] == "done"
+    summary = sim_period.summary(cache, chosen["id"]) if done else None
+    params = (summary or {}).get("params", {})
     return templates.TemplateResponse(request, "sim_periods.html", {
         "circuits": sim_period.circuits(request.app.state.db),
-        "runs": runs, "chosen": chosen,
-        "summary": sim_period.summary(cache, chosen["id"]) if done else None,
+        "runs": runs, "chosen": chosen, "summary": summary,
         "files": sim_period.files(cache, chosen["id"]) if done else [],
         "limits": {"days": sim_period.MAX_DAYS, "soundings": sim_period.MAX_SOUNDINGS},
+        # What the notes under the figures quote: the run's own settings where
+        # it recorded them, else the ones the code scores with.
+        "scoring": {"tolerance_s": params.get("tolerance_s", series.TOLERANCE_S),
+                    "snr_min_db": params.get("snr_min_db", link.SNR_MIN_DB),
+                    "bandwidth_hz": params.get("bandwidth_hz", link.BANDWIDTH_HZ),
+                    "carrier_step_mhz": link.CARRIER_STEP_MHZ,
+                    "cn0_dbhz": check.CN0_COMPARE_ABOVE_DBHZ,
+                    "sun_deg": summing.SUN_DEG},
     })
 
 

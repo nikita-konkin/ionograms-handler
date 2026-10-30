@@ -102,6 +102,7 @@ DELIBERATELY_SAME = {
     # number an operator compares against the leaderboard's Latin one.
     "model.mae", "model.rmse",
     "series.trace.muf", "series.trace.lof", "sources.js.col.id",
+    "sim_live.muf", "sim_live.lof",
     # Nothing in them but placeholders, punctuation and markup.
     "archives.day_folders", "archives.js.result", "archives.js.why",
     "console.js.sending", "series.js.trace.forecast_compare",
@@ -229,6 +230,23 @@ def test_the_russian_catalog_is_actually_russian():
             if code > 0x24F and not (0x400 <= code <= 0x4FF) and ch not in allowed:
                 strays.setdefault(key, set()).add(f"{ch!r} U+{code:04X}")
     assert not strays, f"not Cyrillic, not punctuation: {strays}"
+
+
+#: Messages that name the usable frequencies on purpose, to say they are not
+#: what a sounding measures.
+EXPLAINS_THE_USABLE_FREQUENCY = {"series.lof_note"}
+
+
+def test_russian_names_the_observed_frequencies_not_the_usable_ones():
+    """One sounding measures the highest and lowest *observed* frequencies,
+    МНЧ and ННЧ. МПЧ and НПЧ are the *usable* frequencies of a radio service,
+    a monthly statistic no single sounding has; the simulator's pages shipped
+    with them anyway."""
+    usable = {key for key, text in ru.MESSAGES.items()
+              if "МПЧ" in text or "НПЧ" in text}
+    assert usable <= EXPLAINS_THE_USABLE_FREQUENCY, (
+        f"calls an observed frequency usable: "
+        f"{sorted(usable - EXPLAINS_THE_USABLE_FREQUENCY)}")
 
 
 def test_no_message_smuggles_a_script_into_a_page():

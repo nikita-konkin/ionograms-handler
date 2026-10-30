@@ -239,32 +239,32 @@ const T = {
     title: "Пульт имитатора КВ-канала",
     sub: "вариант интерфейса · прототип на реальных сеансах, данные muf.sim.check",
     pipe_h: "Цепочка", pipe_hint: "Реальный сеанс превращается в состояние канала, состояние — в синтетические сеансы, а те прочитываются тем же трактом muf. Проверки сравнивают одно с другим.",
-    s1: "Реальный сеанс", s2: "Состояние", s3: "Синтетика", s4: "Восстановление · уровень 1", s5: "Реализм · уровень 2",
+    s1: "Реальный сеанс", s2: "Состояние", s3: "Синтетические сеансы", s4: "Восстановление · уровень 1", s5: "Реализм · уровень 2",
     modes_n: "мод", measured: "измерено", prior: "априори", model: "модель",
-    soundings: "сеансов", seeds: "зёрна", delay_rms: "СКО задержки", cn0_bias: "смещение C/N₀",
-    outside: "вне разброса", of: "из", verdicts: "вердиктов",
+    soundings: "сеансов", seeds: "затравки", delay_rms: "СКО задержки", cn0_bias: "смещение C/N₀",
+    outside: "вне разброса", of: "из", verdicts: "заключений",
     ion_h: "Ионограммы", ion_hint: "Слева реальный сеанс, справа — на выбор копия состояния, следующий реальный сеанс или разность. Щелчок ставит частоту для срезов ниже, стрелки ← → двигают её.",
-    ov_trace: "кривые состояния", ov_mask: "ячейки корреляции ±5 бинов",
+    ov_trace: "кривые состояния", ov_mask: "ячейки корреляции ±5 отсчётов",
     m_rows: "построчно", m_smooth: "±0,2 МГц", db30: "30 дБ",
-    real: "реальный", synth1: "синтетика", synth: "копия", next: "следующий, +{m} мин", diff: "разность",
+    real: "реальный", synth1: "синтетический", synth: "копия", next: "следующий, +{m} мин", diff: "разность",
     diffnote: "реальный − копия 1, дБ, ±15; где обе ниже 3 дБ — не закрашено", nextnote: "тот же канал через {m} мин",
     synthnote: "одна из 12 копий; отличаются только замираниями и шумом",
-    cut_h: "Срез строки", cut_hint: "Мощность поперёк дальности на выбранной частоте. Полоса — ±2 бина, по которым считается C/N₀ выбранной моды.",
+    cut_h: "Срез строки", cut_hint: "Мощность поперёк дальности на выбранной частоте. Полоса — ±2 отсчёта, по которым суммируется C/N₀ выбранной моды.",
     prof_h: "Профиль поперёк следа", prof_hint: "Средний профиль по чистым сильным строкам, от раннего к позднему, пик = 1. Шире точечного эха — значит, у моды есть ширина по задержке.",
-    width: "ширина над точкой", within: "внутри строки", centres: "центры строк", r1: "связь соседних строк",
-    spread_state: "разброс в состоянии", scatter_yes: "рассеяние (центры независимы)", scatter_no: "когерентно (центры связаны) — не рассеяние",
-    cn0_hint: "Каждая строка дрожит от замираний; в состояние идёт среднее по ±0,2 МГц.",
+    width: "ширина сверх точечного эха", within: "внутри строки", centres: "центры строк", r1: "корреляция соседних строк",
+    spread_state: "разброс задержки в состоянии", scatter_yes: "рассеяние (центры независимы)", scatter_no: "когерентно (центры связаны) — не рассеяние",
+    cn0_hint: "Уровень каждой строки флуктуирует из-за замираний; в состояние записывается среднее по ±0,2 МГц.",
     rows: "строки", real_s: "реальный, среднее", synth_s: "копия, среднее",
-    verd_h: "Вердикты уровня 2", verd_hint: "Насколько реальное значение отстоит от 12 копий, в их σ. Внутри ±3σ реальный сеанс неотличим от ещё одной копии; для корреляции опасно только «ниже».",
+    verd_h: "Заключения уровня 2", verd_hint: "Насколько реальное значение отстоит от 12 копий, в их σ. Внутри ±3σ реальный сеанс неотличим от ещё одной копии; для корреляции плохим считается только «ниже».",
     muf: "МНЧ", level: "разброс уровня", widthv: "ширина следа", r_rows: "r построчно", r_smooth: "r ±0,2 МГц", all: "все моды",
-    corr_h: "Корреляция ионограмм", corr_hint: "Пирсон по дБ в ±5 бинах вокруг следов. Потолок — копии между собой; эталон изменчивости — следующий сеанс.",
+    corr_h: "Корреляция ионограмм", corr_hint: "Коэффициент Пирсона по значениям в дБ в пределах ±5 отсчётов от следов. Потолок — корреляция копий между собой, мерило изменчивости — следующий сеанс.",
     ceiling: "потолок: копии между собой", real_syn: "реальный ↔ копии", real_next: "реальный ↔ следующий",
     state_h: "Состояние канала", state_hint: "Каждая величина помечена происхождением: измерена с сеанса, априорная или задана моделью.",
     th_mode: "мода", th_band: "полоса, МГц", th_delay: "задержка, мкс", th_cn0: "C/N₀ макс", th_dopp: "доплер", th_ds: "разброс задержки", th_ox: "o/x",
-    chan_hint: "|H(f, t)| на одной несущей: что увидит сигнал в полосе 48 кГц за 30 с; снизу — пути канала.",
-    chan: "Канал на {fc} МГц", taps: "пути: задержка относительно первого, мкс",
+    chan_hint: "|H(f, t)| на одной несущей: что увидит сигнал в полосе 48 кГц за 30 с; снизу — лучи канала.",
+    chan: "Канал на {fc} МГц", taps: "лучи: задержка относительно первого, мкс",
     cut: "Срез строки на {f} МГц", cn0: "C/N₀ моды {m} вдоль полосы",
-    freq: "частота, МГц", range: "дальность, км", time: "время, с", dfk: "смещение, кГц",
+    freq: "частота, МГц", range: "дальность, км", time: "время, с", dfk: "сдвиг частоты, кГц",
     foot: "Прототип: рисует то, что считает <code>muf.sim.check</code>, и ничего не считает сам. Пересобрать: <code>python docs/ui/console.py SOUNDING.lfs …</code>. Материал диссертации, только локально.",
     none: "нет", inside: "внутри", z: "z", vs_ceiling: "при потолке",
     few: "копий {n} < 12", nodata: "не измерено",
@@ -538,14 +538,14 @@ function renderCut() {
     el("text", { x: X(mo.km[i]) + 3, y: ly, class: "ink" }, svg, mo.name); });
   const rn = st.right === "next" ? t("next", { m: gapMin(S()) }) : st.right === "diff" ? `${t("synth")} 1` : `${t("synth")} ${st.right.slice(-1)}`;
   $("cutlegend").innerHTML = `<span style="--c:var(--ink)">${t("real")}</span><span class="dash" style="--c:var(--accent)">${rn}</span>` +
-    `<span class="dash" style="--c:var(--warn)">${st.lang === "ru" ? "шум, −2,8 дБ" : "noise, −2.8 dB"}</span><span class="box" style="--c:var(--accent)">±2 ${st.lang === "ru" ? "бина" : "bins"}</span>`;
+    `<span class="dash" style="--c:var(--warn)">${st.lang === "ru" ? "шум, −2,8 дБ" : "noise, −2.8 dB"}</span><span class="box" style="--c:var(--accent)">±2 ${st.lang === "ru" ? "отсчёта" : "bins"}</span>`;
 }
 function renderProfile() {
   const s = S(), md = s.modes[st.mode], svg = $("prof"), W = 420, H = 230;
   const pr = md.profile || {}, k = [-4, -3, -2, -1, 0, 1, 2, 3, 4];
   const bin_us = s.bin_km / (s.km_per_us || 0.3), bu = Math.round(bin_us);
   const [X, Y] = frame(svg, W, H, { l: 34, r: 8, t: 10, b: 32 }, [-4.6, 4.6], [0, 1.08],
-    st.lang === "ru" ? `бин от следа (ранний → поздний), 1 бин ≈ ${bu} мкс` : `bin from the trace (early → late), 1 bin ≈ ${bu} µs`, null, k, [0, 0.5, 1]);
+    st.lang === "ru" ? `отсчёты от следа (ранний → поздний), 1 отсчёт ≈ ${bu} мкс` : `bin from the trace (early → late), 1 bin ≈ ${bu} µs`, null, k, [0, 0.5, 1]);
   const bw = (X(1) - X(0)) * 0.38;
   if (pr.real) pr.real.forEach((v, q) => el("rect", { x: X(k[q]) - bw - 1, width: bw, y: Y(Math.max(0, v)), height: Y(0) - Y(Math.max(0, v)), fill: "var(--ink)", opacity: 0.75 }, svg));
   if (pr.synthetic) pr.synthetic.forEach((v, q) => el("rect", { x: X(k[q]) + 1, width: bw, y: Y(Math.max(0, v)), height: Y(0) - Y(Math.max(0, v)), fill: "var(--accent)", opacity: 0.8 }, svg));
@@ -713,7 +713,7 @@ function renderPipe() {
     [1, t("s1"), `<b>${s.utc}</b><br>${s.circuit}<br>${t("muf")} <b>${fmt(s.muf.real, 3)}</b> ${st.lang === "ru" ? "МГц" : "MHz"}`],
     [2, t("s2"), `<b>${s.modes.length}</b> ${t("modes_n")}: ${s.modes.map((m) => m.name).join(", ")}<br>` +
       `<span class="badge ok">${counts.measured} ${t("measured")}</span> <span class="badge prior">${counts.prior} ${t("prior")}</span>`],
-    [3, t("s3"), `<b>${s.realisations}</b> ${t("soundings")} · ${t("seeds")} 0–${s.realisations - 1}<br>${st.lang === "ru" ? "тот же свип, окно, тракт muf" : "same sweep, window, muf processing"}`],
+    [3, t("s3"), `<b>${s.realisations}</b> ${t("soundings")} · ${t("seeds")} 0–${s.realisations - 1}<br>${st.lang === "ru" ? "та же развёртка, окно и тракт muf" : "same sweep, window, muf processing"}`],
     [4, t("s4"), `${main.name}: ${t("delay_rms")} <b>${fmt(main.summary.delay_rms_us.mean)}</b> ${mu}<br>${t("cn0_bias")} <b>${fmt(main.summary.cn0_bias_db.mean)}</b> dB`],
     [5, t("s5"), `<span class="badge ${out ? "out" : "ok"}">${out} ${t("of")} ${v.length}</span> ${t("outside")}<br>` +
       `r ${t("m_smooth")}: <b>${fmt((s.correlation.smoothed.real || {}).mean, 3)}</b> ${t("vs_ceiling")} ${fmt((s.correlation.smoothed.synthetic || {}).mean, 3)}`],
