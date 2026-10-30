@@ -36,16 +36,23 @@
 <div class="panel">
   <h2>{{ t('sim_period.title') }}</h2>
   <p class="note">{{ t('sim_period.what', days=limits.days, soundings=limits.soundings) }}</p>
-  {% if circuits %}
+  {% if live %}<p class="note">{{ t('sim_period.what_live') }}</p>{% endif %}
+  {% if circuits or live %}
   <p>
+    <label class="muted" style="font-size:.85rem">{{ t('sim_period.source') }}
+      <select id="perSource">
+        {% if circuits %}<option value="archive">{{ t('sim_period.source.archive') }}</option>{% endif %}
+        {% if live %}<option value="live">{{ t('sim_period.source.live') }}</option>{% endif %}
+      </select></label>
     <label class="muted" style="font-size:.85rem">{{ t('sim_period.circuit') }}
       <select id="perCircuit">
-        {% for c in circuits %}<option value="{{ loop.index0 }}">{{ c.tx }} → {{ c.rx }} · {{ c.first }} – {{ c.last }}</option>{% endfor %}
+        {% for c in circuits or live %}<option value="{{ loop.index0 }}">{{ c.tx }} → {{ c.rx }} · {{ c.first }} – {{ c.last }}</option>{% endfor %}
       </select></label>
     <label class="muted" style="font-size:.85rem">{{ t('sim_period.first') }} <input type="date" id="perFirst"></label>
     <label class="muted" style="font-size:.85rem">{{ t('sim_period.last') }} <input type="date" id="perLast"></label>
     <label class="muted" style="font-size:.85rem">{{ t('sim_period.lead') }}
-      <input type="number" id="perLead" min="1" step="any" style="width:5rem"></label>
+      <input type="number" id="perLead" min="1" step="any" style="width:5rem" list="perLeads"></label>
+    <datalist id="perLeads"></datalist>
     <button id="perRun" class="pill" data-needs="archive">{{ t('sim_period.run') }}</button>
     <span id="perSay" class="note"></span>
   </p>
@@ -59,12 +66,14 @@
   <h2>{{ t('sim_period.runs') }}</h2>
   {% if runs %}
   <div class="scroll"><table>
-    <tr><th>#</th><th>{{ t('sim_period.circuit') }}</th><th>{{ t('sim_period.col.days') }}</th>
+    <tr><th>#</th><th>{{ t('sim_period.col.source') }}</th><th>{{ t('sim_period.circuit') }}</th>
+      <th>{{ t('sim_period.col.days') }}</th>
       <th>{{ t('sim_period.col.lead') }}</th><th>{{ t('sim_period.col.soundings') }}</th>
       <th>{{ t('sim_period.col.state') }}</th></tr>
     {% for r in runs %}
     <tr{% if chosen and r.id == chosen.id %} class="ok"{% endif %}>
       <td><a href="/ui/sim/periods?id={{ r.id }}">{{ r.id }}</a></td>
+      <td>{{ t('sim_period.source.live') if r.source == 'live' else t('sim_period.source.archive') }}</td>
       <td>{{ r.tx }} → {{ r.rx }}</td>
       <td>{{ r.first }}{% if r.last != r.first %} – {{ r.last }}{% endif %}</td>
       <td>{{ t('sim_period.min', min=minutes(r.lead_s)) }}</td>
@@ -85,10 +94,12 @@
 {% if chosen %}
 <div class="panel" id="periodSummary">
   <h2>{{ t('sim_period.result', id=chosen.id, tx=chosen.tx, rx=chosen.rx) }}</h2>
-  <p class="note">{{ t('sim_period.asked', first=chosen.first, last=chosen.last, min=minutes(chosen.lead_s), n=chosen.soundings) }}</p>
+  <p class="note">{{ t('sim_period.source.live') if chosen.source == 'live' else t('sim_period.source.archive') }}
+    · {{ t('sim_period.asked', first=chosen.first, last=chosen.last, min=minutes(chosen.lead_s), n=chosen.soundings) }}</p>
   {% if summary %}
   {% set skipped = (summary.get('skipped') or {}).get('by_stage', {}).values()|sum %}
-  {% set notes = [('pair', t('sim_period.note.pair', tolerance='%g'|format(scoring.tolerance_s)))] %}
+  {% set notes = [('live', t('sim_period.note.live'))] if chosen.source == 'live' else [] %}
+  {% set notes = notes + [('pair', t('sim_period.note.pair', tolerance='%g'|format(scoring.tolerance_s)))] %}
   {% if summary['all'] is defined %}
   {% set notes = notes + [
       ('errors', t('sim_period.note.errors', reps=summary.reps, block=summary.block, min=summary.min_pairs)),
@@ -109,6 +120,7 @@
       day='%g'|format(scoring.sun_deg[0]), night='%g'|format(scoring.sun_deg[1])))] %}{% endif %}
   {% endif %}
   {% set order = notes|map(attribute=0)|list %}
+  {% if chosen.source == 'live' %}<p class="note">{{ t('sim_period.from_live') }}{{ ref('live') }}</p>{% endif %}
   <p>{{ t('sim_period.pairs', pairs=summary.pairs, stretches=summary.stretches) }}{{ ref('pair') }}
     {%- if summary.set_apart %} · <span class="warn">{{ t('sim_period.set_apart', n=summary.set_apart) }}</span>{% endif %}
     {%- if skipped %} · {{ t('sim_period.skipped', n=skipped) }}{% endif %}</p>
@@ -153,8 +165,20 @@
   <p class="muted">{{ t('sim_period.no_pairs') }}</p>
   {% endif %}
   {% if files %}
-  <p>{{ t('sim_period.downloads') }}:
-    {% for name in files %}<a class="pill" href="/sim/periods/{{ chosen.id }}/{{ name }}" download>{{ name }}</a> {% endfor %}</p>
+  {% set about = {'summary.json': t('sim_period.file.summary'),
+                  'pairs.jsonl': t('sim_period.file.pairs'),
+                  'modes.jsonl': t('sim_period.file.modes'),
+                  'carriers.jsonl': t('sim_period.file.carriers_live') if chosen.source == 'live'
+                                    else t('sim_period.file.carriers'),
+                  'skipped.jsonl': t('sim_period.file.skipped_live') if chosen.source == 'live'
+                                   else t('sim_period.file.skipped'),
+                  'run.json': t('sim_period.file.run')} %}
+  <h3>{{ t('sim_period.downloads') }}</h3>
+  <div class="scroll"><table>
+    {% for name in files %}<tr><td><a class="pill" href="/sim/periods/{{ chosen.id }}/{{ name }}" download>{{ name }}</a></td>
+      <td data-file="{{ name }}">{{ about[name] }}</td></tr>
+    {% endfor %}
+  </table></div>
   {% endif %}
   <h3>{{ t('sim_period.notes') }}</h3>
   <ol class="note">
@@ -170,29 +194,45 @@
 {% endif %}
 
 <script>
-{% if circuits %}
-const CIRCUITS = {{ circuits|tojson }};
+{% if circuits or live %}
+const SOURCES = {archive: {{ circuits|tojson }}, live: {{ live|tojson }}};
+const source = document.getElementById('perSource');
 const pick = document.getElementById('perCircuit');
 const first = document.getElementById('perFirst');
 const last = document.getElementById('perLast');
 const lead = document.getElementById('perLead');
+const leads = document.getElementById('perLeads');
 const say = document.getElementById('perSay');
 
+function circuit() {
+  return SOURCES[source.value][pick.value];
+}
+
 function fill() {
-  const c = CIRCUITS[pick.value];
+  const c = circuit();
+  const offered = (c.leads || []).map(s => Math.round(s / 6) / 10);
   first.min = last.min = c.first;
   first.max = last.max = c.last;
   first.value = last.value = c.last;
-  lead.value = c.interval_s ? Math.round(c.interval_s / 6) / 10 : '';
+  leads.replaceChildren(...offered.map(m => new Option('', m)));
+  lead.value = offered.length ? offered[0]
+             : c.interval_s ? Math.round(c.interval_s / 6) / 10 : '';
 }
 
+function list() {
+  pick.replaceChildren(...SOURCES[source.value].map((c, k) =>
+    new Option(c.tx + ' → ' + c.rx + ' · ' + c.first + ' – ' + c.last, k)));
+  fill();
+}
+
+source.addEventListener('change', list);
 pick.addEventListener('change', fill);
 fill();
 
 document.getElementById('perRun').addEventListener('click', async () => {
-  const c = CIRCUITS[pick.value];
+  const c = circuit();
   const r = await control('/sim/periods', 'POST', {
-    tx: c.tx, rx: c.rx, first: first.value, last: last.value,
+    source: source.value, tx: c.tx, rx: c.rx, first: first.value, last: last.value,
     lead_s: lead.value ? Number(lead.value) * 60 : null});
   if (!r.ok) { say.textContent = r.detail; return; }
   location.href = '/ui/sim/periods?id=' + r.body.id;

@@ -181,6 +181,17 @@ def test_events_older_than_the_days_kept_are_forgotten(tmp_path):
     assert len(_kinds(conn)) == 1, "an event older than the days kept was kept"
 
 
+def test_the_events_are_kept_for_good_unless_days_are_set(tmp_path):
+    conn = _conn(tmp_path)
+    _sounding(conn, "2025-09-01 12:00:15")
+    _follow(conn)
+    _sounding(conn, "2025-09-01 12:10:15")
+    _advance(conn, tmp_path, [])
+    _sounding(conn, "2026-10-24 12:00:15")
+    _advance(conn, tmp_path, [])
+    assert len(_kinds(conn)) == 2, "an old event was forgotten with no days set to keep"
+
+
 def _lfs(folder: Path, epoch: float, k: int) -> Path:
     law = presets.law_mode(muf_mhz=13.6 + 0.07 * k, f_lo_mhz=10.5, cn0_dbhz=45.0,
                            spread_hz=0.5)

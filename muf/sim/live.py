@@ -14,11 +14,15 @@ and a ten-minute one 10 and 20. A forecast whose time passes with no
 sounding within the tolerance lapses, and so does one whose sounding has no
 trace; a sounding with no trace issues nothing.
 
-Only the modes are scored -- the pair's MUF, LOF and mode counts, and each
-mode's delay, C/N0 and top (:func:`muf.sim.forecast.score` with no
-carriers) -- and the ionograms are not: they are for the eye. The running
-figures (:func:`figures`) are plain sums over the pairs scored, by lead,
-with no intervals; ``muf sim series`` and ``muf sim summary`` give those.
+A pair is scored as a series scores one (:func:`muf.sim.forecast.score`):
+its MUF, LOF and mode counts, each mode's delay, C/N0 and top, and the
+working frequencies across the sweep. Of those an event keeps each
+frequency's two events and its SNR (:func:`compact`), a few kilobytes where
+the whole rows are a hundred; the ionograms are not scored, being for the
+eye. The pair also says where the sun stood at its control point. The
+running figures (:func:`figures`) are plain sums over the pairs scored, by
+lead, with no intervals; :func:`as_run` writes the events out as a series'
+run, for ``muf sim summary`` to give those.
 
 A pair across a jump of the receiver's clock is scored like any other, with
 the verdict beside its values, and set apart from the figures
@@ -39,7 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import clock, series, summary
+from . import clock, link, series, summary
 from . import forecast as fc
 from .state import ChannelState
 
@@ -60,6 +64,13 @@ SPAN_S = 3600.0
 
 #: A mode's top, censored where either state's sweep cuts it.
 TOP = "f_hi_error_mhz"
+
+#: Decimals an event keeps a working frequency's SNR to, dB: far finer than a
+#: sounding resolves it.
+SNR_DECIMALS = 2
+
+#: The sides of a forecast's every comparison.
+SIDES = ("forecast", "truth")
 
 
 @dataclass(frozen=True)
@@ -145,9 +156,93 @@ def _settle(p: Pending, session: series.Session, state: ChannelState | None,
         return _waited(p, "lapsed", at, reason=f"truth not observed: {_failure(exc)}")
     if not found.modes:
         return _waited(p, "lapsed", at, reason="no trace in the truth's sounding")
-    score = fc.score(p.forecast, found, carriers=[])
-    return _waited(p, "scored", at, to=session.path.name, pair=score.pair,
-                   modes=score.modes, clock=clock.verdict(p.forecast, state))
+    score = fc.score(p.forecast, found)
+    return _waited(p, "scored", at, to=session.path.name,
+                   pair={**score.pair, "zenith_deg": series.zenith_deg(p.forecast)},
+                   modes=score.modes, carriers=compact(score.carriers),
+                   clock=clock.verdict(p.forecast, state))
+
+
+def _rounded(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(float(value), digits)
+
+
+def compact(rows: Sequence[Mapping]) -> dict:
+    """A pair's working frequencies (:func:`muf.sim.forecast.score`) as an
+    event keeps them, in columns: each frequency, its ratio to the truth's
+    MUF, its two events on both sides, and its SNR with the error."""
+    return {"f0_mhz": [float(r["f0_mhz"]) for r in rows],
+            "f_over_muf": [_rounded(r["f_over_muf"], 4) for r in rows],
+            **{event: {side: [bool(r["events"][event][side]) for r in rows]
+                       for side in SIDES} for event in fc.EVENTS},
+            "snr_db": {side: [_rounded(r["figures"]["snr_db"][side], SNR_DECIMALS)
+                              for r in rows] for side in (*SIDES, "error")}}
+
+
+def carrier_rows(e: Mapping) -> list[dict]:
+    """A scored event's working frequencies as :mod:`muf.sim.forecast` writes
+    them, the figures an event does not keep empty; none for an event from
+    before they were kept."""
+    kept, pair = e.get("carriers"), e["pair"]
+    if not kept:
+        return []
+    snr = kept["snr_db"]
+    return [{"schema": fc.CARRIER_SCHEMA, "version": fc.VERSION,
+             "from": pair["from"], "to": pair["to"], "f0_mhz": f0,
+             "f_over_muf": kept["f_over_muf"][k],
+             "events": {event: {side: kept[event][side][k] for side in SIDES}
+                        for event in fc.EVENTS},
+             "strongest": dict.fromkeys(SIDES),
+             "figures": {name: ({side: snr[side][k] for side in (*SIDES, "error")}
+                                if name == "snr_db"
+                                else dict.fromkeys((*SIDES, "error")))
+                         for name in link.FIGURES},
+             "excluded": []}
+            for k, f0 in enumerate(kept["f0_mhz"])]
+
+
+def _line(row: Mapping) -> str:
+    return json.dumps(row, allow_nan=False) + "\n"
+
+
+def as_run(events: Iterable[Mapping], out: str | Path, *, lead_s: float,
+           tolerance_s: float = TOLERANCE_S) -> int:
+    """The forecasts of ``lead_s`` among ``events`` written to ``out`` as a
+    series writes its run (:mod:`muf.sim.series`), for
+    :func:`muf.sim.summary.summarise` to sum up as it sums a period of the
+    archive.
+
+    A scored forecast is a pair, with its modes, its working frequencies
+    (:func:`carrier_rows`) and its clock verdict on the pair, where a series
+    puts it; a lapsed one is a pair that could not be scored. A lead within
+    ``tolerance_s`` of ``lead_s`` is taken for it, a circuit's interval being
+    the median of its gaps. Returns how many pairs.
+    """
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    params = {"lead_s": float(lead_s), "tolerance_s": float(tolerance_s),
+              "bandwidth_hz": link.BANDWIDTH_HZ, "snr_min_db": link.SNR_MIN_DB,
+              "carriers": None, "source": "live"}
+    (out / "run.json").write_text(json.dumps({"params": params}, indent=1) + "\n",
+                                  encoding="utf-8")
+    pairs = 0
+    with (out / "pairs.jsonl").open("w", encoding="utf-8") as found, \
+            (out / "modes.jsonl").open("w", encoding="utf-8") as modes, \
+            (out / "carriers.jsonl").open("w", encoding="utf-8") as carriers, \
+            (out / "skipped.jsonl").open("w", encoding="utf-8") as skipped:
+        for e in events:
+            if (e.get("lead_s") is None
+                    or abs(float(e["lead_s"]) - lead_s) > tolerance_s):
+                continue
+            if e["event"] == "scored":
+                found.write(_line({**e["pair"], "clock": e.get("clock")}))
+                modes.writelines(_line(row) for row in e["modes"])
+                carriers.writelines(_line(row) for row in carrier_rows(e))
+                pairs += 1
+            elif e["event"] == "lapsed":
+                skipped.write(_line(series._skipped(e["from"], None, "pair",
+                                                    e["reason"])))
+    return pairs
 
 
 def step(ledger: Ledger, session: series.Session, state: ChannelState | None,

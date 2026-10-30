@@ -19,10 +19,12 @@ circuit is left alone.
 Each turn runs in a process of its own (:mod:`services.api.apart`): a
 sounding is read and its state fitted, seconds of numerics. The states are
 kept :data:`KEEP_S` in :func:`folder`, under the image's build, since a
-forecast is scored against a later sounding on its own range; the events
-are kept ``LIVE_KEEP_DAYS`` days (30). :func:`events` reads them out, each
-with its forecast and truth side by side, for a copy that outlasts them
-(``tools/pull_live_events.py``).
+forecast is scored against a later sounding on its own range. The events
+are kept for good: they are the live forecast's record, and a period of them
+is summed up as a period of the archive is (:mod:`services.api.sim_period`).
+``LIVE_KEEP_DAYS`` above 0 forgets those older than that many days.
+:func:`events` reads them out, each with its forecast and truth side by
+side, for a copy kept elsewhere (``tools/pull_live_events.py``).
 
 The scans set the pace. At the default of a scan every 15 minutes, a
 five-minute circuit's forecasts are issued and scored three soundings at a
@@ -51,8 +53,8 @@ TIMEOUT_S = 600.0
 #: Seconds a sounding's state is kept for the forecasts that need it.
 KEEP_S = 6 * 3600.0
 
-#: Days of events kept.
-KEEP_DAYS = 30.0
+#: Days of events kept; 0 keeps them all.
+KEEP_DAYS = 0.0
 
 #: Seconds of pairs the page's short and long figures cover.
 HOUR_S, DAY_S = 3600.0, 86400.0
@@ -208,7 +210,7 @@ def advance(conn, root: Path, cache: Path, *,
             conn.commit()
             taken += 1
     newest = db.one(conn, "SELECT MAX(epoch) AS t FROM live_event")["t"]
-    if newest is not None:
+    if newest is not None and keep_days > 0:
         conn.execute("DELETE FROM live_event WHERE epoch < ?",
                      (newest - keep_days * 86400.0,))
         conn.commit()
