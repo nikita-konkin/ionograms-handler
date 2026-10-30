@@ -284,10 +284,23 @@ def test_a_period_with_no_live_forecasts_is_not_found(tmp_path):
         _submit(conn, tmp_path, day + dt.timedelta(days=1), source="live")
 
 
-def test_a_live_period_defaults_to_the_shortest_lead_kept(tmp_path):
+@pytest.fixture
+def summed(monkeypatch):
+    """A live run summed up at once, so that no run is left for the worker when
+    a test ends, to be taken for the next test's."""
+    def total(out):
+        (Path(out) / "summary.json").write_text(json.dumps({"pairs": 0}),
+                                                encoding="utf-8")
+
+    monkeypatch.setattr(sim_period, "_sum", total)
+
+
+def test_a_live_period_defaults_to_the_shortest_lead_kept(tmp_path, summed):
     conn, day = _live_conn(tmp_path), _day()
     _live(conn, day, 6)
-    assert _submit(conn, tmp_path, day, source="live")["lead_s"] == 600.0, \
+    run = _submit(conn, tmp_path, day, source="live")
+    _settled(tmp_path / "sim", run["id"])
+    assert run["lead_s"] == 600.0, \
         "a live period did not default to the shortest lead kept"
 
 
@@ -298,11 +311,12 @@ def test_a_live_period_at_a_lead_never_forecast_is_not_found(tmp_path):
         _submit(conn, tmp_path, day, source="live", lead_s=900.0)
 
 
-def test_a_live_run_says_it_was_live(tmp_path):
+def test_a_live_run_says_it_was_live(tmp_path, summed):
     conn, day = _live_conn(tmp_path), _day()
     _live(conn, day, 6)
-    assert _submit(conn, tmp_path, day, source="live")["source"] == "live", \
-        "a live run does not say it was live"
+    run = _submit(conn, tmp_path, day, source="live")
+    _settled(tmp_path / "sim", run["id"])
+    assert run["source"] == "live", "a live run does not say it was live"
 
 
 def test_an_unknown_source_is_refused(tmp_path, scored):
