@@ -136,6 +136,14 @@ def live_events(tx: str, rx: str, request: Request, after: int = 0,
                     media_type="application/x-ndjson")
 
 
+@router.get("/sim/live/{tx}/{rx}/reception", dependencies=[Depends(require_read)])
+def reception(tx: str, rx: str, request: Request, station: str | None = None) -> dict:
+    from . import sim_reception
+
+    return sim_reception.view(request.app.state.db, request.app.state.live,
+                              tx, rx, station)
+
+
 @router.get("/sim/{sounding_id}/console", response_class=HTMLResponse,
             include_in_schema=False, dependencies=[Depends(require_read)])
 def sim_console(sounding_id: int, request: Request) -> HTMLResponse:

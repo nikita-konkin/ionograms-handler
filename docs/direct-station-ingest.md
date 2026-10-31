@@ -35,14 +35,27 @@ does; the config must name the correct station and server URL.
 
 Adapt `deploy/ionograms-direct-upload.service` to the **installed agent's**
 user, Python executable, checkout, config and secret EnvironmentFile. The
-provided source path is `/home/samsung/ionograms`, for NIC2. Then:
+provided source path is `/home/samsung/ionograms`, for NIC2. Its checkout is
+`/home/samsung/projects/ionograms-handler`; the unit uses `/usr/bin/python3`,
+as the NIC2 agent installation in `deploy/README.md` does. Check that this
+interpreter can import the uploader before enabling the unit:
 
 ```sh
+cd /home/samsung/projects/ionograms-handler
+/usr/bin/python3 -c 'import sys; assert sys.version_info >= (3, 8), sys.version'
+/usr/bin/python3 -m services.agent.upload --help
 sudo install -m 644 deploy/ionograms-direct-upload.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ionograms-direct-upload.service
 journalctl -u ionograms-direct-upload.service -n 30 --no-pager
 ```
+
+If the service is already enabled, use `sudo systemctl restart
+ionograms-direct-upload.service` after `daemon-reload` to apply a changed
+unit. `status=203/EXEC` means systemd could not execute the program in
+`ExecStart`: verify that path exists and is executable. An incorrect
+`WorkingDirectory` instead normally reports `200/CHDIR`. Neither error
+means the hub refused an upload; the Python uploader has not started yet.
 
 It checks every 15 seconds, sends at most eight files per pass, and ignores
 files modified in the last 60 seconds. It streams bytes rather than loading

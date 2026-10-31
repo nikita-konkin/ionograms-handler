@@ -614,6 +614,29 @@ HDF5 products to local hub storage and a separate worker ingests them without
 waiting for archive discovery. Set `DIRECT_INGEST=1` and run the station
 uploader; the simulator's polling and follow controls stay the same.
 
+At the top of `/ui/sim/live`, **Forecast and reception now** pairs a synthetic
+ionogram on the left with the receiving sweep on the right. Select the agent
+station if its receiver alias is not uniquely mapped. The right pane uses
+the same SSE column stream as `/ui/live`, reconnects from a snapshot, and
+leaves missing columns blank. Both panes show the sweep's frequency and
+group-delay extent with the Live view's colour scale. The receiving timestamp
+and count of received columns remain visible, including between sweeps.
+
+The left pane is generated from an already issued persistence forecast for
+that sweep (within 30 seconds of its start, shortest matching lead). It runs
+the synthetic sounding generator, not a copy of the previous measurement.
+Received powers do not enter synthesis; they supply only the display axes.
+A fixed random seed keeps a given forecast stable across refreshes. A single
+background worker bounds the cache/queue to eight forecasts and each build to
+120 seconds. While building, or when no forecast matches, the page says so.
+Generation begins when the live sweep header is available; it does not need
+to wait for the completed HDF5 file. Fields the observed state cannot measure,
+such as its fading prior, remain model assumptions in the synthetic image.
+
+Scores and historical pairs below still update every 30 seconds, without
+reloading the page or interrupting the receiving stream. This feature needs
+only an updated API image; the existing station live agent is unchanged.
+
 `GET /sim/live/{tx}/{rx}/events?after=ID` reads a circuit's events out as
 JSON Lines, oldest first, each as `muf sim live --out` writes it -- a score
 with its forecast and truth side by side -- with the hub's id added.

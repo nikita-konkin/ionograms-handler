@@ -31,6 +31,26 @@ Every key here must exist in `en.py` and vice versa -- see the parity test.
 from __future__ import annotations
 
 MESSAGES: dict[str, str] = {
+    "sim_pair.js.title": "Прогноз и текущий приём",
+    "sim_pair.js.station": "Приёмная станция",
+    "sim_pair.js.prediction": "Модельная ионограмма",
+    "sim_pair.js.receiving": "Принимаемая ионограмма",
+    "sim_pair.js.note": "Синтетическая реализация выданного инерционного прогноза. "
+        "Оси соответствуют принимаемой развёртке; шкала цвета, как в оперативном "
+        "просмотре: 6–36 дБ над шумом. Пустые столбцы ещё не получены.",
+    "sim_pair.js.choose": "Выберите станцию",
+    "sim_pair.js.waiting": "Ожидание зондирования",
+    "sim_pair.js.no_forecast": "Для этого зондирования пока нет подходящего "
+        "выданного прогноза",
+    "sim_pair.js.building": "Формируется модельная ионограмма…",
+    "sim_pair.js.failed": "Не удалось сформировать модельную ионограмму",
+    "sim_pair.js.frequency": "Частота, МГц",
+    "sim_pair.js.delay": "Групповая задержка, мс",
+    "sim_pair.js.progress": "Зондирование {at} · принято {n}/{total} столбцов",
+    "sim_pair.js.connecting": "Подключение…",
+    "sim_pair.js.connected": "Поток данных подключён",
+    "sim_pair.js.disconnected": "Связь потеряна; повторное подключение…",
+    "sim_pair.js.issued": "По данным {at} · прогноз на {due}",
 
     # -- chrome ---------------------------------------------------------
     "app.title": "Ионограммы",

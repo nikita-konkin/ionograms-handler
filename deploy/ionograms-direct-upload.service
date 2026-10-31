@@ -9,10 +9,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=samsung
-WorkingDirectory=/home/samsung/ionograms-handler
+WorkingDirectory=/home/samsung/projects/ionograms-handler
 Environment=AGENT_CONFIG=/home/samsung/agent.json
 EnvironmentFile=/etc/default/chirp-agent
-ExecStart=/home/samsung/.venv38/bin/python -m services.agent.upload --source /home/samsung/ionograms --state /home/samsung/.local/state/ionograms-upload.json
+ExecStart=/usr/bin/python3 -m services.agent.upload --source /home/samsung/ionograms --state /home/samsung/.local/state/ionograms-upload.json
 Restart=on-failure
 RestartSec=15
 Nice=10

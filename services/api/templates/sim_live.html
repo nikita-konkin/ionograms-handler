@@ -3,10 +3,11 @@
 {% block hint %}{{ t('sim_live.hint') }}{% endblock %}
 {% block body %}
 <style>
-  .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(22rem, 1fr));
+  .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
           gap:.75rem; }
   .pair figure { margin:0; }
   .pair img { width:100%; height:auto; }
+  .pair canvas { width:100%; height:360px; display:block; }
 </style>
 {%- macro num(value, spec, unit) -%}
   {%- if value is none %}-{% else %}{{ spec|format(value) }} {{ unit }}{% endif -%}
@@ -26,7 +27,7 @@
     {%- else %}<button id="liveFollow" class="pill" data-needs="archive">{{ t('sim_live.follow') }}</button>{% endif %}
     <span id="liveSay" class="note"></span></p>
   {% if view %}
-  <p class="note">{{ t('sim_live.taken', at=view.taken_at|msk) }}
+  <p class="note" id="simTaken">{{ t('sim_live.taken', at=view.taken_at|msk) }}
     {%- if view.interval_s %} · {{ t('sim_live.interval', min='%g'|format(view.interval_s / 60)) }}{% endif %}
     {%- if every > 0 %} · {{ t('sim_live.every', s='%g'|format(every)) }}{% endif %}</p>
   {% else %}
@@ -38,6 +39,23 @@
   <p class="note"><a href="/ui/sim">{{ t('sim_live.back') }}</a></p>
 </div>
 
+{% if chosen %}
+<div class="panel" id="simReception" data-tx="{{ chosen.tx }}" data-rx="{{ chosen.rx }}">
+  <h2>{{ t('sim_pair.js.title') }}</h2>
+  <label>{{ t('sim_pair.js.station') }} <select id="simStation"></select></label>
+  <span id="simConnection" class="note"></span>
+  <p class="note">{{ t('sim_pair.js.note') }}</p>
+  <div class="pair">
+    <figure><h3>{{ t('sim_pair.js.prediction') }}</h3><canvas id="simPrediction" role="img" aria-label="{{ t('sim_pair.js.prediction') }}"></canvas>
+      <figcaption id="simPredictionInfo" class="note"></figcaption></figure>
+    <figure><h3>{{ t('sim_pair.js.receiving') }}</h3><canvas id="simReceiving" role="img" aria-label="{{ t('sim_pair.js.receiving') }}"></canvas>
+      <figcaption id="simReceivingInfo" class="note"></figcaption>
+      <progress id="simProgress" max="1" value="0" style="width:100%"></progress></figure>
+  </div>
+</div>
+<script src="/static/sim-reception.js"></script>
+{% endif %}
+<div id="simHistory">
 {% if view %}
 {% for lead in view.leads %}
 <div class="panel">
@@ -115,6 +133,7 @@
 {% endfor %}</pre>
 </div>
 {% endif %}
+</div>
 
 {% if chosen %}
 <script>
@@ -138,5 +157,17 @@ gate('archive');
   tick(); setInterval(tick, 1000);
 })();
 </script>
-{% if every > 0 %}<script>setTimeout(() => location.reload(), 30000);</script>{% endif %}
+{% if every > 0 %}<script>
+setInterval(async () => {
+  try {
+    const response = await fetch(location.href);
+    if (!response.ok) return;
+    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const history = page.getElementById('simHistory');
+    if (history) document.getElementById('simHistory').replaceChildren(...history.childNodes);
+    const taken = page.getElementById('simTaken'), oldTaken = document.getElementById('simTaken');
+    if (taken && oldTaken) oldTaken.replaceWith(taken);
+  } catch (_) { /* retain the last scored results while disconnected */ }
+}, 30000);
+</script>{% endif %}
 {% endblock %}
