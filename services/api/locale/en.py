@@ -36,6 +36,7 @@ MESSAGES: dict[str, str] = {
     "sim_pair.js.no_forecast": "No issued forecast matches this sounding yet",
     "sim_pair.js.building": "Generating the simulated ionogram…",
     "sim_pair.js.failed": "Could not generate the simulated ionogram",
+    "sim_pair.js.gone": "The issued forecast's synthetic sounding is no longer kept",
     "sim_pair.js.frequency": "Frequency, MHz",
     "sim_pair.js.delay": "Group delay, ms",
     "sim_pair.js.progress": "Sounding {at} · {n}/{total} columns received",
