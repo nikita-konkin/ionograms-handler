@@ -395,6 +395,18 @@ muf sim summary out/forecast/feb --by hour,day,sun,lead,fmuf
 muf sim live /data/ionozond/2026.10.24/lfm_ionogram-NIC2-*.h5 \
     --circuit NIC2:yoshkar-ola --out out/forecast/live.jsonl
 
+# a frozen benchmark of the simulator (below): every sounding of the circuit
+# by its SHA-256, format and the phase it carries; whole UTC days split into
+# tune, validation and a held-out final; the diagnostic soundings; every
+# parameter and seed. Then the run: each diagnostic sounding reconstructed
+# and read back, with its picture in gallery/, and each split forecast at
+# the circuit's next two soundings; the final split only with --final
+muf sim bench inventory /data/ionozond --root /data
+muf sim bench freeze /data/ionozond/2026.10.24 --root /data --out bench/nic2 \
+    --circuit NIC2:yoshkar-ola --split tune=2026-10-24 \
+    --diagnostic lfm_ionogram-NIC2-yoshkar-ola-ch0-000-1792831515.00.h5
+muf sim bench run bench/nic2/manifest.json --root /data --out bench/nic2/run1
+
 # level 0: the generator against closed-form theory
 muf sim verify
 ```
@@ -561,6 +573,77 @@ sounding and the next is the natural reference.
 
 The level-2 check also reads each trace's width off every synthetic
 sounding and sets the real one against them.
+
+### The benchmark: `muf sim bench`
+
+`muf sim check` answers for one sounding; `muf sim bench` keeps the answer
+for a set of them, so a change to the simulator can be held against the
+same soundings, parameters and seeds as before it. It keeps three
+questions apart:
+
+- **Reconstruction**: a real sounding's state, synthesised at the
+  sounding's own time, set against the sounding itself.
+- **Recovery**: the same synthetic soundings read back, set against the
+  state they were made from. This is level 1 above.
+- **Forecast**: a state persisted a lead ahead, set against the sounding
+  then, as `muf sim series` scores it.
+
+**The manifest** is written once, by `freeze`. It names every input by its
+path under a root and its SHA-256, with its circuit, time, format and the
+phase it carries:
+
+- `lfs`: the whole dechirped record.
+- `z`: v2's whole record.
+- `echo window`: the record around the echoes only.
+- `power`: no voltage at all.
+
+A file whose sweep is cut short, or that does not read, is set aside with
+its reason. So is a second file of one sounding: a station may keep both
+the capture and the product cut from it, and the product is kept, being
+what the live loop reads. Whole UTC days, never single soundings, go into `tune`,
+`validation` and `final`, so neighbouring soundings never sit on both sides
+of a split. The manifest also lists the diagnostic soundings and every
+parameter and seed. Its leads are the circuit's next two soundings at the
+median of all its gaps.
+
+**A run** first refuses any input that has gone or changed. It writes:
+
+- one row per diagnostic sounding to `diagnosis.jsonl`, with its picture in
+  `gallery/`: the sounding, a synthetic copy, the state's traces over the
+  sounding, and the copies' mean less the sounding;
+- each split's forecast at each lead to `forecast/<split>/<lead>s`;
+- what could not be scored, with its reason, to `skipped.jsonl`;
+- the record to `run.json`, with a SHA-256 over every row but its timings.
+
+Two runs of one manifest give one digest. The final split is scored only
+with `--final`, so it stays held out until a change is chosen.
+
+Reconstruction reads two things off the copies against the real sounding:
+
+- **Levels.** Each mode's ridge, the brightest cell within the five-bin
+  strip, gives `peak_bias_db`: the copies over the real sounding, with
+  power averaged linearly over the rows before taking dB. The power over
+  the noise summed 6 bins either side gives `energy_bias_db`, which a
+  broad echo keeps when its ridge is low. A copy that concentrates an
+  echo's power reads high at the peak and level in energy. A C/N0 read
+  high reads high in both. Rows another mode's strip reaches, or that the
+  carrier suppression touched, are left out. The extractor often breaks one
+  trace into fragments whose strips overlap, so the same two figures are
+  also taken for all the modes together, over the union of their strips,
+  where each cell counts once.
+- **Coverage.** An echo is a block of 0.1 MHz by five range bins holding a
+  cell at the 43 dB detection threshold or above:
+  - `missed` is the share of the real echoes a copy lacks;
+  - `false` is the share of a copy's echoes the real sounding lacks;
+  - `untraced` is the share of the real echoes off every trace of the
+    state, which the extractor never found.
+
+  The threshold sees echoes the extractor missed, which a mask built
+  around the extracted traces cannot. It still is not a reviewed echo
+  mask, and an echo under 13 dB is not counted.
+
+The closed loop's correlation, recovery errors and MUF verdict go into the
+same row.
 
 ### Seeing it: the console
 

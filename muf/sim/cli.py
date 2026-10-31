@@ -297,6 +297,50 @@ def cmd_live(args) -> int:
     return 0
 
 
+def _splits(texts) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for text in texts or ():
+        name, _, days = str(text).partition("=")
+        out.setdefault(name, []).extend(d for d in days.split(",") if d)
+    return out
+
+
+def cmd_bench(args) -> int:
+    from ..cli import _load_registry
+    from . import bench, series
+
+    if args.bench_command == "inventory":
+        rows = bench.inventory(args.paths, args.root)
+        print(bench.format_inventory(rows))
+        if args.json:
+            args.json.write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")
+            print(f"-> {args.json}")
+        return 0
+    if args.bench_command == "freeze":
+        params = {"copies": args.copies, "seed": args.seed,
+                  "forecast_copies": args.forecast_copies,
+                  "leads_s": (None if args.lead is None
+                              else [float(v) for v in args.lead.split(",") if v])}
+        manifest = bench.freeze(args.paths, args.root, args.out,
+                                splits=_splits(args.split),
+                                diagnostic=[Path(d).name for d in args.diagnostic],
+                                params=params,
+                                circuit=args.circuit)
+        print(bench.format_inventory([*manifest["entries"], *manifest["set_aside"]]))
+        print(f"-> {Path(args.out) / 'manifest.json'}")
+        return 0
+    record = bench.run(args.manifest, args.out, root=args.root,
+                       diagnostic=not args.no_diagnostic, forecast=not args.no_forecast,
+                       final=args.final, jobs=args.jobs,
+                       stations=_load_registry(args.stations))
+    for row in series.read_rows(Path(args.out) / "diagnosis.jsonl"):
+        print(bench.format_diagnosis(row))
+    print(f"{record['diagnosed']} diagnosed, {record['skipped']} skipped, "
+          f"digest {record['digest'][:16]}")
+    print(f"-> {Path(args.out) / 'run.json'}")
+    return 0
+
+
 def cmd_verify(args) -> int:
     from . import verify
 
@@ -531,6 +575,50 @@ def register(sub) -> None:
     p.add_argument("--knot-mhz", type=float, default=0.1)
     p.add_argument("--stations", type=Path, metavar="FILE")
     p.set_defaults(func=cmd_live)
+
+    bench = ss.add_parser("bench", help="a frozen benchmark against real soundings: "
+                                        "reconstruction, recovery and forecast")
+    bs = bench.add_subparsers(dest="bench_command", required=True)
+    p = bs.add_parser("inventory", help="every sounding by day, format and the phase "
+                                        "it carries")
+    p.add_argument("paths", nargs="+", type=Path, help="soundings or folders of them")
+    p.add_argument("--root", type=Path, required=True,
+                   help="the archive's root, which paths are kept against")
+    p.add_argument("--json", type=Path, help="write every entry here")
+    p.set_defaults(func=cmd_bench)
+    p = bs.add_parser("freeze", help="the benchmark's manifest: inputs and their "
+                                     "SHA-256, splits, diagnostic soundings, params")
+    p.add_argument("paths", nargs="+", type=Path, help="soundings or folders of them")
+    p.add_argument("--root", type=Path, required=True,
+                   help="the archive's root, which paths are kept against")
+    p.add_argument("--out", type=Path, required=True, help="folder for manifest.json")
+    p.add_argument("--circuit", metavar="TX:RX",
+                   help="the circuit, when the soundings hold more than one")
+    p.add_argument("--split", action="append", metavar="NAME=DAY[,DAY...]",
+                   help="UTC days, YYYY-MM-DD, of a split: tune, validation or final")
+    p.add_argument("--diagnostic", nargs="*", default=[], metavar="SOUNDING",
+                   help="soundings reconstructed one by one, with pictures")
+    p.add_argument("--copies", type=int, default=12,
+                   help="synthetic soundings of each diagnostic one; 12 for a verdict")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--forecast-copies", type=int, default=0,
+                   help="synthetic soundings of each forecast for the ionograms")
+    p.add_argument("--lead", metavar="S[,S...]",
+                   help="seconds ahead (default the circuit's next two soundings)")
+    p.set_defaults(func=cmd_bench)
+    p = bs.add_parser("run", help="a frozen benchmark run: diagnosis.jsonl, gallery/, "
+                                  "forecast/, skipped.jsonl, run.json")
+    p.add_argument("manifest", type=Path)
+    p.add_argument("--root", type=Path, required=True,
+                   help="the archive's root the manifest's paths are under")
+    p.add_argument("--out", type=Path, required=True, help="folder for the run")
+    p.add_argument("--final", action="store_true",
+                   help="score the held-out final split too")
+    p.add_argument("--no-diagnostic", action="store_true")
+    p.add_argument("--no-forecast", action="store_true")
+    p.add_argument("--jobs", type=int, default=1, help="pairs scored at once")
+    p.add_argument("--stations", type=Path, metavar="FILE")
+    p.set_defaults(func=cmd_bench)
 
     p = ss.add_parser("verify", help="level 0: the generator against closed-form "
                                      "theory (fading, S(tau, nu), DBPSK)")
