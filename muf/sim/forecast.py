@@ -464,11 +464,13 @@ def score(forecast: ChannelState, truth: ChannelState, *,
 
 def sounded(state: ChannelState, copies: int, *, seed: int = 0,
             gate_km: tuple[float, float] | None = None,
+            window: int = spectro.DEFAULT_WINDOW,
             workdir: str | Path | None = None) -> list:
     """``state``'s synthetic soundings, seeds ``seed`` on, as ionograms.
 
-    Each 80 MB ``.lfs`` is written, loaded at ``gate_km`` and deleted at
-    once, so a run of them holds one on disk at a time.
+    Each 80 MB ``.lfs`` is written, loaded at ``gate_km`` with FFTs of
+    ``window`` samples and deleted at once, so a run of them holds one on
+    disk at a time.
     """
     own = workdir is None
     folder = Path(tempfile.mkdtemp(prefix="muf-forecast-")) if own else Path(workdir)
@@ -478,7 +480,7 @@ def sounded(state: ChannelState, copies: int, *, seed: int = 0,
             path = folder / sounding.default_name(state, tag=f"copy{k:02d}")
             sounding.write_lfs(state, path, seed=seed + k)
             try:
-                out.append(observe.load(path, gate_km=gate_km))
+                out.append(observe.load(path, window=window, gate_km=gate_km))
             finally:
                 path.unlink()
     finally:

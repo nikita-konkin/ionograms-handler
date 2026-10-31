@@ -636,6 +636,10 @@ and count of received columns remain visible, including between sweeps.
 The left pane is generated from an already issued persistence forecast for
 that sweep (within 30 seconds of its start, shortest matching lead). It runs
 the synthetic sounding generator, not a copy of the previous measurement.
+The synthetic sounding is read back with the FFT window the sweep is received
+with (16384 samples on the station's live feed), so its range bins are the
+received ones, and it is folded into the page's raster by the maximum, as the
+received sweep is, rather than interpolated.
 Received powers do not enter synthesis; they supply only the display axes.
 A fixed random seed keeps a given forecast stable across refreshes. A single
 background worker bounds the cache/queue to eight forecasts and each build to
