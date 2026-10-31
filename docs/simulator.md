@@ -608,7 +608,11 @@ SNR, and the sun's zenith angle at the control point. The loop is only as
 live as the scans: at the
 default scan of every 15 minutes a five-minute circuit is forecast and
 scored three soundings at a time, so a hub that shows it sets
-`ARCHIVE_SCAN_INTERVAL_S` to 60-120.
+`ARCHIVE_SCAN_INTERVAL_S` to 60-120. When the NAS itself is slow, use
+[direct station delivery](direct-station-ingest.md): the laptop pushes completed
+HDF5 products to local hub storage and a separate worker ingests them without
+waiting for archive discovery. Set `DIRECT_INGEST=1` and run the station
+uploader; the simulator's polling and follow controls stay the same.
 
 `GET /sim/live/{tx}/{rx}/events?after=ID` reads a circuit's events out as
 JSON Lines, oldest first, each as `muf sim live --out` writes it -- a score
