@@ -20,11 +20,18 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
 from . import db
+
+
+def direct_root() -> Path:
+    """Local station-file storage, also used by CLI ingestion without FastAPI."""
+    return Path(os.environ.get("DIRECT_ROOT") or
+                Path(db.DEFAULT_DB).parent / "station-files").resolve()
 
 #: Columns copied straight from a pipeline row into `sounding`.
 SOUNDING_COLUMNS = (
@@ -107,6 +114,27 @@ def ingest_row(conn: sqlite3.Connection, row: dict, path: Path,
         # refusing: the renderer will still find it on this host, and a
         # half-ingested archive is worse than a non-portable row.
         relative = path.resolve().as_posix()
+
+    # A later NAS scan may add other extraction methods. Keep the local copy
+    # as the read path, so live forecasting cannot be sent back onto the NAS.
+    # Only stat the known local path; never probe the old network path here.
+    try:
+        path.resolve().relative_to(direct_root())
+    except ValueError:
+        pass
+    else:
+        relative = path.resolve().as_posix()
+
+    existing = db.one(conn, "SELECT path FROM sounding WHERE file = ?", (row["file"],))
+    if existing:
+        stored = Path(existing["path"])
+        try:
+            stored.relative_to(direct_root())
+        except ValueError:
+            pass
+        else:
+            if stored.is_file():
+                relative = stored.as_posix()
 
     values = {name: _clean(row.get(name)) for name in SOUNDING_COLUMNS}
     conn.execute(

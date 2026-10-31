@@ -1,0 +1,22 @@
+# NIC2 laptop. Adjust User, WorkingDirectory, Python, and paths for another
+# station. Reuse the existing agent's EnvironmentFile; never copy its token
+# into this unit or a checkout.
+[Unit]
+Description=Direct completed ionogram delivery to the simulator hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=samsung
+WorkingDirectory=/home/samsung/ionograms-handler
+Environment=AGENT_CONFIG=/home/samsung/agent.json
+EnvironmentFile=/etc/default/chirp-agent
+ExecStart=/home/samsung/.venv38/bin/python -m services.agent.upload --source /home/samsung/ionograms --state /home/samsung/.local/state/ionograms-upload.json
+Restart=on-failure
+RestartSec=15
+Nice=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

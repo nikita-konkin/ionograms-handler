@@ -68,6 +68,9 @@ services:
       # are: a hub that shows it scans every minute or two, not every 15.
       LIVE_INTERVAL_S: "${LIVE_INTERVAL_S:-60}"
       LIVE_KEEP_DAYS: "${LIVE_KEEP_DAYS:-0}"
+      # Completed station HDF5 uploads go to /data/station-files and are
+      # ingested independently of NAS scans. Uses the existing agent token.
+      DIRECT_INGEST: "${DIRECT_INGEST:-0}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`
       # discards ~5 MB of index files and the next model run re-downloads them.

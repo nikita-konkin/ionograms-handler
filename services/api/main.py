@@ -31,6 +31,7 @@ from . import (
     build,
     control_routes,
     db,
+    direct,
     i18n,
     live,
     live_routes,
@@ -119,6 +120,7 @@ async def lifespan(app: FastAPI):
     # The simulator's forecasts, issued and scored as the scans store
     # soundings. LIVE_INTERVAL_S=0 turns it off.
     stop_live = sim_live.start(app)
+    stop_direct = direct.start(app)
 
     # No candidate survey here, deliberately. It is a recursive walk of the
     # archive, and doing it at boot means every restart walks the whole mount
@@ -144,6 +146,7 @@ async def lifespan(app: FastAPI):
             target=_warm, args=(app, roots), daemon=True, name="census-warm")
         app.state.census_warm.start()
     yield
+    stop_direct()
     app.state.live.close()
     stop_live()
     app.state.db.close()
@@ -175,6 +178,7 @@ app.include_router(control_routes.router)
 app.include_router(live_routes.router)
 app.include_router(read_routes.router)
 app.include_router(sim_routes.router)
+app.include_router(direct.router)
 app.include_router(sounder_routes.router)
 app.include_router(web_routes.router)
 
