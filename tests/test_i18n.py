@@ -58,6 +58,8 @@ PAGES = ["/ui", "/ui/series", "/ui/soundings", "/ui/sources",
          "/ui/archives", "/ui/forecast"]
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "services/api/templates"
+SCRIPTS = [p for p in (TEMPLATES.parent / "static").glob("*.js")
+           if p.name != "plotly.min.js"]
 
 
 # --------------------------------------------------------------------------
@@ -392,8 +394,8 @@ def _keys_in_templates() -> dict[str, set[str]]:
     # Comments first. `base.html` explains the helper by showing a call, and a
     # key named in prose is not a key the page asks for.
     comment = re.compile(r"\{#.*?#\}|/\*.*?\*/", re.S)
-    for template in sorted(TEMPLATES.glob("*.html")):
-        body = comment.sub(" ", template.read_text())
+    for template in sorted([*TEMPLATES.glob("*.html"), *SCRIPTS]):
+        body = comment.sub(" ", template.read_text(encoding="utf-8"))
         for one, two in call.findall(body):
             found.setdefault(one or two, set()).add(template.name)
     return found
@@ -502,7 +504,7 @@ def test_every_key_the_browser_looks_up_is_shipped_to_the_browser():
 
     shipped = set(i18n.js_catalog("en")["messages"])
     wrong: list[str] = []
-    for path in sorted(TEMPLATES.glob("*.html")):
+    for path in sorted([*TEMPLATES.glob("*.html"), *SCRIPTS]):
         # Comments first. `base.html` documents the helper with a literal
         # `T('key', ...)` in prose, which is an example and not a call --
         # exactly the false positive the template-key scanner above strips for.

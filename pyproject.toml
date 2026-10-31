@@ -54,7 +54,7 @@ packages = ["muf", "muf.extractors", "muf.reference", "muf.sim", "services",
 # modules -- without this an installed copy starts and then 500s on the first
 # page render.
 [tool.setuptools.package-data]
-"services.api" = ["schema.sql", "templates/*.html"]
+"services.api" = ["schema.sql", "templates/*.html", "static/*.js"]
 "services.publish" = ["site/*", "site/**/*"]
 
 [tool.ruff]

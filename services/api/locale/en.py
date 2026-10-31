@@ -24,6 +24,25 @@ Those messages must also stay markup-free. They are written into the DOM with
 from __future__ import annotations
 
 MESSAGES: dict[str, str] = {
+    "sim_pair.js.title": "Forecast and reception now",
+    "sim_pair.js.station": "Receiving station",
+    "sim_pair.js.prediction": "Simulated ionogram",
+    "sim_pair.js.receiving": "Ionogram being received",
+    "sim_pair.js.note": "Synthetic realisation of the issued persistence forecast. "
+        "Both panes use the receiving sweep's axes and the Live view's "
+        "6–36 dB colour scale above noise. Blank columns have not arrived yet.",
+    "sim_pair.js.choose": "Choose a station",
+    "sim_pair.js.waiting": "Waiting for a sounding",
+    "sim_pair.js.no_forecast": "No issued forecast matches this sounding yet",
+    "sim_pair.js.building": "Generating the simulated ionogram…",
+    "sim_pair.js.failed": "Could not generate the simulated ionogram",
+    "sim_pair.js.frequency": "Frequency, MHz",
+    "sim_pair.js.delay": "Group delay, ms",
+    "sim_pair.js.progress": "Sounding {at} · {n}/{total} columns received",
+    "sim_pair.js.connecting": "Connecting…",
+    "sim_pair.js.connected": "Live stream connected",
+    "sim_pair.js.disconnected": "Connection lost; retrying…",
+    "sim_pair.js.issued": "Issued from {at} · forecast for {due}",
 
     # -- chrome ---------------------------------------------------------
     "app.title": "Ionograms",
