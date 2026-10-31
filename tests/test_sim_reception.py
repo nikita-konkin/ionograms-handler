@@ -78,7 +78,8 @@ def test_a_synthetic_trace_is_as_thin_as_the_live_sweep_resolves():
         sim_reception.render(forecast.to_dict(), head)["cells"]),
         np.uint8).reshape(120, 96)[20:100] / 4
     width = np.median([np.sum(c > c.max() - 6) for c in cells])
-    assert width <= 3, f"a flat echo spreads over {width:g} live rows, not the 3 a 16384-sample window resolves"
+    assert width <= 3, \
+        f"a flat echo spreads over {width:g} live rows, not the 3 its window resolves"
 
 
 def test_station_mapping_and_no_forecast_do_not_show_an_unrelated_image(tmp_path,
