@@ -135,7 +135,8 @@ MESSAGES: dict[str, str] = {
     # -- live forecasts ---------------------------------------------------
     "sim_live.title": "Live forecasts",
     "sim_live.hint":
-        "Persistence for each circuit's next two soundings, scored as they come",
+        "The channel simulator's persistence forecast for each circuit's next two "
+        "soundings, scored as they come",
     "sim_live.off": "The live loop is off on this hub: LIVE_INTERVAL_S is 0.",
     "sim_live.none": "No soundings yet, so no circuit to follow.",
     "sim_live.legend":
@@ -169,7 +170,7 @@ MESSAGES: dict[str, str] = {
     "sim_live.clock_why": "set apart from the running figures: {why}",
     "sim_live.modes": "modes: {matched} matched, {missed} missed, {false} false",
     "sim_live.delay": "delay",
-    "sim_live.img.forecast": "Forecast: the {at} sounding",
+    "sim_live.img.simulated": "Simulated from the {at} sounding",
     "sim_live.img.truth": "Truth: the {at} sounding",
     "sim_live.figures": "Running figures",
     "sim_live.figures_note":

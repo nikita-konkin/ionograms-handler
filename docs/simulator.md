@@ -380,13 +380,18 @@ muf sim summary out/forecast/feb --by hour,day,sun,lead,fmuf
 # next two soundings -- 5 and 10 min ahead on cyprus1, 10 and 20 on NIC2, the
 # interval the median of the last six gaps; --lead S,S chooses others. A
 # forecast with no sounding within 30 s of its time lapses, and so does one
-# whose sounding has no trace. Only the modes are scored (MUF, LOF, each
-# mode's delay, C/N0 and top), and after each score the last hour's figures
-# are printed by lead, weighed as muf sim summary weighs them
-# (muf/sim/live.py). --pace 60 plays an hour a minute, 1 in real time; --out
-# keeps every event as JSON Lines. NIC2 -> Yoshkar-Ola on 24 October 2026,
-# 128 soundings, takes about 3 minutes in one process on the work PC, and
-# its 10-minute figures are the series' to the last digit
+# whose sounding has no trace. A forecast is the channel simulator's: the
+# persisted state is synthesised as a sounding at the forecast's time (seed
+# 0), its echo window kept as <source>.<lead>s.sim.echo.h5 beside the states,
+# and that product observed as a real one is; one the simulator cannot make
+# is an "unsimulated" event and is not issued. Only the modes are scored
+# (MUF, LOF, each mode's delay, C/N0 and top), the state observed from the
+# synthetic sounding against the truth's, and after each score the last
+# hour's figures are printed by lead, weighed as muf sim summary weighs them
+# (muf/sim/live.py, muf/sim/series.py simulation). --pace 60 plays an hour a
+# minute, 1 in real time; --out keeps every event as JSON Lines. The
+# simulator adds a few seconds a forecast, and its figures are not the
+# series': muf sim series scores the persisted state itself
 muf sim live /data/ionozond/2026.10.24/lfm_ionogram-NIC2-*.h5 \
     --circuit NIC2:yoshkar-ola --out out/forecast/live.jsonl
 
@@ -595,7 +600,13 @@ The hub also runs `muf sim live`'s loop on the soundings its scans store,
 and shows it at `/ui/sim/live` (`services/api/sim_live.py`): each circuit's
 forecasts waiting, the last forecast of each lead against its truth with
 both ionograms, the figures of the last hour and day, and the latest
-events. It runs only on the circuits an operator follows, with the page's
+events. The forecast's ionogram is the simulator's synthetic sounding,
+drawn by `/sim/live/simulated/{name}.png` with the same renderer and colour
+scale as the truth's `/ionogram/{id}.png`; `?like={id}` draws it on the
+range and at the range step of that truth's picture, so the two read alike.
+It is kept beside the loop's states (`LIVE_CACHE`) and forgotten with them
+after six hours, about 2 MB a forecast. Events from before the simulator scored the forecasts
+(version 1) scored the persisted state itself, and show no forecast image. It runs only on the circuits an operator follows, with the page's
 Follow and Stop buttons (the archive capability, as a rescan needs); the
 others cost nothing. A thread looks every `LIVE_INTERVAL_S` (60 s; 0 turns
 it off) for a followed circuit's soundings newer than the last it took and

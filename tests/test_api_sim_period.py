@@ -252,7 +252,9 @@ def _live(conn, day: dt.date, count: int, *, step_s: float = 600.0) -> list[dict
                              source=f"s{k}.h5")
         ledger, got = live.step(ledger, series.Session(Path(f"s{k}.h5"), epoch, "NIC2",
                                                        "yoshkar-ola"),
-                                state, lambda pending, s=state: s)
+                                state, lambda pending, s=state: s,
+                                lambda forecast: series.Simulated(
+                                    Path(f"{forecast.source}.sim.echo.h5"), forecast))
         for e in got:
             conn.execute("INSERT INTO live_event (tx, rx, epoch, kind, lead_s, "
                          "sounding_id, source_id, body) VALUES (?,?,?,?,?,?,?,?)",

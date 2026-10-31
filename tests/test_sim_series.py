@@ -203,6 +203,56 @@ def test_a_truth_on_the_forecasts_grid_is_read_not_observed(tmp_path, monkeypatc
     assert series.truth_of(a, b, tmp_path / "states").source == b.name
 
 
+def _simulated(tmp_path: Path, lead_s: float = 600.0) -> series.Simulated:
+    from muf.sim import forecast
+
+    origin = _soundings(tmp_path / "data", [T0])[0]
+    state = series.state_of(origin, tmp_path / "states")
+    return series.simulation(forecast.persist(state, lead_s), origin,
+                             tmp_path / "states")
+
+
+def test_a_simulated_forecast_keeps_its_synthetic_sounding_as_a_product(tmp_path):
+    made = _simulated(tmp_path)
+    assert made.product.name.endswith(".echo.h5") and made.product.is_file(), \
+        f"the synthetic sounding was not kept as a product: {made.product}"
+
+
+def test_a_simulated_forecast_is_observed_from_its_synthetic_sounding(tmp_path):
+    made = _simulated(tmp_path)
+    assert made.state.source == made.product.name, \
+        "the state was not observed from the synthetic sounding"
+
+
+def test_a_simulated_forecast_is_a_sounding_at_the_forecasts_time(tmp_path):
+    made = _simulated(tmp_path, 900.0)
+    assert made.state.epoch == T0 + 900.0, \
+        "the synthetic sounding is not dated at the time it forecasts"
+
+
+def test_a_simulated_forecast_keeps_its_lead(tmp_path):
+    made = _simulated(tmp_path, 900.0)
+    assert made.state.metrics.get("lead_s") == 900.0, \
+        "the state observed from the synthetic sounding lost the forecast's lead"
+
+
+def test_a_simulated_forecast_sees_the_echo_it_was_given(tmp_path):
+    made = _simulated(tmp_path)
+    assert made.state.muf_mhz == pytest.approx(13.6, abs=0.3), \
+        "the synthetic sounding did not carry the forecast's echo"
+
+
+def test_two_leads_from_one_sounding_keep_two_products(tmp_path):
+    assert _simulated(tmp_path, 300.0).product != _simulated(tmp_path, 600.0).product, \
+        "one lead's synthetic sounding overwrote another's"
+
+
+def test_a_simulated_forecast_comes_back_whole_from_its_dict(tmp_path):
+    made = _simulated(tmp_path)
+    back = series.Simulated.from_dict(json.loads(json.dumps(made.to_dict())))
+    assert back.to_dict() == made.to_dict(), "the simulation changed on its way back"
+
+
 def test_a_state_is_observed_again_when_its_parameters_change(tmp_path):
     paths = _soundings(tmp_path / "data", [T0, T0 + 300.0])
     _run(paths, tmp_path / "a")

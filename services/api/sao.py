@@ -119,16 +119,18 @@ def raster_extent(ion) -> tuple[float, float, float, float]:
     return f_lo, f_hi, r_lo, r_hi
 
 
-def load_ion(path: Path, *, gate: str | None = "auto"):
+def load_ion(path: Path, *, gate: str | None = "auto", window: int | None = None):
     """Load and gate one sounding the way every surface here must.
 
     Shared so the PNG route and the plot frame cannot gate differently: the
     image is positioned by the extent this returns, and a mismatch would put
-    the raster somewhere the axes do not agree with.
+    the raster somewhere the axes do not agree with. ``window`` reads a
+    sounding that can be transformed again at that many samples.
     """
     from muf import calibrate, loader
 
-    ion = loader.load(Path(path))
+    ion = (loader.load(Path(path)) if window is None
+           else loader.load(Path(path), window=window))
     if gate == "auto":
         found = calibrate.auto_gate(ion.power, ion.cal.vrange)
         if found is not None:

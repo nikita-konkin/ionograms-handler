@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+from pathlib import Path
 
+import numpy as np
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from . import sim, sim_live, sim_period
 from .auth import Capability, Principal, require, require_read
-from .read_routes import _sounding_path
+from .read_routes import _render, _serving, _sounding_path
 
 router = APIRouter(tags=["sim"])
 
@@ -123,6 +125,39 @@ def live_stop(tx: str, rx: str, request: Request,
               _: Principal = Depends(require(Capability.ARCHIVE))) -> dict:
     """Stop following a circuit live; its events are kept."""
     return sim_live.stop(request.app.state.db, tx, rx)
+
+
+@router.get("/sim/live/simulated/{name}.png")
+def live_simulated(name: str, request: Request, gate: str | None = None,
+                   like: int | None = None, muf: bool = True,
+                   dpi: int = Query(110, ge=40, le=300)) -> Response:
+    """A forecast as the channel simulator made it, drawn as a sounding is
+    (``/ionogram``): only the synthetic soundings the live loop keeps.
+
+    ``like`` names the truth's sounding, and the forecast is drawn on the
+    range its picture is drawn on with ``gate=auto``, and at its range step,
+    so the two read alike; each picture's own ``auto`` would gate each on its
+    own echo, and the default window reads a synthetic sounding at half the
+    resolution of a station's product.
+    """
+    from . import sao
+
+    path = sim_live.folder() / name
+    if Path(name).name != name or not name.endswith(".sim.echo.h5") \
+            or not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"no synthetic sounding {name} is kept")
+    window = None
+    if like is not None:
+        truth = _sounding_path(request, like)
+        with _serving(truth):
+            vrange = sao.load_ion(truth, gate="auto").vrange
+        gate = f"{vrange.min()},{vrange.max()}"
+        window = sim_live.window(path, float(np.median(np.abs(np.diff(vrange)))))
+    with _serving(path):
+        png = _render(path, gate=gate, trace=False, muf=muf, dpi=dpi, window=window)
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.get("/sim/live/{tx}/{rx}/events", dependencies=[Depends(require_read)])

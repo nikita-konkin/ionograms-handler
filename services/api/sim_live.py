@@ -78,6 +78,16 @@ def folder() -> Path:
             / (build.SHA or "source"))
 
 
+def window(product: Path, step_km: float) -> int:
+    """The FFT window, samples, that reads the synthetic sounding ``product``
+    at ``step_km`` a range bin: a bin is the window's frequency resolution,
+    the capture's sample rate over the window, in km."""
+    from muf import echo_window
+
+    found = echo_window.read(product, samples=False)
+    return round(abs(found.km_per_hz) * found.source_sr_hz / step_km)
+
+
 def _epoch(stamp: str) -> float:
     return _dt.datetime.fromisoformat(str(stamp)).replace(
         tzinfo=_dt.timezone.utc).timestamp()

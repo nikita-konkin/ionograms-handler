@@ -43,9 +43,9 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from .. import geometry, loader, spectro
+from .. import echo_window, geometry, loader, spectro
 from ..reference import chapman
-from . import check, clock, link, observe
+from . import check, clock, link, observe, sounding
 from . import forecast as fc
 from .state import ChannelState
 
@@ -72,6 +72,11 @@ RECOVERY_EVERY = 12
 #: Synthetic soundings that loop reads back.
 RECOVERY_COPIES = 4
 
+#: The seed of a forecast's synthetic sounding, the one the live page's
+#: reception pane sounds the same forecast with, so both show one
+#: realisation of it.
+SEED = 0
+
 #: How each sounding is observed, unless told otherwise.
 OBSERVE = {"method": "contour", "window": spectro.DEFAULT_WINDOW,
            "knot_mhz": observe.KNOT_MHZ, "doppler": observe.DEFAULT_DOPPLER_PRIOR}
@@ -90,6 +95,23 @@ class Session:
     epoch: float
     tx: str
     rx: str
+
+
+@dataclass(frozen=True)
+class Simulated:
+    """A forecast as the channel simulator gives it: the synthetic sounding
+    made from it, kept as an echo-window product, and the state observed from
+    that sounding as a real one is observed."""
+
+    product: Path
+    state: ChannelState
+
+    def to_dict(self) -> dict:
+        return {"product": str(self.product), "state": self.state.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: Mapping) -> Simulated:
+        return cls(Path(data["product"]), ChannelState.from_dict(data["state"]))
 
 
 def _skipped(source: str, to: str | None, stage: str, reason: str) -> dict:
@@ -255,6 +277,37 @@ def truth_of(origin: str | Path, path: str | Path, cache: str | Path,
                        gate_km=_gate(grid))
     return observe.from_ionogram(ion, method=params["method"], source=b.name,
                                  doppler=params["doppler"], knot_mhz=params["knot_mhz"])
+
+
+def simulation(forecast: ChannelState, origin: str | Path, cache: str | Path,
+               params: Mapping | None = None, *, stations: Mapping | None = None
+               ) -> Simulated:
+    """``forecast`` as the channel simulator gives it.
+
+    Its synthetic sounding, of seed :data:`SEED`, is written beside the states
+    in ``cache`` and cut to its echo window as a station's capture is
+    (:func:`muf.echo_window.write`); only the window is kept. The state is
+    observed from that product on the range of ``origin``, the sounding the
+    forecast was issued from, as the truth is (:func:`truth_of`), and keeps
+    the forecast's lead. ``origin`` must be in ``cache`` (:func:`state_of`).
+    """
+    cache, params = Path(cache), {**OBSERVE, **(params or {})}
+    lead = float(forecast.metrics["lead_s"])
+    lfs = sounding.write_lfs(forecast, cache / f"{Path(origin).name}.{lead:g}s.sim.lfs",
+                             seed=SEED)
+    try:
+        report = echo_window.write(lfs, out_dir=cache, stations=stations)
+    finally:
+        lfs.unlink(missing_ok=True)
+    if report.target is None:
+        raise ValueError(f"{lfs.name}: no echo window was cut: {report.detail}")
+    ion = observe.load(report.target, window=params["window"], stations=stations,
+                       gate_km=_gate(_cached_grid(cache, Path(origin))))
+    state = observe.from_ionogram(ion, method=params["method"],
+                                  source=report.target.name, doppler=params["doppler"],
+                                  knot_mhz=params["knot_mhz"])
+    state.metrics["lead_s"] = lead
+    return Simulated(report.target, state)
 
 
 def zenith_deg(state: ChannelState) -> float | None:

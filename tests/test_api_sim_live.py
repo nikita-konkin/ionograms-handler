@@ -237,10 +237,12 @@ def _held(conn, pending=()) -> None:
 
 
 def _scored(conn, epoch: float, muf_error: float, *, sounding_id=None,
-            source_id=None, tx: str = "NIC2", suspect: bool = False) -> None:
+            source_id=None, tx: str = "NIC2", suspect: bool = False,
+            simulated: str | None = None) -> None:
     bounded = {"forecast": 20.0, "truth": 20.0 - muf_error, "error": muf_error,
                "censored_truth": False, "censored_forecast": False}
     body = {"schema": "muf.sim.live.event", "version": 1, "event": "scored",
+            **({} if simulated is None else {"simulated": simulated}),
             "at": _utc(epoch), "from": "a.h5", "to": "b.h5", "lead_s": 600.0,
             "issued_at": _utc(epoch - 600.0), "valid_at": _utc(epoch),
             "clock": {"suspect": suspect, "jump_us": 1520.0 if suspect else 40.0,
@@ -319,12 +321,99 @@ def test_the_live_page_shows_the_time_in_utc_and_moscow(client):
     assert "T.msk(Date.now() / 1000, true)" in page
 
 
-def test_the_live_page_shows_both_ionograms_of_a_score(client):
+def test_the_live_page_shows_the_truths_ionogram_of_a_score(client):
     _held(client.app.state.db)
     _scored(client.app.state.db, T, 0.5, sounding_id=7, source_id=6)
-    page = client.get("/ui/sim/live").text
-    assert all(f"/ionogram/{k}.png" in page for k in (6, 7)), \
-        "the page does not show the forecast's and the truth's ionograms"
+    assert "/ionogram/7.png" in client.get("/ui/sim/live").text, \
+        "the page does not show the truth's ionogram"
+
+
+def test_the_live_page_shows_the_simulators_ionogram_as_the_forecast(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 0.5, sounding_id=7, source_id=6,
+            simulated="a.h5.600s.sim.echo.h5")
+    assert "/sim/live/simulated/a.h5.600s.sim.echo.h5.png" \
+        in client.get("/ui/sim/live").text, \
+        "the page does not show the simulator's ionogram as the forecast"
+
+
+def test_the_live_page_does_not_show_the_measured_source_as_the_forecast(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 0.5, sounding_id=7, source_id=6,
+            simulated="a.h5.600s.sim.echo.h5")
+    assert "/ionogram/6.png" not in client.get("/ui/sim/live").text, \
+        "the page shows the measured sounding as the forecast"
+
+
+def test_the_live_page_draws_the_forecast_on_its_truths_range(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 0.5, sounding_id=7, source_id=6,
+            simulated="a.h5.600s.sim.echo.h5")
+    assert "a.h5.600s.sim.echo.h5.png?like=7" in client.get("/ui/sim/live").text, \
+        "the forecast is not drawn on the range of its truth's picture"
+
+
+def test_the_live_page_says_the_forecast_is_the_simulators(client):
+    _held(client.app.state.db)
+    _scored(client.app.state.db, T, 0.5, sounding_id=7, source_id=6,
+            simulated="a.h5.600s.sim.echo.h5")
+    assert "Simulated from the" in client.get("/ui/sim/live?lang=en").text, \
+        "the forecast's caption does not say the simulator made it"
+
+
+def _product(folder: Path) -> Path:
+    from muf import echo_window
+
+    folder.mkdir(parents=True, exist_ok=True)
+    law = presets.law_mode(muf_mhz=13.6, f_lo_mhz=10.5, cn0_dbhz=45.0, spread_hz=0.5)
+    state = ChannelState(presets.cyprus1_circuit(), T, [law], sweep=SHORT, source="a")
+    lfs = sounding.write_lfs(state, folder / "a.h5.600s.sim.lfs", seed=0)
+    product = echo_window.write(lfs, out_dir=folder).target
+    lfs.unlink()
+    return product
+
+
+def test_the_simulators_ionogram_is_drawn_as_a_picture(client):
+    product = _product(sim_live.folder())
+    answer = client.get(f"/sim/live/simulated/{product.name}.png?gate=auto&dpi=60")
+    assert answer.headers["content-type"] == "image/png", \
+        f"the simulator's ionogram was not drawn: {answer.status_code}"
+
+
+def test_the_simulators_ionogram_is_drawn_on_the_range_of_its_truths(client, tmp_path):
+    from services.api import sao
+
+    product = _product(sim_live.folder())
+    law = presets.law_mode(muf_mhz=13.2, f_lo_mhz=10.5, cn0_dbhz=45.0, spread_hz=0.5)
+    truth = sounding.write_lfs(
+        ChannelState(presets.cyprus1_circuit(), T + 600.0, [law], sweep=SHORT,
+                     source="b"), tmp_path / "cyprus1_20261024_121015.lfs", seed=3)
+    found = _sounding(client.app.state.db, "2026-10-24 12:10:15", name=truth.name,
+                      tx="cyprus1")
+    vrange = sao.load_ion(truth, gate="auto").vrange
+    like = client.get(f"/sim/live/simulated/{product.name}.png?like={found}&dpi=60")
+    gated = client.get(f"/sim/live/simulated/{product.name}.png"
+                       f"?gate={vrange.min()},{vrange.max()}&dpi=60")
+    assert like.content == gated.content, \
+        "the simulator's ionogram was not drawn on the range of its truth's picture"
+
+
+def test_a_synthetic_sounding_is_read_at_the_range_step_asked_for(tmp_path):
+    product = _product(tmp_path)
+    assert sim_live.window(product, 7.32421875) == 16384, \
+        "the synthetic sounding is not read at the truth's range step"
+
+
+def test_a_simulated_ionogram_the_loop_did_not_keep_is_not_found(client):
+    assert client.get("/sim/live/simulated/nothing.sim.echo.h5.png").status_code \
+        == 404, "a synthetic sounding that is not kept was drawn"
+
+
+def test_only_the_loops_synthetic_soundings_are_drawn(client):
+    _product(sim_live.folder())
+    (sim_live.folder() / "other.json").write_text("{}", encoding="utf-8")
+    assert client.get("/sim/live/simulated/other.json.png").status_code == 404, \
+        "a file that is not a synthetic sounding was served"
 
 
 def test_the_live_page_says_when_the_loop_is_off(client):
