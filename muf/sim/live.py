@@ -14,15 +14,19 @@ and a ten-minute one 10 and 20. A forecast whose time passes with no
 sounding within the tolerance lapses, and so does one whose sounding has no
 trace; a sounding with no trace issues nothing.
 
-A pair is scored as a series scores one (:func:`muf.sim.forecast.score`):
-its MUF, LOF and mode counts, each mode's delay, C/N0 and top, and the
-working frequencies across the sweep. Of those an event keeps each
-frequency's two events and its SNR (:func:`compact`), a few kilobytes where
-the whole rows are a hundred; the ionograms are not scored, being for the
-eye. The pair also says where the sun stood at its control point. The
-running figures (:func:`figures`) are plain sums over the pairs scored, by
-lead, with no intervals; :func:`as_run` writes the events out as a series'
-run, for ``muf sim summary`` to give those.
+A forecast is the channel simulator's (:func:`muf.sim.series.simulation`):
+the persistence of the sounding's state is synthesised as a sounding at the
+forecast's time, kept as an echo-window product, and observed as a real one
+is. A forecast the simulator cannot make is not issued. The state observed
+from the synthetic sounding is what a pair scores, as a series scores one
+(:func:`muf.sim.forecast.score`): its MUF, LOF and mode counts, each mode's
+delay, C/N0 and top, and the working frequencies across the sweep. Of those
+an event keeps each frequency's two events and its SNR (:func:`compact`), a
+few kilobytes where the whole rows are a hundred; the ionograms themselves
+are not scored, being for the eye. The pair also says where the sun stood
+at its control point. The running figures (:func:`figures`) are plain sums
+over the pairs scored, by lead, with no intervals; :func:`as_run` writes the
+events out as a series' run, for ``muf sim summary`` to give those.
 
 A pair across a jump of the receiver's clock is scored like any other, with
 the verdict beside its values, and set apart from the figures
@@ -48,7 +52,7 @@ from . import forecast as fc
 from .state import ChannelState
 
 EVENT_SCHEMA = "muf.sim.live.event"
-VERSION = 1
+VERSION = 2
 
 #: The leads, in the circuit's intervals: its next two soundings.
 STEPS = (1, 2)
@@ -75,21 +79,28 @@ SIDES = ("forecast", "truth")
 
 @dataclass(frozen=True)
 class Pending:
-    """A forecast issued and waiting for its time, and the sounding it came from."""
+    """A forecast issued and waiting for its time: the sounding it came from,
+    the state the simulator was given, and what the simulator made of it.
+    One issued before forecasts were simulated has no simulation."""
 
     source: Path
     forecast: ChannelState
+    simulated: series.Simulated | None = None
 
     @property
     def lead_s(self) -> float:
         return float(self.forecast.metrics["lead_s"])
 
     def to_dict(self) -> dict:
-        return {"source": str(self.source), "forecast": self.forecast.to_dict()}
+        return {"source": str(self.source), "forecast": self.forecast.to_dict(),
+                **({} if self.simulated is None
+                   else {"simulated": self.simulated.to_dict()})}
 
     @classmethod
     def from_dict(cls, data: Mapping) -> Pending:
-        return cls(Path(data["source"]), ChannelState.from_dict(data["forecast"]))
+        return cls(Path(data["source"]), ChannelState.from_dict(data["forecast"]),
+                   None if data.get("simulated") is None
+                   else series.Simulated.from_dict(data["simulated"]))
 
 
 @dataclass(frozen=True)
@@ -148,6 +159,8 @@ def _settle(p: Pending, session: series.Session, state: ChannelState | None,
             truth: Callable[[Pending], ChannelState]) -> dict:
     """``p`` scored against the sounding of ``session``, or lapsed and why."""
     at = session.epoch
+    if p.simulated is None:
+        return _waited(p, "lapsed", at, reason="issued before forecasts were simulated")
     if state is None:
         return _waited(p, "lapsed", at, reason="the truth's sounding was not observed")
     try:
@@ -156,8 +169,9 @@ def _settle(p: Pending, session: series.Session, state: ChannelState | None,
         return _waited(p, "lapsed", at, reason=f"truth not observed: {_failure(exc)}")
     if not found.modes:
         return _waited(p, "lapsed", at, reason="no trace in the truth's sounding")
-    score = fc.score(p.forecast, found)
+    score = fc.score(p.simulated.state, found)
     return _waited(p, "scored", at, to=session.path.name,
+                   simulated=p.simulated.product.name,
                    pair={**score.pair, "zenith_deg": series.zenith_deg(p.forecast)},
                    modes=score.modes, carriers=compact(score.carriers),
                    clock=clock.verdict(p.forecast, state))
@@ -246,16 +260,19 @@ def as_run(events: Iterable[Mapping], out: str | Path, *, lead_s: float,
 
 
 def step(ledger: Ledger, session: series.Session, state: ChannelState | None,
-         truth: Callable[[Pending], ChannelState], *,
+         truth: Callable[[Pending], ChannelState],
+         simulation: Callable[[ChannelState], series.Simulated], *,
          leads: Sequence[float] | None = None,
          tolerance_s: float = TOLERANCE_S) -> tuple[Ledger, list[dict]]:
     """The loop's turn on the sounding of ``session``.
 
     ``state`` is the sounding's own, None when it could not be observed;
     ``truth`` gives the state a pending forecast is scored against
-    (:func:`muf.sim.series.truth_of`). ``leads``, seconds, replace the
-    circuit's intervals. Returns the ledger after the turn, and its events:
-    the forecasts due settled, then those issued.
+    (:func:`muf.sim.series.truth_of`); ``simulation`` gives what the channel
+    simulator makes of a forecast (:func:`muf.sim.series.simulation`).
+    ``leads``, seconds, replace the circuit's intervals. Returns the ledger
+    after the turn, and its events: the forecasts due settled, then those
+    issued.
     """
     at = session.epoch
     events, waiting = [], []
@@ -275,16 +292,24 @@ def step(ledger: Ledger, session: series.Session, state: ChannelState | None,
         interval = cadence(times)
         ahead = (list(leads) if leads is not None
                  else [] if interval is None else [k * interval for k in STEPS])
-        muf = state.metrics.get("muf_mhz", state.muf_mhz)
-        muf = float(muf) if muf is not None and math.isfinite(muf) else None
         for lead in ahead:
-            p = Pending(session.path, fc.persist(state, float(lead)))
-            waiting.append(p)
+            forecast = fc.persist(state, float(lead))
+            try:
+                made = simulation(forecast)
+            except Exception as exc:
+                events.append(event("unsimulated", at, **{
+                    "from": session.path.name, "lead_s": float(lead),
+                    "valid_at": _utc(forecast.epoch), "reason": _failure(exc)}))
+                continue
+            waiting.append(Pending(session.path, forecast, made))
+            muf = made.state.metrics.get("muf_mhz", made.state.muf_mhz)
+            muf = float(muf) if muf is not None and math.isfinite(muf) else None
             events.append(event("issued", at, **{
                 "from": session.path.name, "lead_s": float(lead),
-                "valid_at": _utc(p.forecast.epoch),
+                "valid_at": _utc(forecast.epoch),
                 "muf_mhz": muf,
-                "modes": len(state.modes),
+                "modes": len(made.state.modes),
+                "simulated": made.product.name,
                 "echo_offset_us": clock.offset_us(state)}))
     return Ledger(tuple(waiting), times), events
 
@@ -298,8 +323,10 @@ def take(ledger: Ledger, session: series.Session, cache: str | Path, *,
     Its state is observed into ``cache`` (:func:`muf.sim.series.state_of`),
     and each forecast due is scored against it as
     :func:`muf.sim.series.truth_of` gives it; a sounding that cannot be
-    observed is an ``unobserved`` event. ``params`` are the observing
-    parameters (:data:`muf.sim.series.OBSERVE`).
+    observed is an ``unobserved`` event. The forecasts it issues are
+    simulated into ``cache`` too (:func:`muf.sim.series.simulation`), where
+    their synthetic soundings stay. ``params`` are the observing parameters
+    (:data:`muf.sim.series.OBSERVE`).
     """
     events = []
     try:
@@ -312,6 +339,8 @@ def take(ledger: Ledger, session: series.Session, cache: str | Path, *,
     ledger, turn = step(ledger, session, state,
                         lambda p: series.truth_of(p.source, session.path, cache, params,
                                                   stations=stations),
+                        lambda forecast: series.simulation(
+                            forecast, session.path, cache, params, stations=stations),
                         leads=leads, tolerance_s=tolerance_s)
     return ledger, events + turn
 
@@ -415,6 +444,9 @@ def format_event(e: dict) -> str:
                    else ""))
     if kind == "lapsed":
         return (f"{at}  lapsed  {_ahead(e['lead_s'])} from {_clock(e['issued_at'])}: "
+                f"{e['reason']}")
+    if kind == "unsimulated":
+        return (f"{at}  {_ahead(e['lead_s'])} from {e['from']} not simulated: "
                 f"{e['reason']}")
     if kind == "untraced":
         offset = e.get("echo_offset_us")

@@ -87,8 +87,8 @@
     · {{ t('sim_live.delay') }} {{ num(s.figures.delay_rms_us, '%.0f', t('sim_live.unit.us')) }}
     · C/N0 {{ num(s.figures.cn0_rms_db, '%.1f', t('sim_live.unit.db')) }}</p>
   <div class="pair">
-    {% if s.source_id %}<figure><img src="/ionogram/{{ s.source_id }}.png?gate=auto&amp;dpi=80" alt="" loading="lazy">
-      <figcaption class="note">{{ t('sim_live.img.forecast', at=e.issued_at|msk(11, 19)) }}</figcaption></figure>{% endif %}
+    {% if e.simulated %}<figure><img src="/sim/live/simulated/{{ e.simulated|urlencode }}.png?{% if s.sounding_id %}like={{ s.sounding_id }}{% else %}gate=auto{% endif %}&amp;dpi=80" alt="" loading="lazy">
+      <figcaption class="note">{{ t('sim_live.img.simulated', at=e.issued_at|msk(11, 19)) }}</figcaption></figure>{% endif %}
     {% if s.sounding_id %}<figure><img src="/ionogram/{{ s.sounding_id }}.png?gate=auto&amp;dpi=80" alt="" loading="lazy">
       <figcaption class="note">{{ t('sim_live.img.truth', at=e.at|msk(11, 19)) }}</figcaption></figure>{% endif %}
   </div>

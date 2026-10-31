@@ -697,7 +697,8 @@ def _sounding_path(request: Request, sounding_id: int) -> Path:
     return path
 
 
-def _render(path: Path, *, gate, trace, muf, dpi, bare: bool = False) -> bytes:
+def _render(path: Path, *, gate, trace, muf, dpi, bare: bool = False,
+            window: int | None = None) -> bytes:
     import matplotlib
     matplotlib.use("Agg")                      # no display in a container
 
@@ -708,7 +709,7 @@ def _render(path: Path, *, gate, trace, muf, dpi, bare: bool = False) -> bytes:
     # Gated by the same function the plot frame uses. If these two ever gate
     # differently the raster and the axes drawn over it describe different
     # range windows, and the picture is quietly wrong rather than broken.
-    ion = sao_mod.load_ion(path, gate=gate)
+    ion = sao_mod.load_ion(path, gate=gate, window=window)
 
     if bare:
         # No extractors, no trace fit: nothing is drawn on this image, and

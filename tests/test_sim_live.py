@@ -27,7 +27,19 @@ def _state(epoch: float, *, muf: float = 13.6, source: str = "s.lfs",
                         metrics={} if offset is None else {"echo_offset_us": offset})
 
 
-def _turns(epochs, *, leads=None, untraced=(), offsets=None) -> list[dict]:
+def _simulator(shift_mhz: float = 0.0):
+    def simulation(forecast: ChannelState) -> series.Simulated:
+        made = _state(forecast.epoch, source="sim")
+        made.metrics.update(muf_mhz=forecast.muf_mhz + shift_mhz,
+                            lead_s=forecast.metrics["lead_s"])
+        return series.Simulated(
+            Path(f"{forecast.source}.{forecast.metrics['lead_s']:g}s.sim.echo.h5"),
+            made)
+    return simulation
+
+
+def _turns(epochs, *, leads=None, untraced=(), offsets=None,
+           simulation=None) -> list[dict]:
     ledger, events = live.Ledger(), []
     for k, epoch in enumerate(epochs):
         state = _state(epoch, muf=13.6 + 0.1 * k, source=f"s{k}.lfs",
@@ -35,7 +47,8 @@ def _turns(epochs, *, leads=None, untraced=(), offsets=None) -> list[dict]:
                        offset=None if offsets is None else offsets[k])
         ledger, got = live.step(ledger, series.Session(Path(f"s{k}.lfs"), epoch,
                                                        "cyprus1", "yoshkar-ola"),
-                                state, lambda pending, s=state: s, leads=leads)
+                                state, lambda pending, s=state: s,
+                                simulation or _simulator(), leads=leads)
         events.extend(got)
     return events
 
@@ -120,9 +133,84 @@ def test_a_forecast_due_at_a_sounding_with_no_trace_lapses_saying_so():
 def test_a_ledger_comes_back_whole_from_its_dict():
     ledger, _ = live.step(live.Ledger(), series.Session(Path("s0.lfs"), T0, "cyprus1",
                                                         "yoshkar-ola"),
-                          _state(T0), lambda pending: None, leads=[600.0])
+                          _state(T0), lambda pending: None, _simulator(),
+                          leads=[600.0])
     back = live.Ledger.from_dict(json.loads(json.dumps(ledger.to_dict())))
     assert back.to_dict() == ledger.to_dict(), "the ledger changed on its way back"
+
+
+def test_a_forecast_is_scored_on_what_the_simulator_made():
+    shift = random.uniform(1.0, 2.0)
+    scored = next(e for e in _turns([T0, T0 + 600, T0 + 1200],
+                                    simulation=_simulator(shift))
+                  if e["event"] == "scored")
+    assert scored["pair"]["muf_mhz"]["forecast"] == pytest.approx(
+        _state(T0 + 600, muf=13.7).muf_mhz + shift), \
+        "the forecast scored was not the one the simulator made"
+
+
+def test_an_issued_forecast_gives_the_simulators_muf():
+    shift = random.uniform(1.0, 2.0)
+    issued = [e["muf_mhz"] for e in _turns([T0], leads=[600.0],
+                                           simulation=_simulator(shift))
+              if e["event"] == "issued"]
+    assert issued == [pytest.approx(_state(T0).muf_mhz + shift)], \
+        "the forecast issued did not say what the simulator made"
+
+
+def test_an_issued_forecast_names_its_synthetic_sounding():
+    issued = [e["simulated"] for e in _turns([T0], leads=[300.0, 600.0])
+              if e["event"] == "issued"]
+    assert issued == ["s0.lfs.300s.sim.echo.h5", "s0.lfs.600s.sim.echo.h5"], \
+        "an issued forecast did not name its synthetic sounding"
+
+
+def test_a_scored_forecast_names_its_synthetic_sounding():
+    scored = [e["simulated"] for e in _turns([T0, T0 + 600, T0 + 1200])
+              if e["event"] == "scored"]
+    assert scored == ["s1.lfs.600s.sim.echo.h5"], \
+        "a scored forecast did not name the synthetic sounding it was scored on"
+
+
+def test_a_forecast_the_simulator_cannot_make_is_not_issued():
+    def broken(forecast):
+        raise RuntimeError("no room on the disk")
+
+    kinds = [e["event"] for e in _turns([T0], leads=[600.0], simulation=broken)]
+    assert kinds == ["unsimulated"], \
+        f"a forecast with no simulation was issued: {kinds}"
+
+
+def test_a_forecast_the_simulator_cannot_make_says_why():
+    def broken(forecast):
+        raise RuntimeError("no room on the disk")
+
+    reasons = [e["reason"] for e in _turns([T0], leads=[600.0], simulation=broken)]
+    assert reasons == ["RuntimeError: no room on the disk"], \
+        "the failed simulation did not say why"
+
+
+def test_a_line_says_a_forecast_was_not_simulated():
+    def broken(forecast):
+        raise RuntimeError("no room on the disk")
+
+    line = live.format_event(_turns([T0], leads=[600.0], simulation=broken)[0])
+    assert "not simulated: RuntimeError: no room on the disk" in line, \
+        f"the line did not say the forecast was not simulated: {line}"
+
+
+def test_a_forecast_issued_before_it_was_simulated_lapses_saying_so():
+    ledger = live.Ledger.from_dict({"pending": [
+        {"source": "s0.lfs",
+         "forecast": live.fc.persist(_state(T0), 600.0).to_dict()}],
+        "times": [T0]})
+    _, events = live.step(ledger, series.Session(Path("s1.lfs"), T0 + 600, "cyprus1",
+                                                 "yoshkar-ola"),
+                          _state(T0 + 600), lambda pending: _state(T0 + 600),
+                          _simulator(), leads=[])
+    assert [e.get("reason") for e in events] \
+        == ["issued before forecasts were simulated"], \
+        "a forecast with no simulation was scored"
 
 
 def test_the_running_figures_count_each_leads_pairs():
@@ -237,6 +325,16 @@ def test_a_turn_on_an_unreadable_sounding_says_so(tmp_path):
                                                         "yoshkar-ola"), tmp_path / "c")
     assert [e["event"] for e in events] == ["unobserved"], \
         "an unreadable sounding was not reported as unobserved"
+
+
+def test_a_turn_keeps_the_synthetic_sounding_of_each_forecast_it_issues(tmp_path):
+    path = _soundings(tmp_path / "in", [T0])[0]
+    _, events = live.take(live.Ledger(), series.Session(path, T0, "cyprus1",
+                                                        "yoshkar-ola"),
+                          tmp_path / "cache", leads=[600.0])
+    assert [(tmp_path / "cache" / e["simulated"]).is_file()
+            for e in events if e["event"] == "issued"] == [True], \
+        "an issued forecast's synthetic sounding was not kept beside the states"
 
 
 def test_a_replay_scores_each_forecast_whose_sounding_came(tmp_path):
