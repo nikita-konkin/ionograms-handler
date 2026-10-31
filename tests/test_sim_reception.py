@@ -67,6 +67,20 @@ def test_real_synthesis_places_the_forecast_echo_on_live_axes():
     assert cells[20:60].max() > cells[:5].max()
 
 
+def test_a_synthetic_trace_is_as_thin_as_the_live_sweep_resolves():
+    head = dict(HEAD, columns=120, rows=96, f_lo_mhz=10.0, f_step_mhz=0.04096,
+                range_lo_km=2400.0, range_step_km=7.32421875)
+    forecast = ChannelState(presets.cyprus1_circuit(), T0,
+                            [Mode("flat", [10.4, 14.6], [9137, 9137], 47.0)],
+                            sweep=Sweep(start_mhz=10, rate_hz_s=100e3,
+                                        duration_s=60, sample_rate_hz=40e3))
+    cells = np.frombuffer(base64.b64decode(
+        sim_reception.render(forecast.to_dict(), head)["cells"]),
+        np.uint8).reshape(120, 96)[20:100] / 4
+    width = np.median([np.sum(c > c.max() - 6) for c in cells])
+    assert width <= 3, f"a flat echo spreads over {width:g} live rows, not the 3 a 16384-sample window resolves"
+
+
 def test_station_mapping_and_no_forecast_do_not_show_an_unrelated_image(tmp_path,
                                                                      monkeypatch):
     with db.session(tmp_path / "a.sqlite3") as conn:

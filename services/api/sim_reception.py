@@ -51,29 +51,41 @@ def grid(head: dict) -> dict:
 
 
 def render(state: dict, head: dict) -> dict:
-    from scipy.interpolate import RegularGridInterpolator
+    """The forecast's synthetic sounding on the live sweep's own bins.
 
+    It is read back with the FFT window the sweep is received with, so a
+    trace is as thin as the received one, and folded into the page's raster
+    by the maximum, as the station folds rows and the page folds columns.
+    """
     from muf import spectro
     from muf.sim import forecast
     from muf.sim.state import ChannelState
 
-    ion = forecast.sounded(ChannelState.from_dict(state), 1, seed=0)[0]
-    fs, rs = np.argsort(ion.freq), np.argsort(ion.vrange)
-    interp = RegularGridInterpolator(
-        (np.asarray(ion.freq)[fs], np.asarray(ion.vrange)[rs]),
-        np.asarray(ion.db)[np.ix_(fs, rs)] - spectro.NOISE_FLOOR_DB,
-        bounds_error=False, fill_value=0)
-    f = head["f_lo_mhz"] + np.arange(head["columns"]) * head["f_step_mhz"]
-    r = head["range_lo_km"] + np.arange(head["rows"]) * head["range_step_km"]
-    ff, rr = np.meshgrid(f, r, indexing="ij")
-    cells = np.clip(np.rint(interp(np.stack((ff, rr), axis=-1)) * 4), 0, 255)
-    return {"head": head, "cells": base64.b64encode(cells.astype(np.uint8).tobytes())
-            .decode("ascii")}
+    issued = ChannelState.from_dict(state)
+    raster = grid(head)
+    ion = forecast.sounded(
+        issued, 1, seed=0,
+        window=round(head["f_step_mhz"] * 1e6 / issued.sweep.rate_hz_s
+                     * issued.sweep.sample_rate_hz),
+        gate_km=(head["range_lo_km"] - head["range_step_km"],
+                 head["range_lo_km"] + head["rows"] * head["range_step_km"]))[0]
+    vrange = np.asarray(ion.vrange)
+    column, row = np.meshgrid(
+        np.floor((np.asarray(ion.freq) - head["f_lo_mhz"]) / raster["f_step_mhz"]),
+        np.floor((vrange - head["range_lo_km"] + np.median(np.abs(np.diff(vrange))) / 2)
+                 / raster["range_step_km"]),
+        indexing="ij")
+    inside = ((column >= 0) & (column < raster["columns"])
+              & (row >= 0) & (row < raster["rows"]))
+    cells = np.zeros((raster["columns"], raster["rows"]))
+    np.maximum.at(cells, (column[inside].astype(int), row[inside].astype(int)),
+                  np.asarray(ion.db)[inside] - spectro.NOISE_FLOOR_DB)
+    return {"head": raster, "cells": base64.b64encode(
+        np.clip(np.rint(cells * 4), 0, 255).astype(np.uint8).tobytes()).decode("ascii")}
 
 
 def image(state: dict, head: dict) -> dict:
     global _worker
-    head = grid(head)
     key = hashlib.sha256(json.dumps([state, head], sort_keys=True).encode()).hexdigest()
     with _lock:
         if key in _cache:
