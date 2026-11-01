@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import random
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -167,6 +170,19 @@ def test_reconstruction_recovers_the_underlying_curve():
     assert np.sqrt(np.mean((fitted - truth) ** 2)) < 15.0     # beats the noise
 
 
+def test_a_reconstruction_is_a_parabola_between_its_knots():
+    freq, vrange = one_mode(n=120, scatter=random.uniform(10.0, 30.0),
+                            seed=random.randrange(1000))
+    result = trace.reconstruct(trace.Segment(freq, vrange))
+    worst = max(
+        np.max(np.abs(np.polyval(np.polyfit(f, r, 2), f) - r))
+        for a, b in zip(result.knots[:-1], result.knots[1:])
+        for f, r in [(result.freq[(result.freq > a) & (result.freq < b)],
+                      result.vrange[(result.freq > a) & (result.freq < b)])]
+        if f.size >= 4)
+    assert worst < 1e-6, "the reconstruction is not a parabola between its knots"
+
+
 def test_reconstruction_stays_inside_its_segment():
     """It must never extrapolate past the data it was given."""
     freq, vrange = one_mode(12.0, 22.0)
@@ -249,6 +265,18 @@ def test_group_tracks_will_not_bridge_a_range_jump():
     assert len(tracks) == 2
 
 
+def test_two_tracks_drawing_close_keep_their_order_in_range():
+    low = random.uniform(2700.0, 2900.0)
+    high = low + random.uniform(10.0, 14.0)
+    near = high + random.uniform(1.0, 3.0)
+    freq = np.repeat(np.round(10.0 + 0.02 * np.arange(12), 2), 2)
+    vrange = np.concatenate([np.tile([low, high], 6),
+                             np.tile([near, near + random.uniform(5.0, 8.0)], 6)])
+    one, other = trace.group_tracks(freq, vrange)
+    assert np.unique(np.sign(one.vrange - other.vrange)).size == 1, \
+        "two tracks drawing close crossed each other"
+
+
 def test_group_tracks_needs_no_weights():
     freq = np.linspace(10.0, 20.0, 30)
     tracks = trace.group_tracks(freq, np.full(30, 2700.0))
@@ -282,6 +310,29 @@ def test_extract_points_without_a_mask(real_file):
 
     freq, _vrange, _weight = trace.extract_points(ion, result)
     assert len(freq) == int(result.presence.sum())
+
+
+def _points_of_two_runs(gap):
+    bins = random.randrange(40, 80)
+    start = random.randrange(5, bins - 20)
+    row = np.zeros((1, bins), dtype=bool)
+    row[0, start:start + 3] = row[0, start + 3 + gap:start + 6 + gap] = True
+    ion = SimpleNamespace(
+        freq=np.array([random.uniform(8.0, 30.0)]),
+        vrange=random.uniform(2500.0, 2900.0) + 15.0 * np.arange(bins),
+        db=np.full((1, bins), random.uniform(20.0, 40.0)))
+    found = SimpleNamespace(mask=row, presence=np.array([True]))
+    return trace.extract_points(ion, found)[0]
+
+
+def test_runs_one_empty_bin_apart_are_one_echo():
+    assert _points_of_two_runs(1).size == 1, \
+        "two runs one empty bin apart were read as two echoes"
+
+
+def test_runs_two_empty_bins_apart_are_two_echoes():
+    assert _points_of_two_runs(2).size == 2, \
+        "two runs two empty bins apart were read as one echo"
 
 
 # --- low-ray / high-ray branches ---------------------------------------------
