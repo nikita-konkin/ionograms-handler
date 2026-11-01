@@ -117,6 +117,30 @@ def test_fading_varies_the_level_along_the_trace(tmp_path):
     assert spread(fades) > 3.0 > 1.0 > spread(still)
 
 
+def test_a_mode_sharing_its_echo_with_another_takes_half_its_cn0(tmp_path):
+    cn0 = random.uniform(38.0, 46.0)
+    ion = _load(sounding.write_lfs(_state(_flat(cn0=cn0)), tmp_path,
+                                   seed=random.randrange(1000)))
+    curve = (np.array([10.0, 14.0]), np.full(2, 9000.0 * KM_PER_US))
+    _, lin = observe._cn0_along(ion, *curve, 10.7, 13.3, others=[(*curve, 10.7, 13.3)])
+    assert 10 * np.log10(np.mean(lin)) == pytest.approx(cn0 - 10 * np.log10(2),
+                                                        abs=0.2), \
+        "a mode sharing its echo with another did not take half its C/N0"
+
+
+def test_a_spread_echo_carved_into_modes_reads_its_cn0_once(tmp_path):
+    cn0 = random.uniform(40.0, 46.0)
+    truth = _state(_flat(cn0=cn0, doppler_spread_hz=0.5,
+                         delay_spread_us=random.uniform(30.0, 80.0)))
+    got = observe.from_sounding(sounding.write_lfs(truth, tmp_path,
+                                                   seed=random.randrange(1000)))
+    f = np.linspace(11.0, 13.0, 21)
+    total = sum(10 ** (np.where((f >= m.f_lo) & (f <= m.f_hi), m.cn0_at(f), -99.0) / 10)
+                for m in got.modes)
+    assert 10 * np.log10(np.mean(total)) == pytest.approx(cn0, abs=1.5), \
+        "the modes of one spread echo did not read its C/N0 once between them"
+
+
 def test_a_sounding_needs_a_sweep(tmp_path):
     state = _state(_flat(), sweep=None)
     with pytest.raises(ValueError, match="sweep"):

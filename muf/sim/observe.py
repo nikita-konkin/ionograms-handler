@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -307,24 +307,41 @@ def _bridged(seg, f: np.ndarray, r: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return tuple(np.concatenate(x) for x in zip(*kept))
 
 
+def _nearest(vrange: np.ndarray, km: np.ndarray) -> np.ndarray:
+    """The range bin nearest each of ``km``."""
+    order = np.argsort(vrange)
+    axis = vrange[order]
+    k = np.clip(np.searchsorted(axis, km), 1, axis.size - 1)
+    return order[k - ((km - axis[k - 1]) <= (axis[k] - km))]
+
+
 def _cn0_along(ion, f_curve: np.ndarray, r_curve: np.ndarray,
-               lo: float, hi: float) -> tuple[np.ndarray, np.ndarray]:
-    """(row frequency MHz, C/N0 linear) along a curve, from the ionogram."""
+               lo: float, hi: float, *,
+               others: Sequence[tuple] = ()) -> tuple[np.ndarray, np.ndarray]:
+    """(row frequency MHz, C/N0 linear) along a curve, from the ionogram.
+
+    A cell the strips of ``others`` reach too, each the (f_curve, r_curve,
+    lo, hi) of another mode, gives every mode on it an equal part of its
+    power. Modes the extractor laid over one echo read its power once
+    between them, rather than once each.
+    """
     rows = np.flatnonzero((ion.freq >= lo) & (ion.freq <= hi))
     if rows.size == 0:
         return np.empty(0), np.empty(0)
-    t_w = window_seconds(ion)
     vrange = np.asarray(ion.vrange)
-    n_col = vrange.size
-    out = np.empty(rows.size)
-    for k, i in enumerate(rows):
-        r = float(np.interp(ion.freq[i], f_curve, r_curve))
-        j = int(np.argmin(np.abs(vrange - r)))
-        a, b = max(0, j - SUM_HALF_BINS), min(n_col, j + SUM_HALF_BINS + 1)
-        band = np.asarray(ion.power[i, a:b], dtype=np.float64)
-        tone = (band.sum() - band.size * NOISE_MEAN_POWER) / HANN_ENBW_BINS
-        out[k] = max(tone, 1e-6) / (TONE_PER_CN0_SECOND * t_w)
-    return np.asarray(ion.freq[rows], dtype=np.float64), out
+    freq = np.asarray(ion.freq[rows], dtype=np.float64)
+    cols = (_nearest(vrange, np.interp(freq, f_curve, r_curve))[:, None]
+            + np.arange(-SUM_HALF_BINS, SUM_HALF_BINS + 1))
+    crowd = np.ones(cols.shape)
+    for f_other, r_other, lo_other, hi_other in others:
+        theirs = _nearest(vrange, np.interp(freq, f_other, r_other))[:, None]
+        crowd += (((freq >= lo_other) & (freq <= hi_other))[:, None]
+                  & (np.abs(cols - theirs) <= SUM_HALF_BINS))
+    inside = (cols >= 0) & (cols < vrange.size)
+    power = np.asarray(ion.power)[rows[:, None], np.clip(cols, 0, vrange.size - 1)]
+    tone = (np.where(inside, power - NOISE_MEAN_POWER, 0.0) / crowd).sum(axis=1)
+    return freq, (np.maximum(tone / HANN_ENBW_BINS, 1e-6)
+                  / (TONE_PER_CN0_SECOND * window_seconds(ion)))
 
 
 def _smooth(freq: np.ndarray, value: np.ndarray, half: float) -> np.ndarray:
@@ -415,15 +432,18 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
 
     scale = km_per_us(header)
     taken: set[str] = set()
-    for seg in sorted(segments, key=lambda s: (s.median_range, s.freq_span[0])):
+    curves = [(seg, *_curve(seg))
+              for seg in sorted(segments, key=lambda s: (s.median_range,
+                                                         s.freq_span[0]))
+              if seg.freq_span[1] - seg.freq_span[0] >= knot_mhz]
+    for seg, f_curve, r_curve, how in curves:
         lo, hi = seg.freq_span
-        if hi - lo < knot_mhz:
-            continue
-        f_curve, r_curve, how = _curve(seg)
         knots = np.arange(lo, hi, knot_mhz)
         knots = np.append(knots[knots < hi - 1e-9], hi)
         r_k = np.interp(knots, f_curve, r_curve)
-        f_rows, cn0_rows = _cn0_along(ion, f_curve, r_curve, lo, hi)
+        f_rows, cn0_rows = _cn0_along(
+            ion, f_curve, r_curve, lo, hi,
+            others=[(f, r, *s.freq_span) for s, f, r, _ in curves if s is not seg])
         if f_rows.size < 2:
             continue
         cn0_k = np.interp(knots, f_rows, _smooth(f_rows, cn0_rows, SMOOTH_MHZ))
@@ -444,7 +464,8 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
                                        if widest > FIT_GAP_MHZ else "")),
                 "band": Provenance(MEASURED, "extent of the trace segment"),
                 "cn0": Provenance(MEASURED, f"ionogram power along the trace, "
-                                            f"+-{SUM_HALF_BINS} bins, "
+                                            f"+-{SUM_HALF_BINS} bins, a cell other "
+                                            f"modes reach shared among them, "
                                             f"window {ion.window}{approx}"),
                 "doppler_spread": doppler_origin,
                 "doppler_shift": Provenance(PRIOR, "none: a power ionogram "
