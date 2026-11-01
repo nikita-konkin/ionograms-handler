@@ -416,7 +416,7 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
     state.metrics["pick_vrange_km"] = float(result.pick.vrange_km)
 
     freq, vrange, weight = trace.extract_points(ion, result)
-    segments = trace.group_tracks(freq, vrange, weight)
+    segments = trace.split_humps(trace.group_tracks(freq, vrange, weight))
     ground = calibrate.ground_range_km(header) if isinstance(header, LfsHeader) else (
         circuit.ground_km)
     if ground:

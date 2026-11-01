@@ -83,8 +83,9 @@ written with full precision, so a state read back is the state written.
 
 `muf.sim.observe` finds the trace the way `muf run` does -- an extractor
 (`contour` by default), then `muf.trace`: points per contiguous run, tracks
-followed across frequency without ever crossing, hop labels from the
-geometry, low and high rays paired at the nose. Each track becomes one mode:
+followed across frequency without ever crossing, a track that humps cut at
+the top of its hump into two branches, hop labels from the geometry, low and
+high rays paired at the nose. Each track becomes one mode:
 
 - **delay**: `muf.trace.reconstruct`'s quadratic smoothing spline, loosened
   until it turns once at most, on 0.1 MHz knots, converted from range with the format's own axis -- `.lfs` is calibrated
