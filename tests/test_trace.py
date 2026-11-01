@@ -217,6 +217,48 @@ def test_a_reconstruction_keeps_the_one_turn_its_echo_makes():
         "the reconstruction lost the one turn its echo makes"
 
 
+def test_a_track_that_humps_is_cut_in_two():
+    freq = np.round(np.arange(10.0, 14.0, 0.02), 2)
+    vrange = (2800.0 - random.uniform(40.0, 80.0)
+              * ((freq - random.uniform(11.5, 12.5)) / 2.0) ** 2
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    assert len(trace.split_humps([trace.Segment(freq, vrange)])) == 2, \
+        "a track that humps was not cut in two"
+
+
+def test_a_track_is_cut_at_the_top_of_its_hump():
+    freq = np.round(np.arange(10.0, 14.0, 0.02), 2)
+    apex = random.uniform(11.5, 12.5)
+    vrange = (2800.0 - random.uniform(40.0, 80.0) * ((freq - apex) / 2.0) ** 2
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    pieces = trace.split_humps([trace.Segment(freq, vrange)])
+    assert abs(pieces[0].freq.max() - apex) < 0.5, \
+        "the track was not cut at the top of its hump"
+
+
+def test_cutting_a_track_keeps_every_point():
+    freq = np.round(np.arange(10.0, 14.0, 0.02), 2)
+    vrange = (2800.0 - random.uniform(40.0, 80.0)
+              * ((freq - random.uniform(11.5, 12.5)) / 2.0) ** 2
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    pieces = trace.split_humps([trace.Segment(freq, vrange, weight=np.ones(freq.size))])
+    assert sum(piece.n_points for piece in pieces) == freq.size, \
+        "cutting a track lost some of its points"
+
+
+def test_a_track_that_dips_stays_whole():
+    freq = np.round(np.arange(10.0, 14.0, 0.02), 2)
+    vrange = (2800.0 + random.uniform(40.0, 80.0)
+              * ((freq - random.uniform(11.5, 12.5)) / 2.0) ** 2
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    assert len(trace.split_humps([trace.Segment(freq, vrange)])) == 1, \
+        "a track that dips was cut"
+
+
 def test_reconstruction_stays_inside_its_segment():
     """It must never extrapolate past the data it was given."""
     freq, vrange = one_mode(12.0, 22.0)

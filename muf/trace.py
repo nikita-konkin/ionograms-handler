@@ -35,7 +35,7 @@ electron-density inversion needs and what a sparse point set cannot provide.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -324,6 +324,41 @@ def identify_hops(
             key=lambda h: abs(observed - hop_range_km(ground_km, best_hops, h)),
         )
     return segments
+
+
+def split_humps(segments: list[Segment],
+                min_points: int = DEFAULT_MIN_SEGMENT_POINTS) -> list[Segment]:
+    """Every track cut at the top of each hump, so each piece is one branch.
+
+    One echo's branch never rises and then falls: the low ray climbs toward
+    the nose, perhaps after a dip at the band's foot, and the high ray falls
+    toward it. A track that humps by :data:`TURN_KM` or more is two branches
+    joined -- on this path, mostly a trace climbing into the F1 cusp and the
+    high ray falling from it to the nose -- and no one curve draws both. A
+    bare parabola keeps the hump, and a curve held to dip instead flattened
+    the real bend: on the bench its copies matched their soundings worse.
+    Cut at the top, each piece takes its own shape. A piece of fewer than
+    ``min_points`` is too short to be a mode, so a track humping that near
+    its end stays whole.
+    """
+    return [piece for item in segments for piece in _branches(item, min_points)]
+
+
+def _branches(item: Segment, min_points: int) -> list[Segment]:
+    """``item`` cut at the top of its hump and again in each piece, or whole."""
+    curve = reconstruct(item)
+    if not curve.ok:
+        return [item]
+    depth = np.minimum(curve.vrange - np.minimum.accumulate(curve.vrange),
+                       curve.vrange - np.minimum.accumulate(curve.vrange[::-1])[::-1])
+    left = item.freq <= curve.freq[int(np.argmax(depth))]
+    if depth.max() < TURN_KM or min(left.sum(), (~left).sum()) < min_points:
+        return [item]
+    return [piece for side in (left, ~left)
+            for piece in _branches(
+                replace(item, freq=item.freq[side], vrange=item.vrange[side],
+                        weight=None if item.weight is None else item.weight[side]),
+                min_points)]
 
 
 def slope_km_per_mhz(item: Segment) -> float:
