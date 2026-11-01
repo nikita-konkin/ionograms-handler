@@ -98,7 +98,11 @@ paired at the nose. Each track becomes one mode:
 - **C/N0**: the ionogram's power along the curve, summed over the five range
   bins around it (a Hann window spreads a tone over 1.5 bins, so the sum does
   not depend on where the echo falls between bins), less the noise those bins
-  carry, averaged over +-0.2 MHz to average the fading.
+  carry, averaged over +-0.2 MHz to average the fading. A cell within the
+  five bins of several modes gives each an equal part of its power. The
+  extractor often lays several tracks over one echo, a broad one above all,
+  and each would otherwise take its whole power, so the state would sound
+  it once per track.
 
 The C/N0 conversion is exact for `.lfs`. muf divides each row by 4 ln 2
 times its median, so a tone of carrier-to-noise density C/N0 peaks at
