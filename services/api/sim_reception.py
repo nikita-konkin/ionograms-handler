@@ -1,7 +1,9 @@
 """A synthetic forecast matched to the sounding currently arriving live.
 
-Only the issued state is used to synthesise the left pane. The live header
-supplies display axes; received powers never enter the simulation.
+The left pane draws the synthetic sounding the live loop kept when it issued
+the forecast, the one the forecast's panels draw and its scores were read
+from. It is not synthesised again. The live header supplies display axes;
+received powers never enter it.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import collections
 import hashlib
 import json
 import threading
+from pathlib import Path
 
 import numpy as np
 
@@ -24,7 +27,8 @@ LIMIT = 8
 
 
 def select(ledger: dict, t0: float) -> dict | None:
-    """Shortest issued lead within 30 s of this sweep, never a future source."""
+    """The forecast waiting with the shortest issued lead within 30 s of this
+    sweep, never one from a future source."""
     matches = []
     for pending in ledger.get("pending", []):
         state = pending["forecast"]
@@ -32,61 +36,88 @@ def select(ledger: dict, t0: float) -> dict | None:
         if lead > 0 and state["epoch"] - lead < t0:
             delta = abs(state["epoch"] - t0)
             if delta <= 30:
-                matches.append((delta, lead, state))
+                matches.append((delta, lead, pending))
     return min(matches, key=lambda p: p[:2])[2] if matches else None
 
 
 def grid(head: dict) -> dict:
-    """Bound the browser raster while preserving the live display's extent."""
+    """The page's raster of the live display: as many cells as the page folds
+    the received sweep into, over the same extent."""
     out = {k: head[k] for k in ("t0", "columns", "rows", "f_lo_mhz",
                                "f_step_mhz", "range_lo_km", "range_step_km",
                                "km_per_ms")}
     for n, step, cap in (("columns", "f_step_mhz", 800),
                          ("rows", "range_step_km", 256)):
-        fold = max(1, int(np.ceil(out[n] / cap)))
-        size = int(np.ceil(out[n] / fold))
+        size = min(cap, out[n])
         out[step] *= out[n] / size
         out[n] = size
     return out
 
 
-def render(state: dict, head: dict) -> dict:
-    """The forecast's synthetic sounding on the live sweep's own bins.
+def gate_of(head: dict) -> tuple[float, float]:
+    """The range a sounding is read over to fill the live display's rows."""
+    return (head["range_lo_km"] - head["range_step_km"],
+            head["range_lo_km"] + head["rows"] * head["range_step_km"])
 
-    It is read back with the FFT window the sweep is received with, so a
-    trace is as thin as the received one, and folded into the page's raster
-    by the maximum, as the station folds rows and the page folds columns.
+
+def cells(ion, head: dict) -> np.ndarray:
+    """``ion`` as the page's quarter-dB cells, columns by rows.
+
+    Each bin goes to the live sweep's column and folded row it falls in, and
+    on to the page's raster as ``sim-reception.js`` folds the received
+    sweep: cell ``floor(i * size / n)`` of ``n``, by the maximum.
     """
     from muf import spectro
-    from muf.sim import forecast
-    from muf.sim.state import ChannelState
 
-    issued = ChannelState.from_dict(state)
     raster = grid(head)
-    ion = forecast.sounded(
-        issued, 1, seed=0,
-        window=round(head["f_step_mhz"] * 1e6 / issued.sweep.rate_hz_s
-                     * issued.sweep.sample_rate_hz),
-        gate_km=(head["range_lo_km"] - head["range_step_km"],
-                 head["range_lo_km"] + head["rows"] * head["range_step_km"]))[0]
     vrange = np.asarray(ion.vrange)
     column, row = np.meshgrid(
-        np.floor((np.asarray(ion.freq) - head["f_lo_mhz"]) / raster["f_step_mhz"]),
+        np.floor((np.asarray(ion.freq) - head["f_lo_mhz"]) / head["f_step_mhz"]),
         np.floor((vrange - head["range_lo_km"] + np.median(np.abs(np.diff(vrange))) / 2)
-                 / raster["range_step_km"]),
+                 / head["range_step_km"]),
         indexing="ij")
-    inside = ((column >= 0) & (column < raster["columns"])
-              & (row >= 0) & (row < raster["rows"]))
-    cells = np.zeros((raster["columns"], raster["rows"]))
-    np.maximum.at(cells, (column[inside].astype(int), row[inside].astype(int)),
-                  np.asarray(ion.db)[inside] - spectro.NOISE_FLOOR_DB)
-    return {"head": raster, "cells": base64.b64encode(
-        np.clip(np.rint(cells * 4), 0, 255).astype(np.uint8).tobytes()).decode("ascii")}
+    inside = ((column >= 0) & (column < head["columns"])
+              & (row >= 0) & (row < head["rows"]))
+    out = np.zeros((raster["columns"], raster["rows"]))
+    folded = (column[inside].astype(int) * raster["columns"] // head["columns"],
+              row[inside].astype(int) * raster["rows"] // head["rows"])
+    np.maximum.at(out, folded, np.asarray(ion.db)[inside] - spectro.NOISE_FLOOR_DB)
+    return np.clip(np.rint(out * 4), 0, 255).astype(np.uint8)
 
 
-def image(state: dict, head: dict) -> dict:
+def _product(pending: dict) -> Path | None:
+    found = (pending.get("simulated") or {}).get("product")
+    return Path(found) if found else None
+
+
+def render(pending: dict, head: dict) -> dict:
+    """The forecast's issued synthetic sounding on the live sweep's own bins.
+
+    It is read back with the FFT window the sweep is received with, so a
+    trace is as thin as the received one, and folded as the page folds the
+    received sweep (:func:`cells`).
+    """
+    from muf.sim import observe
+    from muf.sim.state import ChannelState
+
+    sweep = ChannelState.from_dict(pending["forecast"]).sweep
+    ion = observe.load(_product(pending),
+                       window=round(head["f_step_mhz"] * 1e6 / sweep.rate_hz_s
+                                    * sweep.sample_rate_hz),
+                       gate_km=gate_of(head))
+    return {"head": grid(head),
+            "cells": base64.b64encode(cells(ion, head).tobytes()).decode("ascii")}
+
+
+def image(pending: dict, head: dict) -> dict:
+    """The pane's picture of ``pending`` on ``head``: ready, or being built, or
+    ``gone`` when the forecast's synthetic sounding is no longer kept."""
     global _worker
-    key = hashlib.sha256(json.dumps([state, head], sort_keys=True).encode()).hexdigest()
+    product = _product(pending)
+    if product is None or not product.is_file():
+        return {"status": "gone"}
+    key = hashlib.sha256(json.dumps([pending, head], sort_keys=True).encode()
+                         ).hexdigest()
     with _lock:
         if key in _cache:
             _cache.move_to_end(key)
@@ -100,7 +131,7 @@ def image(state: dict, head: dict) -> dict:
                 return {"status": "busy"}
             del _cache[old]
         _cache[key] = {"status": "building"}
-        _queue.append((key, state, head))
+        _queue.append((key, pending, head))
         if _worker is None:
             _worker = threading.Thread(target=_work, daemon=True, name="sim-reception")
             _worker.start()
@@ -114,9 +145,9 @@ def _work():
             if not _queue:
                 _worker = None
                 return
-            key, state, head = _queue.popleft()
+            key, pending, head = _queue.popleft()
         try:
-            result = apart.run(render, state, head, timeout_s=120,
+            result = apart.run(render, pending, head, timeout_s=120,
                                what="live simulated ionogram")
             result["status"] = "ready"
         except Exception as exc:
@@ -144,10 +175,11 @@ def view(conn, hub, tx: str, rx: str, station: str | None = None) -> dict:
     held = db.one(conn, "SELECT ledger FROM live_circuit WHERE tx=? AND rx=?", (tx, rx))
     if held is None:
         return result
-    state = select(json.loads(held["ledger"]), head["t0"])
-    if state is None:
+    pending = select(json.loads(held["ledger"]), head["t0"])
+    if pending is None:
         return result
-    result.update(image(state, head))
+    state = pending["forecast"]
+    result.update(image(pending, head))
     result.update(issued_at=state["epoch"] - state["metrics"]["lead_s"],
                   valid_at=state["epoch"], lead_s=state["metrics"]["lead_s"])
     return result

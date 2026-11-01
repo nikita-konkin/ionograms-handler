@@ -25,6 +25,7 @@
     choose_station: T('sim_pair.js.choose'), waiting: T('sim_pair.js.waiting'),
     no_forecast: T('sim_pair.js.no_forecast'), building: T('sim_pair.js.building'),
     busy: T('sim_pair.js.building'), failed: T('sim_pair.js.failed'),
+    gone: T('sim_pair.js.gone'),
   };
   const headers = () => token() ? {Authorization: 'Bearer ' + token()} : {};
   const colours = [[0,0,255], [0,255,255], [173,255,47], [255,255,0], [255,159,0], [255,0,0]];

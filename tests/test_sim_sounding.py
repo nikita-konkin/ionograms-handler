@@ -75,6 +75,23 @@ def test_the_level_reads_as_its_cn0(tmp_path):
     assert 10 * np.log10(np.mean(lin)) == pytest.approx(cn0, abs=0.2)
 
 
+@pytest.mark.parametrize("off", [0.0, 0.25, 0.5])
+def test_an_echo_between_range_bins_reads_its_cn0(tmp_path, off):
+    centred = _load(sounding.write_lfs(_state(_flat()), tmp_path, seed=3))
+    step = abs(float(np.median(np.diff(centred.vrange))))
+    km = centred.vrange[np.argmin(np.abs(centred.vrange - 9000.0 * KM_PER_US))] \
+        + off * step
+    cn0 = random.uniform(38.0, 46.0)
+    folder = tmp_path / "off"
+    folder.mkdir()
+    ion = _load(sounding.write_lfs(_state(_flat(delay=km / KM_PER_US, cn0=cn0)),
+                                   folder, seed=random.randrange(1000)))
+    _, lin = observe._cn0_along(ion, np.array([10.0, 14.0]), np.array([km, km]),
+                                10.7, 13.3)
+    assert 10 * np.log10(np.mean(lin)) == pytest.approx(cn0, abs=0.2), \
+        f"an echo {off:g} of a bin off its centre did not read its C/N0"
+
+
 def test_the_extractors_find_the_states_muf(tmp_path):
     state = _state(_law())
     ion = _load(sounding.write_lfs(state, tmp_path, seed=4))

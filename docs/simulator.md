@@ -720,20 +720,27 @@ leaves missing columns blank. Both panes show the sweep's frequency and
 group-delay extent with the Live view's colour scale. The receiving timestamp
 and count of received columns remain visible, including between sweeps.
 
-The left pane is generated from an already issued persistence forecast for
-that sweep (within 30 seconds of its start, shortest matching lead). It runs
-the synthetic sounding generator, not a copy of the previous measurement.
-The synthetic sounding is read back with the FFT window the sweep is received
-with (16384 samples on the station's live feed), so its range bins are the
-received ones, and it is folded into the page's raster by the maximum, as the
-received sweep is, rather than interpolated.
-Received powers do not enter synthesis; they supply only the display axes.
-A fixed random seed keeps a given forecast stable across refreshes. A single
-background worker bounds the cache/queue to eight forecasts and each build to
-120 seconds. While building, or when no forecast matches, the page says so.
-Generation begins when the live sweep header is available; it does not need
-to wait for the completed HDF5 file. Fields the observed state cannot measure,
-such as its fading prior, remain model assumptions in the synthetic image.
+The left pane shows an already issued persistence forecast for that sweep,
+the one issued within 30 seconds of the sweep's start with the shortest lead.
+It draws the synthetic sounding the live loop kept when it issued that
+forecast. This is the same product the forecast's panels below draw and its
+scores were read from; it is not synthesised again when the page asks.
+
+The product is read back with the FFT window the sweep is received with
+(16384 samples on the station's live feed), so its range bins are the
+received ones. It is folded into the page's raster by the maximum, exactly
+as `sim-reception.js` folds the received sweep, rather than interpolated.
+Fed identical samples, the station's capture and this pane give the same
+value in every cell. The echo-window product of those samples comes within
+one quarter-dB step of them.
+
+Received powers never enter the product; they supply only the display axes.
+A single background worker bounds the cache/queue to eight forecasts and each
+build to 120 seconds. The page says so while a forecast is building, when
+none matches, and when its product is no longer kept: products are pruned
+with the loop's states after six hours. Fields the observed state cannot
+measure, such as its fading prior, remain model assumptions in the synthetic
+image.
 
 Scores and historical pairs below still update every 30 seconds, without
 reloading the page or interrupting the receiving stream. This feature needs
