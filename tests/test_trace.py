@@ -182,6 +182,41 @@ def test_a_reconstruction_is_a_parabola_between_its_knots():
     assert worst < 1e-6, "the reconstruction is not a parabola between its knots"
 
 
+def turns(values, km):
+    """How many times a sequence reverses its direction by at least ``km``."""
+    count, heading, peak = 0, 0, values[0]
+    for value in values[1:]:
+        if heading == 0 and abs(value - peak) >= km:
+            heading, peak = np.sign(value - peak), value
+        elif heading * (value - peak) > 0:
+            peak = value
+        elif heading and abs(value - peak) >= km:
+            count, heading, peak = count + 1, -heading, value
+    return count
+
+
+def test_a_reconstruction_of_a_wandering_track_turns_at_most_once():
+    freq = np.round(np.arange(10.0, 14.0, 0.02), 2)
+    vrange = (2800.0 + random.uniform(-40.0, 40.0) * (freq - 10.0)
+              + random.uniform(20.0, 35.0)
+              * np.sin(2.0 * np.pi * freq / random.uniform(0.8, 1.2))
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    result = trace.reconstruct(trace.Segment(freq, vrange))
+    assert turns(result.vrange, trace.TURN_KM) <= 1, \
+        "the reconstruction of a wandering track turned more than once"
+
+
+def test_a_reconstruction_keeps_the_one_turn_its_echo_makes():
+    freq = np.round(np.arange(10.0, 14.0, 0.02), 2)
+    vrange = (2800.0 + random.uniform(40.0, 80.0) * ((freq - 12.0) / 2.0) ** 2
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    result = trace.reconstruct(trace.Segment(freq, vrange))
+    assert turns(result.vrange, trace.TURN_KM) == 1, \
+        "the reconstruction lost the one turn its echo makes"
+
+
 def test_reconstruction_stays_inside_its_segment():
     """It must never extrapolate past the data it was given."""
     freq, vrange = one_mode(12.0, 22.0)
