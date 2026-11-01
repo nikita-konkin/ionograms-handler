@@ -530,6 +530,15 @@ it waved. `reconstruct` halves the spline's weights until its curve reverses
 by 15 km (`TURN_KM`) or more no more than once; a bare parabola, where that
 ends, turns once.
 
+**A track that humps is two branches.** No branch rises and then falls: the
+low ray climbs toward the nose and the high ray falls toward it. A track that
+humps by 15 km or more joins two of them — on this path, mostly a trace
+climbing into the F1 cusp and the high ray falling from it to the nose. A curve
+held to dip instead flattened the real bend, and its copies matched their
+soundings worse. `split_humps` cuts such a track at the top of its hump, again
+in each piece, so the simulator's modes each take their own shape; a piece of
+fewer than 8 points stays joined.
+
 **Low and high rays are paired, not treated as separate modes.** Track-following
 sees them as two tracks, since they are separated in range — the low ray rising
 gently (+2 to +17 km/MHz), the high ray falling steeply (−24 to −76). But they
