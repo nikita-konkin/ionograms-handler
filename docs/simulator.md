@@ -86,8 +86,8 @@ written with full precision, so a state read back is the state written.
 followed across frequency without ever crossing, hop labels from the
 geometry, low and high rays paired at the nose. Each track becomes one mode:
 
-- **delay**: `muf.trace.reconstruct`'s quadratic smoothing spline on 0.1 MHz
-  knots, converted from range with the format's own axis -- `.lfs` is calibrated
+- **delay**: `muf.trace.reconstruct`'s quadratic smoothing spline, loosened
+  until it turns once at most, on 0.1 MHz knots, converted from range with the format's own axis -- `.lfs` is calibrated
   with c = 3e5 km/s and divides by 2 for vertical sounding, v2 uses c exact
   and no divisor. Across a gap without points wider than 0.5 MHz the knots
   join the gap's edges in a straight line instead: the spline has no data

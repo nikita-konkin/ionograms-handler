@@ -523,6 +523,13 @@ them braided and looped where the sounding had one echo. The fitted curve is
 a quadratic smoothing spline: a cubic follows a zig-zag in the points more
 closely, and a zig-zag is not a shape an echo makes.
 
+**A curve turns once at most.** One echo's branch rises or falls toward the
+nose and reverses, if at all, once near the band's foot. A track wandering
+through a broad or busy echo zig-zags by tens of km, and the spline fitted to
+it waved. `reconstruct` halves the spline's weights until its curve reverses
+by 15 km (`TURN_KM`) or more no more than once; a bare parabola, where that
+ends, turns once.
+
 **Low and high rays are paired, not treated as separate modes.** Track-following
 sees them as two tracks, since they are separated in range — the low ray rising
 gently (+2 to +17 km/MHz), the high ray falling steeply (−24 to −76). But they

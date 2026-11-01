@@ -80,6 +80,13 @@ DEFAULT_MAX_SUPPORT_GAP_MHZ = 1.0
 #: makes: where tracks were swapped it drew loops and braids.
 SPLINE_DEGREE = 2
 
+#: The least reversal of range a reconstructed curve counts as a turn. One
+#: echo's branch rises or falls toward the nose and turns at most once, near
+#: the band's foot; a track wandering through a broad or busy echo zig-zags
+#: by tens of km, and a spline fitted to it waves. The curve is smoothed until
+#: it turns once at most.
+TURN_KM = 15.0
+
 #: Effective mirror heights scanned when matching a segment's range to a hop
 #: count. Wider than the real hmF2 band (250-400 km) because virtual range
 #: exceeds the true path -- the wave slows near reflection, so the equivalent
@@ -463,11 +470,7 @@ def reconstruct(
             measured point, so a wide gap is left empty rather than bridged by
             whatever the fit does in between.
     """
-    from scipy.interpolate import (
-        Akima1DInterpolator,
-        PchipInterpolator,
-        UnivariateSpline,
-    )
+    from scipy.interpolate import Akima1DInterpolator, PchipInterpolator
 
     if item.n_points < min_points:
         return Reconstruction(np.empty(0), np.empty(0), item, ok=False,
@@ -492,34 +495,6 @@ def reconstruct(
     else:
         weights = np.full(item.n_points, 1.0 / smoothing_km)
 
-    knots = None
-    try:
-        if method == "spline":
-            # s = n is the standard target when weights are 1/sigma: fit to
-            # within one standard deviation per point, no closer.
-            curve = UnivariateSpline(freq, vrange, w=weights, k=SPLINE_DEGREE,
-                                     s=float(item.n_points))
-            knots = np.asarray(curve.get_knots())
-        elif method in ("pchip", "makima"):
-            bin_mhz = max(np.ptp(freq) / 12.0,
-                          float(np.min(np.diff(freq)[np.diff(freq) > 0]))
-                          if np.any(np.diff(freq) > 0) else 0.05)
-            centres, medians = _smoothed_knots(freq, vrange, item.weight, bin_mhz)
-            if len(centres) < 3:
-                return Reconstruction(np.empty(0), np.empty(0), item, ok=False,
-                                      reason=f"only {len(centres)} bins for {method}")
-            curve = (PchipInterpolator(centres, medians, extrapolate=False)
-                     if method == "pchip"
-                     else Akima1DInterpolator(centres, medians))
-            knots = centres
-        else:
-            raise ValueError(f"unknown reconstruction method {method!r}")
-    except ValueError:
-        raise
-    except Exception as exc:
-        return Reconstruction(np.empty(0), np.empty(0), item, ok=False,
-                              reason=f"{method} failed: {type(exc).__name__}: {exc}")
-
     if step_mhz is None:
         # The *smallest* spacing present, which is the instrument's own bin
         # width -- so gaps are filled at the native resolution. Using the median
@@ -543,6 +518,31 @@ def reconstruct(
                               reason="no region is well enough supported")
     grid = grid[supported]
 
+    knots = None
+    try:
+        if method == "spline":
+            curve = _smoothed(freq, vrange, weights, grid)
+            knots = np.asarray(curve.get_knots())
+        elif method in ("pchip", "makima"):
+            bin_mhz = max(np.ptp(freq) / 12.0,
+                          float(np.min(np.diff(freq)[np.diff(freq) > 0]))
+                          if np.any(np.diff(freq) > 0) else 0.05)
+            centres, medians = _smoothed_knots(freq, vrange, item.weight, bin_mhz)
+            if len(centres) < 3:
+                return Reconstruction(np.empty(0), np.empty(0), item, ok=False,
+                                      reason=f"only {len(centres)} bins for {method}")
+            curve = (PchipInterpolator(centres, medians, extrapolate=False)
+                     if method == "pchip"
+                     else Akima1DInterpolator(centres, medians))
+            knots = centres
+        else:
+            raise ValueError(f"unknown reconstruction method {method!r}")
+    except ValueError:
+        raise
+    except Exception as exc:
+        return Reconstruction(np.empty(0), np.empty(0), item, ok=False,
+                              reason=f"{method} failed: {type(exc).__name__}: {exc}")
+
     values = np.asarray(curve(grid), dtype=float)
     fitted = np.asarray(curve(freq), dtype=float)
     good = np.isfinite(fitted)
@@ -554,6 +554,41 @@ def reconstruct(
         freq=grid[finite], vrange=values[finite], segment=item,
         rms_residual_km=residual, knots=knots,
     )
+
+
+def _smoothed(freq: np.ndarray, vrange: np.ndarray, weights: np.ndarray,
+              grid: np.ndarray):
+    """A smoothing spline through the points, turning over ``grid`` once at most.
+
+    ``s = n`` is the standard target when weights are 1/sigma: fit to within
+    one standard deviation per point, no closer. Where the curve still turns
+    more than once, the scatter was underestimated -- a track wandering in a
+    broad echo wanders farther than its neighbouring points disagree -- and
+    the weights are halved until it does not. A bare parabola, where that
+    ends, turns once.
+    """
+    from scipy.interpolate import UnivariateSpline
+
+    for _ in range(64):
+        curve = UnivariateSpline(freq, vrange, w=weights, k=SPLINE_DEGREE,
+                                 s=float(freq.size))
+        if _turns(np.asarray(curve(grid), dtype=float)) <= 1:
+            break
+        weights = weights / 2.0
+    return curve
+
+
+def _turns(values: np.ndarray) -> int:
+    """How many times a curve reverses its direction by :data:`TURN_KM` or more."""
+    count, heading, peak = 0, 0.0, values[0]
+    for value in values[1:]:
+        if heading == 0 and abs(value - peak) >= TURN_KM:
+            heading, peak = np.sign(value - peak), value
+        elif heading * (value - peak) > 0:
+            peak = value
+        elif heading and abs(value - peak) >= TURN_KM:
+            count, heading, peak = count + 1, -heading, value
+    return count
 
 
 def analyse(
