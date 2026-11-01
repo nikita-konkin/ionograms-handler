@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 
 import numpy as np
 import pytest
@@ -79,6 +80,31 @@ def test_one_path_bounds_no_coherence_bandwidth():
 
 def test_a_mode_under_the_floor_is_not_seen():
     assert link.at(_state(_flat("1F", 9137.0, 24.6)), 17.25)["modes"] == 0
+
+
+def test_a_faint_late_mode_does_not_stretch_the_multipath():
+    state = _state(_flat("1F", 9137.0, random.uniform(50.0, 60.0)),
+                   _flat("2F", random.uniform(9500.0, 9900.0),
+                         random.uniform(26.0, 29.0)))
+    assert link.at(state, 17.25)["multipath_us"] is None, \
+        "a mode far below the strongest stretched the multipath"
+
+
+def test_a_mode_far_below_the_strongest_is_not_seen():
+    margin = random.uniform(10.0, 30.0)
+    state = _state(_flat("1F", 9137.0, 70.0),
+                   _flat("2F", 9871.0, 70.0 - margin - random.uniform(0.5, 5.0)))
+    seen = link.present(state, 17.25, margin_db=margin)
+    assert [m.mode.name for m in seen] == ["1F"], \
+        "a mode far below the strongest was seen"
+
+
+def test_a_mode_within_the_margin_of_the_strongest_is_seen():
+    margin = random.uniform(10.0, 30.0)
+    state = _state(_flat("1F", 9137.0, 70.0),
+                   _flat("2F", 9871.0, 70.0 - margin + random.uniform(0.5, 5.0)))
+    assert len(link.present(state, 17.25, margin_db=margin)) == 2, \
+        "a mode within the margin of the strongest was not seen"
 
 
 def test_a_carrier_outside_every_band_sees_no_mode():

@@ -348,7 +348,8 @@ muf sim check /data/2026.02.04/cyprus1_20260204_180010.lfs \
 # against the 12:05 sounding -- MUF and LOF, censored at the band's edges,
 # and a MUF anywhere in a recording cut short of its sweep, as the SAO export
 # has it; every mode paired by delay in both directions; and the link a modem
-# would see at each working frequency inside both recorded bands, with its
+# would see at each working frequency inside both recorded bands, from the
+# modes over the noise and within 20 dB of the strongest, with its
 # events: a mode seen, and the SNR in the modem's band over its floor
 # (muf/sim/forecast.py, muf/sim/link.py); with --copies, the ionograms too,
 # on the range and band both hold: 12:00's against 12:05's, and synthetic

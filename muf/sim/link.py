@@ -8,8 +8,11 @@ coherent, and does the signal clear the noise in the modem's band.
 
 A mode is seen where its C/N0 is over
 :data:`muf.sim.check.CN0_COMPARE_ABOVE_DBHZ`: under it the level read off an
-ionogram is the noise's, not the echo's. Every figure is drawn from the modes
-seen.
+ionogram is the noise's, not the echo's. Nor is a mode seen more than
+:data:`MARGIN_DB` below the strongest at the carrier: a modem's equaliser or
+guard interval does not meet a path that far down, and counted it would
+stretch the multipath as far as a strong one. Every figure is drawn from the
+modes seen.
 
 * The delay spread is the RMS spread of the modes' delays weighted by their
   power, with each mode's own delay spread added in quadrature. A prior
@@ -39,6 +42,9 @@ BANDWIDTH_HZ = 3000.0
 #: SNR in that band a link is usable from, dB.
 SNR_MIN_DB = 10.0
 
+#: How far below the strongest mode at a carrier a mode is still seen, dB.
+MARGIN_DB = 20.0
+
 #: Spacing of the working frequencies, MHz.
 CARRIER_STEP_MHZ = 0.25
 
@@ -58,10 +64,13 @@ def carrier_grid(lo_mhz: float, hi_mhz: float,
     return np.round(lo_mhz + step_mhz * np.arange(n + 1), 6)
 
 
-def present(state: ChannelState, f0_mhz: float) -> list[ModeAt]:
+def present(state: ChannelState, f0_mhz: float,
+            margin_db: float = MARGIN_DB) -> list[ModeAt]:
     """The modes a link at ``f0_mhz`` sees, earliest first."""
-    return [item for item in state.at(f0_mhz)
-            if item.cn0_dbhz >= CN0_COMPARE_ABOVE_DBHZ]
+    heard = [item for item in state.at(f0_mhz)
+             if item.cn0_dbhz >= CN0_COMPARE_ABOVE_DBHZ]
+    floor = max((item.cn0_dbhz for item in heard), default=0.0) - margin_db
+    return [item for item in heard if item.cn0_dbhz >= floor]
 
 
 def coherence_time_s(spread_hz: float, shape: str) -> float | None:
