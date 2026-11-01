@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import random
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -310,29 +309,6 @@ def test_extract_points_without_a_mask(real_file):
 
     freq, _vrange, _weight = trace.extract_points(ion, result)
     assert len(freq) == int(result.presence.sum())
-
-
-def _points_of_two_runs(gap):
-    bins = random.randrange(40, 80)
-    start = random.randrange(5, bins - 20)
-    row = np.zeros((1, bins), dtype=bool)
-    row[0, start:start + 3] = row[0, start + 3 + gap:start + 6 + gap] = True
-    ion = SimpleNamespace(
-        freq=np.array([random.uniform(8.0, 30.0)]),
-        vrange=random.uniform(2500.0, 2900.0) + 15.0 * np.arange(bins),
-        db=np.full((1, bins), random.uniform(20.0, 40.0)))
-    found = SimpleNamespace(mask=row, presence=np.array([True]))
-    return trace.extract_points(ion, found)[0]
-
-
-def test_runs_one_empty_bin_apart_are_one_echo():
-    assert _points_of_two_runs(1).size == 1, \
-        "two runs one empty bin apart were read as two echoes"
-
-
-def test_runs_two_empty_bins_apart_are_two_echoes():
-    assert _points_of_two_runs(2).size == 2, \
-        "two runs two empty bins apart were read as one echo"
 
 
 # --- low-ray / high-ray branches ---------------------------------------------

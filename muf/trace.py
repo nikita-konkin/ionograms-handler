@@ -80,12 +80,6 @@ DEFAULT_MAX_SUPPORT_GAP_MHZ = 1.0
 #: makes: where tracks were swapped it drew loops and braids.
 SPLINE_DEGREE = 2
 
-#: Lit cells of one frequency bin with at most this many unlit range bins
-#: between them are one echo. A broad echo is often lit in pieces, and each
-#: piece taken for an echo of its own became a track: two or three parallel
-#: thin modes where the sounding had one wide one.
-RUN_GAP_BINS = 1
-
 #: Effective mirror heights scanned when matching a segment's range to a hop
 #: count. Wider than the real hmF2 band (250-400 km) because virtual range
 #: exceeds the true path -- the wave slows near reflection, so the equivalent
@@ -622,8 +616,7 @@ def extract_points(ion, result) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Every trace point in a sounding: ``(freq, vrange, weight)``.
 
     Unlike :func:`muf.fit.trace_points`, which returns one range per frequency
-    bin, this emits one point per *run* in the detection mask: lit cells
-    with no more than :data:`RUN_GAP_BINS` unlit ones between them. Two
+    bin, this emits one point per *contiguous run* in the detection mask. Two
     propagation modes are routinely present at the same frequency -- a 06:00
     sounding here carries traces near 2680, 2800 and 2950 km simultaneously --
     and collapsing them to a single range per bin makes the extractor alternate
@@ -641,8 +634,8 @@ def extract_points(ion, result) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         cells = np.flatnonzero(row)
         if cells.size == 0:
             continue
-        # Split the lit cells into runs; each is one mode's echo.
-        breaks = np.flatnonzero(np.diff(cells) > 1 + RUN_GAP_BINS) + 1
+        # Split the lit cells into contiguous runs; each is one mode's echo.
+        breaks = np.flatnonzero(np.diff(cells) > 1) + 1
         for run in np.split(cells, breaks):
             if run.size == 0:
                 continue
