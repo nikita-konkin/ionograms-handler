@@ -75,6 +75,11 @@ DEFAULT_METHOD = "spline"
 #: gap, which it did on a real 22:00 sounding with a 2.1 MHz hole.
 DEFAULT_MAX_SUPPORT_GAP_MHZ = 1.0
 
+#: Degree of the smoothing spline. A cubic follows a zig-zag in the points
+#: more closely than a parabola does, and a zig-zag is not a shape an echo
+#: makes: where tracks were swapped it drew loops and braids.
+SPLINE_DEGREE = 2
+
 #: Effective mirror heights scanned when matching a segment's range to a hop
 #: count. Wider than the real hmF2 band (250-400 km) because virtual range
 #: exceeds the true path -- the wave slows near reflection, so the equivalent
@@ -492,7 +497,7 @@ def reconstruct(
         if method == "spline":
             # s = n is the standard target when weights are 1/sigma: fit to
             # within one standard deviation per point, no closer.
-            curve = UnivariateSpline(freq, vrange, w=weights, k=3,
+            curve = UnivariateSpline(freq, vrange, w=weights, k=SPLINE_DEGREE,
                                      s=float(item.n_points))
             knots = np.asarray(curve.get_knots())
         elif method in ("pchip", "makima"):
@@ -662,9 +667,17 @@ def group_tracks(
     """Group points into tracks by following each mode across frequency.
 
     Walks up the frequency axis holding a set of open tracks and extending each
-    with the nearest point in range. This is the right operation when modes
+    with a point near its last range. This is the right operation when modes
     overlap in frequency -- which they usually do -- where splitting a
     frequency-ordered sequence at range jumps is not.
+
+    Tracks never cross (:func:`_matched`). Taking the closest pair first, as
+    this once did, gave a track the point above its neighbour whenever both
+    moved up a little, and the tracks swapped; the curves fitted to them then
+    braided and looped where the sounding had one echo. Nor does a track
+    head along a parabola through its recent points: on real points,
+    scattered by tens of km, the parabola led tracks off their echo and
+    across each other more often than the last range does.
 
     Args:
         max_step_km: how far a track's range may move between frequency bins.
@@ -694,24 +707,18 @@ def group_tracks(
         closed.extend(t for t in open_tracks if t.get("stale"))
         open_tracks = [t for t in open_tracks if not t.get("stale")]
 
-        # Greedy nearest-in-range assignment: closest pairs claimed first.
-        pairs = sorted(
-            ((abs(vrange[p] - t["last_range"]), p, ti)
-             for p in at for ti, t in enumerate(open_tracks)),
-            key=lambda item: item[0],
-        )
+        at = at[np.argsort(vrange[at], kind="stable")]
+        rank = sorted(range(len(open_tracks)),
+                      key=lambda ti: open_tracks[ti]["last_range"])
         taken_points: set[int] = set()
-        taken_tracks: set[int] = set()
-        for distance, p, ti in pairs:
-            if distance > max_step_km or p in taken_points or ti in taken_tracks:
-                continue
-            track = open_tracks[ti]
+        for i, j in _matched([open_tracks[ti]["last_range"] for ti in rank], vrange[at],
+                             max_step_km):
+            track, p = open_tracks[rank[i]], at[j]
             track["freq"].append(freq[p])
             track["vrange"].append(vrange[p])
             track["weight"].append(weight[p])
             track["last_freq"], track["last_range"] = freq[p], vrange[p]
             taken_points.add(p)
-            taken_tracks.add(ti)
 
         for p in at:
             if p in taken_points:
@@ -729,3 +736,31 @@ def group_tracks(
         for t in closed if len(t["freq"]) >= min_points
     ]
     return sorted(segments, key=lambda s: s.freq.min())
+
+
+def _matched(last: list[float], ranges: np.ndarray,
+             gate_km: float) -> list[tuple[int, int]]:
+    """Tracks paired with points, neither crossing the other, as pairs of indices.
+
+    Both ``last``, the tracks' last ranges, and ``ranges`` ascend, so a
+    pairing that keeps their order keeps the tracks from crossing. Of those,
+    the one with the largest sum of ``gate_km**2 - distance**2`` over its
+    pairs: a pair is worth taking only inside the gate, and worth more the
+    closer it is.
+    """
+    best = np.zeros((len(last) + 1, ranges.size + 1))
+    for i, h in enumerate(last, start=1):
+        for j, r in enumerate(ranges, start=1):
+            best[i, j] = max(best[i - 1, j], best[i, j - 1],
+                             best[i - 1, j - 1] + gate_km ** 2 - (r - h) ** 2
+                             if abs(r - h) <= gate_km else -np.inf)
+    pairs, i, j = [], len(last), ranges.size
+    while i and j:
+        if best[i, j] == best[i - 1, j]:
+            i -= 1
+        elif best[i, j] == best[i, j - 1]:
+            j -= 1
+        else:
+            pairs.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+    return pairs

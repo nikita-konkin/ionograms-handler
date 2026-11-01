@@ -515,6 +515,14 @@ extraction alternate between them, which then looks like a trace jumping about.
 `extract_points` emits one point per contiguous run in the detection mask, so
 both survive.
 
+**Tracks never cross.** The points of one frequency bin are shared out among
+the tracks keeping the tracks' order in range. Taking the closest pair first,
+as `group_tracks` once did, gave a track the point above its neighbour
+whenever both moved up a little; the tracks swapped, and the curves fitted to
+them braided and looped where the sounding had one echo. The fitted curve is
+a quadratic smoothing spline: a cubic follows a zig-zag in the points more
+closely, and a zig-zag is not a shape an echo makes.
+
 **Low and high rays are paired, not treated as separate modes.** Track-following
 sees them as two tracks, since they are separated in range — the low ray rising
 gently (+2 to +17 km/MHz), the high ray falling steeply (−24 to −76). But they

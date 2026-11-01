@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 import numpy as np
 import pytest
 
@@ -167,6 +169,19 @@ def test_reconstruction_recovers_the_underlying_curve():
     assert np.sqrt(np.mean((fitted - truth) ** 2)) < 15.0     # beats the noise
 
 
+def test_a_reconstruction_is_a_parabola_between_its_knots():
+    freq, vrange = one_mode(n=120, scatter=random.uniform(10.0, 30.0),
+                            seed=random.randrange(1000))
+    result = trace.reconstruct(trace.Segment(freq, vrange))
+    worst = max(
+        np.max(np.abs(np.polyval(np.polyfit(f, r, 2), f) - r))
+        for a, b in zip(result.knots[:-1], result.knots[1:])
+        for f, r in [(result.freq[(result.freq > a) & (result.freq < b)],
+                      result.vrange[(result.freq > a) & (result.freq < b)])]
+        if f.size >= 4)
+    assert worst < 1e-6, "the reconstruction is not a parabola between its knots"
+
+
 def test_reconstruction_stays_inside_its_segment():
     """It must never extrapolate past the data it was given."""
     freq, vrange = one_mode(12.0, 22.0)
@@ -247,6 +262,18 @@ def test_group_tracks_will_not_bridge_a_range_jump():
     tracks = trace.group_tracks(freq, vrange)
 
     assert len(tracks) == 2
+
+
+def test_two_tracks_drawing_close_keep_their_order_in_range():
+    low = random.uniform(2700.0, 2900.0)
+    high = low + random.uniform(10.0, 14.0)
+    near = high + random.uniform(1.0, 3.0)
+    freq = np.repeat(np.round(10.0 + 0.02 * np.arange(12), 2), 2)
+    vrange = np.concatenate([np.tile([low, high], 6),
+                             np.tile([near, near + random.uniform(5.0, 8.0)], 6)])
+    one, other = trace.group_tracks(freq, vrange)
+    assert np.unique(np.sign(one.vrange - other.vrange)).size == 1, \
+        "two tracks drawing close crossed each other"
 
 
 def test_group_tracks_needs_no_weights():
