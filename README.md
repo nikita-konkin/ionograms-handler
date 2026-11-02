@@ -1070,7 +1070,7 @@ different interpretations of one ionogram, not something to merge.
 | `muf detect TARGET`   | census a chirpsounder2 detection tree: which transmitters, on what schedule |
 | `muf stations`        | print the station coordinate registry                                       |
 | `muf echo-window TARGET` | keep the dechirped voltage around the echoes ([`docs/echo-window.md`](docs/echo-window.md)) |
-| `muf sim ...`          | HF channel simulator: states from soundings, synthetic `.lfs`, a signal through the channel ([`docs/simulator.md`](docs/simulator.md)) |
+| `muf sim ...`          | HF channel simulator: states from soundings, synthetic `.lfs`, a signal through the channel ([`docs/simulator.md`](docs/simulator.md)); `muf sim band` reads 1F alone over 1 MHz at 0.75 of its MUF |
 
 ### Which commands read which format
 
