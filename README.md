@@ -539,6 +539,12 @@ soundings worse. `split_humps` cuts such a track at the top of its hump, again
 in each piece, so the simulator's modes each take their own shape; a piece of
 fewer than 8 points stays joined.
 
+In simulator series and the live loop, recent matching tracks can retain
+their cut through small peak movements. The observer uses only the previous
+sounding, resets after a gap longer than 15 minutes, and releases a cut when
+the hump disappears. See [the observation rules](docs/simulator.md#from-a-sounding-muf-sim-state)
+for the matching and hysteresis thresholds.
+
 **Low and high rays are paired, not treated as separate modes.** Track-following
 sees them as two tracks, since they are separated in range — the low ray rising
 gently (+2 to +17 km/MHz), the high ray falling steeply (−24 to −76). But they

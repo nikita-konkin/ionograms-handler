@@ -261,6 +261,70 @@ def test_a_state_is_observed_again_when_its_parameters_change(tmp_path):
     assert len(first.modes[0].freq_mhz) < 30
 
 
+def test_a_cached_state_depends_on_the_previous_observation(tmp_path, monkeypatch):
+    a, b = _soundings(tmp_path / "data", [T0, T0 + 300.0])
+    cache = tmp_path / "states"
+    prior = series.state_of(a, cache)
+    series.state_of(b, cache, previous=prior)
+    calls = []
+    original = observe.from_ionogram
+
+    def record(*args, **kwargs):
+        calls.append(kwargs.get("previous"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(observe, "from_ionogram", record)
+    series.state_of(b, cache, previous=prior)
+    assert calls == []
+    prior.metrics["split_history"] = []
+    series.state_of(b, cache, previous=prior)
+    assert calls == [prior]
+
+
+def test_series_observations_see_only_the_previous_sounding(tmp_path, monkeypatch):
+    paths = _soundings(tmp_path / "data", [T0, T0 + 300.0, T0 + 600.0])
+    seen = []
+    original = observe.from_ionogram
+
+    def record(*args, **kwargs):
+        previous = kwargs.get("previous")
+        seen.append(None if previous is None else previous.epoch)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(observe, "from_ionogram", record)
+    _run(list(reversed(paths)), tmp_path / "run")
+    assert seen == [None, T0, T0 + 300.0]
+
+
+@pytest.mark.parametrize("age,other_circuit,forecast,kept", [
+    (300.0, False, False, True), (900.0, False, False, True),
+    (901.0, False, False, False), (0.0, False, False, False),
+    (-300.0, False, False, False), (300.0, True, False, False),
+    (300.0, False, True, False),
+])
+def test_observer_rejects_unusable_history(tmp_path, monkeypatch, age,
+                                         other_circuit, forecast, kept):
+    path = _soundings(tmp_path / "data", [T0])[0]
+    ion = observe.load(path)
+    prior = observe.from_ionogram(ion)
+    prior.epoch -= age
+    if other_circuit:
+        from dataclasses import replace
+        prior.circuit = replace(prior.circuit, tx="elsewhere")
+    if forecast:
+        prior.metrics["lead_s"] = 300.0
+    seen = []
+    original = observe.tracking.split
+
+    def record(segments, previous=()):
+        seen.append(bool(previous))
+        return original(segments, previous)
+
+    monkeypatch.setattr(observe.tracking, "split", record)
+    observe.from_ionogram(ion, previous=prior)
+    assert seen == [kept]
+
+
 def test_two_jobs_score_as_one(tmp_path):
     paths = _soundings(tmp_path / "data", [T0 + 300.0 * k for k in range(3)])
     one = _run(paths, tmp_path / "one")

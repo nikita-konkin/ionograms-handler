@@ -33,7 +33,7 @@ import numpy as np
 
 from .. import calibrate, extractors, interference, loader, spectro, trace
 from ..io_lfs import LfsHeader
-from . import presets
+from . import presets, tracking
 from .state import MEASURED, PRIOR, ChannelState, Circuit, Mode, Provenance, Sweep
 
 #: A Hann window's equivalent noise bandwidth, bins: the share of a tone's
@@ -364,7 +364,8 @@ def _name(seg, taken: set[str]) -> str:
 
 def from_ionogram(ion, *, method: str = "contour", source: str = "",
                   doppler: str | float = DEFAULT_DOPPLER_PRIOR,
-                  knot_mhz: float = KNOT_MHZ) -> ChannelState:
+                  knot_mhz: float = KNOT_MHZ,
+                  previous: ChannelState | None = None) -> ChannelState:
     """A state from an ionogram already in hand. See :func:`from_sounding`."""
     header = ion.header
     if getattr(ion, "zero_periods", 0):
@@ -416,7 +417,14 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
     state.metrics["pick_vrange_km"] = float(result.pick.vrange_km)
 
     freq, vrange, weight = trace.extract_points(ion, result)
-    segments = trace.split_humps(trace.group_tracks(freq, vrange, weight))
+    history = ()
+    if (previous is not None and previous.circuit == circuit
+            and 0 < state.epoch - previous.epoch <= tracking.MAX_AGE_S
+            and "lead_s" not in previous.metrics):
+        history = previous.metrics.get("split_history", ())
+    segments, remembered, names = tracking.split(
+        trace.group_tracks(freq, vrange, weight), history)
+    state.metrics["split_history"] = remembered
     ground = calibrate.ground_range_km(header) if isinstance(header, LfsHeader) else (
         circuit.ground_km)
     if ground:
@@ -432,6 +440,7 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
 
     scale = km_per_us(header)
     taken: set[str] = set()
+    reserved = {old for _, _, old in names.values() if old is not None}
     curves = [(seg, *_curve(seg))
               for seg in sorted(segments, key=lambda s: (s.median_range,
                                                          s.freq_span[0]))
@@ -450,7 +459,15 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
         levels = level_statistics(f_rows, cn0_rows)
         gaps = np.diff(np.unique(seg.freq))
         widest = float(gaps.max()) if gaps.size else 0.0
-        name = _name(seg, taken)
+        entry, slot, old_name = names.get(id(seg), (None, None, None))
+        if old_name is not None and old_name not in taken:
+            name = old_name
+            taken.add(name)
+        else:
+            name = _name(seg, taken | reserved)
+            taken.add(name)
+        if entry is not None:
+            entry["names"][slot] = name
         if levels is not None:
             state.metrics.setdefault("levels", {})[name] = levels
         state.modes.append(Mode(

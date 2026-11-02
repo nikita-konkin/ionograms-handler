@@ -344,21 +344,38 @@ def split_humps(segments: list[Segment],
     return [piece for item in segments for piece in _branches(item, min_points)]
 
 
-def _branches(item: Segment, min_points: int) -> list[Segment]:
+def _branches(item: Segment, min_points: int, previous_cuts=(),
+              cut_points: list[float] | None = None) -> list[Segment]:
     """``item`` cut at the top of its hump and again in each piece, or whole."""
     curve = reconstruct(item)
     if not curve.ok:
         return [item]
     depth = np.minimum(curve.vrange - np.minimum.accumulate(curve.vrange),
                        curve.vrange - np.minimum.accumulate(curve.vrange[::-1])[::-1])
-    left = item.freq <= curve.freq[int(np.argmax(depth))]
-    if depth.max() < TURN_KM or min(left.sum(), (~left).sum()) < min_points:
+    top = int(np.argmax(depth))
+    boundary = curve.freq[top]
+    threshold = TURN_KM
+    # Keep a recent boundary near the supported top, with hysteresis on
+    # prominence. A moved peak or vanished hump must override the history.
+    for cut in sorted(previous_cuts, key=lambda f: abs(f - curve.freq[top])):
+        if abs(cut - curve.freq[top]) > 0.5:
+            continue
+        candidate = int(np.argmin(abs(curve.freq - cut)))
+        if depth[candidate] >= max(TURN_KM / 2, depth[top] - TURN_KM / 2):
+            top, threshold = candidate, TURN_KM / 2
+            boundary = cut
+            break
+    left = item.freq <= boundary
+    if depth[top] < threshold or min(left.sum(), (~left).sum()) < min_points:
         return [item]
+    if cut_points is not None:
+        cut_points.append(float(boundary))
     return [piece for side in (left, ~left)
             for piece in _branches(
                 replace(item, freq=item.freq[side], vrange=item.vrange[side],
                         weight=None if item.weight is None else item.weight[side]),
-                min_points)]
+                min_points, [f for f in previous_cuts
+                             if abs(f - boundary) > 0.5], cut_points)]
 
 
 def slope_km_per_mhz(item: Segment) -> float:

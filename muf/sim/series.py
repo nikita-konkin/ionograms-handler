@@ -222,23 +222,28 @@ def _files(cache: Path, path: Path) -> tuple[Path, Path]:
 
 
 def state_of(path: str | Path, cache: str | Path, params: Mapping | None = None, *,
-             stations: Mapping | None = None, stations_id: str | None = None
+             stations: Mapping | None = None, stations_id: str | None = None,
+             previous: ChannelState | None = None
              ) -> ChannelState:
     """The state of the sounding at ``path``, from ``cache`` when its key matches.
 
     The key is the file's path, size and modification time, the code's
     version (:func:`code_version`) and the observing ``params`` -- extractor,
     window, knots and Doppler prior, :data:`OBSERVE` filling in the rest --
-    with ``stations_id`` naming the station table. A state observed afresh is
-    cached with its key and its ionogram's grid.
+    with ``stations_id`` naming the station table. The preceding observation
+    is also hashed into the key and saved for re-observing on another grid.
+    A state observed afresh is cached with its key and its ionogram's grid.
     """
     path, cache = Path(path), Path(cache)
     params = {**OBSERVE, **(params or {})}
     state_file, key_file = _files(cache, path)
     stat = path.stat()
+    prior = None if previous is None else previous.to_dict()
     key = {"path": str(path.resolve()), "size": stat.st_size,
            "mtime_ns": stat.st_mtime_ns, "muf": code_version(), "observe": params,
-           "stations": stations_id}
+           "stations": stations_id,
+           "previous": None if prior is None else hashlib.sha256(
+               json.dumps(prior, sort_keys=True).encode()).hexdigest()}
     if state_file.exists() and key_file.exists():
         stored = json.loads(key_file.read_text(encoding="utf-8"))
         if stored.get("key") == key:
@@ -246,10 +251,11 @@ def state_of(path: str | Path, cache: str | Path, params: Mapping | None = None,
     ion = observe.load(path, window=params["window"], stations=stations)
     state = observe.from_ionogram(ion, method=params["method"], source=path.name,
                                   doppler=params["doppler"],
-                                  knot_mhz=params["knot_mhz"])
+                                  knot_mhz=params["knot_mhz"], previous=previous)
     cache.mkdir(parents=True, exist_ok=True)
     state.save(state_file)
-    key_file.write_text(json.dumps({"key": key, "grid": _grid(ion)}, indent=1) + "\n",
+    key_file.write_text(json.dumps({"key": key, "grid": _grid(ion),
+                                    "previous": prior}, indent=1) + "\n",
                         encoding="utf-8")
     return state
 
@@ -275,8 +281,11 @@ def truth_of(origin: str | Path, path: str | Path, cache: str | Path,
         return ChannelState.load(_files(cache, b)[0])
     ion = observe.load(b, window=params["window"], stations=stations,
                        gate_km=_gate(grid))
+    prior = json.loads(_files(cache, b)[1].read_text(encoding="utf-8")).get("previous")
     return observe.from_ionogram(ion, method=params["method"], source=b.name,
-                                 doppler=params["doppler"], knot_mhz=params["knot_mhz"])
+                                 doppler=params["doppler"], knot_mhz=params["knot_mhz"],
+                                 previous=None if prior is None else
+                                 ChannelState.from_dict(prior))
 
 
 def simulation(forecast: ChannelState, origin: str | Path, cache: str | Path,
@@ -348,17 +357,6 @@ def _recovery_rows(report: dict, state: ChannelState, to: str) -> list[dict]:
 
 def _empty() -> dict[str, list]:
     return {name: [] for name in (*ROWS, "skipped")}
-
-
-def _observe_job(job: dict) -> dict | None:
-    """One sounding's state into the cache; a skipped row if it fails."""
-    path = Path(job["path"])
-    try:
-        state_of(path, job["cache"], job["observe"], stations=job["stations"],
-                 stations_id=job["stations_id"])
-    except Exception as exc:
-        return _skipped(path.name, None, "state", f"not observed: {_failure(exc)}")
-    return None
 
 
 def _score_job(job: dict) -> dict[str, list]:
@@ -556,17 +554,26 @@ def run_series(paths: Iterable, out: str | Path, *, circuit: str | None = None,
     common = {"cache": str(cache), "observe": observing, "stations": stations,
               "stations_id": stations_file}
     failed = {r["from"] for r in skipped if r["stage"] == "state"}
-    states = [{**common, "path": str(s.path)} for s in chosen
-              if s.path.name not in failed]
+    states = [{**common, "path": str(s.path)} for s in chosen]
     found_pairs, unpaired = pairs(chosen, lead_s=lead_s, tolerance_s=tolerance_s)
     owed = [(a, b) for a, b in found_pairs if (a.path.name, b.path.name) not in done]
     steps = len(states) + len(owed)
     tell = progress or (lambda done, total: None)
     tell(0, steps)
-    for k, row in enumerate(_map(_observe_job, states, jobs), 1):
-        if row is not None:
-            writer.skip([row])
-            failed.add(row["from"])
+    previous = None
+    for k, job in enumerate(states, 1):
+        if Path(job["path"]).name in failed:
+            previous = None
+            tell(k, steps)
+            continue
+        try:
+            previous = state_of(job["path"], cache, observing, stations=stations,
+                                stations_id=stations_file, previous=previous)
+        except Exception as exc:
+            writer.skip([_skipped(Path(job["path"]).name, None, "state",
+                                  f"not observed: {_failure(exc)}")])
+            failed.add(Path(job["path"]).name)
+            previous = None
         tell(k, steps)
     writer.skip(unpaired)
     order = {s.path: k for k, s in enumerate(chosen)}
