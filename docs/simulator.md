@@ -232,11 +232,10 @@ more precisely (#92). The full simulator is unchanged beside it.
 
 1. **The band.** 1F is the earliest-arriving low ray that covers 0.75 of
    its own MUF; its MUF is the top of that ray. The band is 0.75 MUF
-   +- 0.5 MHz. Hop labels are not used: they come from the absolute delay,
-   and a receiver clock that is off -- yoshkar-ola's, from 18 October
-   2026 -- moves every delay alike and relabels the hops, but cannot change
-   which mode arrives first. A censored MUF, or no low ray covering its
-   band, gives no band and says so.
+   +- 0.5 MHz. Hop labels are not used: a receiver clock that is off --
+   yoshkar-ola's, from 18 October 2026 -- moves every delay alike, but
+   cannot change which mode arrives first. A censored MUF, or no low ray
+   covering its band, gives no band and says so.
 2. **The signal.** Over the band (10 s at 100 kHz/s) the record is
    dechirped a second time along 1F's trace, re-centred on the echo and
    low-passed, as the fast part does. Every other mode lies beyond the stop

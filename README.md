@@ -554,9 +554,16 @@ results table without opening a plot.
 
 **Hop labelling is weak on this path, deliberately so.** Over 2,588 km a 1-hop
 echo spans 2636–2774 km across plausible reflection heights and a 2-hop echo
-2774–3182: the families touch, so most segments are genuinely ambiguous and are
+2774–3182: the families touch, so many segments are genuinely ambiguous and are
 left unlabelled rather than assigned on a few kilometres. It sharpens on longer
 paths. Segmentation does not depend on it.
+
+**The ladder is calibrated on the earliest echo (#94).** Nothing arrives before
+1F, so the earliest trace spanning 1 MHz is taken as the 1-hop path at the
+lowest mirror height, and every trace is shifted by the same amount before it
+is matched. Uncalibrated, "3F at 250 km" sat at 2991 km, right where 2F
+arrives, and a receiver's clock error moved every label with it. An earliest
+trace too far from the 1-hop family to be it leaves the ladder as it is.
 
 ### External references
 
@@ -1131,8 +1138,7 @@ period, 2997 km at the usual 10 ms — which is a property of the transmitter's
 timing and says nothing about this circuit. `calibrate.geometry_gate` asks the
 geometry instead: the near edge is one hop at the lowest plausible mirror
 height, the far edge `DEFAULT_MAX_HOPS` at the highest, both from
-`trace.hop_range_km` so a gate and a hop label cannot disagree about what a
-range means.
+`trace.hop_range_km`, the ladder hop labels are read against.
 
 | path              | stored      | geometry gate | kept             |
 |-------------------|-------------|---------------|------------------|
