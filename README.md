@@ -530,6 +530,18 @@ it waved. `reconstruct` halves the spline's weights until its curve reverses
 by 15 km (`TURN_KM`) or more no more than once; a bare parabola, where that
 ends, turns once.
 
+**A track is cut where it rises into a gap and falls out of it.** The one turn
+an echo makes is a dip: walked up in frequency, its low ray falls at the foot
+and rises to the nose, and its high ray falls to it. It never rises and then
+falls. A track that does has gone past one echo's top, across a gap with no
+points, onto another echo within the 80 km a track may step: a low ray below,
+or a high ray falling from beside it. Its curve then bends the wrong way.
+`group_tracks` reads the turns on the points' median range per 0.25 MHz, and
+where a rise and a fall of 15 km or more meet across a gap wider than 0.5 MHz
+(`TURN_GAP_MHZ`), it cuts the track at the widest gap there (#97). A turn
+among points with no gap is a track wandering through one broad echo, and is
+left to `reconstruct`.
+
 **Low and high rays are paired, not treated as separate modes.** Track-following
 sees them as two tracks, since they are separated in range — the low ray rising
 gently (+2 to +17 km/MHz), the high ray falling steeply (−24 to −76). But they

@@ -83,7 +83,8 @@ written with full precision, so a state read back is the state written.
 
 `muf.sim.observe` finds the trace the way `muf run` does -- an extractor
 (`contour` by default), then `muf.trace`: points per contiguous run, tracks
-followed across frequency without ever crossing, hop labels from the
+followed across frequency without ever crossing and cut where they rise into
+a gap and fall out of it, hop labels from the
 geometry, low and high rays paired at the nose. Each track becomes one mode:
 
 - **delay**: `muf.trace.reconstruct`'s quadratic smoothing spline, loosened
