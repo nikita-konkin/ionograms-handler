@@ -83,6 +83,28 @@ def cmd_fast(args) -> int:
     return 0 if any(e.used for e in estimates) else 2
 
 
+def cmd_band(args) -> int:
+    from ..cli import _load_registry
+    from . import band
+
+    try:
+        report = band.check(args.sounding, count=args.copies, seed=args.seed,
+                            method=args.method, stations=_load_registry(args.stations))
+    except ValueError as error:
+        print(f"muf sim band: {args.sounding}: {error}", file=sys.stderr)
+        return 2
+    print(band.format_report(report))
+    if args.json:
+        Path(args.json).write_text(json.dumps(report, indent=1) + "\n",
+                                   encoding="utf-8")
+        print(f"-> {args.json}")
+    if args.out:
+        from .state import ChannelState
+
+        print(f"-> {ChannelState.from_dict(report['state']).save(args.out)}")
+    return 0
+
+
 def cmd_preset(args) -> int:
     from . import presets
 
@@ -401,6 +423,19 @@ def register(sub) -> None:
     p.add_argument("--realisations", type=int, default=2)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_fast)
+
+    p = ss.add_parser("band", help="1F alone over 1 MHz at 0.75 of its MUF, from the "
+                                   "complex signal: its band state and its copies")
+    p.add_argument("sounding", help=".lfs, v2 .h5 with z, or .echo.h5")
+    p.add_argument("--copies", type=int, default=12,
+                   help="synthetic soundings of the band state; verdicts need 12 "
+                        "or more")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--method", default="contour", help="extractor that finds the trace")
+    p.add_argument("--stations", type=Path, metavar="FILE")
+    p.add_argument("--json", type=Path, help="write the full report here")
+    p.add_argument("--out", type=Path, help="write the band state here")
+    p.set_defaults(func=cmd_band)
 
     p = ss.add_parser("preset", help="an ITU-R F.1487 test channel, or 'law'")
     p.add_argument("name", nargs="?", help="F.1487 condition (see --list) or 'law'")
