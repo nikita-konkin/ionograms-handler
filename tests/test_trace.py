@@ -117,16 +117,49 @@ def test_labels_a_clear_one_hop_segment():
     assert labelled[0].height_km is not None
 
 
+def track(f0: float, f1: float, km: float) -> trace.Segment:
+    """A flat trace across a band, rising 4 km over it."""
+    freq = np.linspace(f0, f1, 40)
+    return trace.Segment(freq, km + 4.0 * (freq - f0) / (f1 - f0))
+
+
 def test_leaves_an_ambiguous_segment_unlabelled():
     """Between the 1-hop and 2-hop families, "don't know" is the right answer.
 
-    Over 2588 km the families touch near 2774 km, so a segment sitting there
-    must not be assigned on a few kilometres of difference.
+    Over 2588 km the families touch at 2774 km, so a segment sitting there once
+    the ladder is calibrated on the earliest echo must not be assigned on a few
+    kilometres of difference.
     """
-    freq, vrange = one_mode(h0=2770.0, rise=5.0)
-    labelled = trace.identify_hops(trace.segment(freq, vrange), GROUND_KM)
+    segments = [track(9.0, 18.0, 2745.0), track(8.0, 16.0, 2885.0)]
+    assert trace.identify_hops(segments, GROUND_KM)[1].hops is None, \
+        "a segment between the hop families was labelled"
 
-    assert labelled[0].hops is None
+
+def test_a_2f_trace_behind_the_1f_low_ray_is_labelled_two_hops():
+    """Over 2588 km the flat-Earth ladder puts 3F reflecting at 250 km at
+    2991 km, where 2F arrives; calibrated on the earliest echo it reads 2F."""
+    segments = [track(9.0, 18.0, 2745.0), track(8.0, 27.5, 2810.0),
+                track(8.0, 16.5, 2990.0)]
+    assert trace.identify_hops(segments, GROUND_KM)[2].hops == 2, \
+        "a 2F trace behind the 1F low ray was not labelled two hops"
+
+
+def test_a_uniform_shift_leaves_every_hop_label_alone():
+    shift = random.choice((-1.0, 1.0)) * random.uniform(60.0, 120.0)
+    kms = (2745.0, 2810.0, 2990.0)
+    spans = ((9.0, 18.0), (8.0, 27.5), (8.0, 16.5))
+    assert [s.hops for s in trace.identify_hops(
+        [track(*span, km + shift) for span, km in zip(spans, kms)], GROUND_KM)] \
+        == [s.hops for s in trace.identify_hops(
+            [track(*span, km) for span, km in zip(spans, kms)], GROUND_KM)], \
+        f"shifting every trace by {shift:.0f} km changed the hop labels"
+
+
+def test_a_trace_narrower_than_a_megahertz_does_not_calibrate_the_ladder():
+    segments = [track(14.2, 14.6, 2500.0), track(9.0, 18.0, 2745.0),
+                track(8.0, 27.5, 2810.0), track(8.0, 16.5, 2990.0)]
+    assert trace.identify_hops(segments, GROUND_KM)[3].hops == 2, \
+        "a narrow early trace calibrated the hop ladder"
 
 
 def test_leaves_an_implausible_segment_unlabelled():

@@ -237,9 +237,8 @@ def test_auto_gate_returns_none_rather_than_raising_on_junk():
 
 
 def test_geometry_gate_brackets_the_hop_families():
-    """Both edges come from `trace.hop_range_km`, the same formula
-    `identify_hops` labels segments with, so a gate and a hop label cannot
-    disagree about what a range means."""
+    """Both edges come from `trace.hop_range_km`, the ladder `identify_hops`
+    reads hop labels against."""
     from muf import calibrate, trace
 
     class _H:

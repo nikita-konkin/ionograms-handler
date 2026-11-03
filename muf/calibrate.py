@@ -138,9 +138,8 @@ def geometry_gate(header, *,
     Where :func:`default_gate` asks the *instrument* what it recorded, this
     asks the *path* what is possible: the shortest echo is one hop at the
     lowest plausible mirror height, the longest is ``max_hops`` at the highest.
-    Both edges come from :func:`muf.trace.hop_range_km`, the same formula
-    ``identify_hops`` labels segments with, so a gate and a hop label cannot
-    disagree about what a range means.
+    Both edges come from :func:`muf.trace.hop_range_km`, the ladder
+    ``identify_hops`` reads hop labels against.
 
     This exists for receivers whose stored extent says nothing about the path.
     A ``.lfs`` header carries an ``rmax`` chosen for its own circuit, and a v2
