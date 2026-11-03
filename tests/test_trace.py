@@ -344,6 +344,55 @@ def test_two_tracks_drawing_close_keep_their_order_in_range():
         "two tracks drawing close crossed each other"
 
 
+def test_a_track_rising_to_a_gap_does_not_go_on_down_onto_another_echo():
+    rng = np.random.default_rng(random.randrange(1000))
+    top = random.uniform(2840.0, 2890.0)
+    upper = np.round(np.arange(8.0, 10.5, 0.04), 2)
+    lower = np.round(np.arange(11.5, 14.0, 0.04), 2)
+    vrange = np.concatenate([
+        top - random.uniform(25.0, 40.0) * (10.5 - upper) / 2.5,
+        top - random.uniform(55.0, 70.0) + 20.0 * ((lower - 11.5) / 2.5) ** 2,
+    ]) + rng.uniform(-3.0, 3.0, upper.size + lower.size)
+    tracks = trace.group_tracks(np.concatenate([upper, lower]), vrange)
+    assert len(tracks) == 2, \
+        "a track rising to one echo's top went on down onto another"
+
+
+def test_a_track_rising_to_a_gap_does_not_go_on_down_a_high_ray():
+    rng = np.random.default_rng(random.randrange(1000))
+    top = random.uniform(2840.0, 2890.0)
+    upper = np.round(np.arange(8.8, 10.4, 0.04), 2)
+    high = np.round(np.arange(11.4, 14.0, 0.04), 2)
+    vrange = np.concatenate([
+        top - random.uniform(25.0, 40.0) * (10.4 - upper) / 1.6,
+        top + random.uniform(0.0, 15.0)
+        - random.uniform(60.0, 90.0) * (high - 11.4) / 2.6,
+    ]) + rng.uniform(-3.0, 3.0, upper.size + high.size)
+    tracks = trace.group_tracks(np.concatenate([upper, high]), vrange)
+    assert len(tracks) == 2, \
+        "a track rising to one echo's top went on down another's high ray"
+
+
+def test_a_low_ray_dipping_at_its_foot_across_a_fade_stays_one_track():
+    rng = np.random.default_rng(random.randrange(1000))
+    freq = np.round(np.concatenate([np.arange(8.0, 10.0, 0.04),
+                                    np.arange(11.0, 14.0, 0.04)]), 2)
+    vrange = (2790.0 + random.uniform(40.0, 60.0) * ((freq - 11.5) / 3.5) ** 2
+              + rng.uniform(-3.0, 3.0, freq.size))
+    assert len(trace.group_tracks(freq, vrange)) == 1, \
+        "a low ray dipping at its foot was cut at its fade"
+
+
+def test_a_track_wandering_through_a_broad_echo_stays_one_track():
+    freq = np.round(np.arange(10.0, 14.0, 0.04), 2)
+    vrange = (2800.0 + random.uniform(20.0, 35.0)
+              * np.sin(2.0 * np.pi * freq / random.uniform(0.8, 1.2))
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    assert len(trace.group_tracks(freq, vrange)) == 1, \
+        "a track wandering through one broad echo was cut where it turned"
+
+
 def test_group_tracks_needs_no_weights():
     freq = np.linspace(10.0, 20.0, 30)
     tracks = trace.group_tracks(freq, np.full(30, 2700.0))

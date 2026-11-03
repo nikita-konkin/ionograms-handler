@@ -87,6 +87,18 @@ SPLINE_DEGREE = 2
 #: it turns once at most.
 TURN_KM = 15.0
 
+#: A track that turns from rising to falling across a gap without points at
+#: least this wide is cut there, MHz. One echo, walked up in frequency, never
+#: rises and then falls: its low ray dips at its foot and rises to its nose,
+#: and its high ray falls to it. A track that does has gone past one echo's top
+#: onto another echo, which only a gap lets it do. A turn among its points is
+#: a track wandering through a broad echo, and is left alone.
+TURN_GAP_MHZ = 0.5
+
+#: Width of the bins a track's turns are read on, MHz, as the median range of
+#: its points in each: a point scatters by 12-37 km here, more than a turn.
+TURN_BIN_MHZ = 0.25
+
 #: Effective mirror heights scanned when matching a segment's range to a hop
 #: count. Wider than the real hmF2 band (250-400 km) because virtual range
 #: exceeds the true path -- the wave slows near reflection, so the equivalent
@@ -742,6 +754,12 @@ def group_tracks(
     scattered by tens of km, the parabola led tracks off their echo and
     across each other more often than the last range does.
 
+    A track is cut where it turns from rising to falling across a gap
+    (:data:`TURN_GAP_MHZ`). The range window lets a track step 80 km, and an
+    echo that ends at its own nose can leave another within that reach on the
+    far side of the gap. Followed on, onto a low ray below it or a high ray
+    falling from beside it, the track's curve bends the wrong way.
+
     Args:
         max_step_km: how far a track's range may move between frequency bins.
         max_gap_mhz: a track unextended for longer than this is closed, so two
@@ -794,11 +812,53 @@ def group_tracks(
     closed.extend(open_tracks)
 
     segments = [
-        Segment(freq=np.asarray(t["freq"]), vrange=np.asarray(t["vrange"]),
-                weight=np.asarray(t["weight"]))
-        for t in closed if len(t["freq"]) >= min_points
+        Segment(freq=f, vrange=r, weight=w)
+        for t in closed
+        for f, r, w in _cut(np.asarray(t["freq"]), np.asarray(t["vrange"]),
+                            np.asarray(t["weight"]))
+        if f.size >= min_points
     ]
     return sorted(segments, key=lambda s: s.freq.min())
+
+
+def _cut(freq: np.ndarray, vrange: np.ndarray,
+         weight: np.ndarray) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """A track in pieces, cut where it turns from rising to falling across a gap."""
+    at = _turns_across_gaps(freq, vrange)
+    return list(zip(np.split(freq, at), np.split(vrange, at), np.split(weight, at)))
+
+
+def _turns_across_gaps(freq: np.ndarray, vrange: np.ndarray) -> list[int]:
+    """The points a track is cut before: in each of its rises and falls, the widest gap.
+
+    A rise and fall is read on bin medians (:data:`TURN_BIN_MHZ`), each side
+    :data:`TURN_KM` or more. Its gap is looked for between the bins either
+    side of its top that lie that far below it, and is cut only if wider than
+    :data:`TURN_GAP_MHZ`.
+    """
+    edges = np.arange(freq[0], freq[-1] + TURN_BIN_MHZ, TURN_BIN_MHZ)
+    index = np.digitize(freq, edges)
+    bins = np.unique(index)
+    centre = np.array([np.median(freq[index == b]) for b in bins])
+    level = np.array([np.median(vrange[index == b]) for b in bins])
+    gaps = np.diff(freq)
+    cuts, heading, low, high = [], 0, 0, 0
+    for i in range(1, level.size):
+        if heading >= 0 and level[i] > level[high]:
+            high = i
+        if heading <= 0 and level[i] < level[low]:
+            low = i
+        if heading <= 0 and level[i] - level[low] >= TURN_KM:
+            heading, high = 1, i
+        elif heading >= 0 and level[high] - level[i] >= TURN_KM:
+            if heading > 0:
+                before = int(np.flatnonzero(level[:high] <= level[high] - TURN_KM)[-1])
+                inside = np.flatnonzero((freq[:-1] >= centre[before])
+                                        & (freq[1:] <= centre[i]))
+                if inside.size and gaps[inside].max() > TURN_GAP_MHZ:
+                    cuts.append(int(inside[np.argmax(gaps[inside])]) + 1)
+            heading, low = -1, i
+    return cuts
 
 
 def _matched(last: list[float], ranges: np.ndarray,
