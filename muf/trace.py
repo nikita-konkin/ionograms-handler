@@ -107,6 +107,11 @@ HOP_TOLERANCE_KM = 250.0
 #: useful either way.
 HOP_MARGIN_KM = 40.0
 
+#: The least band a trace must span to calibrate the hop ladder. A carrier or a
+#: fragment a few bins wide is not the 1-hop path, and a ladder set on it would
+#: move every other label.
+ANCHOR_SPAN_MHZ = 1.0
+
 
 #: Two tracks are branches of one mode when their high-frequency ends meet:
 #: within this much in frequency, and in range, of each other. Measured on real
@@ -288,6 +293,10 @@ def identify_hops(
 ) -> list[Segment]:
     """Label each segment with the hop count its virtual range implies.
 
+    The ladder is calibrated on the earliest echo first (:func:`_shift_km`),
+    so what the flat-Earth mirror misses on a path, and a receiver's clock
+    error, cannot move a trace onto another hop count.
+
     A segment is labelled only when one hop count fits clearly better than the
     rest. Segments matching nothing within ``tolerance_km``, or sitting between
     two candidates without favouring either by ``margin_km``, are left
@@ -300,8 +309,9 @@ def identify_hops(
     """
     if not math.isfinite(ground_km):
         return segments
+    shift = _shift_km(segments, ground_km, tolerance_km)
     for item in segments:
-        observed = item.median_range
+        observed = item.median_range - shift
 
         # Best error for each hop count, minimised over plausible heights.
         by_hops = {
@@ -324,6 +334,24 @@ def identify_hops(
             key=lambda h: abs(observed - hop_range_km(ground_km, best_hops, h)),
         )
     return segments
+
+
+def _shift_km(segments: list[Segment], ground_km: float, tolerance_km: float) -> float:
+    """How far the earliest echo sits behind the ladder's shortest 1-hop path, km.
+
+    Nothing arrives before 1F, and 1F is present whenever 2F is: its MUF is
+    higher and its LOF lower. So the earliest trace spanning ``ANCHOR_SPAN_MHZ``
+    is the 1-hop path, and its distance from the lowest 1-hop range is what
+    the ladder misses here: the Earth's curvature, the wave slowing near
+    reflection, and the receiver's clock. Zero when no trace is that wide, or
+    when the earliest is further than ``tolerance_km`` from every 1-hop range.
+    """
+    wide = [s.median_range for s in segments
+            if s.freq_span[1] - s.freq_span[0] >= ANCHOR_SPAN_MHZ]
+    if not wide or min(abs(min(wide) - hop_range_km(ground_km, 1, h))
+                       for h in HOP_HEIGHTS_KM) > tolerance_km:
+        return 0.0
+    return min(wide) - hop_range_km(ground_km, 1, min(HOP_HEIGHTS_KM))
 
 
 def slope_km_per_mhz(item: Segment) -> float:
