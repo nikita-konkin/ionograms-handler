@@ -539,8 +539,24 @@ or a high ray falling from beside it. Its curve then bends the wrong way.
 `group_tracks` reads the turns on the points' median range per 0.25 MHz, and
 where a rise and a fall of 15 km or more meet across a gap wider than 0.5 MHz
 (`TURN_GAP_MHZ`), it cuts the track at the widest gap there (#97). A turn
-among points with no gap is a track wandering through one broad echo, and is
-left to `reconstruct`.
+among points with no gap stays one track at this stage and is left to
+`reconstruct`.
+
+**A track that humps is two branches.** No branch rises and then falls: the
+low ray climbs toward the nose and the high ray falls toward it. A track that
+humps by 15 km or more joins two of them — on this path, mostly a trace
+climbing into the F1 cusp and the high ray falling from it to the nose. A curve
+held to dip instead flattened the real bend, and its copies matched their
+soundings worse. After the gap cuts above, the simulator also splits any
+remaining hump at its top, again in each piece, so its modes each take their
+own shape. `split_humps` provides the independent split; a piece of fewer
+than 8 points stays joined.
+
+In simulator series and the live loop, recent matching tracks can retain
+their cut through small peak movements. The observer uses only the previous
+sounding, resets after a gap longer than 15 minutes, and releases a cut when
+the hump disappears. See [the observation rules](docs/simulator.md#from-a-sounding-muf-sim-state)
+for the matching and hysteresis thresholds.
 
 **Low and high rays are paired, not treated as separate modes.** Track-following
 sees them as two tracks, since they are separated in range — the low ray rising

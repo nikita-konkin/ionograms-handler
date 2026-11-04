@@ -84,8 +84,29 @@ written with full precision, so a state read back is the state written.
 `muf.sim.observe` finds the trace the way `muf run` does -- an extractor
 (`contour` by default), then `muf.trace`: points per contiguous run, tracks
 followed across frequency without ever crossing and cut where they rise into
-a gap and fall out of it, hop labels from the
-geometry, low and high rays paired at the nose. Each track becomes one mode:
+a gap and fall out of it, then any remaining hump cut at its top into two
+branches, hop labels from the calibrated geometry, low and high rays paired
+at the nose. Each branch becomes one simulated mode.
+
+Archive series and the live loop also carry the previous observation's
+segmentation. Parent tracks must be mutual nearest neighbours in range,
+within 80 km, with at least 0.5 MHz and half the shorter band's overlap.
+Ambiguous matches start afresh. An existing cut stays at its frequency if
+it is within 0.5 MHz of the new peak and at most 7.5 km below its prominence;
+it survives while its prominence remains at least 7.5 km. Creating a cut
+still requires 15 km, and both pieces still need eight points. These are
+continuity heuristics, not measured propagation constants.
+
+History is discarded for another circuit, a non-increasing timestamp, a
+forecast supplied as history, or a gap exceeding 900 seconds. With unchanged
+branch count, matched branches retain their names; curves and power are
+always measured from the new sounding. `metrics.split_history` records the
+parent curves, cuts and names. The live ledger saves the last observation,
+and the archive cache key includes it. Observations run in time order;
+pair scoring can still use several workers. A standalone `sim state` has
+no previous observation and uses the original independent split.
+
+Each resulting branch supplies:
 
 - **delay**: `muf.trace.reconstruct`'s quadratic smoothing spline, loosened
   until it turns once at most, on 0.1 MHz knots, converted from range with the format's own axis -- `.lfs` is calibrated

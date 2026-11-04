@@ -110,15 +110,19 @@ class Ledger:
 
     pending: tuple[Pending, ...] = ()
     times: tuple[float, ...] = ()
+    previous: ChannelState | None = None
 
     def to_dict(self) -> dict:
         return {"pending": [p.to_dict() for p in self.pending],
-                "times": [float(t) for t in self.times]}
+                "times": [float(t) for t in self.times],
+                "previous": None if self.previous is None else self.previous.to_dict()}
 
     @classmethod
     def from_dict(cls, data: Mapping) -> Ledger:
         return cls(tuple(Pending.from_dict(p) for p in data.get("pending", ())),
-                   tuple(float(t) for t in data.get("times", ())))
+                   tuple(float(t) for t in data.get("times", ())),
+                   None if data.get("previous") is None else
+                   ChannelState.from_dict(data["previous"]))
 
 
 def cadence(times: Sequence[float]) -> float | None:
@@ -311,7 +315,7 @@ def step(ledger: Ledger, session: series.Session, state: ChannelState | None,
                 "modes": len(made.state.modes),
                 "simulated": made.product.name,
                 "echo_offset_us": clock.offset_us(state)}))
-    return Ledger(tuple(waiting), times), events
+    return Ledger(tuple(waiting), times, state), events
 
 
 def take(ledger: Ledger, session: series.Session, cache: str | Path, *,
@@ -331,7 +335,7 @@ def take(ledger: Ledger, session: series.Session, cache: str | Path, *,
     events = []
     try:
         state = series.state_of(session.path, cache, params, stations=stations,
-                                stations_id=stations_id)
+                                stations_id=stations_id, previous=ledger.previous)
     except Exception as exc:
         state = None
         events.append(event("unobserved", session.epoch,

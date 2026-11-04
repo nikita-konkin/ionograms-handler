@@ -327,6 +327,31 @@ def test_a_turn_on_an_unreadable_sounding_says_so(tmp_path):
         "an unreadable sounding was not reported as unobserved"
 
 
+def test_live_history_survives_a_ledger_restart(tmp_path, monkeypatch):
+    a, b = _soundings(tmp_path / "in", [T0, T0 + 300.0])
+    ledger, _ = live.take(live.Ledger(), series.Session(a, T0, "cyprus1",
+                                                      "yoshkar-ola"),
+                          tmp_path / "cache", leads=[])
+    ledger = live.Ledger.from_dict(json.loads(json.dumps(ledger.to_dict())))
+    seen = []
+    original = series.state_of
+
+    def record(*args, **kwargs):
+        seen.append(kwargs["previous"].epoch)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(series, "state_of", record)
+    ledger, _ = live.take(ledger, series.Session(b, T0 + 300.0, "cyprus1",
+                                                "yoshkar-ola"),
+                          tmp_path / "cache", leads=[])
+    assert seen == [T0]
+    assert ledger.previous.epoch == T0 + 300.0
+
+
+def test_old_ledgers_without_history_still_load():
+    assert live.Ledger.from_dict({"pending": [], "times": []}).previous is None
+
+
 def test_a_turn_keeps_the_synthetic_sounding_of_each_forecast_it_issues(tmp_path):
     path = _soundings(tmp_path / "in", [T0])[0]
     _, events = live.take(live.Ledger(), series.Session(path, T0, "cyprus1",
