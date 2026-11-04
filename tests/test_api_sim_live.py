@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -214,6 +215,36 @@ def test_a_real_turn_scores_a_forecast_at_its_sounding(tmp_path):
         _sounding(conn, when, name=path.name, tx="cyprus1")
     sim_live.advance(conn, root, tmp_path / "cache", turn=sim_live._turn)
     assert _kinds(conn).count("scored") == 1, f"no forecast was scored: {_kinds(conn)}"
+
+
+
+def test_the_loop_observes_the_1f_family_alone_unless_told_otherwise(monkeypatch):
+    monkeypatch.delenv("LIVE_HOPS", raising=False)
+    assert sim_live.hops() == 1, \
+        "the loop did not observe one-hop modes alone by default"
+
+
+def test_the_loop_observes_every_mode_when_told_none(monkeypatch):
+    monkeypatch.setenv("LIVE_HOPS", "0")
+    assert sim_live.hops() is None, "the loop kept to one hop count when told none"
+
+
+def test_a_turn_observes_the_hop_count_the_loop_is_set_to(tmp_path, monkeypatch):
+    from muf.sim import live
+
+    count = random.randint(1, 4)
+    monkeypatch.setenv("LIVE_HOPS", str(count))
+    seen = []
+
+    def take(ledger, session, cache, **kw):
+        seen.append(kw.get("params"))
+        return ledger, []
+
+    monkeypatch.setattr(live, "take", take)
+    sim_live._turn(live.Ledger().to_dict(), str(tmp_path / "a.h5"), 1792843215.0,
+                   "NIC2", "yoshkar-ola", str(tmp_path))
+    assert seen == [{"hops": count}], \
+        "a turn did not observe the hop count it was set to"
 
 
 # --- the page -----------------------------------------------------------------

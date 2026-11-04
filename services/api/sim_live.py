@@ -47,6 +47,10 @@ from . import apart, build, db
 #: Seconds between looks for new soundings; 0 turns the loop off.
 INTERVAL_S = 60.0
 
+#: The hop count whose modes the loop observes alone; 0 observes every mode.
+#: The 1F family alone, while the upper modes' curves do not follow their echoes.
+HOPS = 1
+
 #: Longest one turn may take before it is stopped.
 TIMEOUT_S = 600.0
 
@@ -69,6 +73,12 @@ PAGE, PAGE_MAX = 1000, 10_000
 def interval() -> float:
     """Seconds between the loop's looks, ``LIVE_INTERVAL_S``; 0 when it is off."""
     return float(os.environ.get("LIVE_INTERVAL_S", INTERVAL_S))
+
+
+def hops() -> int | None:
+    """The hop count whose modes the loop observes alone, ``LIVE_HOPS``: 1, the
+    1F family, unless told otherwise; None, every mode, when told 0."""
+    return int(os.environ.get("LIVE_HOPS", HOPS)) or None
 
 
 def folder() -> Path:
@@ -100,7 +110,8 @@ def _turn(ledger: dict, path: str, epoch: float, tx: str, rx: str,
     from muf.sim import live, series
 
     found, events = live.take(live.Ledger.from_dict(ledger),
-                              series.Session(Path(path), epoch, tx, rx), cache)
+                              series.Session(Path(path), epoch, tx, rx), cache,
+                              params={"hops": hops()})
     return found.to_dict(), events
 
 

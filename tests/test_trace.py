@@ -117,16 +117,49 @@ def test_labels_a_clear_one_hop_segment():
     assert labelled[0].height_km is not None
 
 
+def track(f0: float, f1: float, km: float) -> trace.Segment:
+    """A flat trace across a band, rising 4 km over it."""
+    freq = np.linspace(f0, f1, 40)
+    return trace.Segment(freq, km + 4.0 * (freq - f0) / (f1 - f0))
+
+
 def test_leaves_an_ambiguous_segment_unlabelled():
     """Between the 1-hop and 2-hop families, "don't know" is the right answer.
 
-    Over 2588 km the families touch near 2774 km, so a segment sitting there
-    must not be assigned on a few kilometres of difference.
+    Over 2588 km the families touch at 2774 km, so a segment sitting there once
+    the ladder is calibrated on the earliest echo must not be assigned on a few
+    kilometres of difference.
     """
-    freq, vrange = one_mode(h0=2770.0, rise=5.0)
-    labelled = trace.identify_hops(trace.segment(freq, vrange), GROUND_KM)
+    segments = [track(9.0, 18.0, 2745.0), track(8.0, 16.0, 2885.0)]
+    assert trace.identify_hops(segments, GROUND_KM)[1].hops is None, \
+        "a segment between the hop families was labelled"
 
-    assert labelled[0].hops is None
+
+def test_a_2f_trace_behind_the_1f_low_ray_is_labelled_two_hops():
+    """Over 2588 km the flat-Earth ladder puts 3F reflecting at 250 km at
+    2991 km, where 2F arrives; calibrated on the earliest echo it reads 2F."""
+    segments = [track(9.0, 18.0, 2745.0), track(8.0, 27.5, 2810.0),
+                track(8.0, 16.5, 2990.0)]
+    assert trace.identify_hops(segments, GROUND_KM)[2].hops == 2, \
+        "a 2F trace behind the 1F low ray was not labelled two hops"
+
+
+def test_a_uniform_shift_leaves_every_hop_label_alone():
+    shift = random.choice((-1.0, 1.0)) * random.uniform(60.0, 120.0)
+    kms = (2745.0, 2810.0, 2990.0)
+    spans = ((9.0, 18.0), (8.0, 27.5), (8.0, 16.5))
+    assert [s.hops for s in trace.identify_hops(
+        [track(*span, km + shift) for span, km in zip(spans, kms)], GROUND_KM)] \
+        == [s.hops for s in trace.identify_hops(
+            [track(*span, km) for span, km in zip(spans, kms)], GROUND_KM)], \
+        f"shifting every trace by {shift:.0f} km changed the hop labels"
+
+
+def test_a_trace_narrower_than_a_megahertz_does_not_calibrate_the_ladder():
+    segments = [track(14.2, 14.6, 2500.0), track(9.0, 18.0, 2745.0),
+                track(8.0, 27.5, 2810.0), track(8.0, 16.5, 2990.0)]
+    assert trace.identify_hops(segments, GROUND_KM)[3].hops == 2, \
+        "a narrow early trace calibrated the hop ladder"
 
 
 def test_leaves_an_implausible_segment_unlabelled():
@@ -351,6 +384,55 @@ def test_two_tracks_drawing_close_keep_their_order_in_range():
     one, other = trace.group_tracks(freq, vrange)
     assert np.unique(np.sign(one.vrange - other.vrange)).size == 1, \
         "two tracks drawing close crossed each other"
+
+
+def test_a_track_rising_to_a_gap_does_not_go_on_down_onto_another_echo():
+    rng = np.random.default_rng(random.randrange(1000))
+    top = random.uniform(2840.0, 2890.0)
+    upper = np.round(np.arange(8.0, 10.5, 0.04), 2)
+    lower = np.round(np.arange(11.5, 14.0, 0.04), 2)
+    vrange = np.concatenate([
+        top - random.uniform(25.0, 40.0) * (10.5 - upper) / 2.5,
+        top - random.uniform(55.0, 70.0) + 20.0 * ((lower - 11.5) / 2.5) ** 2,
+    ]) + rng.uniform(-3.0, 3.0, upper.size + lower.size)
+    tracks = trace.group_tracks(np.concatenate([upper, lower]), vrange)
+    assert len(tracks) == 2, \
+        "a track rising to one echo's top went on down onto another"
+
+
+def test_a_track_rising_to_a_gap_does_not_go_on_down_a_high_ray():
+    rng = np.random.default_rng(random.randrange(1000))
+    top = random.uniform(2840.0, 2890.0)
+    upper = np.round(np.arange(8.8, 10.4, 0.04), 2)
+    high = np.round(np.arange(11.4, 14.0, 0.04), 2)
+    vrange = np.concatenate([
+        top - random.uniform(25.0, 40.0) * (10.4 - upper) / 1.6,
+        top + random.uniform(0.0, 15.0)
+        - random.uniform(60.0, 90.0) * (high - 11.4) / 2.6,
+    ]) + rng.uniform(-3.0, 3.0, upper.size + high.size)
+    tracks = trace.group_tracks(np.concatenate([upper, high]), vrange)
+    assert len(tracks) == 2, \
+        "a track rising to one echo's top went on down another's high ray"
+
+
+def test_a_low_ray_dipping_at_its_foot_across_a_fade_stays_one_track():
+    rng = np.random.default_rng(random.randrange(1000))
+    freq = np.round(np.concatenate([np.arange(8.0, 10.0, 0.04),
+                                    np.arange(11.0, 14.0, 0.04)]), 2)
+    vrange = (2790.0 + random.uniform(40.0, 60.0) * ((freq - 11.5) / 3.5) ** 2
+              + rng.uniform(-3.0, 3.0, freq.size))
+    assert len(trace.group_tracks(freq, vrange)) == 1, \
+        "a low ray dipping at its foot was cut at its fade"
+
+
+def test_a_track_wandering_through_a_broad_echo_stays_one_track():
+    freq = np.round(np.arange(10.0, 14.0, 0.04), 2)
+    vrange = (2800.0 + random.uniform(20.0, 35.0)
+              * np.sin(2.0 * np.pi * freq / random.uniform(0.8, 1.2))
+              + np.random.default_rng(random.randrange(1000))
+              .normal(0.0, 5.0, freq.size))
+    assert len(trace.group_tracks(freq, vrange)) == 1, \
+        "a track wandering through one broad echo was cut where it turned"
 
 
 def test_group_tracks_needs_no_weights():

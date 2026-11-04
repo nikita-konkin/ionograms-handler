@@ -7,6 +7,7 @@ import random
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from muf.sim import observe, presets, series, sounding, summary
@@ -261,11 +262,14 @@ def test_a_state_is_observed_again_when_its_parameters_change(tmp_path):
     assert len(first.modes[0].freq_mhz) < 30
 
 
-def test_a_cached_state_depends_on_the_previous_observation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("hops", [None, 1])
+def test_a_cached_state_depends_on_the_previous_observation(tmp_path, monkeypatch,
+                                                          hops):
     a, b = _soundings(tmp_path / "data", [T0, T0 + 300.0])
     cache = tmp_path / "states"
-    prior = series.state_of(a, cache)
-    series.state_of(b, cache, previous=prior)
+    params = {"hops": hops}
+    prior = series.state_of(a, cache, params)
+    series.state_of(b, cache, params, previous=prior)
     calls = []
     original = observe.from_ionogram
 
@@ -274,11 +278,31 @@ def test_a_cached_state_depends_on_the_previous_observation(tmp_path, monkeypatc
         return original(*args, **kwargs)
 
     monkeypatch.setattr(observe, "from_ionogram", record)
-    series.state_of(b, cache, previous=prior)
+    series.state_of(b, cache, params, previous=prior)
     assert calls == []
     prior.metrics["split_history"] = []
-    series.state_of(b, cache, previous=prior)
+    series.state_of(b, cache, params, previous=prior)
     assert calls == [prior]
+
+
+def test_truth_on_another_grid_keeps_hop_filter_and_history(tmp_path, monkeypatch):
+    a, b = _soundings(tmp_path / "data", [T0, T0 + 300.0])
+    cache = tmp_path / "states"
+    prior = series.state_of(a, cache, {"window": 4096, "hops": 1})
+    series.state_of(b, cache, {"hops": 1}, previous=prior)
+    assert prior.metrics["split_history"]
+    seen = []
+    original = observe.tracking.split
+
+    def record(segments, previous=()):
+        seen.append(previous)
+        return original(segments, previous)
+
+    monkeypatch.setattr(observe.tracking, "split", record)
+    truth = series.truth_of(a, b, cache, {"hops": 1})
+    assert seen == [prior.metrics["split_history"]]
+    assert truth.modes and {m.hops for m in truth.modes} == {1}
+    assert "1-hop modes alone" in truth.notes
 
 
 def test_series_observations_see_only_the_previous_sounding(tmp_path, monkeypatch):
@@ -382,3 +406,21 @@ def test_a_failed_run_leaves_the_pairs_not_begun():
         for _ in series._map(time.sleep, [0.1] * 200, 2):
             raise RuntimeError("the writer failed")
     assert time.monotonic() - start < 5.0, "a failed run went on scoring every pair"
+
+
+def test_a_state_is_observed_for_the_hop_count_asked_for(tmp_path, make_chirp_h5):
+    from conftest import chirp_range_gates_m
+
+    rows = random.randint(40, 70)
+    power = np.random.exponential(1.0, (rows, 8192))
+    km = chirp_range_gates_m(8192, 40_000.0, 100_000.0) / 1e3
+    low = random.uniform(2760.0, 2800.0)
+    for start in (low, low + random.uniform(260.0, 300.0)):
+        power[:, (km >= start) & (km < start + 15.0)] *= 1e3
+    path = make_chirp_h5(power, t0=1792843215.0, txname="NIC1",
+                         station_name="yoshkar-ola", max_range_extent_km=8000.0,
+                         freqs_hz=np.linspace(10e6, 20e6, rows),
+                         name="lfm_ionogram-NIC1-yoshkar-ola-ch0-000-1792843215.00.h5")
+    state = series.state_of(path, tmp_path / "states", {"hops": 1})
+    assert {m.hops for m in state.modes} == {1}, \
+        "a state observed for one hop count held modes of another"

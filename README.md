@@ -530,14 +530,27 @@ it waved. `reconstruct` halves the spline's weights until its curve reverses
 by 15 km (`TURN_KM`) or more no more than once; a bare parabola, where that
 ends, turns once.
 
+**A track is cut where it rises into a gap and falls out of it.** The one turn
+an echo makes is a dip: walked up in frequency, its low ray falls at the foot
+and rises to the nose, and its high ray falls to it. It never rises and then
+falls. A track that does has gone past one echo's top, across a gap with no
+points, onto another echo within the 80 km a track may step: a low ray below,
+or a high ray falling from beside it. Its curve then bends the wrong way.
+`group_tracks` reads the turns on the points' median range per 0.25 MHz, and
+where a rise and a fall of 15 km or more meet across a gap wider than 0.5 MHz
+(`TURN_GAP_MHZ`), it cuts the track at the widest gap there (#97). A turn
+among points with no gap stays one track at this stage and is left to
+`reconstruct`.
+
 **A track that humps is two branches.** No branch rises and then falls: the
 low ray climbs toward the nose and the high ray falls toward it. A track that
 humps by 15 km or more joins two of them — on this path, mostly a trace
 climbing into the F1 cusp and the high ray falling from it to the nose. A curve
 held to dip instead flattened the real bend, and its copies matched their
-soundings worse. `split_humps` cuts such a track at the top of its hump, again
-in each piece, so the simulator's modes each take their own shape; a piece of
-fewer than 8 points stays joined.
+soundings worse. After the gap cuts above, the simulator also splits any
+remaining hump at its top, again in each piece, so its modes each take their
+own shape. `split_humps` provides the independent split; a piece of fewer
+than 8 points stays joined.
 
 In simulator series and the live loop, recent matching tracks can retain
 their cut through small peak movements. The observer uses only the previous
@@ -569,9 +582,16 @@ results table without opening a plot.
 
 **Hop labelling is weak on this path, deliberately so.** Over 2,588 km a 1-hop
 echo spans 2636–2774 km across plausible reflection heights and a 2-hop echo
-2774–3182: the families touch, so most segments are genuinely ambiguous and are
+2774–3182: the families touch, so many segments are genuinely ambiguous and are
 left unlabelled rather than assigned on a few kilometres. It sharpens on longer
 paths. Segmentation does not depend on it.
+
+**The ladder is calibrated on the earliest echo (#94).** Nothing arrives before
+1F, so the earliest trace spanning 1 MHz is taken as the 1-hop path at the
+lowest mirror height, and every trace is shifted by the same amount before it
+is matched. Uncalibrated, "3F at 250 km" sat at 2991 km, right where 2F
+arrives, and a receiver's clock error moved every label with it. An earliest
+trace too far from the 1-hop family to be it leaves the ladder as it is.
 
 ### External references
 
@@ -1085,7 +1105,7 @@ different interpretations of one ionogram, not something to merge.
 | `muf detect TARGET`   | census a chirpsounder2 detection tree: which transmitters, on what schedule |
 | `muf stations`        | print the station coordinate registry                                       |
 | `muf echo-window TARGET` | keep the dechirped voltage around the echoes ([`docs/echo-window.md`](docs/echo-window.md)) |
-| `muf sim ...`          | HF channel simulator: states from soundings, synthetic `.lfs`, a signal through the channel ([`docs/simulator.md`](docs/simulator.md)) |
+| `muf sim ...`          | HF channel simulator: states from soundings, synthetic `.lfs`, a signal through the channel ([`docs/simulator.md`](docs/simulator.md)); `muf sim band` reads 1F alone over 1 MHz at 0.75 of its MUF |
 
 ### Which commands read which format
 
@@ -1146,8 +1166,7 @@ period, 2997 km at the usual 10 ms — which is a property of the transmitter's
 timing and says nothing about this circuit. `calibrate.geometry_gate` asks the
 geometry instead: the near edge is one hop at the lowest plausible mirror
 height, the far edge `DEFAULT_MAX_HOPS` at the highest, both from
-`trace.hop_range_km` so a gate and a hop label cannot disagree about what a
-range means.
+`trace.hop_range_km`, the ladder hop labels are read against.
 
 | path              | stored      | geometry gate | kept             |
 |-------------------|-------------|---------------|------------------|

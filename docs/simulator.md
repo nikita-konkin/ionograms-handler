@@ -83,9 +83,10 @@ written with full precision, so a state read back is the state written.
 
 `muf.sim.observe` finds the trace the way `muf run` does -- an extractor
 (`contour` by default), then `muf.trace`: points per contiguous run, tracks
-followed across frequency without ever crossing, a track that humps cut at
-the top of its hump into two branches, hop labels from the geometry, low and
-high rays paired at the nose. Each branch becomes one simulated mode.
+followed across frequency without ever crossing and cut where they rise into
+a gap and fall out of it, then any remaining hump cut at its top into two
+branches, hop labels from the calibrated geometry, low and high rays paired
+at the nose. Each branch becomes one simulated mode.
 
 Archive series and the live loop also carry the previous observation's
 segmentation. Parent tracks must be mutual nearest neighbours in range,
@@ -244,6 +245,61 @@ bound on the spread, below about 0.03 Hz.
 preset and reads them back -- the closed loop, with the tracker's traces --
 and the results are under [Checks](#checks).
 
+### One mode over one band: `muf sim band`
+
+A link uses one part of the channel: 1 MHz of 1F around 0.75 of its MUF.
+`muf.sim.band` reads that part alone, from the complex signal, and makes a
+state of it -- a simpler problem than the whole sweep, and one solved far
+more precisely (#92). The full simulator is unchanged beside it.
+
+1. **The band.** 1F is the earliest-arriving low ray that covers 0.75 of
+   its own MUF; its MUF is the top of that ray. The band is 0.75 MUF
+   +- 0.5 MHz. Hop labels are not used: a receiver clock that is off --
+   yoshkar-ola's, from 18 October 2026 -- moves every delay alike, but
+   cannot change which mode arrives first. A censored MUF, or no low ray
+   covering its band, gives no band and says so.
+2. **The signal.** Over the band (10 s at 100 kHz/s) the record is
+   dechirped a second time along 1F's trace, re-centred on the echo and
+   low-passed, as the fast part does. Every other mode lies beyond the stop
+   band and is discarded; a second echo the record confirms inside it gives
+   no band. The o and x waves stay: both are 1F. The noise reference is the
+   median of the offsets clear of every other mode -- the level is the
+   signal over it, and one offset near another mode's beat, which the fast
+   part's quietest-offset rule can pick, read the level 0.13 dB low; the
+   median also took a 0.15 dB bias off a steady mode's level.
+3. **The reading.** The level is the signal's power over the noise
+   reference's, times the filter's noise bandwidth: C/N0 with no
+   calibration. The echo's beat is the trace's plus the signal's own, read
+   from its phase over 0.1 s lags and weighted by its amplitude; a quadratic
+   in frequency through it gives the delay, the GDD and the TOD at the
+   band's centre. The fading is read as the fast part reads it.
+4. **The band state.** 1F alone over the band +- 0.2 MHz, its delay and GDD
+   from the phase, its TOD from the trace, its level flat at the band's,
+   its fading the band's, its sweep cut to the band. Along an up-sweep a
+   delay spread fades as a Doppler spread does, so the band's fading
+   already holds the trace's delay spread, and the band state sets it to
+   zero rather than count it twice -- doing so had the copies read a
+   0.44 Hz spread as 0.83 Hz.
+5. **The copies.** Twelve synthetic soundings of the band state are read
+   the same way, and the real reading is set against them with level 2's
+   rule.
+
+How precisely one band gives each number, on the `law` preset (MUF 25 MHz,
+45 dB-Hz, the trace 10 us off, eight realisations; bias +- scatter where
+the bias is not negligible):
+
+| Doppler spread | level | delay | GDD | TOD | spread read |
+|---|---|---|---|---|---|
+| none | +0.02 +- 0.07 dB | +- 0.005 us | +- 0.02 us/MHz | +- 0.13 us/MHz^2 | -- |
+| 0.3 Hz | +- 1.5 dB | +- 1.0 us | +- 1.5 us/MHz | +- 12 us/MHz^2 | 0.31 +- 0.07 Hz |
+| 0.5 Hz | +- 1.0 dB | +- 0.6 us | +- 2.7 us/MHz | +- 12 us/MHz^2 | 0.54 +- 0.08 Hz |
+
+A steady channel is read almost exactly. Fading is the limit: 10 s holds a
+few fades, whose random phase scatters the GDD by a fifth of the law's
+7.5 us/MHz at 0.75 MUF and leaves the TOD unknown, which is why the band
+state takes it from the trace. A second mode 6 dB stronger and 1 ms later
+leaves the reading unchanged.
+
 ### From a scenario: `muf sim preset`
 
 - **ITU-R F.1487 test channels.** Two independently fading paths of equal
@@ -358,6 +414,10 @@ muf sim state /data/2026.02.04/cyprus1_20260204_180010.lfs --fast
 # the estimator calibrated: known spreads, and an o/x split, sounded and read back
 muf sim fast --calibrate --realisations 2
 muf sim fast --calibrate --spreads 0.2,0.5,1 --shapes gaussian --split 30 --x-to-o -3
+
+# 1F alone over 1 MHz at 0.75 of its MUF: the band's reading, its band state,
+# and twelve copies read the same way
+muf sim band /data/2026.02.04/cyprus1_20260204_120010.lfs --out band.json
 
 # the closed loop on a real sounding (below): recovery, realism and the
 # ionogram correlation, with the natural change over one repetition and the
@@ -722,7 +782,11 @@ it off) for a followed circuit's soundings newer than the last it took and
 runs each turn in a process of its own. A circuit followed begins at its
 newest sounding, so the archive's past is not replayed, and a sounding
 stored after a later one was taken is passed over. Events are kept for
-good; `LIVE_KEEP_DAYS` above 0 forgets the older ones. A scored event keeps
+good; `LIVE_KEEP_DAYS` above 0 forgets the older ones. The loop forecasts
+and scores the 1F family alone (`LIVE_HOPS`, 1; 0 for every mode): the
+curves the observer draws for the upper modes hop between echoes stacked
+closer than a track may step, and until they follow their echoes they only
+add phantom traces to the forecast (#99). A scored event keeps
 the pair's working frequencies too, each frequency's two events and its
 SNR, and the sun's zenith angle at the control point. The loop is only as
 live as the scans: at the
@@ -876,6 +940,16 @@ Sources:
 [Warrington et al. 2006](https://figshare.le.ac.uk/articles/journal_contribution/Measurement_and_modelling_of_HF_channel_directional_spread_characteristics_for_northerly_paths/10079777/1).
 
 ## What is not here yet
+
+- **The band mode on the bench.** `muf sim band` reads one sounding; the
+  bench has no band option yet, and a band state is not scored over time.
+  Averaging the band's GDD over successive soundings, while the channel
+  holds, would beat down the fading's scatter.
+- **Delay spread against Doppler spread in the band.** Along one up-sweep
+  they fade alike, so the band state folds the one into the other. A
+  wideband modem meets them differently -- a delay spread as frequency
+  selectivity -- and a down-sweep, or the trace's width read finer than the
+  ionogram's 49 us bins, would part them.
 
 - **The Doppler shift.** One up-sweep cannot tell a shift from a delay
   change; the shift stays a prior. The slow drift of delay between

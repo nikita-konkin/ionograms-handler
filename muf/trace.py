@@ -87,6 +87,18 @@ SPLINE_DEGREE = 2
 #: it turns once at most.
 TURN_KM = 15.0
 
+#: A track that turns from rising to falling across a gap without points at
+#: least this wide is cut there, MHz. One echo, walked up in frequency, never
+#: rises and then falls: its low ray dips at its foot and rises to its nose,
+#: and its high ray falls to it. A track that does has gone past one echo's top
+#: onto another echo, which only a gap lets it do. A turn among its points is
+#: a track wandering through a broad echo, and is left alone.
+TURN_GAP_MHZ = 0.5
+
+#: Width of the bins a track's turns are read on, MHz, as the median range of
+#: its points in each: a point scatters by 12-37 km here, more than a turn.
+TURN_BIN_MHZ = 0.25
+
 #: Effective mirror heights scanned when matching a segment's range to a hop
 #: count. Wider than the real hmF2 band (250-400 km) because virtual range
 #: exceeds the true path -- the wave slows near reflection, so the equivalent
@@ -106,6 +118,11 @@ HOP_TOLERANCE_KM = 250.0
 #: the hop families separate. Segmentation does not depend on this and remains
 #: useful either way.
 HOP_MARGIN_KM = 40.0
+
+#: The least band a trace must span to calibrate the hop ladder. A carrier or a
+#: fragment a few bins wide is not the 1-hop path, and a ladder set on it would
+#: move every other label.
+ANCHOR_SPAN_MHZ = 1.0
 
 
 #: Two tracks are branches of one mode when their high-frequency ends meet:
@@ -288,6 +305,10 @@ def identify_hops(
 ) -> list[Segment]:
     """Label each segment with the hop count its virtual range implies.
 
+    The ladder is calibrated on the earliest echo first (:func:`_shift_km`),
+    so what the flat-Earth mirror misses on a path, and a receiver's clock
+    error, cannot move a trace onto another hop count.
+
     A segment is labelled only when one hop count fits clearly better than the
     rest. Segments matching nothing within ``tolerance_km``, or sitting between
     two candidates without favouring either by ``margin_km``, are left
@@ -300,8 +321,9 @@ def identify_hops(
     """
     if not math.isfinite(ground_km):
         return segments
+    shift = _shift_km(segments, ground_km, tolerance_km)
     for item in segments:
-        observed = item.median_range
+        observed = item.median_range - shift
 
         # Best error for each hop count, minimised over plausible heights.
         by_hops = {
@@ -376,6 +398,24 @@ def _branches(item: Segment, min_points: int, previous_cuts=(),
                         weight=None if item.weight is None else item.weight[side]),
                 min_points, [f for f in previous_cuts
                              if abs(f - boundary) > 0.5], cut_points)]
+
+
+def _shift_km(segments: list[Segment], ground_km: float, tolerance_km: float) -> float:
+    """How far the earliest echo sits behind the ladder's shortest 1-hop path, km.
+
+    Nothing arrives before 1F, and 1F is present whenever 2F is: its MUF is
+    higher and its LOF lower. So the earliest trace spanning ``ANCHOR_SPAN_MHZ``
+    is the 1-hop path, and its distance from the lowest 1-hop range is what
+    the ladder misses here: the Earth's curvature, the wave slowing near
+    reflection, and the receiver's clock. Zero when no trace is that wide, or
+    when the earliest is further than ``tolerance_km`` from every 1-hop range.
+    """
+    wide = [s.median_range for s in segments
+            if s.freq_span[1] - s.freq_span[0] >= ANCHOR_SPAN_MHZ]
+    if not wide or min(abs(min(wide) - hop_range_km(ground_km, 1, h))
+                       for h in HOP_HEIGHTS_KM) > tolerance_km:
+        return 0.0
+    return min(wide) - hop_range_km(ground_km, 1, min(HOP_HEIGHTS_KM))
 
 
 def slope_km_per_mhz(item: Segment) -> float:
@@ -766,6 +806,12 @@ def group_tracks(
     scattered by tens of km, the parabola led tracks off their echo and
     across each other more often than the last range does.
 
+    A track is cut where it turns from rising to falling across a gap
+    (:data:`TURN_GAP_MHZ`). The range window lets a track step 80 km, and an
+    echo that ends at its own nose can leave another within that reach on the
+    far side of the gap. Followed on, onto a low ray below it or a high ray
+    falling from beside it, the track's curve bends the wrong way.
+
     Args:
         max_step_km: how far a track's range may move between frequency bins.
         max_gap_mhz: a track unextended for longer than this is closed, so two
@@ -818,11 +864,53 @@ def group_tracks(
     closed.extend(open_tracks)
 
     segments = [
-        Segment(freq=np.asarray(t["freq"]), vrange=np.asarray(t["vrange"]),
-                weight=np.asarray(t["weight"]))
-        for t in closed if len(t["freq"]) >= min_points
+        Segment(freq=f, vrange=r, weight=w)
+        for t in closed
+        for f, r, w in _cut(np.asarray(t["freq"]), np.asarray(t["vrange"]),
+                            np.asarray(t["weight"]))
+        if f.size >= min_points
     ]
     return sorted(segments, key=lambda s: s.freq.min())
+
+
+def _cut(freq: np.ndarray, vrange: np.ndarray,
+         weight: np.ndarray) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """A track in pieces, cut where it turns from rising to falling across a gap."""
+    at = _turns_across_gaps(freq, vrange)
+    return list(zip(np.split(freq, at), np.split(vrange, at), np.split(weight, at)))
+
+
+def _turns_across_gaps(freq: np.ndarray, vrange: np.ndarray) -> list[int]:
+    """The points a track is cut before: in each of its rises and falls, the widest gap.
+
+    A rise and fall is read on bin medians (:data:`TURN_BIN_MHZ`), each side
+    :data:`TURN_KM` or more. Its gap is looked for between the bins either
+    side of its top that lie that far below it, and is cut only if wider than
+    :data:`TURN_GAP_MHZ`.
+    """
+    edges = np.arange(freq[0], freq[-1] + TURN_BIN_MHZ, TURN_BIN_MHZ)
+    index = np.digitize(freq, edges)
+    bins = np.unique(index)
+    centre = np.array([np.median(freq[index == b]) for b in bins])
+    level = np.array([np.median(vrange[index == b]) for b in bins])
+    gaps = np.diff(freq)
+    cuts, heading, low, high = [], 0, 0, 0
+    for i in range(1, level.size):
+        if heading >= 0 and level[i] > level[high]:
+            high = i
+        if heading <= 0 and level[i] < level[low]:
+            low = i
+        if heading <= 0 and level[i] - level[low] >= TURN_KM:
+            heading, high = 1, i
+        elif heading >= 0 and level[high] - level[i] >= TURN_KM:
+            if heading > 0:
+                before = int(np.flatnonzero(level[:high] <= level[high] - TURN_KM)[-1])
+                inside = np.flatnonzero((freq[:-1] >= centre[before])
+                                        & (freq[1:] <= centre[i]))
+                if inside.size and gaps[inside].max() > TURN_GAP_MHZ:
+                    cuts.append(int(inside[np.argmax(gaps[inside])]) + 1)
+            heading, low = -1, i
+    return cuts
 
 
 def _matched(last: list[float], ranges: np.ndarray,
