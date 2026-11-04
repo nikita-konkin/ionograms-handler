@@ -7,7 +7,11 @@ track becomes one mode:
 
 * its delay curve is :func:`muf.trace.reconstruct`'s smoothing spline,
   sampled on knots and converted from range with the format's own axis
-  (the ``.lfs`` axis is calibrated with c = 3e5 km/s, v2's with c exact);
+  (the ``.lfs`` axis is calibrated with c = 3e5 km/s, v2's with c exact) --
+  or, with ``curve="layer"``, the 1F family is not tracked at all: a
+  quasi-parabolic layer is laid on the echoes (:mod:`muf.layer`), and its
+  low and high rays are the two modes, each over the band where the echoes
+  lie along it;
 * its C/N0 is the ionogram's power along the curve, summed over the five
   range bins around it so that where the echo falls between bins does not
   matter (a Hann window's tone energy spans 1.5 bins), less the noise those
@@ -31,7 +35,7 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from .. import calibrate, extractors, interference, loader, spectro, trace
+from .. import calibrate, extractors, interference, layer, loader, spectro, trace
 from ..io_lfs import LfsHeader
 from . import presets
 from .state import MEASURED, PRIOR, ChannelState, Circuit, Mode, Provenance, Sweep
@@ -60,6 +64,17 @@ KNOT_MHZ = 0.1
 #: only continuity holds the cubic there, and it can swing thousands of km off
 #: the trace while passing close to every point.
 FIT_GAP_MHZ = 0.5
+
+#: What a mode's delay curve is drawn from: a smoothing spline through its
+#: tracked points, or the 1F rays of a layer laid on the echoes (muf.layer).
+CURVES = ("spline", "layer")
+
+#: How near a layer's ray an echo point has to lie to be on it, km: as near
+#: as the fit counts it.
+INLIER_KM = layer.REACH_KM
+
+#: The widest gap in frequency a ray's band crosses without echo on it, MHz.
+SPAN_GAP_MHZ = 1.5
 
 #: Half-width over which the C/N0 along a mode is averaged, MHz. A
 #: Rayleigh-fading echo's level is the mean of its power, not a sample of it.
@@ -364,8 +379,11 @@ def _name(seg, taken: set[str]) -> str:
 
 def from_ionogram(ion, *, method: str = "contour", source: str = "",
                   doppler: str | float = DEFAULT_DOPPLER_PRIOR,
-                  knot_mhz: float = KNOT_MHZ, hops: int | None = None) -> ChannelState:
+                  knot_mhz: float = KNOT_MHZ, hops: int | None = None,
+                  curve: str = "spline") -> ChannelState:
     """A state from an ionogram already in hand. See :func:`from_sounding`."""
+    if curve not in CURVES:
+        raise ValueError(f"no curve {curve!r}: the curves are {', '.join(CURVES)}")
     header = ion.header
     if getattr(ion, "zero_periods", 0):
         raise ValueError("C/N0 is calibrated for an unpadded spectrogram; "
@@ -416,9 +434,19 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
     state.metrics["pick_vrange_km"] = float(result.pick.vrange_km)
 
     freq, vrange, weight = trace.extract_points(ion, result)
-    segments = trace.group_tracks(freq, vrange, weight)
     ground = calibrate.ground_range_km(header) if isinstance(header, LfsHeader) else (
         circuit.ground_km)
+    scale = km_per_us(header)
+    priors = _priors(ion, approx, doppler_origin)
+    if curve == "layer":
+        _layered(state, ion, (freq, vrange, weight), ground, float(result.pick.muf_mhz),
+                 scale, method=method, knot_mhz=knot_mhz, spread=spread, priors=priors)
+        if hops is not None:
+            state.modes = [m for m in state.modes if m.hops == hops]
+            state.notes.append(f"{hops}-hop modes alone")
+        _delay_spread(state, ion)
+        return state
+    segments = trace.group_tracks(freq, vrange, weight)
     if ground:
         segments = trace.identify_hops(segments, ground)
     segments = trace.merge_branches(segments)
@@ -433,55 +461,131 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
         segments = [s for s in segments if s.hops == hops]
         state.notes.append(f"{hops}-hop modes alone")
 
-    scale = km_per_us(header)
     taken: set[str] = set()
     curves = [(seg, *_curve(seg))
               for seg in sorted(segments, key=lambda s: (s.median_range,
                                                          s.freq_span[0]))
               if seg.freq_span[1] - seg.freq_span[0] >= knot_mhz]
     for seg, f_curve, r_curve, how in curves:
-        lo, hi = seg.freq_span
-        knots = np.arange(lo, hi, knot_mhz)
-        knots = np.append(knots[knots < hi - 1e-9], hi)
-        r_k = np.interp(knots, f_curve, r_curve)
-        f_rows, cn0_rows = _cn0_along(
-            ion, f_curve, r_curve, lo, hi,
-            others=[(f, r, *s.freq_span) for s, f, r, _ in curves if s is not seg])
-        if f_rows.size < 2:
+        along = _along(ion, f_curve, r_curve, *seg.freq_span, knot_mhz,
+                       [(f, r, *s.freq_span) for s, f, r, _ in curves if s is not seg])
+        if along is None:
             continue
-        cn0_k = np.interp(knots, f_rows, _smooth(f_rows, cn0_rows, SMOOTH_MHZ))
-        levels = level_statistics(f_rows, cn0_rows)
         gaps = np.diff(np.unique(seg.freq))
         widest = float(gaps.max()) if gaps.size else 0.0
-        name = _name(seg, taken)
-        if levels is not None:
-            state.metrics.setdefault("levels", {})[name] = levels
-        state.modes.append(Mode(
-            name=name, freq_mhz=knots, delay_us=r_k / scale,
-            cn0_dbhz=10.0 * np.log10(cn0_k), doppler_spread_hz=spread,
-            hops=seg.hops, branch=seg.branch,
-            provenance={
-                "delay": Provenance(MEASURED, f"{method} trace, {how}"
-                                    + (f"; widest gap without points {widest:.2f} MHz, "
-                                       f"gaps over {FIT_GAP_MHZ:g} MHz joined straight"
-                                       if widest > FIT_GAP_MHZ else "")),
-                "band": Provenance(MEASURED, "extent of the trace segment"),
-                "cn0": Provenance(MEASURED, f"ionogram power along the trace, "
-                                            f"+-{SUM_HALF_BINS} bins, a cell other "
-                                            f"modes reach shared among them, "
-                                            f"window {ion.window}{approx}"),
-                "doppler_spread": doppler_origin,
-                "doppler_shift": Provenance(PRIOR, "none: a power ionogram "
-                                                   "has no phase"),
-                "fading": Provenance(PRIOR, "Rayleigh (ITU-R F.1487 Annex 1)"),
-                "magnetoionic": Provenance(PRIOR, "not resolved on a power ionogram; "
-                                                  "not split"),
-            }))
+        _add(state, along, scale, name=_name(seg, taken), spread=spread,
+             hops=seg.hops, branch=seg.branch, priors=priors,
+             delay=Provenance(MEASURED, f"{method} trace, {how}"
+                              + (f"; widest gap without points {widest:.2f} MHz, "
+                                 f"gaps over {FIT_GAP_MHZ:g} MHz joined straight"
+                                 if widest > FIT_GAP_MHZ else "")),
+             band=Provenance(MEASURED, "extent of the trace segment"))
     if not state.modes:
         state.notes.append(f"{method} found a trace but no segment long enough "
                            f"for a mode")
     _delay_spread(state, ion)
     return state
+
+
+def _layered(state: ChannelState, ion, points, ground: float | None, muf: float,
+             scale: float, *, method: str, knot_mhz: float, spread: float,
+             priors: dict) -> None:
+    """The 1F family drawn from a layer laid on the echoes: its low and high rays.
+
+    Each ray's band is where the echoes lie along it (:func:`_span`); its
+    C/N0 is read along it as a track's is.
+    """
+    if not ground:
+        state.notes.append("no ground range to lay a layer over")
+        return
+    found = layer.fit(*points, ground, muf)
+    lay = found.layer
+    state.notes.append("the 1F family from a fitted quasi-parabolic layer")
+    state.metrics["layer"] = {"fc_mhz": lay.fc_mhz, "hm_km": lay.hm_km,
+                              "ym_km": lay.ym_km, "offset_km": found.offset_km,
+                              "score": found.score}
+    rays = [(name, branch, f, r, span)
+            for name, branch, (f, r) in (("1F", "low", found.low()),
+                                         ("1F-high", "high", found.high()))
+            for span in [_span(f, r, points)]
+            if span is not None and span[1] - span[0] >= knot_mhz]
+    delay = Provenance(MEASURED, f"quasi-parabolic layer, fc {lay.fc_mhz:.2f} MHz, "
+                                 f"hm {lay.hm_km:.0f} km, ym {lay.ym_km:.0f} km over "
+                                 f"{ground:.0f} km, laid on the {method} trace's "
+                                 f"echoes at a range offset of "
+                                 f"{found.offset_km:+.0f} km")
+    band = Provenance(MEASURED, f"where the echoes lie within {INLIER_KM:g} km of the "
+                                f"ray, gaps up to {SPAN_GAP_MHZ:g} MHz")
+    for name, branch, f, r, span in rays:
+        others = [(f_o, r_o, *s_o) for n_o, _, f_o, r_o, s_o in rays if n_o != name]
+        along = _along(ion, f, r, *span, knot_mhz, others)
+        if along is not None:
+            _add(state, along, scale, name=name, spread=spread, hops=1,
+                 branch=branch, priors=priors, delay=delay, band=band)
+    if not state.modes:
+        state.notes.append("the fitted layer's rays lie along no echo")
+
+
+def _span(f_ray: np.ndarray, r_ray: np.ndarray, points) -> tuple[float, float] | None:
+    """Where the echoes lie along a ray: the run of them holding the most rows.
+
+    A point within :data:`INLIER_KM` of the ray is on it; a gap wider than
+    :data:`SPAN_GAP_MHZ` without one ends a run. The longest, not the one
+    nearest the nose: where the layer's nose misses the sounding's, a few
+    points there would otherwise stand for the whole ray.
+    """
+    freq, vrange, _ = points
+    inside = (freq >= f_ray[0]) & (freq <= f_ray[-1])
+    near = np.abs(vrange[inside] - np.interp(freq[inside], f_ray, r_ray)) <= INLIER_KM
+    on = np.unique(freq[inside][near])
+    if on.size < 2:
+        return None
+    run = max(np.split(on, np.flatnonzero(np.diff(on) > SPAN_GAP_MHZ) + 1), key=len)
+    return (float(run[0]), float(run[-1])) if run.size >= 2 else None
+
+
+def _along(ion, f_curve: np.ndarray, r_curve: np.ndarray, lo: float, hi: float,
+           knot_mhz: float, others: Sequence[tuple]):
+    """A curve's knots over its band, its range and C/N0 at them, and its rows' level.
+
+    None when the band holds fewer than two of the ionogram's rows.
+    """
+    knots = np.arange(lo, hi, knot_mhz)
+    knots = np.append(knots[knots < hi - 1e-9], hi)
+    f_rows, cn0_rows = _cn0_along(ion, f_curve, r_curve, lo, hi, others=others)
+    if f_rows.size < 2:
+        return None
+    return (knots, np.interp(knots, f_curve, r_curve),
+            np.interp(knots, f_rows, _smooth(f_rows, cn0_rows, SMOOTH_MHZ)),
+            level_statistics(f_rows, cn0_rows))
+
+
+def _add(state: ChannelState, along, scale: float, *, name: str, spread: float,
+         hops: int | None, branch: str | None, priors: dict,
+         delay: Provenance, band: Provenance) -> None:
+    knots, r_k, cn0_k, levels = along
+    if levels is not None:
+        state.metrics.setdefault("levels", {})[name] = levels
+    state.modes.append(Mode(
+        name=name, freq_mhz=knots, delay_us=r_k / scale,
+        cn0_dbhz=10.0 * np.log10(cn0_k), doppler_spread_hz=spread,
+        hops=hops, branch=branch,
+        provenance={"delay": delay, "band": band, **priors}))
+
+
+def _priors(ion, approx: str, doppler_origin: Provenance) -> dict:
+    """The provenance every mode shares, whatever its curve was drawn from."""
+    return {
+        "cn0": Provenance(MEASURED, f"ionogram power along the trace, "
+                                    f"+-{SUM_HALF_BINS} bins, a cell other "
+                                    f"modes reach shared among them, "
+                                    f"window {ion.window}{approx}"),
+        "doppler_spread": doppler_origin,
+        "doppler_shift": Provenance(PRIOR, "none: a power ionogram has no phase"),
+        "fading": Provenance(PRIOR, "Rayleigh (ITU-R F.1487 Annex 1)"),
+        "magnetoionic": Provenance(PRIOR,
+                                   "not resolved on a power ionogram; not split"),
+    }
 
 
 def load(path: str | Path, *, window: int = spectro.DEFAULT_WINDOW,
@@ -516,15 +620,19 @@ def from_sounding(path: str | Path, *, method: str = "contour",
                   stations: Mapping[str, tuple[float, float]] | None = None,
                   doppler: str | float = DEFAULT_DOPPLER_PRIOR,
                   knot_mhz: float = KNOT_MHZ, hops: int | None = None,
+                  curve: str = "spline",
                   cache_dir: str | Path | None = None) -> ChannelState:
     """Read a sounding of any format muf reads and describe its channel.
 
     ``doppler`` is the prior for what the ionogram cannot measure: an F.1487
     condition name, or a frequency spread in Hz. ``hops``, when given, keeps
     the modes of that many hops alone, as :func:`muf.trace.identify_hops`
-    labels them: an unlabelled trace goes with the rest.
+    labels them: an unlabelled trace goes with the rest. ``curve`` is what
+    the modes' delay curves are drawn from, one of :data:`CURVES`: with
+    ``"layer"`` the state holds the 1F family alone, its low ray and its
+    high ray.
     """
     ion = load(path, window=window, gate_km=gate_km, stations=stations,
                cache_dir=cache_dir)
     return from_ionogram(ion, method=method, source=Path(path).name, doppler=doppler,
-                         knot_mhz=knot_mhz, hops=hops)
+                         knot_mhz=knot_mhz, hops=hops, curve=curve)

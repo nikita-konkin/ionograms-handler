@@ -51,6 +51,10 @@ INTERVAL_S = 60.0
 #: The 1F family alone, while the upper modes' curves do not follow their echoes.
 HOPS = 1
 
+#: What the loop draws the modes' delay curves from (muf.sim.observe.CURVES):
+#: a layer laid on the echoes, whose 1F rays cannot hop between them.
+CURVE = "layer"
+
 #: Longest one turn may take before it is stopped.
 TIMEOUT_S = 600.0
 
@@ -79,6 +83,12 @@ def hops() -> int | None:
     """The hop count whose modes the loop observes alone, ``LIVE_HOPS``: 1, the
     1F family, unless told otherwise; None, every mode, when told 0."""
     return int(os.environ.get("LIVE_HOPS", HOPS)) or None
+
+
+def curve() -> str:
+    """What the loop draws the modes' delay curves from, ``LIVE_CURVE``: a fitted
+    layer unless told ``spline``."""
+    return os.environ.get("LIVE_CURVE", CURVE)
 
 
 def folder() -> Path:
@@ -111,7 +121,7 @@ def _turn(ledger: dict, path: str, epoch: float, tx: str, rx: str,
 
     found, events = live.take(live.Ledger.from_dict(ledger),
                               series.Session(Path(path), epoch, tx, rx), cache,
-                              params={"hops": hops()})
+                              params={"hops": hops(), "curve": curve()})
     return found.to_dict(), events
 
 

@@ -83,6 +83,9 @@ services:
       # The hop count whose modes the loop forecasts and scores alone: 1, the
       # 1F family, by default; 0 for every mode.
       LIVE_HOPS: "${LIVE_HOPS:-1}"
+      # What the loop draws the modes' delay curves from: layer, the 1F rays of
+      # a fitted quasi-parabolic layer, by default; spline for the tracks'.
+      LIVE_CURVE: "${LIVE_CURVE:-layer}"
       DIRECT_INGEST: "${DIRECT_INGEST:-0}"
       # Solar indices for IRI cache here, on the volume rather than in the
       # image: `$HOME` is a container layer, so without this every `pull`

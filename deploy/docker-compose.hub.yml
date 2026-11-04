@@ -71,6 +71,9 @@ services:
       # The hop count whose modes the loop forecasts and scores alone: 1, the
       # 1F family, by default; 0 for every mode.
       LIVE_HOPS: "${LIVE_HOPS:-1}"
+      # What the loop draws the modes' delay curves from: layer, the 1F rays of
+      # a fitted quasi-parabolic layer, by default; spline for the tracks'.
+      LIVE_CURVE: "${LIVE_CURVE:-layer}"
       # Completed station HDF5 uploads go to /data/station-files and are
       # ingested independently of NAS scans. Uses the existing agent token.
       DIRECT_INGEST: "${DIRECT_INGEST:-0}"
