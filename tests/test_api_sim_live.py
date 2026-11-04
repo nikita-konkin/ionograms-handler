@@ -243,8 +243,32 @@ def test_a_turn_observes_the_hop_count_the_loop_is_set_to(tmp_path, monkeypatch)
     monkeypatch.setattr(live, "take", take)
     sim_live._turn(live.Ledger().to_dict(), str(tmp_path / "a.h5"), 1792843215.0,
                    "NIC2", "yoshkar-ola", str(tmp_path))
-    assert seen == [{"hops": count}], \
+    assert seen[0]["hops"] == count, \
         "a turn did not observe the hop count it was set to"
+
+
+def test_the_loop_draws_its_curves_from_a_layer_unless_told_otherwise(monkeypatch):
+    monkeypatch.delenv("LIVE_CURVE", raising=False)
+    assert sim_live.curve() == "layer", \
+        "the loop did not draw its curves from a layer by default"
+
+
+def test_a_turn_draws_its_curves_as_the_loop_is_set_to(tmp_path, monkeypatch):
+    from muf.sim import live
+
+    curve = random.choice(("spline", "layer"))
+    monkeypatch.setenv("LIVE_CURVE", curve)
+    seen = []
+
+    def take(ledger, session, cache, **kw):
+        seen.append(kw.get("params"))
+        return ledger, []
+
+    monkeypatch.setattr(live, "take", take)
+    sim_live._turn(live.Ledger().to_dict(), str(tmp_path / "a.h5"), 1792843215.0,
+                   "NIC2", "yoshkar-ola", str(tmp_path))
+    assert seen[0]["curve"] == curve, \
+        "a turn did not draw its curves as the loop was set to"
 
 
 # --- the page -----------------------------------------------------------------

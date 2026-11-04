@@ -105,6 +105,26 @@ geometry, low and high rays paired at the nose. Each track becomes one mode:
   and each would otherwise take its whole power, so the state would sound
   it once per track.
 
+With `curve="layer"` (`muf sim live --curve layer`, the series' `curve`) the
+1F family is not tracked at all (#101). A track can step from one echo onto
+the next where they are stacked tens of km apart, and a spline through it
+follows wherever the track went. `muf.layer` instead lays a quasi-parabolic
+layer on the sounding's echo points: its ground range and group path have
+Croft and Hoogasian's closed form over a spherical Earth, and its rays at
+the circuit's ground range give a low ray rising to the nose and a high ray
+falling from it. The MUF is searched within 3 % of the extractor's pick,
+the peak height and the thickness on a grid, and the range offset is free,
+since the station's clock moves every echo together; the layer that puts
+the most echo weight within 15 km of either ray wins. The state then holds
+two modes, `1F` and `1F-high`, each over the longest run of echo points
+within those 15 km of its ray (gaps up to 1.5 MHz), with its C/N0 read
+along the ray as a track's is. The longest run, not the one nearest the
+nose: where the layer's nose misses the sounding's, a few points there
+would otherwise stand for the whole ray. The offset trades against the peak
+height, so the fitted layer is a curve that fits, not a measured profile.
+One layer has one nose: where the o and x waves' noses part, it settles
+between them, and the high ray's band ends where the echo leaves it.
+
 The C/N0 conversion is exact for `.lfs`. muf divides each row by 4 ln 2
 times its median, so a tone of carrier-to-noise density C/N0 peaks at
 `C/N0 * T / (6 ln^2 2)` for a window of T seconds, and a noise bin averages
@@ -765,7 +785,9 @@ good; `LIVE_KEEP_DAYS` above 0 forgets the older ones. The loop forecasts
 and scores the 1F family alone (`LIVE_HOPS`, 1; 0 for every mode): the
 curves the observer draws for the upper modes hop between echoes stacked
 closer than a track may step, and until they follow their echoes they only
-add phantom traces to the forecast (#99). A scored event keeps
+add phantom traces to the forecast (#99). It draws the 1F family from a
+fitted layer (`LIVE_CURVE`, `layer`; `spline` for the tracks' splines), whose
+rays cannot hop between echoes as a track can (#101). A scored event keeps
 the pair's working frequencies too, each frequency's two events and its
 SNR, and the sun's zenith angle at the control point. The loop is only as
 live as the scans: at the

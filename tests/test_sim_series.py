@@ -337,3 +337,20 @@ def test_a_state_is_observed_for_the_hop_count_asked_for(tmp_path, make_chirp_h5
     state = series.state_of(path, tmp_path / "states", {"hops": 1})
     assert {m.hops for m in state.modes} == {1}, \
         "a state observed for one hop count held modes of another"
+
+
+def test_a_state_is_observed_with_the_curve_asked_for(tmp_path, make_chirp_h5):
+    from conftest import chirp_range_gates_m
+
+    rows = random.randint(40, 70)
+    power = np.random.exponential(1.0, (rows, 8192))
+    km = chirp_range_gates_m(8192, 40_000.0, 100_000.0) / 1e3
+    low = random.uniform(2760.0, 2800.0)
+    power[:, (km >= low) & (km < low + 15.0)] *= 1e3
+    path = make_chirp_h5(power, t0=1792843215.0, txname="NIC1",
+                         station_name="yoshkar-ola", max_range_extent_km=8000.0,
+                         freqs_hz=np.linspace(10e6, 20e6, rows),
+                         name="lfm_ionogram-NIC1-yoshkar-ola-ch0-000-1792843215.00.h5")
+    state = series.state_of(path, tmp_path / "states", {"curve": "layer"})
+    assert "the 1F family from a fitted quasi-parabolic layer" in state.notes, \
+        "a state was not observed with the curve asked for"

@@ -307,7 +307,7 @@ def cmd_live(args) -> int:
 
     observing = {"method": args.method, "window": args.window,
                  "knot_mhz": args.knot_mhz, "doppler": _doppler(args.doppler),
-                 "hops": args.hops}
+                 "hops": args.hops, "curve": args.curve}
     leads = (None if args.lead is None
              else [float(v) for v in args.lead.split(",") if v.strip()])
     live.replay(args.paths, circuit=args.circuit, leads=leads,
@@ -611,6 +611,9 @@ def register(sub) -> None:
     p.add_argument("--knot-mhz", type=float, default=0.1)
     p.add_argument("--hops", type=int, metavar="N",
                    help="observe the modes of N hops alone (default every mode)")
+    p.add_argument("--curve", choices=("spline", "layer"), default="spline",
+                   help="draw the modes' delay curves as splines through the tracks, "
+                        "or the 1F family from a fitted layer (default spline)")
     p.add_argument("--stations", type=Path, metavar="FILE")
     p.set_defaults(func=cmd_live)
 
