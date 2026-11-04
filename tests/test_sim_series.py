@@ -7,6 +7,7 @@ import random
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from muf.sim import observe, presets, series, sounding, summary
@@ -318,3 +319,21 @@ def test_a_failed_run_leaves_the_pairs_not_begun():
         for _ in series._map(time.sleep, [0.1] * 200, 2):
             raise RuntimeError("the writer failed")
     assert time.monotonic() - start < 5.0, "a failed run went on scoring every pair"
+
+
+def test_a_state_is_observed_for_the_hop_count_asked_for(tmp_path, make_chirp_h5):
+    from conftest import chirp_range_gates_m
+
+    rows = random.randint(40, 70)
+    power = np.random.exponential(1.0, (rows, 8192))
+    km = chirp_range_gates_m(8192, 40_000.0, 100_000.0) / 1e3
+    low = random.uniform(2760.0, 2800.0)
+    for start in (low, low + random.uniform(260.0, 300.0)):
+        power[:, (km >= start) & (km < start + 15.0)] *= 1e3
+    path = make_chirp_h5(power, t0=1792843215.0, txname="NIC1",
+                         station_name="yoshkar-ola", max_range_extent_km=8000.0,
+                         freqs_hz=np.linspace(10e6, 20e6, rows),
+                         name="lfm_ionogram-NIC1-yoshkar-ola-ch0-000-1792843215.00.h5")
+    state = series.state_of(path, tmp_path / "states", {"hops": 1})
+    assert {m.hops for m in state.modes} == {1}, \
+        "a state observed for one hop count held modes of another"
