@@ -761,7 +761,11 @@ it off) for a followed circuit's soundings newer than the last it took and
 runs each turn in a process of its own. A circuit followed begins at its
 newest sounding, so the archive's past is not replayed, and a sounding
 stored after a later one was taken is passed over. Events are kept for
-good; `LIVE_KEEP_DAYS` above 0 forgets the older ones. A scored event keeps
+good; `LIVE_KEEP_DAYS` above 0 forgets the older ones. The loop forecasts
+and scores the 1F family alone (`LIVE_HOPS`, 1; 0 for every mode): the
+curves the observer draws for the upper modes hop between echoes stacked
+closer than a track may step, and until they follow their echoes they only
+add phantom traces to the forecast (#99). A scored event keeps
 the pair's working frequencies too, each frequency's two events and its
 SNR, and the sun's zenith angle at the control point. The loop is only as
 live as the scans: at the

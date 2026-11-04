@@ -79,7 +79,8 @@ SEED = 0
 
 #: How each sounding is observed, unless told otherwise.
 OBSERVE = {"method": "contour", "window": spectro.DEFAULT_WINDOW,
-           "knot_mhz": observe.KNOT_MHZ, "doppler": observe.DEFAULT_DOPPLER_PRIOR}
+           "knot_mhz": observe.KNOT_MHZ, "doppler": observe.DEFAULT_DOPPLER_PRIOR,
+           "hops": None}
 
 #: The fields of a recovery error, as :class:`muf.sim.check.ModeError` has them.
 RECOVERY_ERRORS = ("overlap_mhz", "delay_bias_us", "delay_rms_us",
@@ -228,9 +229,9 @@ def state_of(path: str | Path, cache: str | Path, params: Mapping | None = None,
 
     The key is the file's path, size and modification time, the code's
     version (:func:`code_version`) and the observing ``params`` -- extractor,
-    window, knots and Doppler prior, :data:`OBSERVE` filling in the rest --
-    with ``stations_id`` naming the station table. A state observed afresh is
-    cached with its key and its ionogram's grid.
+    window, knots, Doppler prior and hop count, :data:`OBSERVE` filling in the
+    rest -- with ``stations_id`` naming the station table. A state observed
+    afresh is cached with its key and its ionogram's grid.
     """
     path, cache = Path(path), Path(cache)
     params = {**OBSERVE, **(params or {})}
@@ -246,7 +247,7 @@ def state_of(path: str | Path, cache: str | Path, params: Mapping | None = None,
     ion = observe.load(path, window=params["window"], stations=stations)
     state = observe.from_ionogram(ion, method=params["method"], source=path.name,
                                   doppler=params["doppler"],
-                                  knot_mhz=params["knot_mhz"])
+                                  knot_mhz=params["knot_mhz"], hops=params["hops"])
     cache.mkdir(parents=True, exist_ok=True)
     state.save(state_file)
     key_file.write_text(json.dumps({"key": key, "grid": _grid(ion)}, indent=1) + "\n",
@@ -276,7 +277,8 @@ def truth_of(origin: str | Path, path: str | Path, cache: str | Path,
     ion = observe.load(b, window=params["window"], stations=stations,
                        gate_km=_gate(grid))
     return observe.from_ionogram(ion, method=params["method"], source=b.name,
-                                 doppler=params["doppler"], knot_mhz=params["knot_mhz"])
+                                 doppler=params["doppler"], knot_mhz=params["knot_mhz"],
+                                 hops=params["hops"])
 
 
 def simulation(forecast: ChannelState, origin: str | Path, cache: str | Path,
@@ -305,7 +307,7 @@ def simulation(forecast: ChannelState, origin: str | Path, cache: str | Path,
                        gate_km=_gate(_cached_grid(cache, Path(origin))))
     state = observe.from_ionogram(ion, method=params["method"],
                                   source=report.target.name, doppler=params["doppler"],
-                                  knot_mhz=params["knot_mhz"])
+                                  knot_mhz=params["knot_mhz"], hops=params["hops"])
     state.metrics["lead_s"] = lead
     return Simulated(report.target, state)
 

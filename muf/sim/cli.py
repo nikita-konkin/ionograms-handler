@@ -306,7 +306,8 @@ def cmd_live(args) -> int:
     from . import live
 
     observing = {"method": args.method, "window": args.window,
-                 "knot_mhz": args.knot_mhz, "doppler": _doppler(args.doppler)}
+                 "knot_mhz": args.knot_mhz, "doppler": _doppler(args.doppler),
+                 "hops": args.hops}
     leads = (None if args.lead is None
              else [float(v) for v in args.lead.split(",") if v.strip()])
     live.replay(args.paths, circuit=args.circuit, leads=leads,
@@ -608,6 +609,8 @@ def register(sub) -> None:
                    help="prior for the spread a power ionogram cannot measure")
     p.add_argument("--window", type=int, default=spectro.DEFAULT_WINDOW)
     p.add_argument("--knot-mhz", type=float, default=0.1)
+    p.add_argument("--hops", type=int, metavar="N",
+                   help="observe the modes of N hops alone (default every mode)")
     p.add_argument("--stations", type=Path, metavar="FILE")
     p.set_defaults(func=cmd_live)
 

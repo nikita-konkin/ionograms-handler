@@ -364,7 +364,7 @@ def _name(seg, taken: set[str]) -> str:
 
 def from_ionogram(ion, *, method: str = "contour", source: str = "",
                   doppler: str | float = DEFAULT_DOPPLER_PRIOR,
-                  knot_mhz: float = KNOT_MHZ) -> ChannelState:
+                  knot_mhz: float = KNOT_MHZ, hops: int | None = None) -> ChannelState:
     """A state from an ionogram already in hand. See :func:`from_sounding`."""
     header = ion.header
     if getattr(ion, "zero_periods", 0):
@@ -429,6 +429,9 @@ def from_ionogram(ion, *, method: str = "contour", source: str = "",
     for s in segments:
         if s.hops is None and s.group in hops_of:
             s.hops = hops_of[s.group]
+    if hops is not None:
+        segments = [s for s in segments if s.hops == hops]
+        state.notes.append(f"{hops}-hop modes alone")
 
     scale = km_per_us(header)
     taken: set[str] = set()
@@ -512,14 +515,16 @@ def from_sounding(path: str | Path, *, method: str = "contour",
                   gate_km: tuple[float, float] | None = None,
                   stations: Mapping[str, tuple[float, float]] | None = None,
                   doppler: str | float = DEFAULT_DOPPLER_PRIOR,
-                  knot_mhz: float = KNOT_MHZ,
+                  knot_mhz: float = KNOT_MHZ, hops: int | None = None,
                   cache_dir: str | Path | None = None) -> ChannelState:
     """Read a sounding of any format muf reads and describe its channel.
 
     ``doppler`` is the prior for what the ionogram cannot measure: an F.1487
-    condition name, or a frequency spread in Hz.
+    condition name, or a frequency spread in Hz. ``hops``, when given, keeps
+    the modes of that many hops alone, as :func:`muf.trace.identify_hops`
+    labels them: an unlabelled trace goes with the rest.
     """
     ion = load(path, window=window, gate_km=gate_km, stations=stations,
                cache_dir=cache_dir)
     return from_ionogram(ion, method=method, source=Path(path).name, doppler=doppler,
-                         knot_mhz=knot_mhz)
+                         knot_mhz=knot_mhz, hops=hops)

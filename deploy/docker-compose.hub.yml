@@ -68,6 +68,9 @@ services:
       # are: a hub that shows it scans every minute or two, not every 15.
       LIVE_INTERVAL_S: "${LIVE_INTERVAL_S:-60}"
       LIVE_KEEP_DAYS: "${LIVE_KEEP_DAYS:-0}"
+      # The hop count whose modes the loop forecasts and scores alone: 1, the
+      # 1F family, by default; 0 for every mode.
+      LIVE_HOPS: "${LIVE_HOPS:-1}"
       # Completed station HDF5 uploads go to /data/station-files and are
       # ingested independently of NAS scans. Uses the existing agent token.
       DIRECT_INGEST: "${DIRECT_INGEST:-0}"
