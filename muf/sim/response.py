@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -395,3 +396,42 @@ def measure(record: Record, mode: Mode, f_lo_mhz: float, f_hi_mhz: float, *,
         else math.nan,
         gdd_trace_us_per_mhz=float(slope[0]) if slope is not None else math.nan,
         stepped=out_stepped, sliding=out_sliding)
+
+
+def default_band(mode: Mode, width_mhz: float = 1.0) -> tuple[float, float]:
+    """A stretch of ``width_mhz`` about the middle of the mode's band, inside it."""
+    width = min(width_mhz, mode.f_hi - mode.f_lo)
+    lo = min(max((mode.f_lo + mode.f_hi - width) / 2.0, mode.f_lo), mode.f_hi - width)
+    return round(lo, 6), round(lo + width, 6)
+
+
+def format_response(r: Response) -> str:
+    gate = "held at one delay" if r.gate.held else "on the curve"
+    count = int(r.sliding.valid.sum()), int(r.stepped.valid.sum())
+    return "\n".join([
+        f"{r.mode} over {r.f_lo_mhz:.2f}-{r.f_hi_mhz:.2f} MHz ({r.source})",
+        f"  subchannel {r.subchannel_hz / 1e3:.2f} kHz: a window of {r.window} "
+        f"samples, delay bin {r.bin_us:.1f} us",
+        f"  overlap: a window every {r.hop} samples, {count[0]} sliding samples "
+        f"against {count[1]} stepped",
+        f"  gate: {gate}, shift {r.gate.shift_us:+.1f} us, half-width "
+        f"{r.gate_half_us:.1f} us (automatic {r.gate_auto_us:.1f} us)",
+        f"  level: median {r.snr_db:.1f} dB above the noise",
+        f"  GDD: {r.gdd_phase_us_per_mhz:.1f} us/MHz from the phase, "
+        f"{r.gdd_trace_us_per_mhz:.1f} us/MHz from the peaks",
+        f"  phase: sliding {r.sliding.jumps} jumps in {r.sliding.steps} steps; stepped "
+        f"{r.stepped.jumps} in {r.stepped.steps}, {int(r.stepped.lost.sum())} samples "
+        f"a turn off"])
+
+
+def write_csv(r: Response, path) -> Path:
+    """Both series, one row per window: the stepped first, then the sliding."""
+    path = Path(path)
+    lines = ["series,freq_mhz,gate_us,delay_us,level_db,phase_rad,lost"]
+    for name, s in (("stepped", r.stepped), ("sliding", r.sliding)):
+        for i in np.nonzero(s.valid)[0]:
+            lines.append(f"{name},{s.freq_mhz[i]:.6f},{s.gate_us[i]:.2f},"
+                         f"{s.delay_us[i]:.3f},{s.level_db[i]:.3f},"
+                         f"{s.phase_rad[i]:.5f},{int(s.lost[i])}")
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+    return path

@@ -7,9 +7,12 @@ known exactly.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
+from muf import cli
 from muf.sim import presets, response, sounding
 from muf.sim.fast import Record
 from muf.sim.state import ChannelState, Mode, Sweep
@@ -189,3 +192,65 @@ def test_an_overlap_above_one_is_refused():
     mode = Mode("1F", [9.9, 11.1], [2037.4, 2098.6], 60.0)
     with pytest.raises(ValueError, match="overlap"):
         response.measure(_record(mode, fading_on=False), mode, 10.2, 10.8, overlap=1.3)
+
+
+def _sounding(folder) -> tuple:
+    """A synthetic .lfs of one split, dispersive mode, and its state's file."""
+    mode = Mode("1F", [9.9, 11.1], [2037.4, 2098.6], 60.0, ox_split_us=27.3,
+                x_to_o_db=-3.0)
+    sweep = Sweep(start_mhz=10.0, rate_hz_s=100e3, duration_s=10.0, sample_rate_hz=2e3)
+    state = ChannelState(presets.cyprus1_circuit(), 1770206410.0, modes=[mode],
+                         sweep=sweep, source="test")
+    return (sounding.write_lfs(state, folder / "sim.lfs", seed=3, fading_on=False),
+            state.save(folder / "state.json"))
+
+
+def test_the_command_prints_the_dispersion(tmp_path, capsys):
+    lfs, state = _sounding(tmp_path)
+    cli.main(["sim", "response", str(lfs), "--state", str(state),
+              "--band", "10.2,10.8"])
+    assert "us/MHz from the phase" in capsys.readouterr().out, \
+        "the command did not print the GDD"
+
+
+def test_the_command_writes_both_series_as_csv(tmp_path):
+    lfs, state = _sounding(tmp_path)
+    out = tmp_path / "fr.csv"
+    cli.main(["sim", "response", str(lfs), "--state", str(state), "--band", "10.2,10.8",
+              "--csv", str(out)])
+    kinds = {line.split(",")[0] for line in out.read_text().splitlines()[1:]}
+    assert kinds == {"stepped", "sliding"}, "the CSV did not hold both series"
+
+
+def test_the_command_writes_the_response_as_json(tmp_path):
+    lfs, state = _sounding(tmp_path)
+    out = tmp_path / "fr.json"
+    cli.main(["sim", "response", str(lfs), "--state", str(state), "--band", "10.2,10.8",
+              "--subchannel", "40.96", "--json", str(out)])
+    assert json.loads(out.read_text())["window"] == 819, \
+        "the JSON did not carry a 40.96 kHz window"
+
+
+def test_the_command_takes_a_megahertz_about_the_mode_by_default(tmp_path):
+    lfs, state = _sounding(tmp_path)
+    out = tmp_path / "fr.json"
+    cli.main(["sim", "response", str(lfs), "--state", str(state), "--json", str(out)])
+    got = json.loads(out.read_text())
+    assert (got["f_lo_mhz"], got["f_hi_mhz"]) == (10.0, 11.0), \
+        "the default stretch was not the megahertz about the mode's middle"
+
+
+def test_the_command_passes_the_gate_on(tmp_path):
+    lfs, state = _sounding(tmp_path)
+    out = tmp_path / "fr.json"
+    cli.main(["sim", "response", str(lfs), "--state", str(state), "--band", "10.2,10.8",
+              "--held", "--shift", "12.5", "--half", "33", "--json", str(out)])
+    got = json.loads(out.read_text())["gate"]
+    assert (got["held"], got["shift_us"], got["half_us"]) == (True, 12.5, 33.0), \
+        "the command did not pass the gate on"
+
+
+def test_the_command_refuses_an_unknown_mode(tmp_path):
+    lfs, state = _sounding(tmp_path)
+    assert cli.main(["sim", "response", str(lfs), "--state", str(state),
+                     "--mode", "4F"]) == 2, "an unknown mode was not refused"

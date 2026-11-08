@@ -299,6 +299,42 @@ few fades, whose random phase scatters the GDD by a fifth of the law's
 state takes it from the trace. A second mode 6 dB stronger and 1 ms later
 leaves the reading unchanged.
 
+### The frequency response, subchannel by subchannel: `muf sim response`
+
+The playground's `#fr` page reads a mode's frequency response off the
+dechirped record, in the browser; `muf.sim.response` is the same
+measurement in muf, so that it can be checked on synthetic soundings, where
+the truth is known (#103).
+
+A Hann window T long is an instantaneous delay profile with bins 1/T of
+beat apart, and the sweep moves B = rate * T while it lasts: the window sees
+the channel through a subchannel B wide, and the complex value at the
+mode's peak is one sample of H(f). The peak is looked for in a gate around
+the mode's curve, or held at the curve's delay at the stretch's middle,
+shifted and as wide as asked; by default it is +- max(60 us, 1.5 bins).
+Windows one after another give a sample per subchannel; overlapping ones,
+down to one at every record sample, a sample per hop, and a phase that
+unwraps. Both series are kept, since what the overlap buys shows only
+against the stepped one.
+
+Two waves Delta-tau apart -- o and x -- share a delay bin while
+B < 1/Delta-tau, and their sum ripples along frequency with period
+1/Delta-tau; wider, they resolve. On a synthetic mode split by 27.3 us,
+x 3 dB down, the ripple sits at 27.3 us in a 10.24 kHz subchannel and the
+level is flat to 0.5 dB in 102.4 kHz. The GDD comes two ways, from the
+phase's curvature and from the peaks' slope, and on a steady 51 us/MHz
+curve both read 51.0 at 10.24 to 102.4 kHz with windows at 90 % overlap.
+The peaks' slope is the weaker: a parabola between bins is biased by about
+a sixtieth of a bin, which tilts a curve that crosses less than a bin. And
+windows a subchannel apart see the phase move 2 pi (tau - tau_ref) B between
+them, so on a wide subchannel only overlapping windows unwrap it: the
+stepped series counts its jumps and marks the samples a turn off the sliding
+phase.
+
+The simulator's o/x split is a constant delay per mode, so on a synthetic
+record the ripple's period is fixed across a stretch; on a real one it
+drifts as the split grows towards the MUF.
+
 ### From a scenario: `muf sim preset`
 
 - **ITU-R F.1487 test channels.** Two independently fading paths of equal
@@ -417,6 +453,13 @@ muf sim fast --calibrate --spreads 0.2,0.5,1 --shapes gaussian --split 30 --x-to
 # 1F alone over 1 MHz at 0.75 of its MUF: the band's reading, its band state,
 # and twelve copies read the same way
 muf sim band /data/2026.02.04/cyprus1_20260204_120010.lfs --out band.json
+
+# 1F's frequency response over 10.2-10.8 MHz in 40.96 kHz subchannels,
+# windows overlapping by 90 %, the gate held at one delay 20 us late and
+# +- 40 us wide; both series as CSV
+muf sim response /data/2026.02.04/cyprus1_20260204_120010.lfs --mode 1F \
+    --band 10.2,10.8 --subchannel 40.96 --overlap 0.9 --held --shift 20 \
+    --half 40 --csv fr.csv
 
 # the closed loop on a real sounding (below): recovery, realism and the
 # ionogram correlation, with the natural change over one repetition and the
