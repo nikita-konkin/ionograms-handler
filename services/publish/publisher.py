@@ -352,9 +352,13 @@ def draw(site_dir: Path, name: str, rows: list[dict], archive_root: Path,
 # --------------------------------------------------------------------------
 
 def choose(conn, wanted: list[tuple[str, str]]) -> list[dict]:
-    """Allow-listed circuits that exist and are not muted, in list order."""
+    """Allow-listed circuits that exist and are not muted, in list order.
+
+    A station stored under two spellings (``Yoshkar-Ola``, ``yoshkar-ola``)
+    makes one slug; the spelling sounded most recently stands for it.
+    """
     held = db.rows(conn, "SELECT tx, rx, MAX(datetime) AS last, COUNT(*) AS n"
-                         " FROM sounding GROUP BY tx, rx")
+                         " FROM sounding GROUP BY tx, rx ORDER BY last DESC")
     muted = db.muted_matcher(conn)
     chosen, seen = [], set()
     for want in wanted:
