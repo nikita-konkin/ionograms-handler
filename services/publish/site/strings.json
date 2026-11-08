@@ -48,7 +48,13 @@
     "now_unavailable": "The live feed is unavailable.",
     "now_line": "{f} MHz reached of {lo}–{hi} MHz, {p}%",
     "now_started": "started {time}",
-    "now_alt": "Ionogram being recorded, {tx} to {rx}"
+    "now_alt": "Ionogram being recorded, {tx} to {rx}",
+    "link_ok": "Station link OK",
+    "link_lost": "Station link lost since {since} UTC: {reason}",
+    "link_stale": "Station link not checked for {age}",
+    "link_vpn": "VPN is down",
+    "link_unreachable": "station unreachable",
+    "link_refused": "station refused the copy"
   },
   "ru": {
     "title": "Наклонное зондирование ионосферы",
@@ -99,6 +105,12 @@
     "now_unavailable": "Текущие данные недоступны.",
     "now_line": "достигнуто {f} МГц из {lo}–{hi} МГц, {p}%",
     "now_started": "начато {time}",
-    "now_alt": "Записываемая ионограмма, {tx} — {rx}"
+    "now_alt": "Записываемая ионограмма, {tx} — {rx}",
+    "link_ok": "Связь со станцией есть",
+    "link_lost": "Нет связи со станцией с {since} UTC: {reason}",
+    "link_stale": "Связь не проверялась {age}",
+    "link_vpn": "VPN не подключён",
+    "link_unreachable": "станция недоступна",
+    "link_refused": "станция отказала в данных"
   }
 }
