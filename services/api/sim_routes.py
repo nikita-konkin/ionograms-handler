@@ -22,7 +22,7 @@ import numpy as np
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from . import sim, sim_live, sim_period
+from . import response, sim, sim_live, sim_period
 from .auth import Capability, Principal, require, require_read
 from .read_routes import _render, _serving, _sounding_path
 
@@ -91,6 +91,27 @@ def period_file(run_id: int, name: str, request: Request) -> FileResponse:
     return FileResponse(path, filename=f"period-{run_id}-{name}",
                         media_type="application/json" if name.endswith(".json")
                         else "application/x-ndjson")
+
+
+@router.get("/soundings/{sounding_id}/response", dependencies=[Depends(require_read)])
+def sounding_response(sounding_id: int, request: Request, mode: str | None = None,
+                      lo: float | None = None, hi: float | None = None,
+                      sub: float = Query(20.48, gt=0, le=1000),
+                      overlap: float = Query(0.5, ge=0, le=1), held: bool = False,
+                      shift: float = 0.0, half: float | None = Query(None, gt=0)
+                      ) -> dict:
+    """A mode's frequency response read subchannel by subchannel off the
+    sounding's phase (:mod:`services.api.response`): ``sub`` kHz wide,
+    windows overlapping by ``overlap``, peaks looked for in a gate on the
+    mode's curve or ``held`` at one delay, ``shift`` us off it and ``half`` us
+    either side."""
+    path = _sounding_path(request, sounding_id)
+    try:
+        return response.reading(path, request.app.state.sim_cache, mode=mode, lo=lo,
+                                hi=hi, subchannel_khz=sub, overlap=overlap, held=held,
+                                shift_us=shift, half_us=half)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
 
 
 @router.get("/sim/{sounding_id}", dependencies=[Depends(require_read)])
