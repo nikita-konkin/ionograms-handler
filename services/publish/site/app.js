@@ -15,7 +15,7 @@
 
   var state = {
     lang: "en", strings: {}, status: null, slug: null, range: 7,
-    data: {}, shown: null, now: null
+    data: {}, shown: null, now: null, link: null
   };
 
   // --- helpers -------------------------------------------------------------
@@ -486,6 +486,33 @@
     });
   }
 
+  // The public host's own word on its link to the hub (link.json, written by
+  // its pull after every pass). Absent where the hub serves the page itself.
+  function renderLink() {
+    var link = state.link;
+    var line = document.getElementById("link");
+    line.hidden = !link;
+    if (!link) return;
+    var checked = (Date.now() - parseT(link.checked_at)) / 1000;
+    var bad = !link.ok || checked > NOW_STALE_S;
+    line.className = "link-state " + (bad ? "down" : "up");
+    if (checked > NOW_STALE_S) {
+      line.textContent = t("link_stale", { age: ago(checked) });
+    } else if (link.ok) {
+      line.textContent = t("link_ok");
+    } else {
+      line.textContent = t("link_lost", {
+        reason: t("link_" + link.reason),
+        since: link.since ? fmtTime(parseT(link.since), false) : "?" });
+    }
+  }
+
+  function refreshLink() {
+    return getJSON("link.json").then(function (link) { state.link = link; })
+      .catch(function () { state.link = null; })
+      .then(renderLink);
+  }
+
   function refreshNow() {
     return getJSON("now.json").then(function (now) { state.now = now; })
       .catch(function () { state.now = null; })
@@ -496,6 +523,7 @@
     renderStatic();
     renderHeader();
     renderNow();
+    renderLink();
     renderTabs();
     renderCircuit();
   }
@@ -558,7 +586,8 @@
       .then(function () { renderStatic(); renderNow(); return refresh(); });
     setInterval(refresh, REFRESH_MS);
     refreshNow();
-    setInterval(refreshNow, NOW_MS);
+    refreshLink();
+    setInterval(function () { refreshNow(); refreshLink(); }, NOW_MS);
   }
 
   start();
