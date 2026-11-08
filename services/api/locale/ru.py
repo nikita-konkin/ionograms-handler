@@ -490,6 +490,83 @@ MESSAGES: dict[str, str] = {
     "sounding.axis.range": "Действующая дальность, км",
     "sounding.hop": "Скачок",
 
+    # -- frequency response by subchannel ----------------------------------
+    "response.title": "ЧХ по подканалам",
+    "response.hint": "Частотная характеристика моды по окнам, из фазы зондирования",
+    "response.link": "частотная характеристика моды из фазы этого зондирования",
+    "response.intro":
+        "Окно записи после сжатия — профиль задержек, видимый через подканал "
+        "шириной в ход развёртки за время окна; комплексное значение в максимуме "
+        "моды — один отсчёт её характеристики в этом подканале. Окна подряд дают "
+        "отсчёт на подканал, перекрывающиеся — отсчёт почти на каждом отсчёте "
+        "записи и фазу, которая разворачивается. Две волны с разностью задержек Δ "
+        "попадают в один отсчёт задержки, пока подканал уже 1/Δ, и интерферируют "
+        "по частоте с периодом 1/Δ; в более широком подканале они разрешаются.",
+    "response.back": "К зондированию",
+    "response.pick": "Зондирование",
+    "response.pick.nophase": "без фазы",
+    "response.pick.note":
+        "Зондирования этой трассы с предыдущего дня по следующий; настройки "
+        "переносятся.",
+    "response.nophase":
+        "Это зондирование не хранит фазу. Нужна запись .lfs или продукт v2 с z "
+        "или окном эха.",
+    "response.mode": "Мода",
+    "response.stretch": "Участок",
+    "response.sub": "Подканал, кГц",
+    "response.overlap": "Перекрытие окон",
+    "response.overlap.every": "на каждом отсчёте",
+    "response.gate": "Строб поиска максимума",
+    "response.gate.curve": "по ДЧХ",
+    "response.gate.held": "одна задержка",
+    "response.gate.shift": "Сдвиг строба",
+    "response.gate.half": "Полуширина строба",
+    "response.ionogram": "Ионограмма",
+    "response.ionogram.note":
+        "Щелчок по ионограмме переносит участок. Белая линия — ДЧХ выбранной моды, "
+        "оранжевая рамка — участок, жёлтый пунктир — МНЧ по экстрактору.",
+    "response.level": "Уровень",
+    "response.phase": "Фаза",
+    "response.phase.note":
+        "Развёрнута по перекрывающимся окнам; отсчёты без перекрытия, потерявшие "
+        "оборот относительно неё, перечёркнуты.",
+    "response.delay": "Задержка максимума",
+    "response.js.loading": "Измерение…",
+    "response.js.error": "Не удалось измерить: {why}",
+    "response.js.reset":
+        "Перенесённые мода или участок не подходят к этому зондированию ({why}); "
+        "показана его первая мода.",
+    "response.js.us": "{v} мкс",
+    "response.js.auto": "авто, {v} мкс",
+    "response.js.muf": "МНЧ {f} МГц",
+    "response.js.ax.f": "Частота, МГц",
+    "response.js.ax.delay": "Задержка, мкс",
+    "response.js.ax.level": "дБ над шумом",
+    "response.js.ax.phase": "Фаза, рад",
+    "response.js.sliding": "с перекрытием",
+    "response.js.stepped": "без перекрытия",
+    "response.js.lost": "потерян оборот",
+    "response.js.gate": "строб",
+    "response.js.curve": "центр строба",
+    "response.js.peaks": "пики ПЗМ",
+    "response.js.card.stretch": "Участок",
+    "response.js.card.stretch.v": "{lo}–{hi} МГц",
+    "response.js.card.rel": "f/МНЧ {lo}–{hi}",
+    "response.js.card.sub": "Подканал",
+    "response.js.card.sub.v":
+        "{sub} кГц: длина окна {n}, шаг {hop} (в отсчётах), отсчёт задержки {bin} мкс",
+    "response.js.card.gate": "Строб",
+    "response.js.card.gate.curve": "по ДЧХ",
+    "response.js.card.gate.held": "на одной задержке",
+    "response.js.card.gate.v": "сдвиг {shift} мкс, ± {half} мкс (авто {auto} мкс)",
+    "response.js.card.level": "Уровень",
+    "response.js.card.level.v": "медиана {db} дБ над шумом",
+    "response.js.card.gdd": "Дисперсия групповой задержки",
+    "response.js.card.gdd.v": "{phase} мкс/МГц по фазе, {peaks} мкс/МГц по пикам",
+    "response.js.card.phase": "Шаги фазы больше четверти оборота",
+    "response.js.card.phase.v":
+        "с перекрытием {j} из {n}; без него {sj} из {sn}, со сбоем на оборот: {lost}",
+
     # -- forecast ---------------------------------------------------------
     "forecast.title": "Прогноз",
     "forecast.hint":

@@ -24,6 +24,8 @@
 
 <div class="panel">
   <h2>{{ sounding.file }}</h2>
+  {% if phase %}<p class="note"><a href="/ui/sounding/{{ sounding.id }}/response">{{ t('response.title') }}</a>
+    &middot; {{ t('response.link') }}</p>{% endif %}
   <div class="scroll"><table>
     <tr><th>{{ t('soundings.col.time') }}</th><td>{{ sounding.datetime|msk }}</td>
         <th>{{ t('sounding.col.path') }}</th><td>{{ sounding.tx }} &rarr; {{ sounding.rx }}

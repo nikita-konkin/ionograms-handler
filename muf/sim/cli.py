@@ -105,6 +105,39 @@ def cmd_band(args) -> int:
     return 0
 
 
+def cmd_response(args) -> int:
+    from ..cli import _load_registry
+    from . import fast, observe, response
+    from .state import ChannelState
+
+    stations = _load_registry(args.stations)
+    state = (ChannelState.load(args.state) if args.state
+             else observe.from_sounding(args.sounding, method=args.method,
+                                        stations=stations))
+    names = [m.name for m in state.modes]
+    if not names or (args.mode and args.mode not in names):
+        print(f"muf sim response: {args.sounding}: no mode {args.mode or ''} among "
+              f"{', '.join(names) or 'none'}", file=sys.stderr)
+        return 2
+    mode = state.mode(args.mode or names[0])
+    lo, hi = _gate(args.band) or response.default_band(mode)
+    gate = response.Gate(held=args.held, shift_us=args.shift, half_us=args.half)
+    try:
+        got = response.measure(fast.record_of(args.sounding, stations), mode, lo, hi,
+                               subchannel_hz=args.subchannel * 1e3,
+                               overlap=args.overlap, gate=gate)
+    except ValueError as error:
+        print(f"muf sim response: {args.sounding}: {error}", file=sys.stderr)
+        return 2
+    print(response.format_response(got))
+    if args.csv:
+        print(f"-> {response.write_csv(got, args.csv)}")
+    if args.json:
+        Path(args.json).write_text(json.dumps(got.as_dict()) + "\n", encoding="utf-8")
+        print(f"-> {args.json}")
+    return 0
+
+
 def cmd_preset(args) -> int:
     from . import presets
 
@@ -437,6 +470,29 @@ def register(sub) -> None:
     p.add_argument("--json", type=Path, help="write the full report here")
     p.add_argument("--out", type=Path, help="write the band state here")
     p.set_defaults(func=cmd_band)
+
+    p = ss.add_parser("response", help="a mode's frequency response subchannel by "
+                                       "subchannel, from a sounding's phase")
+    p.add_argument("sounding", help=".lfs, v2 .h5 with z, or .echo.h5")
+    p.add_argument("--mode", help="the mode, by name; default the state's first")
+    p.add_argument("--band", metavar="LO,HI",
+                   help="the stretch, MHz; default 1 MHz about the mode's middle")
+    p.add_argument("--subchannel", type=float, default=20.48,
+                   help="kHz, the sweep's travel in one window (default 20.48)")
+    p.add_argument("--overlap", type=float, default=0.5,
+                   help="of a window, 0 to 1; 1 starts one at every sample")
+    p.add_argument("--held", action="store_true",
+                   help="hold the gate at the curve's delay at the stretch's middle")
+    p.add_argument("--shift", type=float, default=0.0, help="gate shift, us")
+    p.add_argument("--half", type=float, help="gate half-width, us; default automatic")
+    p.add_argument("--state", type=Path,
+                   help="the state whose curves gate the peaks; default read off "
+                        "the sounding")
+    p.add_argument("--method", default="contour", help="extractor that finds the trace")
+    p.add_argument("--stations", type=Path, metavar="FILE")
+    p.add_argument("--csv", type=Path, help="write both series here")
+    p.add_argument("--json", type=Path, help="write the response here")
+    p.set_defaults(func=cmd_response)
 
     p = ss.add_parser("preset", help="an ITU-R F.1487 test channel, or 'law'")
     p.add_argument("name", nargs="?", help="F.1487 condition (see --list) or 'law'")

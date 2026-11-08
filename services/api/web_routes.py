@@ -461,6 +461,12 @@ SOUNDING_SORTS = {
 #: Soundings the simulator page offers, newest first.
 SIM_SOUNDINGS = 2000
 
+#: The frequency response page's window overlaps; 1 starts one at every sample.
+RESPONSE_OVERLAPS = (0.0, 0.5, 0.75, 0.9, 1.0)
+
+#: Soundings the page's arrows look through, either way, for one with phase.
+RESPONSE_SCAN = 50
+
 
 @router.get("/ui/sim")
 def sim_page(request: Request, id: int | None = None):
@@ -957,7 +963,67 @@ def sounding(request: Request, sounding_id: int, gate: str = "auto",
         "scaling": scaling, "frame": frame, "sao_error": sao_error,
         "file_missing": file_missing, "method": method,
         "methods": sao_mod.METHODS, "plot": plot,
+        "phase": row is not None and _keeps_phase(request, row),
     })
+
+
+def _keeps_phase(request: Request, row) -> bool:
+    from . import response
+
+    try:
+        return response.keeps_phase(_product_path(request, row))
+    except OSError:
+        return False
+
+
+@router.get("/ui/sounding/{sounding_id}/response")
+def sounding_response(request: Request, sounding_id: int):
+    """A mode's frequency response read subchannel by subchannel (#103): the
+    settings and the plots, which ask ``/soundings/{id}/response`` for data."""
+    from muf.sim import response as fr
+
+    conn = request.app.state.db
+    row = db.one(conn, "SELECT * FROM sounding WHERE id = ?", (sounding_id,))
+    if row is None:
+        return templates.TemplateResponse(request, "response.html", {"sounding": None},
+                                          status_code=404)
+    return templates.TemplateResponse(request, "response.html", {
+        "sounding": row, "phase": _keeps_phase(request, row),
+        "prev": _response_neighbour(request, row, "<", "DESC"),
+        "next": _response_neighbour(request, row, ">", "ASC"),
+        "days": _response_days(request, row), "query": request.url.query,
+        "subchannels": [round(s / 1e3, 2) for s in fr.SUBCHANNELS_HZ],
+        "overlaps": RESPONSE_OVERLAPS,
+    })
+
+
+def _response_neighbour(request: Request, row, cmp: str, order: str):
+    """The circuit's nearest sounding in time, that way, that keeps the phase."""
+    found = db.rows(
+        request.app.state.db,
+        "SELECT * FROM sounding WHERE tx IS ? AND rx IS ?"
+        f" AND (datetime {cmp} ? OR (datetime = ? AND id {cmp} ?))"
+        f" ORDER BY datetime {order}, id {order} LIMIT ?",
+        (row["tx"], row["rx"], row["datetime"], row["datetime"], row["id"],
+         RESPONSE_SCAN))
+    return next((r for r in found if _keeps_phase(request, r)), None)
+
+
+def _response_days(request: Request, row) -> dict[str, list[dict]]:
+    """The circuit's soundings from the day before the sounding's to the day after,
+    by day, each marked with whether it keeps the phase."""
+    day = datetime.fromisoformat(str(row["datetime"])[:10]).date()
+    found = db.rows(
+        request.app.state.db,
+        "SELECT id, file, path, datetime FROM sounding WHERE tx IS ? AND rx IS ?"
+        " AND datetime >= ? AND datetime < ? ORDER BY datetime, id",
+        (row["tx"], row["rx"], str(day - timedelta(days=1)),
+         str(day + timedelta(days=2))))
+    days: dict[str, list[dict]] = {}
+    for r in found:
+        days.setdefault(str(r["datetime"])[:10], []).append(
+            {**r, "phase": _keeps_phase(request, r)})
+    return days
 
 
 def _product_path(request: Request, row) -> Path:

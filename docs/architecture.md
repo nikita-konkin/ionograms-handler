@@ -527,6 +527,11 @@ GET /ionogram/{id}.png            → renderer; bare=true drops the axes and
                                   every overlay, for the interactive plot
                                   to place behind its own
 GET /soundings/{id}/sao.xml       → SAO.XML 5.0, one record per estimator
+GET /soundings/{id}/response?mode=&lo=&hi=&sub=&overlap=&held=&shift=&half=
+                                  → a mode's frequency response read subchannel
+                                  by subchannel off the phase, with the modes'
+                                  curves and an ionogram about them (#103);
+                                  /ui/sounding/{id}/response draws it
 GET /forecast?horizon=&from=
 GET /net                          index-host reachability, last background
                                   pass only -- this route never probes
