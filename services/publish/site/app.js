@@ -8,12 +8,14 @@
 
   var STALE_S = 3600;            // older than this, the banner says so
   var REFRESH_MS = 5 * 60 * 1000;
+  var NOW_MS = 10 * 1000;       // now.json: the sounding in progress
+  var NOW_STALE_S = 120;        // older than this, the live feed is delayed
   var RANGES = [1, 7, 30];
   var SVG = "http://www.w3.org/2000/svg";
 
   var state = {
     lang: "en", strings: {}, status: null, slug: null, range: 7,
-    data: {}, shown: null
+    data: {}, shown: null, now: null
   };
 
   // --- helpers -------------------------------------------------------------
@@ -455,9 +457,45 @@
     renderForecast();
   }
 
+  // The sounding in progress, from now.json (services/publish/now.py).
+  function renderNow() {
+    var now = state.now;
+    var line = document.getElementById("now-state");
+    var list = document.getElementById("now-list");
+    clear(list);
+    if (!now) { line.textContent = t("now_unavailable"); return; }
+    var age = (Date.now() - parseT(now.generated_at)) / 1000;
+    if (age > NOW_STALE_S) { line.textContent = t("now_delayed", { age: ago(age) }); return; }
+    if (!now.circuits.length) { line.textContent = t("now_idle"); return; }
+    line.textContent = "";
+    now.circuits.forEach(function (c) {
+      var pct = Math.round(c.progress * 100);
+      var bar = el("progress", { max: "100", value: String(pct) });
+      list.appendChild(el("figure", { "class": "latest now-item" }, [
+        el("img", { src: c.img, alt: t("now_alt", { tx: c.tx_name, rx: c.rx_name }) }),
+        el("figcaption", {}, [
+          el("b", { text: c.tx_name + " → " + c.rx_name }),
+          el("span", { text: " · " + t("now_line", {
+            f: c.f_now_mhz.toFixed(2), lo: c.f_lo_mhz.toFixed(1),
+            hi: c.f_hi_mhz.toFixed(1), p: pct }) }),
+          el("br"),
+          el("span", { "class": "muted", text: t("now_started", { time: fmtTime(parseT(c.started)) }) }),
+          bar
+        ])
+      ]));
+    });
+  }
+
+  function refreshNow() {
+    return getJSON("now.json").then(function (now) { state.now = now; })
+      .catch(function () { state.now = null; })
+      .then(renderNow);
+  }
+
   function renderAll() {
     renderStatic();
     renderHeader();
+    renderNow();
     renderTabs();
     renderCircuit();
   }
@@ -517,8 +555,10 @@
 
     getJSON("strings.json").then(function (s) { state.strings = s; })
       .catch(function () { state.strings = {}; })
-      .then(function () { renderStatic(); return refresh(); });
+      .then(function () { renderStatic(); renderNow(); return refresh(); });
     setInterval(refresh, REFRESH_MS);
+    refreshNow();
+    setInterval(refreshNow, NOW_MS);
   }
 
   start();

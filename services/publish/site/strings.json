@@ -37,11 +37,18 @@
     "msk": "MSK",
     "km": "km",
     "path": "Path",
-    "about": "Oblique chirp sounding. Times are UTC. Images and series are refreshed every 15 minutes.",
+    "about": "Oblique chirp sounding. Times are UTC. The sounding in progress refreshes every 10 seconds; images and series every 15 minutes.",
     "lang": "Русский",
     "ago_min": "{n} min",
     "ago_h": "{n} h",
-    "ago_d": "{n} d"
+    "ago_d": "{n} d",
+    "now": "Sounding now",
+    "now_idle": "No sounding is in progress at the moment.",
+    "now_delayed": "The live feed is delayed: last look {age} ago.",
+    "now_unavailable": "The live feed is unavailable.",
+    "now_line": "{f} MHz reached of {lo}–{hi} MHz, {p}%",
+    "now_started": "started {time}",
+    "now_alt": "Ionogram being recorded, {tx} to {rx}"
   },
   "ru": {
     "title": "Наклонное зондирование ионосферы",
@@ -81,10 +88,17 @@
     "msk": "МСК",
     "km": "км",
     "path": "Трасса",
-    "about": "Наклонное ЛЧМ-зондирование. Время — UTC. Изображения и ряды обновляются каждые 15 минут.",
+    "about": "Наклонное ЛЧМ-зондирование. Время — UTC. Текущее зондирование обновляется каждые 10 секунд, изображения и ряды — каждые 15 минут.",
     "lang": "English",
     "ago_min": "{n} мин",
     "ago_h": "{n} ч",
-    "ago_d": "{n} сут"
+    "ago_d": "{n} сут",
+    "now": "Идёт зондирование",
+    "now_idle": "Сейчас зондирование не идёт.",
+    "now_delayed": "Текущие данные задерживаются: последнее обновление {age} назад.",
+    "now_unavailable": "Текущие данные недоступны.",
+    "now_line": "достигнуто {f} МГц из {lo}–{hi} МГц, {p}%",
+    "now_started": "начато {time}",
+    "now_alt": "Записываемая ионограмма, {tx} — {rx}"
   }
 }
