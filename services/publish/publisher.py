@@ -471,6 +471,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=0.0,
                         help="seconds between passes; 0 runs once and exits "
                              "(default: %(default)s)")
+    parser.add_argument("--api", default=os.environ.get("PUBLISH_API", ""),
+                        help="the api inside the hub's network, read for the "
+                             "sounding in progress; empty leaves it out "
+                             "(default: $PUBLISH_API)")
+    parser.add_argument("--now-interval", type=float,
+                        default=float(os.environ.get("PUBLISH_NOW_INTERVAL_S", "10")),
+                        help="seconds between live passes (default: "
+                             "$PUBLISH_NOW_INTERVAL_S or %(default)s)")
     args = parser.parse_args(argv)
 
     circuits = parse_circuits(args.circuits)
@@ -480,30 +488,63 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     archive_root = args.archive_root or db.ARCHIVE_ROOT
 
+    fetch = None
+    if args.api:
+        from . import now as live
+        fetch = live.fetcher(args.api, os.environ.get("READ_TOKEN", ""))
+    next_full = next_now = 0.0
+    code = 0
     while True:
-        started = time.time()
-        try:
-            conn = connect_ro(args.db or db.DEFAULT_DB)
-            try:
-                result = build_site(conn, args.out, circuits=circuits,
-                                    method=args.method, days=args.days,
-                                    archive_root=archive_root)
-            finally:
-                conn.close()
-        except Exception as exc:
-            # The usual causes -- a locked database, a mount that went away --
-            # clear by themselves, and the page keeps the last good snapshot.
-            print(f"{db.utcnow()}  pass failed: {type(exc).__name__}: {exc}",
-                  file=sys.stderr, flush=True)
-            if args.interval <= 0:
-                return 1
-        else:
-            print(f"{db.utcnow()}  {describe(result)}", flush=True)
-
+        if time.time() >= next_full:
+            next_full = time.time() + args.interval
+            code = _full_pass(args, circuits, archive_root)
+            if args.interval <= 0 and fetch is None:
+                return code
+        if fetch is not None and time.time() >= next_now:
+            next_now = time.time() + args.now_interval
+            _now_pass(args, circuits, fetch)
         if args.interval <= 0:
-            return 0
-        time.sleep(max(1.0, args.interval - (time.time() - started)))
+            return code
+        wake = min(next_full, next_now) if fetch is not None else next_full
+        time.sleep(max(0.5, wake - time.time()))
 
+
+def _full_pass(args, circuits, archive_root) -> int:
+    """The slow pass: pictures, series, forecast. 0 when it went through."""
+    try:
+        conn = connect_ro(args.db or db.DEFAULT_DB)
+        try:
+            result = build_site(conn, args.out, circuits=circuits,
+                                method=args.method, days=args.days,
+                                archive_root=archive_root)
+        finally:
+            conn.close()
+    except Exception as exc:
+        # The usual causes -- a locked database, a mount that went away --
+        # clear by themselves, and the page keeps the last good snapshot.
+        print(f"{db.utcnow()}  pass failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr, flush=True)
+        return 1
+    print(f"{db.utcnow()}  {describe(result)}", flush=True)
+    return 0
+
+
+def _now_pass(args, circuits, fetch) -> None:
+    """The live pass (`now.py`); quiet unless something is wrong."""
+    from . import now as live
+
+    try:
+        conn = connect_ro(args.db or db.DEFAULT_DB)
+        try:
+            result = live.write_now(conn, args.out, fetch=fetch, circuits=circuits)
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"{db.utcnow()}  live pass failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr, flush=True)
+        return
+    for error in result["errors"]:
+        print(f"{db.utcnow()}  live: {error}", file=sys.stderr, flush=True)
 
 if __name__ == "__main__":
     raise SystemExit(main())

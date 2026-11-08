@@ -486,6 +486,24 @@ existing file is its own cache. `.h5` products render in a fraction of a
 second; `.lfs` re-runs the spectrogram, seconds each. The folder holds 24
 images and one JSON per circuit, a few hundred KB each.
 
+### The sounding in progress
+
+A second, fast pass shows the sounding being recorded, a few seconds behind.
+Every `PUBLISH_NOW_INTERVAL_S` (10 s) `publish` reads each station's live
+snapshot from the api inside the compose network and writes two things beside
+the slow pass's files:
+
+```
+now.json                    circuits being sounded, and when the pass looked
+now/{slug}-{t0}-{n}.webp    the columns so far, as one small picture
+```
+
+The same allow-lists hold: only circuits in `PUBLISH_CIRCUITS` and not muted,
+only the fields in `services/publish/now.py` `FIELDS` -- no station ids. The
+page polls `now.json` every 10 s, and says the feed is delayed once it is over
+two minutes old. `PUBLISH_API` (default `http://api:8000`) names the api;
+set it empty to turn the pass off. With `READ_TOKEN` set, the pass sends it.
+
 ## 2d. Public page on another host
 
 The work server is on a private network and stays there. A separate public
@@ -504,6 +522,13 @@ same vhost. Below, the hub is `10.0.0.130` and the public host
   folder (`rrsync -ro` with `restrict`). No shell, no writes, no other path.
 - **The pull copies regular files only**, so nginx cannot be made to serve
   anything outside the folder.
+
+The live pass needs a faster pull: `now.json` and `now/` every 10 s, the
+whole folder every five minutes, as above. For a public host that runs
+everything in Docker -- the VPN client, the pull and the web server, behind
+a reverse proxy it already has -- the stack lives in its own repository,
+`ionostation-public`, and replaces the systemd units and host OpenVPN
+below. The hub side, and its key, are the same either way.
 
 The api never leaves the hub. If the VPN drops, pulls fail and the page keeps
 its last copy, with its own banner once that copy is over an hour old.

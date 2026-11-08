@@ -201,6 +201,12 @@ services:
       PUBLISH_CIRCUITS: "${PUBLISH_CIRCUITS:-}"
       PUBLISH_METHOD: "${PUBLISH_METHOD:-contour}"
       PUBLISH_DAYS: "${PUBLISH_DAYS:-30}"
+      # The sounding in progress (#105): read from the api inside this network
+      # every PUBLISH_NOW_INTERVAL_S and written as now.json and one preview.
+      # Empty PUBLISH_API leaves the live pass out.
+      PUBLISH_API: "${PUBLISH_API-http://api:8000}"
+      PUBLISH_NOW_INTERVAL_S: "${PUBLISH_NOW_INTERVAL_S:-10}"
+      READ_TOKEN: "${READ_TOKEN:-}"
     # Same reason as `watch`: no server in here, so the image's healthcheck
     # would only ever say unhealthy. The log line every pass is the liveness.
     healthcheck:
