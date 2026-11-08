@@ -29,7 +29,9 @@ def _integral(layer: Layer, f: float, elevation: float) -> tuple[float, float]:
             1.0 - ((r - rm) / layer.ym_km) ** 2 * (rb / r) ** 2)
         return r * r * (1.0 - fn2 / f ** 2) - a * a
 
-    top = optimize.brentq(x, rb + 1e-9, rm)
+    grid = np.linspace(rb + 1e-9, rm, 4001)
+    first = int(np.argmax([x(r) <= 0.0 for r in grid]))
+    top = optimize.brentq(x, grid[first - 1], grid[first])
 
     def ground(u):
         r = top - u * u
@@ -63,6 +65,14 @@ def test_a_ray_reaches_as_far_as_the_integral_along_it_says():
     closed = float(layer.ray(f, elevation)[0])
     assert abs(closed - _integral(layer, f, elevation)[0]) < 1e-3, \
         "a ray's closed-form ground range did not match the integral along it"
+
+
+def test_a_low_ray_turning_below_the_peak_reaches_as_far_as_the_integral_says():
+    layer = Layer(10.229974426112786, 288.310065061253, 143.92214396962638)
+    f, elevation = 35.472714260844796, math.radians(2.0293613509078345)
+    closed = float(layer.ray(f, elevation)[0])
+    assert abs(closed - _integral(layer, f, elevation)[0]) < 1e-3, \
+        "a low ray's ground range did not match the integral along it"
 
 
 def test_a_ray_is_as_long_as_the_integral_along_it_says():
