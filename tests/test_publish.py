@@ -132,6 +132,18 @@ def _everything(site: Path) -> str:
 # What appears
 # --------------------------------------------------------------------------
 
+def test_a_circuit_stored_under_two_spellings_follows_the_newest(tmp_path, archive):
+    path = tmp_path / "spellings.sqlite3"
+    with db.session(path) as conn:
+        _sounding(conn, archive, "old.h5", "2026-09-14 17:14:00", tx="NIC2",
+                  rx="Yoshkar-Ola")
+        _sounding(conn, archive, "new.h5", "2026-11-08 22:05:15", tx="NIC2",
+                  rx="yoshkar-ola")
+        chosen = publisher.choose(conn, publisher.parse_circuits("NIC2->Yoshkar-Ola"))
+    assert [row["rx"] for row in chosen] == ["yoshkar-ola"], \
+        "the circuit did not follow the spelling sounded most recently"
+
+
 def test_only_allow_listed_unmuted_circuits_are_published(database, archive,
                                                           tmp_path, drawn):
     site = tmp_path / "site"
