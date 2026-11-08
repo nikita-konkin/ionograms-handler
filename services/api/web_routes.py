@@ -461,6 +461,9 @@ SOUNDING_SORTS = {
 #: Soundings the simulator page offers, newest first.
 SIM_SOUNDINGS = 2000
 
+#: The frequency response page's window overlaps; 1 starts one at every sample.
+RESPONSE_OVERLAPS = (0.0, 0.5, 0.75, 0.9, 1.0)
+
 
 @router.get("/ui/sim")
 def sim_page(request: Request, id: int | None = None):
@@ -957,7 +960,32 @@ def sounding(request: Request, sounding_id: int, gate: str = "auto",
         "scaling": scaling, "frame": frame, "sao_error": sao_error,
         "file_missing": file_missing, "method": method,
         "methods": sao_mod.METHODS, "plot": plot,
+        "phase": row is not None and _keeps_phase(request, row),
     })
+
+
+def _keeps_phase(request: Request, row) -> bool:
+    from . import response
+
+    try:
+        return response.keeps_phase(_product_path(request, row))
+    except OSError:
+        return False
+
+
+@router.get("/ui/sounding/{sounding_id}/response")
+def sounding_response(request: Request, sounding_id: int):
+    """A mode's frequency response read subchannel by subchannel (#103): the
+    settings and the plots, which ask ``/soundings/{id}/response`` for data."""
+    from muf.sim import response as fr
+
+    row = db.one(request.app.state.db, "SELECT * FROM sounding WHERE id = ?",
+                 (sounding_id,))
+    return templates.TemplateResponse(request, "response.html", {
+        "sounding": row, "phase": row is not None and _keeps_phase(request, row),
+        "subchannels": [round(s / 1e3, 2) for s in fr.SUBCHANNELS_HZ],
+        "overlaps": RESPONSE_OVERLAPS,
+    }, status_code=404 if row is None else 200)
 
 
 def _product_path(request: Request, row) -> Path:

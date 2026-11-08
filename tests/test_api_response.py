@@ -128,3 +128,34 @@ def test_a_file_without_the_phase_is_unprocessable(client, recording):
 def test_an_unknown_sounding_is_not_found(client):
     assert client.get("/soundings/987654/response").status_code == 404, \
         "an unknown sounding was found"
+
+
+def test_the_page_of_a_recording_loads_its_script(client):
+    page = client.get(f"/ui/sounding/{_row(client, 'sim.lfs')}/response").text
+    assert "/static/response.js" in page, "the response page did not load its script"
+
+
+def test_the_page_of_a_power_only_product_says_it_keeps_no_phase(client, recording):
+    _power_only(recording.parent)
+    page = client.get(f"/ui/sounding/{_row(client, 'power-only.h5')}/response").text
+    assert "keeps no phase" in page, "the page did not say the product keeps no phase"
+
+
+def test_the_page_of_an_unknown_sounding_is_not_found(client):
+    assert client.get("/ui/sounding/987654/response").status_code == 404, \
+        "the response page of an unknown sounding was found"
+
+
+def test_the_sounding_page_links_a_recording_to_its_response(client):
+    sounding_id = _row(client, "sim.lfs")
+    page = client.get(f"/ui/sounding/{sounding_id}", params={"plot": "rendered"}).text
+    assert f"/ui/sounding/{sounding_id}/response" in page, \
+        "the sounding page did not link to the response"
+
+
+def test_a_power_only_sounding_page_has_no_response_link(client, recording):
+    _power_only(recording.parent)
+    sounding_id = _row(client, "power-only.h5")
+    page = client.get(f"/ui/sounding/{sounding_id}", params={"plot": "rendered"}).text
+    assert f"/ui/sounding/{sounding_id}/response" not in page, \
+        "a power-only product was linked to a response"

@@ -476,6 +476,77 @@ MESSAGES: dict[str, str] = {
     "sounding.axis.range": "Virtual range (km)",
     "sounding.hop": "Hop",
 
+    # -- frequency response by subchannel ----------------------------------
+    "response.title": "Frequency response by subchannel",
+    "response.hint": "A mode's response read window by window off a sounding's phase",
+    "response.link": "a mode's response read off this sounding's phase",
+    "response.intro":
+        "A window of the dechirped record is a delay profile seen through a "
+        "subchannel as wide as the sweep moves while the window lasts; the complex "
+        "value at the mode's peak is one sample of its response there. Windows one "
+        "after another give a sample per subchannel, overlapping ones a sample at "
+        "almost every record sample and a phase that unwraps. Two waves Δτ apart "
+        "share a delay bin while the subchannel is narrower than 1/Δτ, and ripple "
+        "along frequency with period 1/Δτ; in a wider one they resolve.",
+    "response.back": "Back to the sounding",
+    "response.nophase":
+        "This sounding keeps no phase. The page needs an .lfs recording, or a v2 "
+        "product with z or an echo window.",
+    "response.mode": "Mode",
+    "response.stretch": "Stretch",
+    "response.sub": "Subchannel, kHz",
+    "response.overlap": "Window overlap",
+    "response.overlap.every": "every sample",
+    "response.gate": "Peak search gate",
+    "response.gate.curve": "on the curve",
+    "response.gate.held": "one delay",
+    "response.gate.shift": "Gate shift",
+    "response.gate.half": "Gate half-width",
+    "response.ionogram": "Ionogram",
+    "response.ionogram.note":
+        "Click the ionogram to move the stretch. The white line is the chosen "
+        "mode's curve, the orange frame the stretch, the dashed yellow line the "
+        "extractor's MUF.",
+    "response.level": "Level",
+    "response.phase": "Phase",
+    "response.phase.note":
+        "Unwrapped along the overlapping windows; the samples without overlap that "
+        "lost a turn against it are crossed.",
+    "response.delay": "Peak delay",
+    "response.js.loading": "Measuring…",
+    "response.js.error": "Could not measure: {why}",
+    "response.js.us": "{v} µs",
+    "response.js.auto": "automatic, {v} µs",
+    "response.js.muf": "MUF {f} MHz",
+    "response.js.ax.f": "Frequency, MHz",
+    "response.js.ax.delay": "Delay, µs",
+    "response.js.ax.level": "dB above the noise",
+    "response.js.ax.phase": "Phase, rad",
+    "response.js.sliding": "with overlap",
+    "response.js.stepped": "without overlap",
+    "response.js.lost": "a turn lost",
+    "response.js.gate": "gate",
+    "response.js.curve": "gate centre",
+    "response.js.peaks": "peak",
+    "response.js.card.stretch": "Stretch",
+    "response.js.card.stretch.v": "{lo}–{hi} MHz",
+    "response.js.card.rel": "f/MUF {lo}–{hi}",
+    "response.js.card.sub": "Subchannel",
+    "response.js.card.sub.v":
+        "{sub} kHz: window length {n}, step {hop} (in samples), delay bin {bin} µs",
+    "response.js.card.gate": "Gate",
+    "response.js.card.gate.curve": "on the curve",
+    "response.js.card.gate.held": "held at one delay",
+    "response.js.card.gate.v": "shift {shift} µs, ± {half} µs (automatic {auto} µs)",
+    "response.js.card.level": "Level",
+    "response.js.card.level.v": "median {db} dB above the noise",
+    "response.js.card.gdd": "Group delay dispersion",
+    "response.js.card.gdd.v":
+        "{phase} µs/MHz from the phase, {peaks} µs/MHz from the peaks",
+    "response.js.card.phase": "Phase steps over a quarter turn",
+    "response.js.card.phase.v":
+        "with overlap {j} of {n}; without {sj} of {sn}, a turn off: {lost}",
+
     # -- forecast ---------------------------------------------------------
     "forecast.title": "Forecast",
     "forecast.hint":

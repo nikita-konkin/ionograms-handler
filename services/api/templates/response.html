@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ t('response.title') }}{% if sounding %} · {{ sounding.file }}{% endif %}{% endblock %}
+{% block hint %}{{ t('response.hint') }}{% endblock %}
+{% block body %}
+<style>
+  .fr-controls { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+                 gap:.6rem 1.4rem; margin:.6rem 0; }
+  .fr-controls input[type=range] { width:100%; }
+  .fr-controls button { cursor:pointer; }
+  .fr-plot { width:100%; height:300px; }
+  #frIon { height:340px; cursor:crosshair; }
+  #frCards th, #frCards td { white-space:normal; vertical-align:top; }
+  #frCards th { width:30%; }
+  .fr-plots { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap:.75rem; }
+</style>
+
+{% if not sounding %}
+<div class="panel"><h2>{{ t('sounding.notfound') }}</h2></div>
+{% elif not phase %}
+<div class="panel">
+  <h2>{{ t('response.title') }}: {{ sounding.file }}</h2>
+  <p>{{ t('response.nophase') }}</p>
+  <p class="note"><a href="/ui/sounding/{{ sounding.id }}">{{ t('response.back') }}</a></p>
+</div>
+{% else %}
+<div class="panel" id="frPage" data-id="{{ sounding.id }}">
+  <h2>{{ t('response.title') }}: {{ sounding.file }}</h2>
+  <p class="note">{{ t('response.intro') }}</p>
+  <p class="note"><a href="/ui/sounding/{{ sounding.id }}">{{ t('response.back') }}</a></p>
+  <div class="fr-controls">
+    <div><span class="note">{{ t('response.mode') }}</span> <span id="frModes"></span></div>
+    <div><label class="note" for="frLo">{{ t('response.stretch') }}</label> <span id="frLoText"></span>
+      <input type="range" id="frLo" step="0.05" min="0" max="1" value="0"></div>
+    <div><span class="note">{{ t('response.sub') }}</span>
+      <span id="frSub">{% for s in subchannels %}<button class="pill{% if s == 20.48 %} ok{% endif %}"
+        data-v="{{ '%g'|format(s) }}">{{ '%g'|format(s) }}</button> {% endfor %}</span></div>
+    <div><span class="note">{{ t('response.overlap') }}</span>
+      <span id="frOverlap">{% for v in overlaps %}<button class="pill{% if v == 0.5 %} ok{% endif %}"
+        data-v="{{ '%g'|format(v) }}">{% if v == 1 %}{{ t('response.overlap.every') }}{% else %}{{ '%g'|format(100 * v) }} %{% endif %}</button> {% endfor %}</span></div>
+    <div><span class="note">{{ t('response.gate') }}</span>
+      <span id="frGate"><button class="pill ok" data-v="false">{{ t('response.gate.curve') }}</button>
+        <button class="pill" data-v="true">{{ t('response.gate.held') }}</button></span></div>
+    <div><label class="note" for="frShift">{{ t('response.gate.shift') }}</label> <span id="frShiftText"></span>
+      <input type="range" id="frShift" min="-300" max="300" step="5" value="0"></div>
+    <div><label class="note" for="frHalf">{{ t('response.gate.half') }}</label> <span id="frHalfText"></span>
+      <input type="range" id="frHalf" min="0" max="300" step="5" value="0"></div>
+  </div>
+  <p id="frSay" class="note" aria-live="polite"></p>
+</div>
+
+<div class="panel">
+  <h2>{{ t('response.ionogram') }}</h2>
+  <div id="frIon" class="fr-plot" role="img" aria-label="{{ t('response.ionogram') }}"></div>
+  <p class="note">{{ t('response.ionogram.note') }}</p>
+  <div class="scroll"><table id="frCards"></table></div>
+</div>
+
+<div class="fr-plots">
+  <div class="panel"><h2>{{ t('response.level') }}</h2><div id="frLevel" class="fr-plot"></div></div>
+  <div class="panel"><h2>{{ t('response.phase') }}</h2><div id="frPhase" class="fr-plot"></div>
+    <p class="note">{{ t('response.phase.note') }}</p></div>
+  <div class="panel"><h2>{{ t('response.delay') }}</h2><div id="frDelay" class="fr-plot"></div></div>
+</div>
+<script src="/static/plotly.min.js"></script>
+<script src="/static/response.js"></script>
+{% endif %}
+{% endblock %}
