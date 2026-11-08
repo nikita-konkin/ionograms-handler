@@ -41,14 +41,21 @@ def client(tmp_path, monkeypatch, recording):
         yield c
 
 
-def _row(client, name: str) -> int:
+def _row(client, name: str, when: str = "2026-02-04 12:00:10",
+         tx: str = "cyprus1") -> int:
     conn = client.app.state.db
     cursor = conn.execute(
         "INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at) "
         "VALUES (?,?,?,?,?,?)",
-        (name, name, "2026-02-04 12:00:10", "cyprus1", "yoshkar-ola", db.utcnow()))
+        (name, name, when, tx, "yoshkar-ola", db.utcnow()))
     conn.commit()
     return cursor.lastrowid
+
+
+def _lfs(folder: Path, name: str) -> str:
+    """A file that stands for a recording: the page reads no more than its name."""
+    (folder / name).write_bytes(b"\0" * 64)
+    return name
 
 
 def _power_only(folder: Path) -> Path:
@@ -159,3 +166,60 @@ def test_a_power_only_sounding_page_has_no_response_link(client, recording):
     page = client.get(f"/ui/sounding/{sounding_id}", params={"plot": "rendered"}).text
     assert f"/ui/sounding/{sounding_id}/response" not in page, \
         "a power-only product was linked to a response"
+
+
+def test_the_page_links_to_the_next_sounding_with_phase(client, recording):
+    here = _row(client, "sim.lfs")
+    _power_only(recording.parent)
+    _row(client, "power-only.h5", "2026-02-04 12:05:10")
+    after = _row(client, _lfs(recording.parent, "b.lfs"), "2026-02-04 12:10:10")
+    page = client.get(f"/ui/sounding/{here}/response").text
+    assert f'id="frNext" href="/ui/sounding/{after}/response' in page, \
+        "the next sounding with phase was not linked"
+
+
+def test_the_page_links_to_the_previous_sounding_of_the_circuit(client, recording):
+    before = _row(client, _lfs(recording.parent, "a.lfs"), "2026-02-04 11:55:10")
+    here = _row(client, "sim.lfs")
+    page = client.get(f"/ui/sounding/{here}/response").text
+    assert f'id="frPrev" href="/ui/sounding/{before}/response' in page, \
+        "the previous sounding was not linked"
+
+
+def test_the_arrows_stay_on_the_circuit(client, recording):
+    here = _row(client, "sim.lfs")
+    other = _row(client, _lfs(recording.parent, "c.lfs"), "2026-02-04 12:05:10", "NIC2")
+    page = client.get(f"/ui/sounding/{here}/response").text
+    assert f"/ui/sounding/{other}/response" not in page, \
+        "another circuit's sounding was offered"
+
+
+def test_the_arrows_carry_the_settings_on(client, recording):
+    here = _row(client, "sim.lfs")
+    after = _row(client, _lfs(recording.parent, "b.lfs"), "2026-02-04 12:10:10")
+    page = client.get(f"/ui/sounding/{here}/response?sub=40.96&held=true").text
+    assert f"/ui/sounding/{after}/response?sub=40.96" in page, \
+        "the next sounding's link dropped the settings"
+
+
+def test_the_picker_groups_the_circuit_by_day(client, recording):
+    here = _row(client, "sim.lfs")
+    _row(client, _lfs(recording.parent, "d.lfs"), "2026-02-05 00:05:10")
+    page = client.get(f"/ui/sounding/{here}/response").text
+    assert '<optgroup label="2026-02-05">' in page, "the next day was not in the picker"
+
+
+def test_the_picker_disables_a_sounding_without_phase(client, recording):
+    here = _row(client, "sim.lfs")
+    _power_only(recording.parent)
+    bare = _row(client, "power-only.h5", "2026-02-04 12:05:10")
+    page = client.get(f"/ui/sounding/{here}/response").text
+    assert f'<option value="{bare}" disabled' in page, \
+        "a sounding without phase could be picked"
+
+
+def test_a_sounding_without_phase_still_offers_the_picker(client, recording):
+    _power_only(recording.parent)
+    bare = _row(client, "power-only.h5")
+    page = client.get(f"/ui/sounding/{bare}/response").text
+    assert 'id="frPick"' in page, "a sounding without phase left no way on"

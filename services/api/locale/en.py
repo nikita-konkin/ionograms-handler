@@ -489,6 +489,11 @@ MESSAGES: dict[str, str] = {
         "share a delay bin while the subchannel is narrower than 1/Δτ, and ripple "
         "along frequency with period 1/Δτ; in a wider one they resolve.",
     "response.back": "Back to the sounding",
+    "response.pick": "Sounding",
+    "response.pick.nophase": "no phase",
+    "response.pick.note":
+        "The circuit's soundings from the day before to the day after; the "
+        "settings go along.",
     "response.nophase":
         "This sounding keeps no phase. The page needs an .lfs recording, or a v2 "
         "product with z or an echo window.",
@@ -515,6 +520,9 @@ MESSAGES: dict[str, str] = {
     "response.delay": "Peak delay",
     "response.js.loading": "Measuring…",
     "response.js.error": "Could not measure: {why}",
+    "response.js.reset":
+        "The mode or stretch carried over does not fit this sounding ({why}); "
+        "showing its first mode instead.",
     "response.js.us": "{v} µs",
     "response.js.auto": "automatic, {v} µs",
     "response.js.muf": "MUF {f} MHz",

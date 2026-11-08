@@ -35,22 +35,33 @@ MAP_COLS, MAP_ROWS = 480, 220
 MAP_PAD_US = 400.0
 MAP_DB = (0.0, 40.0)
 
+#: Products whose answer to :func:`keeps_phase` is remembered, at most.
+PHASE_MEMO = 20_000
+
 _lock = threading.Lock()
 _last: dict = {}
+_phase: dict = {}
 
 
 def forget() -> None:
     """Drop the sounding kept in memory."""
     with _lock:
         _last.clear()
+    _phase.clear()
 
 
 def keeps_phase(path: Path) -> bool:
     """Whether the file keeps the dechirped voltage: an .lfs, or a v2 product
-    with ``z`` or an echo window."""
-    suffix = Path(path).suffix.lower()
+    with ``z`` or an echo window.
+
+    A product is opened once for as long as it stays the same size and age:
+    the picker asks this of a circuit's three days of soundings at every
+    visit, and an echo window can be added to a product after it is written.
+    """
+    path = Path(path)
+    suffix = path.suffix.lower()
     if suffix == ".lfs":
-        return True
+        return path.is_file()
     if suffix != ".h5":
         return False
     import h5py
@@ -58,8 +69,15 @@ def keeps_phase(path: Path) -> bool:
     from muf import echo_window, io_chirp
 
     try:
-        with h5py.File(path, "r") as fh:
-            return io_chirp.RAW_VOLTAGE_KEY in fh or echo_window.GROUP in fh
+        stat = path.stat()
+        key = (str(path), stat.st_size, stat.st_mtime_ns)
+        if key not in _phase:
+            with h5py.File(path, "r") as fh:
+                found = io_chirp.RAW_VOLTAGE_KEY in fh or echo_window.GROUP in fh
+            if len(_phase) >= PHASE_MEMO:
+                _phase.clear()
+            _phase[key] = found
+        return _phase[key]
     except OSError:
         return False
 

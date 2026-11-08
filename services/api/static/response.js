@@ -7,15 +7,33 @@
    lays its raster. */
 (function () {
   'use strict';
+  /* The picker goes to another sounding with the settings in the address,
+     which the page below keeps current; on a page without phase it carries
+     on whatever the address held. */
+  const pick = document.getElementById('frPick');
+  if (pick) {
+    pick.addEventListener('change', () => {
+      location.href = '/ui/sounding/' + pick.value + '/response' + location.search;
+    });
+  }
   const page = document.getElementById('frPage');
   if (!page) return;
   const id = page.dataset.id;
   const SPAN_MHZ = 1.0;
   const STOPS = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
-  const st = { mode: null, lo: null, sub: 20.48, overlap: 0.5, held: false, shift: 0, half: 0 };
+  const given = new URLSearchParams(location.search);
+  const number = (key, fallback) => {
+    const v = given.has(key) ? Number(given.get(key)) : NaN;
+    return Number.isFinite(v) ? v : fallback;
+  };
+  const st = { mode: given.get('mode'), lo: number('lo', null), sub: number('sub', 20.48),
+               overlap: number('overlap', 0.5), held: given.get('held') === 'true',
+               shift: number('shift', 0), half: number('half', 0) };
   const $ = name => document.getElementById(name);
   const say = $('frSay');
-  let data = null, busy = false, again = false, timer = 0, painted = null;
+  let data = null, busy = false, again = false, timer = 0, painted = null, notice = '';
+  // A mode or a stretch carried from another sounding may not exist on this one.
+  let carried = st.mode !== null || st.lo !== null;
 
   const num = (v, d) => (v === null || v === undefined ? '-' : Number(v).toFixed(d));
 
@@ -40,13 +58,24 @@
       const body = await r.json().catch(() => ({}));
       if (!r.ok) {
         const why = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail || r.status);
+        if (carried) {
+          carried = false;
+          st.mode = null;
+          st.lo = null;
+          notice = T('response.js.reset', { why: why });
+          again = true;
+          return;
+        }
         say.textContent = T('response.js.error', { why: why });
         return;
       }
       data = body;
+      carried = false;
       if (st.mode === null) st.mode = data.response.mode;
       if (st.lo === null) st.lo = data.response.f_lo_mhz;
-      say.textContent = '';
+      say.textContent = notice;
+      notice = '';
+      remember();
       draw();
     } catch (error) {
       say.textContent = T('response.js.error', { why: String(error) });
@@ -57,6 +86,14 @@
   }
 
   const later = () => { clearTimeout(timer); timer = setTimeout(load, 250); };
+
+  /* The settings into the address, and so into the arrows' links. */
+  function remember() {
+    const q = query();
+    q.delete('hi');
+    history.replaceState(null, '', location.pathname + '?' + q);
+    document.querySelectorAll('a[data-base]').forEach(a => { a.href = a.dataset.base + '?' + q; });
+  }
 
   function mark(box, value) {
     box.querySelectorAll('button').forEach(b => b.classList.toggle('ok', b.dataset.v === String(value)));
@@ -265,6 +302,11 @@
 
   /* ------------------------------------------------------------ wiring */
 
+  mark($('frSub'), st.sub);
+  mark($('frOverlap'), st.overlap);
+  mark($('frGate'), st.held);
+  $('frShift').value = st.shift;
+  $('frHalf').value = st.half;
   segment($('frSub'), 'sub', Number);
   segment($('frOverlap'), 'overlap', Number);
   segment($('frGate'), 'held', v => v === 'true');

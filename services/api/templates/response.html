@@ -16,12 +16,39 @@
 
 {% if not sounding %}
 <div class="panel"><h2>{{ t('sounding.notfound') }}</h2></div>
-{% elif not phase %}
+{% else %}
+{# The arrows and the picker stay on the sounding's circuit and carry the
+   settings in the address on, so a day can be stepped through at one setting.
+   The script keeps their links up to date as the settings change. #}
+{% set carried = ('?' ~ query) if query else '' %}
+<div class="panel" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+  {% if prev %}<a class="pill" id="frPrev" href="/ui/sounding/{{ prev.id }}/response{{ carried }}"
+     data-base="/ui/sounding/{{ prev.id }}/response" title="{{ prev.datetime }}">&larr; {{ t('common.previous') }}</a>
+  {% else %}<span class="pill muted">&larr; {{ t('common.previous') }}</span>{% endif %}
+  <label class="note">{{ t('response.pick') }}
+    <select id="frPick">
+      {% for day, items in days.items() %}
+      <optgroup label="{{ day }}">
+        {% for s in items %}
+        <option value="{{ s.id }}"{% if not s.phase %} disabled{% endif %}{% if s.id == sounding.id %} selected{% endif %}>
+          {{- s.datetime|msk(11, 19) }} · {{ s.file }}{% if not s.phase %} · {{ t('response.pick.nophase') }}{% endif -%}
+        </option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select></label>
+  {% if next %}<a class="pill" id="frNext" href="/ui/sounding/{{ next.id }}/response{{ carried }}"
+     data-base="/ui/sounding/{{ next.id }}/response" title="{{ next.datetime }}">{{ t('common.next') }} &rarr;</a>
+  {% else %}<span class="pill muted">{{ t('common.next') }} &rarr;</span>{% endif %}
+  <span class="note">{{ t('response.pick.note') }}</span>
+</div>
+{% if not phase %}
 <div class="panel">
   <h2>{{ t('response.title') }}: {{ sounding.file }}</h2>
   <p>{{ t('response.nophase') }}</p>
   <p class="note"><a href="/ui/sounding/{{ sounding.id }}">{{ t('response.back') }}</a></p>
 </div>
+<script src="/static/response.js"></script>
 {% else %}
 <div class="panel" id="frPage" data-id="{{ sounding.id }}">
   <h2>{{ t('response.title') }}: {{ sounding.file }}</h2>
@@ -63,5 +90,6 @@
 </div>
 <script src="/static/plotly.min.js"></script>
 <script src="/static/response.js"></script>
+{% endif %}
 {% endif %}
 {% endblock %}
