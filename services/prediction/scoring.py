@@ -768,6 +768,22 @@ def score_baselines(conn: sqlite3.Connection, param: str, tx: str, rx: str,
     return results
 
 
+def forget(conn: sqlite3.Connection, param: str, tx: str, rx: str,
+           horizons: tuple[int, ...]) -> None:
+    """Drop a circuit's baseline rows at horizons outside ``horizons``.
+
+    A pass replaces the rows it scores and nothing else, so a horizon the
+    models stopped producing would keep its last numbers for ever, beside
+    rows from a window that has since moved on.
+    """
+    marks = ",".join("?" * len(horizons))
+    with conn:
+        conn.execute(
+            "DELETE FROM score WHERE subject LIKE 'baseline:%' AND param = ? "
+            f"AND tx = ? AND rx = ? AND horizon_s NOT IN ({marks})",
+            (param, tx, rx, *(int(h) for h in horizons)))
+
+
 def run_once(conn: sqlite3.Connection, params: tuple[str, ...] = ("muf",),
              method: str = "contour", window_days: int = DEFAULT_WINDOW_DAYS,
              tx: str | None = None, rx: str | None = None,
@@ -802,6 +818,7 @@ def run_once(conn: sqlite3.Connection, params: tuple[str, ...] = ("muf",),
             # line up with them column for column. With no models yet, all four.
             horizons = tuple(sorted({bucket(row["horizon_s"]) for row in issued})) \
                 or HORIZONS
+            forget(conn, param, circuit["tx"], circuit["rx"], horizons)
             results.extend(score_baselines(conn, param, circuit["tx"],
                                            circuit["rx"], method, horizons,
                                            window_days, now))

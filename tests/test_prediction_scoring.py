@@ -640,3 +640,15 @@ def test_the_leaderboard_carries_r2_per_horizon(conn):
                   {"n": 17, "mae": 1.3, "r2": 0.614})
     entry = scoring.leaderboard(conn, "muf", TX, RX)[0]
     assert entry["r2"] == {"10800": 0.614}, "the leaderboard dropped the stored R²"
+
+
+def test_a_pass_forgets_baseline_rows_at_horizons_it_no_longer_scores(conn):
+    index, muf, _ = seed(conn, days=40)
+    add_forecasts(conn, add_model(conn, name="day-ahead-probe"),
+                  muf.reindex(index[-96 * 8:]) + 0.4)
+    scoring.store(conn, "baseline:persistence", "muf", TX, RX, 21600,
+                  {"n": 2870, "mae": 8.3393})
+    scoring.run_once(conn, ("muf",), "contour", window_days=8, now=just_after(index))
+    kept = {row["horizon_s"] for row in scoring.scores(conn, "muf", TX, RX)
+            if row["subject"] == "baseline:persistence"}
+    assert kept == {86400}, f"a pass left baseline rows at {sorted(kept)}"
