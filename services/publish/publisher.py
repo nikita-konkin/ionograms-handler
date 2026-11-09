@@ -67,8 +67,8 @@ STRIP_HOURS = 24
 
 #: The image size: about 640 x 280 px, a WebP of a few tens of kilobytes.
 FIGSIZE = (8.0, 3.5)
-DPI = 80
-WEBP_QUALITY = 70
+DPI = 160
+WEBP_QUALITY = 82
 
 #: Prefix of every temporary file, so a pass can sweep up after a crash.
 TMP_PREFIX = ".tmp-"
@@ -166,7 +166,8 @@ def render_webp(path: Path) -> bytes:
 
     ion = sao_mod.load_ion(path, gate="auto")
     png = io.BytesIO()
-    render.plot(ion, png, None, axes=True, lof=False, dpi=DPI, figsize=FIGSIZE)
+    render.plot(ion, png, None, axes=True, lof=False, dpi=DPI, figsize=FIGSIZE,
+                tight=True)
     png.seek(0)
     out = io.BytesIO()
     with Image.open(png) as image:

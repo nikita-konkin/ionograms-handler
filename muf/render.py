@@ -181,6 +181,7 @@ def plot(
     segments=None,
     reconstruction=None,
     lof: bool = True,
+    tight: bool = False,
 ) -> Path:
     """Render one ionogram, optionally marking MUFs, LOFs and the fitted trace.
 
@@ -199,6 +200,9 @@ def plot(
     non-default ``min_run`` or ``band_floor_mhz`` may differ from the picture
     -- which is already true of the MUF and is why the picture is a view of
     the sounding rather than a view of the table.
+
+    ``tight`` crops an axed figure to its ink, for a page that has no width
+    to spare on white margins.
     """
     out_path = _destination(out_path)
 
@@ -275,8 +279,8 @@ def plot(
 
     fig.savefig(
         out_path, dpi=dpi,
-        bbox_inches="tight" if not axes else None,
-        pad_inches=0 if not axes else 0.1,
+        bbox_inches="tight" if tight or not axes else None,
+        pad_inches=0 if not axes else (0.04 if tight else 0.1),
     )
     plt.close(fig)
     return out_path
