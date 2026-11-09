@@ -67,8 +67,9 @@ STRIP_HOURS = 24
 
 #: The image size: about 640 x 280 px, a WebP of a few tens of kilobytes.
 FIGSIZE = (8.0, 3.5)
-DPI = 80
-WEBP_QUALITY = 70
+DPI = 160
+WEBP_QUALITY = 82
+ZERO_PERIODS = 3
 
 #: Prefix of every temporary file, so a pass can sweep up after a crash.
 TMP_PREFIX = ".tmp-"
@@ -150,6 +151,21 @@ def _iso(text: str | None) -> str | None:
 # Rendering
 # --------------------------------------------------------------------------
 
+def sounding(path: Path):
+    """One sounding gated as the console gates it.
+
+    An ``.lfs`` is transformed again with each window padded by
+    ``ZERO_PERIODS`` of zeros, so a gate a few dozen bins tall is drawn as a
+    smooth trace rather than as blocks. A v2 product stores its spectrum and
+    cannot be padded.
+    """
+    from muf import loader
+    from services.api import sao as sao_mod
+
+    return sao_mod.load_ion(path, gate="auto", zero_periods=(
+        ZERO_PERIODS if loader.format_of(path) == loader.LFS else 0))
+
+
 def render_webp(path: Path) -> bytes:
     """One sounding as a small WebP with axes, ready to publish.
 
@@ -162,11 +178,10 @@ def render_webp(path: Path) -> bytes:
     from PIL import Image
 
     from muf import render
-    from services.api import sao as sao_mod
 
-    ion = sao_mod.load_ion(path, gate="auto")
     png = io.BytesIO()
-    render.plot(ion, png, None, axes=True, lof=False, dpi=DPI, figsize=FIGSIZE)
+    render.plot(sounding(path), png, None, axes=True, lof=False, dpi=DPI,
+                figsize=FIGSIZE, tight=True)
     png.seek(0)
     out = io.BytesIO()
     with Image.open(png) as image:
