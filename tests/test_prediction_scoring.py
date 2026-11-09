@@ -605,3 +605,38 @@ def test_the_interval_does_not_move_between_two_reads():
 
     assert scoring.compare(ours, theirs, "muf") == \
         scoring.compare(ours, theirs, "muf")
+
+
+def test_r2_is_the_share_of_the_observed_variance_a_forecast_explains():
+    rng = np.random.default_rng(23)
+    observed = rng.uniform(9.0, 31.0, 57)
+    predicted = observed + rng.normal(0.3, 1.7, 57)
+    pairs = scoring.Pairs(pd.date_range(START, periods=57, freq="7min"),
+                          predicted, observed, np.zeros(57, dtype=bool))
+    expected = 1 - ((predicted - observed) ** 2).sum() / (
+        (observed - observed.mean()) ** 2).sum()
+    assert scoring.summarise(pairs, "muf")["r2"] == pytest.approx(expected, abs=1e-4), \
+        "R² does not match one minus the residual over the total sum of squares"
+
+
+def test_r2_leaves_out_the_pairs_judged_against_a_bound():
+    rng = np.random.default_rng(31)
+    observed = rng.uniform(11.0, 27.0, 41)
+    predicted = observed + rng.normal(0.0, 0.9, 41)
+    censored = np.arange(41) % 5 == 0
+    wild = np.where(censored, predicted + 40.0, predicted)
+    free = ~censored
+    expected = 1 - ((predicted[free] - observed[free]) ** 2).sum() / (
+        (observed[free] - observed[free].mean()) ** 2).sum()
+    pairs = scoring.Pairs(pd.date_range(START, periods=41, freq="11min"),
+                          wild, observed, censored)
+    assert scoring.summarise(pairs, "muf")["r2"] == pytest.approx(expected, abs=1e-4), \
+        "R² counted pairs that were only judged against a bound"
+
+
+def test_the_leaderboard_carries_r2_per_horizon(conn):
+    model_id = add_model(conn, name="gbm-r2-probe")
+    scoring.store(conn, f"model:{model_id}", "muf", TX, RX, 10800,
+                  {"n": 17, "mae": 1.3, "r2": 0.614})
+    entry = scoring.leaderboard(conn, "muf", TX, RX)[0]
+    assert entry["r2"] == {"10800": 0.614}, "the leaderboard dropped the stored R²"

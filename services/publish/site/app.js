@@ -400,6 +400,28 @@
 
   // --- forecast table ------------------------------------------------------
 
+  function scoreTable(f, metric, cell) {
+    var horizons = f.horizons.filter(function (h) {
+      return f.scores.some(function (row) { return row[metric] && row[metric][h] != null; });
+    });
+    if (!horizons.length) return null;
+    var head = el("tr", {}, [el("th", { text: t(metric) })].concat(
+      horizons.map(function (h) { return el("th", { text: t("h" + h) }); })));
+    var body = el("tbody");
+    f.scores.forEach(function (row) {
+      var name = row.kind === "baseline" ? row.name + " (" + t("baseline") + ")" : row.name;
+      var cells = [el("td", { text: name })];
+      horizons.forEach(function (h) {
+        var known = row[metric] && row[metric][h] != null;
+        cells.push(el("td", { text: known ? cell(row, h) : "—" }));
+      });
+      body.appendChild(el("tr", {}, cells));
+    });
+    return el("div", { "class": "table-wrap" }, [
+      el("table", {}, [el("thead", {}, [head]), body])
+    ]);
+  }
+
   function renderForecast() {
     var box = document.getElementById("forecast");
     clear(box);
@@ -418,28 +440,17 @@
     box.appendChild(el("p", { "class": "model-line", text: line }));
     if (!f.scores.length) return;
 
-    var horizons = f.horizons.filter(function (h) {
-      return f.scores.some(function (row) { return row.mae[h] != null; });
+    var mae = scoreTable(f, "mae", function (row, h) {
+      var text = row.mae[h].toFixed(2);
+      var skill = row.skill && row.skill[h];
+      if (row.kind === "model" && skill != null) {
+        text += " (" + (skill >= 0 ? "+" : "") + Math.round(skill * 100) + "%)";
+      }
+      return text;
     });
-    var head = el("tr", {}, [el("th", { text: t("mae") })].concat(
-      horizons.map(function (h) { return el("th", { text: t("h" + h) }); })));
-    var body = el("tbody");
-    f.scores.forEach(function (row) {
-      var name = row.kind === "baseline" ? row.name + " (" + t("baseline") + ")" : row.name;
-      var cells = [el("td", { text: name })];
-      horizons.forEach(function (h) {
-        var text = row.mae[h] == null ? "—" : row.mae[h].toFixed(2);
-        var skill = row.skill && row.skill[h];
-        if (row.kind === "model" && skill != null) {
-          text += " (" + (skill >= 0 ? "+" : "") + Math.round(skill * 100) + "%)";
-        }
-        cells.push(el("td", { text: text }));
-      });
-      body.appendChild(el("tr", {}, cells));
-    });
-    box.appendChild(el("div", { "class": "table-wrap" }, [
-      el("table", {}, [el("thead", {}, [head]), body])
-    ]));
+    var r2 = scoreTable(f, "r2", function (row, h) { return row.r2[h].toFixed(2); });
+    if (mae) box.appendChild(mae);
+    if (r2) box.appendChild(r2);
     box.appendChild(el("p", { "class": "note", text: "(%) — " + t("skill") }));
   }
 

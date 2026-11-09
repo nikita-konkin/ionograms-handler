@@ -195,10 +195,17 @@ def absolute_error(pairs: Pairs, param: str) -> np.ndarray:
 
 
 def summarise(pairs: Pairs, param: str) -> dict:
-    """MAE, RMSE and bias over the measured pairs; bounds counted apart."""
+    """MAE, RMSE, bias and R² over the measured pairs; bounds counted apart.
+
+    R² is one minus the residual over the total sum of squares: the share of
+    the observed variation a forecast explains. It is undefined, and None,
+    when the measured values do not vary.
+    """
     error = absolute_error(pairs, param)
     free = ~pairs.censored
     residual = pairs.predicted - pairs.observed
+    spread = (((pairs.observed[free] - pairs.observed[free].mean()) ** 2).sum()
+              if free.any() else 0.0)
 
     def _finite(value) -> float | None:
         value = float(value)
@@ -209,6 +216,8 @@ def summarise(pairs: Pairs, param: str) -> dict:
         "mae": _finite(error[free].mean()) if free.any() else None,
         "rmse": _finite(np.sqrt((residual[free] ** 2).mean())) if free.any() else None,
         "bias": _finite(residual[free].mean()) if free.any() else None,
+        "r2": (_finite(1.0 - (residual[free] ** 2).sum() / spread)
+               if spread > 0 else None),
         "n_censored": int(pairs.censored.sum()),
         "mae_censored": (_finite(error[pairs.censored].mean())
                          if pairs.censored.any() else None),
@@ -491,12 +500,13 @@ def store(conn: sqlite3.Connection, subject: str, param: str, tx: str, rx: str,
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO score (subject, param, tx, rx, horizon_s, "
-            "scored_at, window_from, window_to, n, mae, rmse, bias, "
-            "n_censored, mae_censored, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "scored_at, window_from, window_to, n, mae, rmse, bias, r2, "
+            "n_censored, mae_censored, detail) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (subject, param, tx, rx, horizon_s, db.utcnow(),
              window[0] if window else None, window[1] if window else None,
              result.get("n", 0), result.get("mae"), result.get("rmse"),
-             result.get("bias"), result.get("n_censored", 0),
+             result.get("bias"), result.get("r2"), result.get("n_censored", 0),
              result.get("mae_censored"),
              json.dumps(detail) if detail else None),
         )
@@ -532,7 +542,8 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
             "subject": row["subject"],
             "kind": "baseline" if row["subject"].startswith("baseline:") else "model",
             "name": row["subject"].split(":", 1)[1],
-            "origin": "", "state": "", "mae": {}, "n": {}, "detail": {},
+            "origin": "", "state": "", "mae": {}, "r2": {}, "n": {},
+            "detail": {},
             # The relative number per horizon, when the scoring pass recorded
             # one. Absolute MAE alone cannot be read across weeks: a quiet
             # week and a disturbed one give different megahertz from one
@@ -547,6 +558,7 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
             entry["state"] = registry.state_of(model)
             entry["model_id"] = model["id"]
         entry["mae"][str(row["horizon_s"])] = row["mae"]
+        entry["r2"][str(row["horizon_s"])] = row.get("r2")
         entry["n"][str(row["horizon_s"])] = row["n"]
         if row["detail"]:
             entry["detail"][str(row["horizon_s"])] = row["detail"]

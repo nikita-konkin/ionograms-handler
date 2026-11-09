@@ -142,6 +142,7 @@ ADDED_COLUMNS = (
     ("sounding", "chirp_rate", "REAL"),
     ("forecast", "input_measured", "REAL"),
     ("config_epoch", "config_hash", "TEXT"),
+    ("score", "r2", "REAL"),
 )
 
 

@@ -468,6 +468,7 @@ CREATE TABLE IF NOT EXISTS score (
     window_from  TEXT, window_to TEXT,
     n            INTEGER NOT NULL,
     mae          REAL, rmse REAL, bias REAL,
+    r2           REAL,                   -- share of the observed variance explained
     n_censored   INTEGER NOT NULL DEFAULT 0,
     mae_censored REAL,
     detail       TEXT,                   -- JSON: why a baseline is missing, etc.

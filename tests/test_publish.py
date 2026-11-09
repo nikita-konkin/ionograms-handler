@@ -61,9 +61,9 @@ def _model(conn, *, tx="NIC", rx="DOB", name="live-model", active=1):
                       (hour - 9) * 3600, 21.0 + hour / 10))
     for subject in (f"model:{model_id}", "baseline:persistence"):
         conn.execute("INSERT OR IGNORE INTO score (subject, param, tx, rx,"
-                     " horizon_s, scored_at, n, mae, detail)"
+                     " horizon_s, scored_at, n, mae, r2, detail)"
                      " VALUES (?, 'muf', ?, ?, 3600, '2026-08-13T09:00:00Z',"
-                     " 40, 1.2, ?)",
+                     " 40, 1.2, 0.83, ?)",
                      (subject, tx, rx,
                       json.dumps({"vs_persistence": {"skill": 0.1,
                                                      "distinguishable": True}})))
@@ -352,6 +352,14 @@ def test_a_real_product_renders_to_webp(tmp_path, make_chirp_h5):
 
     assert image[:4] == b"RIFF" and image[8:12] == b"WEBP"
     assert len(image) < 200_000
+
+
+def test_the_published_forecast_scores_carry_r2(database, archive, tmp_path, drawn):
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    data = json.loads((site / "data" / "nic-dob.json").read_text(encoding="utf-8"))
+    assert [s["r2"] for s in data["forecast"]["scores"]] == [{"3600": 0.83}] * 2, \
+        "the published scores do not carry R²"
 
 
 def test_a_published_ionogram_is_sharp_on_a_dense_screen(make_chirp_h5):
