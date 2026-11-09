@@ -302,7 +302,8 @@ def forecast_block(conn, tx: str, rx: str) -> dict:
         "scores": [{
             "name": entry["name"], "kind": entry["kind"],
             # `skill` is absent from score rows written before it existed.
-            "mae": entry["mae"], "skill": entry.get("skill") or {},
+            "mae": entry["mae"], "r2": entry["r2"],
+            "skill": entry.get("skill") or {},
             "n": entry["n"],
         } for entry in board
             if entry["kind"] == "baseline" or entry.get("state") == "active"],
