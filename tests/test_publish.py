@@ -358,7 +358,7 @@ def test_a_published_ionogram_is_wide_enough_for_a_dense_screen(make_chirp_h5):
     image = pytest.importorskip("PIL.Image")
     power = np.random.default_rng(7).uniform(50.0, 300.0, (64, 256))
     picture = image.open(io.BytesIO(publisher.render_webp(make_chirp_h5(power))))
-    assert picture.width >= 1100, f"a {picture.width} px ionogram is not sharp on a dense screen"
+    assert picture.width >= 1100,         f"a {picture.width} px ionogram is not sharp on a dense screen"
 
 
 def test_a_published_ionogram_wastes_no_width_on_white_margins(make_chirp_h5):
@@ -371,3 +371,11 @@ def test_a_published_ionogram_wastes_no_width_on_white_margins(make_chirp_h5):
                  picture.shape[0] - 1 - inked[:, 0].max(),
                  picture.shape[1] - 1 - inked[:, 1].max())
     assert margin <= 12, f"a {margin} px white margin is not a tight layout"
+
+
+def test_a_published_lfs_sounding_is_drawn_from_a_zero_padded_transform(make_lfs):
+    from conftest import synth_iq
+    path = make_lfs(synth_iq(n_freq=6, window=8192, echo_range_km=2810.0,
+                             half_span_km=60_000.0, echo_last_bin=4, seed=5))
+    step = publisher.sounding(path).cal.range_step
+    assert step < 60_000.0 * 2 / 8192 / 3,         f"a {step:.2f} km range step is not zero padded"
