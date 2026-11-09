@@ -354,7 +354,7 @@ def test_a_real_product_renders_to_webp(tmp_path, make_chirp_h5):
     assert len(image) < 200_000
 
 
-def test_a_published_ionogram_is_wide_enough_for_a_dense_screen(make_chirp_h5):
+def test_a_published_ionogram_is_sharp_on_a_dense_screen(make_chirp_h5):
     image = pytest.importorskip("PIL.Image")
     power = np.random.default_rng(7).uniform(50.0, 300.0, (64, 256))
     picture = image.open(io.BytesIO(publisher.render_webp(make_chirp_h5(power))))
@@ -373,7 +373,7 @@ def test_a_published_ionogram_wastes_no_width_on_white_margins(make_chirp_h5):
     assert margin <= 12, f"a {margin} px white margin is not a tight layout"
 
 
-def test_a_published_lfs_sounding_is_drawn_from_a_zero_padded_transform(make_lfs):
+def test_a_published_lfs_sounding_is_zero_padded(make_lfs):
     from conftest import synth_iq
     path = make_lfs(synth_iq(n_freq=6, window=8192, echo_range_km=2810.0,
                              half_span_km=60_000.0, echo_last_bin=4, seed=5))
