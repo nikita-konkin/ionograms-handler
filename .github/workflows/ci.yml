@@ -12,6 +12,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run at a time per branch, in the order the commits arrived. Two merges
+# seconds apart used to race: on 2026-11-09 the older commit's `publish`
+# finished last, so `latest` was the older code and the work server pulled it.
+# A push is never cancelled, because its image may be the one a tag names; a
+# pull request's superseded run is.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Cheap and first. A lint failure is a one-line fix, and finding it after a
   # four-minute test run wastes the time it was meant to save.
