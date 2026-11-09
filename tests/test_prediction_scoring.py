@@ -695,3 +695,15 @@ def test_iri_that_cannot_be_modelled_says_why(conn, monkeypatch):
     found = next(entry for entry in board if entry["name"] == "iri")
     assert "index host is down" in str(found["detail"]), (
         f"the reason IRI is absent was lost: {found['detail']}")
+
+
+def test_a_pass_forgets_baseline_rows_at_horizons_it_no_longer_scores(conn):
+    index, muf, _ = seed(conn, days=40)
+    add_forecasts(conn, add_model(conn, name="day-ahead-probe"),
+                  muf.reindex(index[-96 * 8:]) + 0.4)
+    scoring.store(conn, "baseline:persistence", "muf", TX, RX, 21600,
+                  {"n": 2870, "mae": 8.3393})
+    scoring.run_once(conn, ("muf",), "contour", window_days=8, now=just_after(index))
+    kept = {row["horizon_s"] for row in scoring.scores(conn, "muf", TX, RX)
+            if row["subject"] == "baseline:persistence"}
+    assert kept == {86400}, f"a pass left baseline rows at {sorted(kept)}"
