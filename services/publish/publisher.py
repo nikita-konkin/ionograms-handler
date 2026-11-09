@@ -62,6 +62,9 @@ SITE_SRC = Path(__file__).resolve().parent / "site"
 #: to parse on a phone for a picture that cannot show them anyway.
 MAX_POINTS = 6000
 
+#: Instants each baseline is published at: more than a chart has pixels for.
+BASELINE_POINTS = 1500
+
 #: Hours of thumbnails in the strip under the newest ionogram.
 STRIP_HOURS = 24
 
@@ -268,9 +271,10 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
                               forecasts=series_mod.live_forecasts(conn, rows))
     if not framed["circuits"]:
         return {"path_km": None, "t": [], "muf": [], "lof": [], "limited": [],
-                "loflim": [], "forecast": []}
+                "loflim": [], "forecast": [], "baselines": []}
     circuit = framed["circuits"][0]
     return {
+        "baselines": baselines_block(conn, tx, rx, method, circuit["forecast"]),
         "path_km": _number(circuit["path_km"]),
         "t": circuit["t"],
         "muf": circuit["muf"], "lof": circuit["lof"],
@@ -284,6 +288,74 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
             "sigma": [_number(v) for v in entry["sigma"]],
         } for entry in circuit["forecast"] if not entry.get("comparison")],
     }
+
+
+def baselines_block(conn, tx: str, rx: str, method: str,
+                    forecasts: list[dict]) -> list[dict]:
+    """Each baseline's curve at the instants of the live MUF forecast.
+
+    The page draws them beside the forecast they are scored against, so they
+    are computed as the scoring pass computes them: persistence looks back by
+    the forecast's own horizon, and the harmonic fit sees nothing later than
+    the forecast's first instant. IRI is read from its stored rows up to the
+    newest sounding and modelled afresh only past it. The instants are thinned
+    to what a chart can show, and a baseline with nothing to say at them is
+    left out.
+    """
+    import pandas as pd
+
+    from services.prediction import registry, scoring
+
+    live = next((entry for entry in forecasts if entry["param"] == "muf"
+                 and not entry.get("comparison")), None)
+    stamps = [] if live is None else _thin([
+        t for t, value in zip(live["t"], live["value"]) if value is not None],
+        BASELINE_POINTS)
+    if not stamps:
+        return []
+    try:
+        model = registry.active(conn, "muf", tx, rx)
+        lead = db.one(conn, "SELECT MAX(horizon_s) AS s FROM forecast"
+                            " WHERE model_id = ? AND param = 'muf'"
+                            " AND tx = ? AND rx = ?", (model["id"], tx, rx))
+        observed = scoring.truth(conn, "muf", tx, rx, method)
+    except (sqlite3.Error, TypeError):
+        return []
+    at = pd.DatetimeIndex(pd.to_datetime(stamps))
+    spelled = dict(zip(at, stamps))
+    drawn = []
+    for name in scoring.BASELINES:
+        try:
+            curve = scoring.baseline_series(
+                conn, name, "muf", tx, rx, observed, at,
+                scoring.bucket(lead["s"]), at[0])
+        except scoring.ScoringError:
+            curve = pd.Series(dtype=float)
+        if name == "iri":
+            curve = pd.concat([curve, _iri_ahead(conn, tx, rx, at[
+                at > (observed.index.max() if len(observed) else at[0])])])
+        curve = curve[curve.notna()]
+        if len(curve):
+            drawn.append({"name": name,
+                          "t": [spelled[when] for when in curve.index],
+                          "value": [_number(v) for v in curve.to_numpy()]})
+    return drawn
+
+
+def _iri_ahead(conn, tx: str, rx: str, at):
+    """IRI's MUF at instants no sounding has reached yet; empty when it
+    cannot be modelled."""
+    import pandas as pd
+
+    from services.prediction import scoring
+
+    found = scoring.ends(conn, tx, rx)
+    if found is None or not len(at):
+        return pd.Series(dtype=float)
+    try:
+        return scoring.modelled(*found, at)
+    except scoring.ScoringError:
+        return pd.Series(dtype=float)
 
 
 def forecast_block(conn, tx: str, rx: str) -> dict:

@@ -15,7 +15,7 @@
 
   var state = {
     lang: "en", strings: {}, status: null, slug: null, range: 7,
-    data: {}, shown: null, now: null, link: null
+    data: {}, shown: null, now: null, link: null, hidden: {}
   };
 
   // --- helpers -------------------------------------------------------------
@@ -227,6 +227,34 @@
 
   function niceMax(v) { return Math.max(5, Math.ceil(v / 5) * 5); }
 
+  // The forecast curves a reader can switch on and off: the live model and
+  // the baselines it is scored against. The order is the order of the legend.
+  var CURVES = ["model", "persistence", "recurrence-27d", "harmonic", "iri"];
+
+  function curveLabel(key, f) {
+    return key === "model" ? (f && f.model ? f.model.name : t("model")) : t("m_" + key);
+  }
+
+  function curves(d, start, until) {
+    var s = d.series, found = [];
+    function inside(ts, values, sigmas) {
+      var pts = [];
+      for (var i = 0; i < ts.length; i++) {
+        var x = parseT(ts[i]);
+        if (x >= start && x <= until) pts.push([x, values[i], sigmas ? sigmas[i] : null]);
+      }
+      return pts;
+    }
+    var fc = (s.forecast || []).filter(function (f) { return f.param === "muf"; })[0];
+    if (fc) found.push({ key: "model", pts: inside(fc.t, fc.value, fc.sigma) });
+    (s.baselines || []).forEach(function (b) {
+      if (CURVES.indexOf(b.name) > 0) found.push({ key: b.name, pts: inside(b.t, b.value) });
+    });
+    return found.filter(function (c) { return c.pts.length; }).sort(function (a, b) {
+      return CURVES.indexOf(a.key) - CURVES.indexOf(b.key);
+    });
+  }
+
   function renderChart() {
     var box = document.getElementById("chart");
     clear(box);
@@ -243,34 +271,30 @@
       if (s.muf[i] != null) muf.push([x, s.muf[i], s.limited[i]]);
       if (s.lof[i] != null) lof.push([x, s.lof[i]]);
     }
-    var fc = (s.forecast || []).filter(function (f) { return f.param === "muf"; })[0];
-    var fpts = [];
-    if (fc) {
-      for (var j = 0; j < fc.t.length; j++) {
-        var fx = parseT(fc.t[j]);
-        if (fx >= start && fx <= now + state.range * 86400000) {
-          fpts.push([fx, fc.value[j], fc.sigma[j]]);
-        }
-      }
-    }
-    if (!muf.length && !lof.length && !fpts.length) {
+    var all = curves(d, start, now + state.range * 86400000);
+    var shown = all.filter(function (c) { return !state.hidden[c.key]; });
+    if (!muf.length && !lof.length && !all.length) {
       box.appendChild(el("p", { "class": "muted", text: t("no_data") }));
-      renderLegend(false);
+      renderLegend([], d);
       return;
     }
 
-    var end = now;
-    fpts.forEach(function (p) { if (p[1] != null && p[0] > end) end = p[0]; });
-    var top = 0;
+    var end = now, top = 0;
     muf.forEach(function (p) { top = Math.max(top, p[1]); });
     lof.forEach(function (p) { top = Math.max(top, p[1]); });
-    fpts.forEach(function (p) { if (p[1] != null) top = Math.max(top, p[1] + (p[2] || 0)); });
+    shown.forEach(function (c) {
+      c.pts.forEach(function (p) {
+        if (p[1] == null) return;
+        if (p[0] > end) end = p[0];
+        top = Math.max(top, p[1] + (p[2] || 0));
+      });
+    });
     top = niceMax(top * 1.05);
 
     var W = Math.max(320, box.clientWidth || 640), H = W < 500 ? 240 : 300;
     var L = 36, R = 10, T = 10, B = 26;
     function X(ms) { return L + (ms - start) / (end - start) * (W - L - R); }
-    function Y(v) { return T + (1 - v / top) * (H - T - B); }
+    function Y(v) { return T + (1 - Math.min(v, top) / top) * (H - T - B); }
 
     var root = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
                             "aria-label": t("series") });
@@ -304,26 +328,26 @@
       root.appendChild(svg("line", { "class": "now", x1: X(now), x2: X(now), y1: T, y2: H - B }));
     }
 
-    // forecast band and line, broken wherever a value is missing
-    if (fpts.length) {
+    // each curve, broken wherever a value is missing; the model also has a band
+    shown.slice().reverse().forEach(function (c) {
       var runs = [], run = [];
-      fpts.forEach(function (p) {
+      c.pts.forEach(function (p) {
         if (p[1] == null) { if (run.length) runs.push(run); run = []; } else run.push(p);
       });
       if (run.length) runs.push(run);
       runs.forEach(function (r) {
         var withSigma = r.filter(function (p) { return p[2] != null; });
         if (withSigma.length > 1) {
-          var up = withSigma.map(function (p) { return X(p[0]) + "," + Y(Math.min(top, p[1] + p[2])); });
+          var up = withSigma.map(function (p) { return X(p[0]) + "," + Y(p[1] + p[2]); });
           var down = withSigma.slice().reverse().map(function (p) {
             return X(p[0]) + "," + Y(Math.max(0, p[1] - p[2]));
           });
           root.appendChild(svg("polygon", { "class": "band", points: up.concat(down).join(" ") }));
         }
-        root.appendChild(svg("polyline", { "class": "fc",
+        root.appendChild(svg("polyline", { "class": "fc c-" + c.key,
           points: r.map(function (p) { return X(p[0]) + "," + Y(p[1]); }).join(" ") }));
       });
-    }
+    });
 
     lof.forEach(function (p) {
       root.appendChild(svg("circle", { "class": "lof", cx: X(p[0]), cy: Y(p[1]), r: 2 }));
@@ -333,30 +357,59 @@
                                        cx: X(p[0]), cy: Y(p[1]), r: p[2] ? 2.6 : 2.2 }));
     });
 
-    // hover / touch readout
+    // hover / touch readout: the nearest measurement, or past "now" the
+    // nearest forecast instant with every curve that is switched on
     var cursor = svg("line", { "class": "cursor", x1: 0, x2: 0, y1: T, y2: H - B, visibility: "hidden" });
     root.appendChild(cursor);
     var tip = el("div", { "class": "tip", hidden: "" });
     var times = s.t.map(parseT);
+    var ahead = {};
+    shown.forEach(function (c) {
+      c.pts.forEach(function (p) {
+        if (p[1] == null) return;
+        (ahead[p[0]] = ahead[p[0]] || []).push([c.key, p[1]]);
+      });
+    });
+    var aheadTimes = Object.keys(ahead).map(Number);
+    function nearest(list, ms, from) {
+      var best = -1, gap = Infinity;
+      for (var n = 0; n < list.length; n++) {
+        if (list[n] < from) continue;
+        var g = Math.abs(list[n] - ms);
+        if (g < gap) { gap = g; best = n; }
+      }
+      return [best, gap];
+    }
     function readout(evt) {
       var rect = root.getBoundingClientRect();
       var px = ((evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left) * (W / rect.width);
       var ms = start + (px - L) / (W - L - R) * (end - start);
-      var best = -1, gap = Infinity;
-      for (var n = 0; n < times.length; n++) {
-        if (times[n] < start) continue;
-        var g = Math.abs(times[n] - ms);
-        if (g < gap) { gap = g; best = n; }
+      var seen = nearest(times, ms, start), told = nearest(aheadTimes, ms, start);
+      var forecast = told[1] < seen[1];
+      var hit = forecast ? told : seen;
+      if (hit[0] < 0 || hit[1] > (end - start) / 40) {
+        cursor.setAttribute("visibility", "hidden"); tip.hidden = true; return;
       }
-      if (best < 0 || gap > (end - start) / 40) { cursor.setAttribute("visibility", "hidden"); tip.hidden = true; return; }
-      var cx = X(times[best]);
+      var at = forecast ? aheadTimes[hit[0]] : times[hit[0]];
+      var cx = X(at);
       cursor.setAttribute("x1", cx); cursor.setAttribute("x2", cx);
       cursor.setAttribute("visibility", "visible");
-      tip.textContent = fmtTime(times[best]) + " · " + t("muf") + " " + mhz(s.muf[best]) +
-        " · " + t("lof") + " " + mhz(s.lof[best]) + " " + t("mhz");
+      clear(tip);
+      tip.appendChild(el("div", { "class": "tip-time", text: fmtTime(at) }));
+      if (forecast) {
+        ahead[at].forEach(function (pair) {
+          tip.appendChild(el("div", {}, [
+            el("i", { "class": "swatch c-" + pair[0] }),
+            document.createTextNode(curveLabel(pair[0], d.forecast) + " "),
+            el("b", { text: mhz(pair[1]) + " " + t("mhz") })]));
+        });
+      } else {
+        tip.appendChild(el("div", { text: t("muf") + " " + mhz(s.muf[hit[0]]) + " · " +
+          t("lof") + " " + mhz(s.lof[hit[0]]) + " " + t("mhz") }));
+      }
       tip.hidden = false;
-      var left = cx * rect.width / W;
-      tip.style.left = Math.min(Math.max(0, left - 90), rect.width - 190) + "px";
+      var left = cx * rect.width / W, wide = tip.offsetWidth || 190;
+      tip.style.left = Math.min(Math.max(0, left - wide / 2), Math.max(0, rect.width - wide)) + "px";
       tip.style.top = "0px";
     }
     root.addEventListener("mousemove", readout);
@@ -367,10 +420,10 @@
 
     box.appendChild(root);
     box.appendChild(tip);
-    renderLegend(fpts.length > 0);
+    renderLegend(all, d);
   }
 
-  function renderLegend(withForecast) {
+  function renderLegend(all, d) {
     var legend = document.getElementById("legend");
     clear(legend);
     function key(cls, label) {
@@ -379,7 +432,22 @@
     legend.appendChild(key("k-muf", t("muf")));
     legend.appendChild(key("k-lim", t("muf") + ", " + t("limited")));
     legend.appendChild(key("k-lof", t("lof")));
-    if (withForecast) legend.appendChild(key("k-fc", t("forecast_band")));
+    if (!all.length) return;
+    var group = el("div", { "class": "curves", role: "group", "aria-label": t("curves") });
+    group.appendChild(el("span", { "class": "curves-title", text: t("curves") + ":" }));
+    all.forEach(function (c) {
+      var on = !state.hidden[c.key];
+      var label = curveLabel(c.key, d.forecast) + (c.key === "model" ? " ±σ" : "");
+      var b = el("button", { type: "button", "aria-pressed": String(on) }, [
+        el("i", { "class": "swatch c-" + c.key }), document.createTextNode(label)]);
+      b.addEventListener("click", function () {
+        state.hidden[c.key] = on;
+        remember("hidden", JSON.stringify(state.hidden));
+        renderChart();
+      });
+      group.appendChild(b);
+    });
+    legend.appendChild(group);
   }
 
   function renderRanges() {
@@ -400,26 +468,46 @@
 
   // --- forecast table ------------------------------------------------------
 
-  function scoreTable(f, metric, cell) {
-    var horizons = f.horizons.filter(function (h) {
-      return f.scores.some(function (row) { return row[metric] && row[metric][h] != null; });
-    });
-    if (!horizons.length) return null;
-    var head = el("tr", {}, [el("th", { text: t(metric) })].concat(
-      horizons.map(function (h) { return el("th", { text: t("h" + h) }); })));
+  // One table per horizon: a row per method that has a score there, the
+  // model first, the best value of each column marked.
+  function scoreTable(f, h) {
+    var rows = f.scores.filter(function (row) { return row.mae && row.mae[h] != null; });
+    if (!rows.length) return null;
+    function best(metric, pick) {
+      var values = rows.map(function (row) { return row[metric] && row[metric][h]; })
+        .filter(function (v) { return v != null; });
+      return values.length > 1 ? pick.apply(null, values) : null;
+    }
+    var leastError = best("mae", Math.min), mostExplained = best("r2", Math.max);
+    function number(value, top) {
+      return el("td", value != null && value === top ? { "class": "best", text: value.toFixed(2) }
+                                                      : { text: value == null ? "—" : value.toFixed(2) });
+    }
     var body = el("tbody");
-    f.scores.forEach(function (row) {
-      var name = row.kind === "baseline" ? row.name + " (" + t("baseline") + ")" : row.name;
-      var cells = [el("td", { text: name })];
-      horizons.forEach(function (h) {
-        var known = row[metric] && row[metric][h] != null;
-        cells.push(el("td", { text: known ? cell(row, h) : "—" }));
-      });
-      body.appendChild(el("tr", {}, cells));
+    rows.forEach(function (row) {
+      var model = row.kind === "model";
+      var key = model ? "model" : row.name;
+      var about = model ? t("m_model_about") : t("m_" + row.name + "_about", { h: t("h" + h) });
+      var skill = row.skill && row.skill[h];
+      if (model && skill != null) {
+        about += " · " + t(skill >= 0 ? "better" : "worse", { n: Math.abs(Math.round(skill * 100)) });
+      }
+      body.appendChild(el("tr", model ? { "class": "live" } : {}, [
+        el("td", {}, [
+          el("i", { "class": "swatch c-" + key }),
+          el("b", { text: curveLabel(key, f) }),
+          el("small", { text: about })]),
+        number(row.mae[h], leastError),
+        number(row.r2 ? row.r2[h] : null, mostExplained),
+        el("td", { text: row.n && row.n[h] != null ? String(row.n[h]) : "—" })]));
     });
+    var head = el("tr", {}, [
+      el("th", { text: t("method") }), el("th", { text: t("mae") }),
+      el("th", { text: t("r2") }), el("th", { text: t("pairs") })]);
     return el("div", { "class": "table-wrap" }, [
-      el("table", {}, [el("thead", {}, [head]), body])
-    ]);
+      el("table", { "class": "scores" }, [
+        el("caption", { text: t("lead", { h: t("h" + h) }) }),
+        el("thead", {}, [head]), body])]);
   }
 
   function renderForecast() {
@@ -438,20 +526,13 @@
         "–" + fmtDay(parseT(f.model.trained_to));
     }
     box.appendChild(el("p", { "class": "model-line", text: line }));
-    if (!f.scores.length) return;
-
-    var mae = scoreTable(f, "mae", function (row, h) {
-      var text = row.mae[h].toFixed(2);
-      var skill = row.skill && row.skill[h];
-      if (row.kind === "model" && skill != null) {
-        text += " (" + (skill >= 0 ? "+" : "") + Math.round(skill * 100) + "%)";
-      }
-      return text;
-    });
-    var r2 = scoreTable(f, "r2", function (row, h) { return row.r2[h].toFixed(2); });
-    if (mae) box.appendChild(mae);
-    if (r2) box.appendChild(r2);
-    box.appendChild(el("p", { "class": "note", text: "(%) — " + t("skill") }));
+    var tables = f.horizons.map(function (h) { return scoreTable(f, h); })
+      .filter(function (table) { return table; });
+    if (!tables.length) return;
+    box.appendChild(el("p", { "class": "note", text: t("scores_intro") }));
+    tables.forEach(function (table) { box.appendChild(table); });
+    box.appendChild(el("ul", { "class": "note how" }, ["mae_about", "r2_about", "pairs_about"]
+      .map(function (key) { return el("li", { text: t(key) }); })));
   }
 
   // --- flow ----------------------------------------------------------------
@@ -575,6 +656,7 @@
     state.lang = saved === "ru" || saved === "en" ? saved
       : (navigator.language || "").toLowerCase().indexOf("ru") === 0 ? "ru" : "en";
     var r = parseInt(recall("range"), 10);
+    try { state.hidden = JSON.parse(recall("hidden")) || {}; } catch (e) { state.hidden = {}; }
     if (RANGES.indexOf(r) >= 0) state.range = r;
 
     document.getElementById("lang").addEventListener("click", function () {
