@@ -305,7 +305,7 @@ def test_an_unavailable_baseline_is_stored_with_its_reason(conn):
     rows = {r["subject"]: r for r in scoring.scores(conn, "muf", TX, RX)}
     assert "baseline:iri" in rows
     assert rows["baseline:iri"]["n"] == 0
-    assert "no IRI rows stored" in rows["baseline:iri"]["detail"]["unavailable"]
+    assert "IRI is not modelled" in rows["baseline:iri"]["detail"]["unavailable"]
 
 
 # --------------------------------------------------------------------------
@@ -398,7 +398,7 @@ def test_a_baseline_reports_once_not_once_per_horizon(conn):
     assert set(results[0]["mae"]) == {str(h) for h in scoring.HORIZONS}
     iri = next(r for r in results if r["name"] == "iri")
     assert "absorption floor" not in (iri["detail"] or "")   # muf, so it is a
-    assert "no IRI rows stored" in iri["detail"]             # storage problem
+    assert "IRI is not modelled" in iri["detail"]            # modelling problem
 
 
 def test_a_baseline_that_finds_no_pairs_says_why(conn):
@@ -640,3 +640,58 @@ def test_the_leaderboard_carries_r2_per_horizon(conn):
                   {"n": 17, "mae": 1.3, "r2": 0.614})
     entry = scoring.leaderboard(conn, "muf", TX, RX)[0]
     assert entry["r2"] == {"10800": 0.614}, "the leaderboard dropped the stored R²"
+
+
+def test_a_pass_stores_iri_for_the_soundings_that_lack_it(conn):
+    index, _, _ = seed(conn, days=3)
+    level = 13.0 + np.random.default_rng(3).uniform(0.0, 9.0)
+    scoring.fill_iri(conn, TX, RX, index[40], index[-1],
+                     lambda tx, rx, at: pd.Series(level, index=at))
+    stored = scoring.iri(conn, "muf", TX, RX)
+    assert (len(stored), float(stored.iloc[0])) == (len(index) - 40, level), (
+        f"{len(stored)} IRI rows were stored for {len(index) - 40} soundings")
+
+
+def test_a_stored_iri_row_is_never_modelled_again(conn):
+    index, _, _ = seed(conn, days=2)
+    conn.execute("INSERT INTO reference (sounding_id, source, param, value) "
+                 "SELECT id, 'iri', 'muf', 17.25 FROM sounding")
+    conn.commit()
+    asked = []
+    scoring.fill_iri(conn, TX, RX, index[0], index[-1],
+                     lambda tx, rx, at: asked.append(len(at))
+                     or pd.Series(3.0, index=at))
+    assert asked == [], f"IRI was modelled again for {asked} stored soundings"
+
+
+def test_the_iri_model_is_given_the_ends_stored_on_the_soundings(conn):
+    index, _, _ = seed(conn, days=1)
+    seen = []
+    scoring.fill_iri(conn, TX, RX, index[0], index[-1],
+                     lambda tx, rx, at: seen.append((tx.lat, tx.lon, rx.lat, rx.lon))
+                     or pd.Series(11.0, index=at))
+    assert seen == [(35.1, 33.3, 56.6, 47.9)], f"IRI was modelled between {seen}"
+
+
+def test_a_pass_scores_iri_once_its_rows_can_be_modelled(conn, monkeypatch):
+    index, muf, _ = seed(conn, days=12)
+    monkeypatch.setattr(scoring, "modelled",
+                        lambda tx, rx, at: muf.reindex(at) + 0.75)
+    board = scoring.score_baselines(conn, "muf", TX, RX, horizons=(86400,),
+                                    window_days=4, now=just_after(index))
+    found = next(entry for entry in board if entry["name"] == "iri")
+    assert found["mae"] == {"86400": 0.75}, f"IRI was scored as {found}"
+
+
+def test_iri_that_cannot_be_modelled_says_why(conn, monkeypatch):
+    index, _, _ = seed(conn, days=6)
+
+    def broken(tx, rx, at):
+        raise scoring.ScoringError("no solar driver: the index host is down")
+
+    monkeypatch.setattr(scoring, "modelled", broken)
+    board = scoring.score_baselines(conn, "muf", TX, RX, horizons=(86400,),
+                                    window_days=3, now=just_after(index))
+    found = next(entry for entry in board if entry["name"] == "iri")
+    assert "index host is down" in str(found["detail"]), (
+        f"the reason IRI is absent was lost: {found['detail']}")
