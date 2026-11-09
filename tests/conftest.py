@@ -615,3 +615,15 @@ def feature_names() -> list[str]:
               for w in (12, 48) for s in ("mean", "std")]
     names += ["hour", "minute"]
     return names
+
+
+@pytest.fixture(autouse=True)
+def no_iri_model(monkeypatch):
+    """Keeps a scoring pass from modelling IRI, which needs solar indices
+    from the Internet. A test that wants IRI rows supplies its own model."""
+    from services.prediction import scoring
+
+    def absent(tx, rx, at):
+        raise scoring.ScoringError("IRI is not modelled in tests")
+
+    monkeypatch.setattr(scoring, "modelled", absent)

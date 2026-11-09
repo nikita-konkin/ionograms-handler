@@ -381,6 +381,15 @@ def circuit_point(conn: sqlite3.Connection, tx: str, rx: str) -> Point | None:
     A station table corrected after ingest would otherwise move the control
     point without moving a single measurement.
     """
+    found = ends(conn, tx, rx)
+    if found is None:
+        return None
+    points = control_points(*found)
+    return points[0] if points else None
+
+
+def ends(conn: sqlite3.Connection, tx: str, rx: str) -> tuple[Point, Point] | None:
+    """Where the circuit starts and stops, as stored on its soundings."""
     row = db.one(
         conn,
         "SELECT tx_lat, tx_lon, rx_lat, rx_lon FROM sounding "
@@ -390,9 +399,8 @@ def circuit_point(conn: sqlite3.Connection, tx: str, rx: str) -> Point | None:
     )
     if not row:
         return None
-    points = control_points(Point(row["tx_lat"], row["tx_lon"]),
-                            Point(row["rx_lat"], row["rx_lon"]))
-    return points[0] if points else None
+    return (Point(row["tx_lat"], row["tx_lon"]),
+            Point(row["rx_lat"], row["rx_lon"]))
 
 
 def harmonic_design(index: pd.DatetimeIndex, point: Point) -> np.ndarray:
@@ -458,11 +466,70 @@ def iri(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> pd.Series:
     )
     if not rows:
         raise ScoringError(
-            "no IRI rows stored for this circuit; run the pipeline with "
-            "`--ref-model iri` to populate them.")
+            "no IRI rows stored for this circuit; the scoring pass writes "
+            "them once IRI can be modelled here.")
     frame = pd.DataFrame(rows)
     return pd.Series(pd.to_numeric(frame["value"], errors="coerce").to_numpy(),
                      index=pd.DatetimeIndex(pd.to_datetime(frame["datetime"])))
+
+
+def modelled(tx: Point, rx: Point, at: pd.DatetimeIndex) -> pd.Series:
+    """IRI's MUF between two points at ``at``, or :class:`ScoringError`.
+
+    One call per day, so each day is driven by its own solar flux: the model
+    reads the driver off the first instant it is given.
+    """
+    from muf.reference import iri as model
+
+    if not model.available():
+        raise ScoringError(f"IRI is not installed. {model.INSTALL_HINT}")
+    parts, reasons = [], []
+    for _, stamps in at.to_series().groupby(at.normalize()):
+        got = model.predict(tx, rx, pd.DatetimeIndex(stamps))
+        if got.ok:
+            parts.append(got.muf)
+        else:
+            reasons.append(got.error or "no values")
+    found = pd.concat(parts).dropna() if parts else pd.Series(dtype=float)
+    if found.empty:
+        raise ScoringError(
+            f"IRI gave nothing: {reasons[0] if reasons else 'no instants'}")
+    return found
+
+
+def fill_iri(conn: sqlite3.Connection, tx: str, rx: str,
+             since: pd.Timestamp, until: pd.Timestamp, model=None) -> int:
+    """Store IRI's MUF for the circuit's soundings in a window that lack it.
+
+    The one writer of the rows :func:`iri` reads. A sounding that already has
+    a row keeps it: the value was modelled with the solar driver known then,
+    and a later pass must not move the reference a model was judged against.
+    """
+    rows = db.rows(
+        conn,
+        "SELECT s.id, s.datetime FROM sounding s "
+        "WHERE s.tx = ? AND s.rx = ? AND s.datetime BETWEEN ? AND ? "
+        "AND NOT EXISTS (SELECT 1 FROM reference r WHERE r.sounding_id = s.id "
+        "                AND r.source = 'iri' AND r.param = 'muf')",
+        (tx, rx, since.strftime("%Y-%m-%d %H:%M:%S"),
+         until.strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    if not rows:
+        return 0
+    found = ends(conn, tx, rx)
+    if found is None:
+        raise ScoringError(
+            f"no coordinates stored for {tx}->{rx}, so IRI has no path to model.")
+    stamps = pd.to_datetime([row["datetime"] for row in rows])
+    values = (model or modelled)(
+        *found, pd.DatetimeIndex(stamps.unique()).sort_values())
+    pairs = [(row["id"], float(values[stamp]))
+             for row, stamp in zip(rows, stamps) if stamp in values.index]
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO reference (sounding_id, source, param, value) "
+            "VALUES (?, 'iri', 'muf', ?)", pairs)
+    return len(pairs)
 
 
 def baseline_series(conn: sqlite3.Connection, name: str, param: str,
@@ -728,6 +795,12 @@ def score_baselines(conn: sqlite3.Connection, param: str, tx: str, rx: str,
                 for name in BASELINES]
 
     at = pd.DatetimeIndex(scored.index)
+    absent: dict[str, str] = {}
+    if param == "muf":
+        try:
+            fill_iri(conn, tx, rx, since, cutoff)
+        except ScoringError as exc:
+            absent["iri"] = str(exc)
     results = []
     for name in BASELINES:
         by_horizon: dict[str, float | None] = {}
@@ -738,10 +811,11 @@ def score_baselines(conn: sqlite3.Connection, param: str, tx: str, rx: str,
                 predicted = baseline_series(conn, name, param, tx, rx, observed,
                                             at, int(horizon), since)
             except ScoringError as exc:
-                reason = reason or str(exc)
+                why = absent.get(name, str(exc))
+                reason = reason or why
                 by_horizon[str(int(horizon))] = None
                 store(conn, f"baseline:{name}", param, tx, rx, int(horizon),
-                      {"n": 0}, window, {"unavailable": str(exc)})
+                      {"n": 0}, window, {"unavailable": why})
                 continue
 
             result = summarise(pair(predicted, observed), param)
