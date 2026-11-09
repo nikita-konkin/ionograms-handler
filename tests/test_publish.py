@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -389,3 +390,49 @@ def test_a_published_lfs_sounding_is_zero_padded(make_lfs):
     step = publisher.sounding(path).cal.range_step
     assert step < 60_000.0 * 2 / 8192 / 3, \
         f"a {step:.2f} km range step is not zero padded"
+
+
+def test_each_baseline_is_published_at_the_instants_of_the_forecast(
+        database, archive, tmp_path, drawn):
+    levels = [11.5, 13.25, 16.0, 18.75]
+    with db.session(database) as conn:
+        for hour, level in zip(range(4, 8), levels):
+            _sounding(conn, archive, f"early{hour}.h5",
+                      f"2026-08-13 0{hour}:00:00", muf=level)
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    found = {entry["name"]: entry["value"] for entry in series["baselines"]}
+    assert found["persistence"] == levels, (
+        f"persistence was not published six hours behind the forecast: {found}")
+
+
+def test_iri_is_published_ahead_of_now_from_the_model(
+        database, archive, tmp_path, drawn, monkeypatch):
+    from services.prediction import scoring
+    monkeypatch.setattr(
+        scoring, "modelled",
+        lambda tx, rx, at: pd.Series(np.arange(len(at)) + 9.5, index=at))
+    with db.session(database) as conn:
+        conn.execute("UPDATE sounding SET tx_lat = 35.14, tx_lon = 33.38,"
+                     " rx_lat = 56.63, rx_lon = 47.89 WHERE tx = 'NIC'")
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    found = {entry["name"]: entry["value"] for entry in series["baselines"]}
+    assert found["iri"] == [9.5, 10.5, 11.5, 12.5], (
+        f"IRI was not published at the forecast's instants: {found}")
+
+
+def test_a_baseline_with_nothing_to_draw_is_left_out(
+        database, archive, tmp_path, drawn):
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    names = [entry["name"] for entry in series["baselines"]]
+    assert "recurrence-27d" not in names, f"an empty baseline was published: {names}"
