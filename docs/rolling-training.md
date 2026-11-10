@@ -52,10 +52,15 @@ enable direct completed-file ingestion to avoid the archive-copy delay.
 Each successful fit registers a distinct artifact so prior forecasts retain
 their model identity. Artifacts and forecast history are retained; monitor
 model-store/database growth. The worker writes only future forecasts, rather
-than duplicating a complete archive backtest every five minutes. The public
-chart reads the active version. Scores for a new version start empty until
-its issued predictions can be compared with subsequent measurements; the
-validation MAE is recorded in the registry, not presented as a live score.
+than duplicating a complete archive backtest every five minutes. The validation
+MAE is recorded in the registry, not presented as a live score.
+
+Because each fit is a new model, no single version holds a history. The public
+chart and its score table therefore use the live forecast **as it was issued**
+(`scoring.issued`): for each instant, the newest forecast made before it by any
+model that has been live on the circuit. Every point is a forecast made in
+advance; a backtest written after the fact never enters it. The scoring pass
+stores this record under the subject `live:forecast`.
 
 Learning-curve probes and permutation diagnostics are disabled for rolling
 fits. Ordinary manually requested training keeps its existing diagnostics.

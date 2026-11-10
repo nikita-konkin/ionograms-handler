@@ -96,6 +96,10 @@ MATCH_TOLERANCE = pd.Timedelta(seconds=dataset.DEFAULT_STEP_S / 2)
 #: them.
 BASELINES = ("persistence", "recurrence-27d", "iri", "harmonic")
 
+#: The score subject of the live forecast as it was issued, whichever model
+#: issued each point of it.
+LIVE = "live:forecast"
+
 
 class ScoringError(RuntimeError):
     """Something is wrong with the request, not with the forecast."""
@@ -607,7 +611,8 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
     for row in scores(conn, param, tx, rx):
         entry = folded.setdefault(row["subject"], {
             "subject": row["subject"],
-            "kind": "baseline" if row["subject"].startswith("baseline:") else "model",
+            "kind": ("baseline" if row["subject"].startswith("baseline:")
+                     else "live" if row["subject"] == LIVE else "model"),
             "name": row["subject"].split(":", 1)[1],
             "origin": "", "state": "", "mae": {}, "r2": {}, "n": {},
             "detail": {},
@@ -634,7 +639,7 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
                 entry["skill"][str(row["horizon_s"])] = versus.get("skill")
                 entry["sure"][str(row["horizon_s"])] = versus.get(
                     "distinguishable")
-    order = {"model": 0, "baseline": 1}
+    order = {"live": 0, "model": 1, "baseline": 2}
     return sorted(folded.values(),
                   key=lambda e: (order[e["kind"]],
                                  min([v for v in e["mae"].values() if v is not None],
@@ -722,38 +727,9 @@ def score_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
                 "tx": tx, "rx": rx, "param": model["param"], "scored": 0,
                 "detail": f"no measured {model['param']} picks in the window"}
 
-    window = (since, cutoff.strftime(db.TIME_FORMAT))
-    by_horizon: dict[str, dict] = {}
-    for horizon, group in frame.groupby("horizon"):
-        group = group.drop_duplicates(subset="valid_at", keep="last")
-        series = pd.Series(group["value"].to_numpy(dtype=float),
-                           index=pd.DatetimeIndex(group["valid_at"])).sort_index()
-        pairs = pair(series, observed)
-        result = summarise(pairs, model["param"])
-
-        # The relative number, beside the absolute one and over the same
-        # instants. A live MAE alone cannot be read across weeks: a quiet week
-        # and a disturbed one produce different megahertz from the same model,
-        # and only the ratio to a baseline that saw the same days says which.
-        versus = None
-        try:
-            reference = baseline_series(conn, "persistence", model["param"],
-                                        tx, rx, observed,
-                                        pd.DatetimeIndex(series.index),
-                                        int(horizon),
-                                        _naive(since))
-            if not reference.empty:
-                versus = compare(pairs, pair(reference, observed),
-                                 model["param"])
-        except ScoringError:
-            versus = None
-
-        store(conn, f"model:{model['id']}", model["param"], tx, rx,
-              int(horizon), result, window,
-              detail={"vs_persistence": versus} if versus else None)
-        by_horizon[str(int(horizon))] = {**result,
-                                         **({"vs_persistence": versus}
-                                            if versus else {})}
+    by_horizon = _judge(conn, f"model:{model['id']}", model["param"], tx, rx,
+                        frame, observed, since,
+                        (since, cutoff.strftime(db.TIME_FORMAT)))
 
     registry.set_metrics(conn, model["id"], {
         "scored_at": db.utcnow(), "method": method,
@@ -762,6 +738,98 @@ def score_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
 
     return {"subject": f"model:{model['id']}", "name": model["name"],
             "tx": tx, "rx": rx, "param": model["param"],
+            "scored": sum(r["n"] for r in by_horizon.values()),
+            "horizons": sorted(int(h) for h in by_horizon),
+            "mae": {h: r["mae"] for h, r in by_horizon.items()}}
+
+
+def _judge(conn: sqlite3.Connection, subject: str, param: str, tx: str,
+           rx: str, frame: pd.DataFrame, observed: pd.DataFrame, since: str,
+           window: tuple[str, str]) -> dict[str, dict]:
+    """Score one subject's forecasts per horizon and store a row for each."""
+    by_horizon: dict[str, dict] = {}
+    for horizon, group in frame.groupby("horizon"):
+        group = group.drop_duplicates(subset="valid_at", keep="last")
+        series = pd.Series(group["value"].to_numpy(dtype=float),
+                           index=pd.DatetimeIndex(group["valid_at"])).sort_index()
+        pairs = pair(series, observed)
+        result = summarise(pairs, param)
+        # The relative number, beside the absolute one and over the same
+        # instants. A live MAE alone cannot be read across weeks: a quiet week
+        # and a disturbed one produce different megahertz from the same model,
+        # and only the ratio to a baseline that saw the same days says which.
+        versus = None
+        try:
+            reference = baseline_series(conn, "persistence", param, tx, rx,
+                                        observed,
+                                        pd.DatetimeIndex(series.index),
+                                        int(horizon), _naive(since))
+            if not reference.empty:
+                versus = compare(pairs, pair(reference, observed), param)
+        except ScoringError:
+            versus = None
+        store(conn, subject, param, tx, rx, int(horizon), result, window,
+              detail={"vs_persistence": versus} if versus else None)
+        by_horizon[str(int(horizon))] = {**result,
+                                         **({"vs_persistence": versus}
+                                            if versus else {})}
+    return by_horizon
+
+
+def issued(conn: sqlite3.Connection, param: str, tx: str, rx: str,
+           start=None, end=None) -> pd.DataFrame:
+    """The live forecast as it was issued, one row per instant.
+
+    For each instant, the newest forecast made before it by any model that has
+    been live on this circuit. Rolling training replaces the live model every
+    few minutes, so no single model holds a history; this record does, and
+    every point in it was made in advance, which a backtest written after the
+    fact is not.
+    """
+    sql = ["SELECT f.valid_at, f.issued_at, f.horizon_s, f.value, f.sigma,",
+           "f.model_id FROM forecast f",
+           "JOIN model_registry m ON m.id = f.model_id",
+           "WHERE (m.activated_at IS NOT NULL OR m.active = 1)",
+           "AND f.param = ? AND f.tx = ?",
+           "AND f.rx = ? AND f.issued_at <= f.valid_at AND f.value IS NOT NULL"]
+    values: list = [param, tx, rx]
+    if start is not None:
+        sql.append("AND f.valid_at >= ?")
+        values.append(_naive(start).strftime(db.TIME_FORMAT))
+    if end is not None:
+        sql.append("AND f.valid_at <= ?")
+        values.append(_naive(end).strftime(db.TIME_FORMAT))
+    sql.append("ORDER BY f.valid_at, f.issued_at")
+    frame = pd.DataFrame(db.rows(conn, " ".join(sql), tuple(values)))
+    if frame.empty:
+        return pd.DataFrame(columns=["value", "sigma", "horizon_s", "model_id"],
+                            index=pd.DatetimeIndex([]))
+    frame = frame.drop_duplicates(subset="valid_at", keep="last")
+    frame.index = pd.DatetimeIndex([_naive(value) for value in frame["valid_at"]])
+    return frame[["value", "sigma", "horizon_s", "model_id"]]
+
+
+def score_live(conn: sqlite3.Connection, param: str, tx: str, rx: str,
+               method: str = "contour",
+               window_days: int = DEFAULT_WINDOW_DAYS,
+               now: str | None = None) -> dict:
+    """Score the live forecast as it was issued, as one subject."""
+    cutoff = _naive(now or db.utcnow())
+    since = (cutoff - pd.Timedelta(days=window_days)).strftime(db.TIME_FORMAT)
+    record = issued(conn, param, tx, rx, start=since, end=cutoff)
+    observed = truth(conn, param, tx, rx, method, start=since,
+                     end=cutoff.strftime(db.TIME_FORMAT))
+    if record.empty or observed.empty:
+        return {"subject": LIVE, "tx": tx, "rx": rx, "param": param,
+                "scored": 0, "detail": "no issued forecast or no measured pick "
+                                       "in the window"}
+    frame = pd.DataFrame({"valid_at": record.index,
+                          "value": record["value"].to_numpy(dtype=float),
+                          "horizon": [bucket(value)
+                                      for value in record["horizon_s"]]})
+    by_horizon = _judge(conn, LIVE, param, tx, rx, frame, observed, since,
+                        (since, cutoff.strftime(db.TIME_FORMAT)))
+    return {"subject": LIVE, "tx": tx, "rx": rx, "param": param,
             "scored": sum(r["n"] for r in by_horizon.values()),
             "horizons": sorted(int(h) for h in by_horizon),
             "mae": {h: r["mae"] for h, r in by_horizon.items()}}
@@ -875,22 +943,25 @@ def run_once(conn: sqlite3.Connection, params: tuple[str, ...] = ("muf",),
         for circuit in dataset.circuits(conn, param, method):
             if (tx and circuit["tx"] != tx) or (rx and circuit["rx"] != rx):
                 continue
-            issued = db.rows(
+            written = db.rows(
                 conn,
                 "SELECT DISTINCT model_id, horizon_s FROM forecast "
                 "WHERE param = ? AND tx = ? AND rx = ?",
                 (param, circuit["tx"], circuit["rx"]),
             )
-            for model_id in sorted({row["model_id"] for row in issued}):
+            for model_id in sorted({row["model_id"] for row in written}):
                 model = registry.get(conn, model_id)
                 if model is None:            # cascade should prevent this
                     continue
                 results.append(score_model(conn, model, circuit["tx"],
                                            circuit["rx"], method, window_days, now))
+            if written:
+                results.append(score_live(conn, param, circuit["tx"],
+                                          circuit["rx"], method, window_days, now))
 
             # The horizons the models actually produced, so the baseline rows
             # line up with them column for column. With no models yet, all four.
-            horizons = tuple(sorted({bucket(row["horizon_s"]) for row in issued})) \
+            horizons = tuple(sorted({bucket(row["horizon_s"]) for row in written})) \
                 or HORIZONS
             forget(conn, param, circuit["tx"], circuit["rx"], horizons)
             results.extend(score_baselines(conn, param, circuit["tx"],
