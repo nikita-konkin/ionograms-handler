@@ -4639,3 +4639,20 @@ def test_the_census_row_offers_the_nominal_rate():
     assert row["rate"] == 500008.4, "the detected rate stays visible"
     assert row["nominal_rate"] == 500000.0
     assert row["timing_entry"]["chirp-rate"] == 500000.0
+
+
+def test_the_training_form_offers_a_window_of_recent_days(client, api_db,
+                                                          tmp_path):
+    _circuit(api_db)
+    assert 'id="tr-window"' in client.get("/ui/forecast").text, \
+        "the form cannot choose a training window"
+
+
+def test_a_queued_run_says_which_window_it_trains_on(client, api_db, tmp_path):
+    from services.prediction import queues
+    _circuit(api_db)
+    queues.add_job(api_db, param="muf", tx="cyprus1", rx="rx",
+                   spec={"estimator": "huber", "lag": 288, "train_days": 9})
+    api_db.commit()
+    assert "trained on the last 9 days" in client.get("/ui/forecast").text, \
+        "the job list hides the training window"
