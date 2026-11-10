@@ -25,6 +25,11 @@ from . import dataset, infer, registry, scoring, store, train
 #: archive that stopped arriving is not refitted over and over.
 STALE = pd.Timedelta(minutes=30)
 
+#: Rolling fits that keep their artifacts besides the live one: an hour of
+#: them, enough to roll back to. Older fits keep their registry rows and their
+#: forecasts, which the published record and its scores are built from.
+KEEP = 12
+
 
 def window_plan(
     spec: dict, anchor: pd.Timestamp
@@ -103,7 +108,9 @@ def run_once(
         newest = pd.Timestamp(observed["datetime"].max())
         anchor = newest.floor("5min") + pd.Timedelta(minutes=5)
         stamp = str(anchor)
-        if saved.get("anchor") == stamp and (not activate or saved.get("activated")):
+        if saved.get("anchor") == stamp and (
+            not activate or saved.get("activated") or saved.get("refused")
+        ):
             return {"state": "unchanged", **saved}
         # Do not train repeatedly on an old archive while waiting for ingest.
         if now - newest > STALE:
@@ -126,10 +133,19 @@ def run_once(
                 "rolling validation requires 60 uncensored pairs and finite MAE"
             )
         model = result["model"]
+        # Validity is not enough to go live: a fit the paired test finds worse
+        # than the live forecast, on the same validation day, stays a
+        # candidate and the incumbent keeps publishing.
+        versus = result.get("vs_live") or {}
+        refused = (
+            activate
+            and bool(versus.get("distinguishable"))
+            and versus.get("delta", 0) > 0
+        )
         # Write forecasts before promotion, so a failed prediction leaves the
         # old active model and its public curve intact.
         forecast = None
-        if activate:
+        if activate and not refused:
             forecast = infer.run_model(
                 conn,
                 model,
@@ -141,10 +157,19 @@ def run_once(
             if not forecast["written"]:
                 raise train.TrainError("candidate produced no forecast; incumbent kept")
             registry.activate(conn, model["id"], by="rolling-13d-1d")
+            prune(conn, spec["param"], spec["tx"], spec["rx"])
         saved = {
             "anchor": stamp,
             "model_id": model["id"],
-            "activated": activate,
+            "activated": activate and not refused,
+            "refused": (
+                f"worse than the live forecast on the validation day: MAE "
+                f"{versus['mae']:.2f} v {versus['baseline_mae']:.2f} MHz over "
+                f"{versus['n']} pairs"
+                if refused
+                else None
+            ),
+            "vs_live": versus or None,
             "train_start": str(start),
             "validation_start": str(cut),
             "validation_end": stamp,
@@ -154,7 +179,42 @@ def run_once(
         temporary = state_file.with_suffix(".tmp")
         temporary.write_text(json.dumps(saved), encoding="utf-8")
         temporary.replace(state_file)
-        return {"state": "trained", **saved, "forecast": forecast}
+        return {
+            "state": "refused" if refused else "trained",
+            **saved,
+            "forecast": forecast,
+        }
+
+
+def prune(conn, param: str, tx: str, rx: str, keep: int = KEEP) -> int:
+    """Delete the artifacts of superseded rolling fits; return how many.
+
+    The live model and the newest ``keep`` fits keep theirs. A digest that a
+    kept fit or any model not from rolling also names is left alone. Registry
+    rows and forecasts are never touched.
+    """
+    rows = db.rows(
+        conn,
+        "SELECT id, sha256, active FROM model_registry WHERE name LIKE "
+        "'rolling-%' AND param = ? AND tx = ? AND rx = ? ORDER BY id DESC",
+        (param, tx, rx),
+    )
+    kept = {row["sha256"] for row in rows[:keep]} | {
+        row["sha256"] for row in rows if row["active"]
+    }
+    removed = 0
+    for row in rows[keep:]:
+        if row["sha256"] in kept:
+            continue
+        shared = db.one(
+            conn,
+            "SELECT COUNT(*) AS n FROM model_registry WHERE sha256 = ? "
+            "AND name NOT LIKE 'rolling-%'",
+            (row["sha256"],),
+        )
+        if not shared["n"] and store.unlink(row["sha256"]):
+            removed += 1
+    return removed
 
 
 def status(conn, param: str, tx: str, rx: str, method: str = "contour",

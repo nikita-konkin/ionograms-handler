@@ -1,6 +1,7 @@
 """Rolling windows must not shrink while features warm up or data goes stale."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -192,3 +193,119 @@ def test_there_is_no_status_without_a_rolling_fit(conn):
     seed(conn, days=2)
     assert rolling.status(conn, "muf", TX, RX) is None, \
         "a status appeared for a circuit nobody rolls"
+
+
+def judged(verdict):
+    """`train.run` as it is, with the comparison to the live forecast fixed."""
+    real = train.run
+
+    def run(*args, **kwargs):
+        return {**real(*args, **kwargs), "vs_live": verdict}
+
+    return run
+
+
+WORSE = {"distinguishable": True, "delta": 0.4, "mae": 1.9,
+         "baseline_mae": 1.5, "n": 200}
+
+
+def test_a_fit_worse_than_the_live_forecast_is_not_activated(conn, tmp_path,
+                                                             monkeypatch):
+    index = seed(conn, days=18)
+    monkeypatch.setattr(train, "run", judged(WORSE))
+    monkeypatch.setattr(infer, "run_model", lambda *a, **kw: {"written": 1})
+    rolling.run_once(conn, spec(), activate=True, now=index[-1],
+                     state_dir=tmp_path)
+    assert registry.active(conn, "muf", TX, RX) is None, \
+        "a fit worse than the live forecast went live"
+
+
+def test_a_refused_fit_is_not_retried_for_the_same_step(conn, tmp_path,
+                                                        monkeypatch):
+    index = seed(conn, days=18)
+    monkeypatch.setattr(train, "run", judged(WORSE))
+    monkeypatch.setattr(infer, "run_model", lambda *a, **kw: {"written": 1})
+    rolling.run_once(conn, spec(), activate=True, now=index[-1],
+                     state_dir=tmp_path)
+    again = rolling.run_once(conn, spec(), activate=True, now=index[-1],
+                             state_dir=tmp_path)
+    assert again["state"] == "unchanged", "a refused step was fitted again"
+
+
+def test_a_fit_level_with_the_live_forecast_is_activated(conn, tmp_path,
+                                                         monkeypatch):
+    index = seed(conn, days=18)
+    monkeypatch.setattr(train, "run", judged({**WORSE, "distinguishable": False}))
+    monkeypatch.setattr(infer, "run_model", lambda *a, **kw: {"written": 1})
+    rolling.run_once(conn, spec(), activate=True, now=index[-1],
+                     state_dir=tmp_path)
+    assert registry.active(conn, "muf", TX, RX) is not None, \
+        "a fit no worse than the live forecast was held back"
+
+
+def stored(conn, name: str, active: bool = False) -> dict:
+    """A registered model whose artifact really is in the store."""
+    import hashlib
+
+    from services.prediction import store
+
+    body = name.encode() * 8
+    digest = hashlib.sha256(body).hexdigest()
+    source = store.root().parent / f"{name}.sav"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(body)
+    path = store.put(source, digest)
+    model = registry.register(
+        conn, name=name, param="muf", tx=TX, rx=RX, origin="trained",
+        framework="sklearn", loader="joblib", capability="slim",
+        artifact=str(path), sha256=digest, features=["a"],
+        target_src="measured")
+    if active:
+        registry.activate(conn, model, by="test")
+    return registry.get(conn, model)
+
+
+def test_pruning_removes_the_oldest_rolling_artifacts(conn):
+    old = stored(conn, "rolling-20261110T210000")
+    for minute in (5, 10, 15):
+        stored(conn, f"rolling-20261110T21{minute:02d}00")
+    rolling.prune(conn, "muf", TX, RX, keep=2)
+    assert not Path(old["artifact"]).exists(), "an old fit kept its artifact"
+
+
+def test_pruning_keeps_the_newest_rolling_artifacts(conn):
+    for minute in (0, 5, 10):
+        newest = stored(conn, f"rolling-20261110T21{minute:02d}00")
+    rolling.prune(conn, "muf", TX, RX, keep=2)
+    assert Path(newest["artifact"]).exists(), "the newest fit lost its artifact"
+
+
+def test_pruning_keeps_the_live_model(conn):
+    live = stored(conn, "rolling-20261110T200000", active=True)
+    for minute in (0, 5, 10):
+        stored(conn, f"rolling-20261110T21{minute:02d}00")
+    rolling.prune(conn, "muf", TX, RX, keep=1)
+    assert Path(live["artifact"]).exists(), "the live model lost its artifact"
+
+
+def test_pruning_spares_models_trained_by_hand(conn):
+    manual = stored(conn, "voting-muf-24h-2026-10-31")
+    for minute in (0, 5, 10):
+        stored(conn, f"rolling-20261110T21{minute:02d}00")
+    rolling.prune(conn, "muf", TX, RX, keep=1)
+    assert Path(manual["artifact"]).exists(), "a hand-trained model was pruned"
+
+
+def test_pruning_keeps_the_registry_rows_and_their_forecasts(conn):
+    old = stored(conn, "rolling-20261110T210000")
+    conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at, "
+                 "valid_at, horizon_s, value) VALUES (?, 'muf', ?, ?, "
+                 "'2026-11-10T21:00:00Z', '2026-11-11T21:00:00Z', 86400, 11.0)",
+                 (old["id"], TX, RX))
+    conn.commit()
+    for minute in (5, 10):
+        stored(conn, f"rolling-20261110T21{minute:02d}00")
+    rolling.prune(conn, "muf", TX, RX, keep=1)
+    assert conn.execute("SELECT COUNT(*) FROM forecast WHERE model_id = ?",
+                        (old["id"],)).fetchone()[0] == 1, \
+        "pruning deleted the forecasts the published record is built from"

@@ -42,7 +42,15 @@ Keep the existing inference worker running. The rolling worker also writes
 the candidate's future forecasts before activating it; failed validation,
 training or prediction leaves the incumbent active. At least 60 uncensored
 validation pairs and a finite validation MAE are required for activation.
-This is a data-validity gate, not a claim that each fit improves accuracy.
+A valid fit is also compared, with the paired test, against the live forecast
+as issued over the same validation day. One the test finds worse stays a
+candidate: its state records the reason, the incumbent keeps publishing, and
+the same step is not fitted again.
+
+After each activation the worker deletes the artifacts of older rolling fits,
+keeping the live model and the newest twelve (an hour of fits) to roll back
+to. Registry rows and forecasts stay, because the published record and its
+scores are built from them.
 
 The loop checks every 300 seconds, skips unchanged data and never queues missed
 steps. OS locks in the shared model store prevent concurrent fits of the same
