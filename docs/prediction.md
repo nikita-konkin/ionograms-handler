@@ -365,8 +365,11 @@ measured-versus-modelled provenance, and a promotion rule that is a schema
 CHECK rather than a convention. Matching the layout costs nothing and means a
 `dvc remote` could be pointed at this directory later without moving a byte.
 
-`0444` because the two workers mount the volume read-write and have to add to
-it; that is not a reason for them to be able to replace something already in
+`0444` because the artifact-writing services mount the volume read-write and
+have to add to it: `registrar` and `trainer`, plus the hub's manual `train`
+helper and optional `rolling` trainer (see [rolling training](rolling-training.md)).
+The `api`, `infer` and `importer` mounts stay read-only. Permission to add an
+artifact is not a reason to be able to replace something already in
 it. `store.put` writes a temporary file in the destination directory and
 `os.replace`s it into position, so a reader never sees a half-copied artifact,
 and placing the same bytes twice converges on one object rather than racing.
