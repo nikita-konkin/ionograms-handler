@@ -733,6 +733,19 @@ MESSAGES: dict[str, str] = {
     "forecast.train.window.days": "N, days",
     "forecast.train.window.span": "trained on the last {days} days",
     "forecast.train.window.whole": "trained on all history",
+    "forecast.train.folds": "refit before each held-back day",
+    "forecast.train.by_day": "checked day by day",
+    "forecast.rolling": "Rolling training",
+    "forecast.rolling.fit": "Newest fit <b>{name}</b>, registered {at}.",
+    "forecast.rolling.live": "live",
+    "forecast.rolling.mae": "Validation MAE {mae} MHz on {start} to {stop}.",
+    "forecast.rolling.trained": "Trained on {start} to {stop}.",
+    "forecast.rolling.newest": "Newest measurement {at}, {age} min ago.",
+    "forecast.rolling.waiting": "Fitting is paused",
+    "forecast.rolling.paused":
+        "The rolling worker fits only while the newest measurement is under "
+        "{limit} min old. It resumes by itself when fresh data arrives; if "
+        "this lasts, the archive scan or the station is behind.",
     "forecast.train.holdout": "Hold back (days)",
     "forecast.train.submit": "Queue training",
     "forecast.train.jobs": "Training runs",

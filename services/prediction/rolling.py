@@ -21,6 +21,10 @@ import pandas as pd
 from ..api import db
 from . import dataset, infer, registry, scoring, store, train
 
+#: Fitting pauses while the newest measurement is older than this, so an
+#: archive that stopped arriving is not refitted over and over.
+STALE = pd.Timedelta(minutes=30)
+
 
 def window_plan(
     spec: dict, anchor: pd.Timestamp
@@ -102,7 +106,7 @@ def run_once(
         if saved.get("anchor") == stamp and (not activate or saved.get("activated")):
             return {"state": "unchanged", **saved}
         # Do not train repeatedly on an old archive while waiting for ingest.
-        if now - newest > pd.Timedelta(minutes=30):
+        if now - newest > STALE:
             return {
                 "state": "waiting",
                 "detail": "latest measurement is over 30 minutes old",
@@ -151,6 +155,39 @@ def run_once(
         temporary.write_text(json.dumps(saved), encoding="utf-8")
         temporary.replace(state_file)
         return {"state": "trained", **saved, "forecast": forecast}
+
+
+def status(conn, param: str, tx: str, rx: str, method: str = "contour",
+           now=None) -> dict | None:
+    """The newest rolling fit for a circuit, and whether the worker can fit.
+
+    Read from the registry and the picks, not from the worker, so the console
+    can show it without reaching into the training container. None when no
+    rolling fit was ever registered for the circuit.
+    """
+    row = db.one(conn, "SELECT id FROM model_registry WHERE name LIKE "
+                       "'rolling-%' AND param = ? AND tx = ? AND rx = ? "
+                       "ORDER BY id DESC LIMIT 1", (param, tx, rx))
+    if row is None:
+        return None
+    model = registry.get(conn, row["id"])
+    holdout = (model.get("metrics") or {}).get("holdout") or {}
+    now = scoring._naive(now or db.utcnow())
+    newest = dataset.observations(conn, param, tx, rx, method,
+                                  start=str(now - pd.Timedelta(days=2)),
+                                  end=str(now))
+    newest = newest[newest["value"].notna()]
+    at = pd.Timestamp(newest["datetime"].max()) if len(newest) else None
+    return {"name": model["name"], "fitted_at": model["imported_at"],
+            "live": bool(model["active"]), "mae": holdout.get("mae"),
+            "from": holdout.get("from"), "to": holdout.get("to"),
+            "trained_from": model.get("trained_from"),
+            "trained_to": model.get("trained_to"),
+            "newest": None if at is None else at.strftime(db.TIME_FORMAT),
+            "age_min": (None if at is None
+                        else int((now - at).total_seconds() // 60)),
+            "waiting": at is None or now - at > STALE,
+            "stale_min": int(STALE.total_seconds() // 60)}
 
 
 def main(argv=None):

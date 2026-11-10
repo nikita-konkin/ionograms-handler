@@ -1114,3 +1114,87 @@ def test_a_fit_that_fails_on_its_own_terms_does_not_blame_the_build(conn):
 
     assert settled["state"] == queues.FAILED
     assert "pull and recreate" not in settled["detail"]
+
+
+def live_forecast(conn, offset: float = 0.6) -> None:
+    """A live model whose forecasts, made a day ahead, cover the seeded days."""
+    model = registry.register(
+        conn, name="live-now", param="muf", tx=TX, rx=RX, origin="trained",
+        framework="sklearn", loader="joblib", capability="slim",
+        artifact="/models/live.sav", sha256="9" * 64, features=["a"],
+        target_src="measured")
+    registry.activate(conn, model, by="test")
+    picks = conn.execute(
+        "SELECT s.datetime, e.muf FROM sounding s JOIN extraction e"
+        " ON e.sounding_id = s.id WHERE s.tx = ?", (TX,)).fetchall()
+    conn.executemany(
+        "INSERT INTO forecast (model_id, param, tx, rx, issued_at, valid_at,"
+        " horizon_s, value) VALUES (?, 'muf', ?, ?, ?, ?, 86400, ?)",
+        [(model, TX, RX,
+          (pd.Timestamp(when) - pd.Timedelta(days=1)).strftime(db.TIME_FORMAT),
+          pd.Timestamp(when).strftime(db.TIME_FORMAT), muf + offset)
+         for when, muf in picks])
+    conn.commit()
+
+
+def test_a_run_is_compared_with_the_live_forecast_on_the_same_days(conn):
+    seed(conn, days=10)
+    live_forecast(conn)
+    result = train.run(conn, plan(holdout_days=2))
+    assert result["vs_live"]["baseline_mae"] == pytest.approx(0.6), \
+        "the live forecast was not judged on the held-back days"
+
+
+def test_the_report_names_the_live_forecast(conn):
+    seed(conn, days=10)
+    live_forecast(conn)
+    assert "the live forecast" in train.describe(
+        train.run(conn, plan(holdout_days=2))), \
+        "the report does not mention the live forecast"
+
+
+def test_the_report_names_the_held_back_dates(conn):
+    seed(conn, days=10)
+    result = train.run(conn, plan(holdout_days=2))
+    assert f"{result['cut']:%Y-%m-%d %H:%M}" in train.describe(result), \
+        "the report does not say when the held-back days begin"
+
+
+def test_the_report_names_the_training_dates(conn):
+    seed(conn, days=10)
+    result = train.run(conn, plan(holdout_days=2, train_days=3))
+    start = pd.Timestamp(result["model"]["trained_from"])
+    assert f"{start:%Y-%m-%d %H:%M}" in train.describe(result), \
+        "the report does not say when the training span begins"
+
+
+def test_day_by_day_validation_survives_vetting():
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                         "walk_forward": True})
+    assert checked["spec"]["walk_forward"] is True, "the choice was dropped"
+
+
+def test_day_by_day_validation_is_off_unless_asked():
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24})
+    assert checked["spec"]["walk_forward"] is False, "it switched itself on"
+
+
+def test_day_by_day_validation_tests_each_held_back_day(conn):
+    seed(conn, days=12)
+    result = train.run(conn, plan(holdout_days=3, walk_forward=True))
+    assert len(result["folds"]["days"]) == 3, "a held-back day went untested"
+
+
+def test_day_by_day_validation_refits_before_each_day(conn):
+    seed(conn, days=12)
+    result = train.run(conn, plan(holdout_days=3, walk_forward=True))
+    days = result["folds"]["days"]
+    assert days[2]["n_train"] > days[0]["n_train"], \
+        "the last day was judged by a model that never saw the days before it"
+
+
+def test_the_report_gives_the_spread_across_days(conn):
+    seed(conn, days=12)
+    assert "day by day" in train.describe(
+        train.run(conn, plan(holdout_days=3, walk_forward=True))), \
+        "the report hides the day-by-day spread"

@@ -4656,3 +4656,43 @@ def test_a_queued_run_says_which_window_it_trains_on(client, api_db, tmp_path):
     api_db.commit()
     assert "trained on the last 9 days" in client.get("/ui/forecast").text, \
         "the job list hides the training window"
+
+
+def test_the_training_form_opens_on_the_leaderboard_circuit(client, api_db,
+                                                            tmp_path):
+    _circuit(api_db)
+    cursor = api_db.execute(
+        "INSERT INTO sounding (file, path, datetime, tx, rx, ingested_at) "
+        "VALUES ('a0.lfs', 'a0.lfs', '2026-02-04 01:00:00', 'Alpha', 'rx', ?)",
+        (db.utcnow(),))
+    api_db.execute("INSERT INTO extraction (sounding_id, method, muf, limited, "
+                   "loflim) VALUES (?, 'contour', 19.0, 0, 0)", (cursor.lastrowid,))
+    api_db.commit()
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert '<option value="cyprus1|rx" selected>' in page, \
+        "the form did not open on the circuit being looked at"
+
+
+def test_the_training_form_offers_day_by_day_validation(client, api_db,
+                                                        tmp_path):
+    _circuit(api_db)
+    assert 'id="tr-folds"' in client.get("/ui/forecast").text, \
+        "the form cannot ask for day-by-day validation"
+
+
+def test_the_page_shows_the_newest_rolling_fit(client, api_db, tmp_path):
+    _circuit(api_db)
+    _register(api_db, "rolling-20260204T050000", active=1,
+              trained=("2026-01-21T05:00:00Z", "2026-02-03T05:00:00Z"))
+    api_db.commit()
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "Rolling training" in page, "the rolling fit is not on the page"
+
+
+def test_the_page_says_when_rolling_training_waits(client, api_db, tmp_path):
+    _circuit(api_db)
+    _register(api_db, "rolling-20260204T050000", active=1,
+              trained=("2026-01-21T05:00:00Z", "2026-02-03T05:00:00Z"))
+    api_db.commit()
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "Fitting is paused" in page, "a stalled worker looks healthy"

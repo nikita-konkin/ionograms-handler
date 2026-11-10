@@ -388,6 +388,7 @@ def vet(spec: dict) -> dict:
         **({"members": list(members)} if estimator in ENSEMBLES else {}),
         "holdout_days": holdout_days,
         "train_days": train_days,
+        "walk_forward": bool(spec.get("walk_forward", False)),
         "start": spec.get("start") or None,
         "end": spec.get("end") or None,
         "name": (str(spec["name"]).strip() if spec.get("name") else None),
@@ -979,6 +980,15 @@ def run(conn, plan: dict, by: str | None = None, *,
     # service kept reporting "beats"/"loses to" on exactly that.
     versus = (scoring.compare(pairs, baseline_pairs, plan["param"])
               if baseline_pairs is not None else None)
+    folds = (_folds(plan, frame, y, censored, parts["observed"], cut,
+                    index.max())
+             if plan.get("walk_forward") else None)
+    live_pairs = _live(conn, plan, parts["observed"],
+                       pd.DatetimeIndex(held.index), horizon_s)
+    live = (scoring.summarise(live_pairs, plan["param"])
+            if live_pairs is not None else None)
+    versus_live = (scoring.compare(pairs, live_pairs, plan["param"])
+                   if live_pairs is not None else None)
 
     name = plan.get("name") or default_name(plan)
     with tempfile.TemporaryDirectory() as scratch:
@@ -1015,6 +1025,9 @@ def run(conn, plan: dict, by: str | None = None, *,
         **holdout,
         "persistence": baseline,
         **({"vs_persistence": versus} if versus else {}),
+        **({"live": live} if live else {}),
+        **({"vs_live": versus_live} if versus_live else {}),
+        **({"folds": folds} if folds else {}),
     }, "diurnal": diurnal,
         **({"learning": curve} if curve else {}),
         **({"influence": influence} if influence else {}),
@@ -1024,7 +1037,8 @@ def run(conn, plan: dict, by: str | None = None, *,
         "model": registry.get(conn, model["id"]),
         "holdout": holdout, "persistence": baseline,
         "vs_persistence": versus,
-        "horizon_s": horizon_s, "cut": cut,
+        "live": live, "vs_live": versus_live, "folds": folds,
+        "horizon_s": horizon_s, "cut": cut, "end": index.max(),
         "diurnal": diurnal, "learning": curve, "influence": influence,
         "permutation": permutation,
         "n_train": int(fit_rows.sum()), "n_paired": len(frame),
@@ -1060,10 +1074,107 @@ def _persistence(conn, plan: dict, observed: pd.DataFrame,
     return scoring.pair(series, observed)
 
 
+def _folds(plan: dict, frame: pd.DataFrame, y: pd.Series,
+           censored: np.ndarray, observed: pd.DataFrame, cut: pd.Timestamp,
+           end: pd.Timestamp) -> dict | None:
+    """Refit before each held-back day and judge the fit on that day alone.
+
+    One held-back day is noisy: a single quiet or disturbed day moves the
+    error by half a megahertz with no change in the model. Each day here gets
+    a model that saw everything before it, and the training window, if one
+    was asked for, slides with it. Days with too few rows to fit are skipped.
+    """
+    index = pd.DatetimeIndex(frame.index)
+    span = plan.get("train_days")
+    floor = max(MIN_TRAIN_ROWS, ROWS_PER_FEATURE * frame.shape[1])
+    days = []
+    start = cut
+    while start < end:
+        stop = start + pd.Timedelta(days=1)
+        fit = (index < start) & ~np.asarray(censored, dtype=bool)
+        if span:
+            fit &= index >= start - pd.Timedelta(days=float(span))
+        tested = (index >= start) & ((index <= end) if stop >= end
+                                     else (index < stop))
+        if int(fit.sum()) >= floor and tested.any():
+            if plan["estimator"] in ENSEMBLES:
+                model, _ = _ensemble(plan["estimator"],
+                                     list(plan.get("members") or DEFAULT_MEMBERS),
+                                     frame[fit], y[fit])
+            else:
+                model = _estimator(plan["estimator"])
+            model.fit(frame[fit], y[fit])
+            predicted = pd.Series(
+                np.asarray(artifacts.predict(model, frame[tested]), dtype=float),
+                index=frame.index[tested])
+            judged = scoring.summarise(scoring.pair(predicted, observed),
+                                       plan["param"])
+            days.append({"from": start.strftime(db.TIME_FORMAT),
+                         "to": min(stop, end).strftime(db.TIME_FORMAT),
+                         "n_train": int(fit.sum()), "n": judged["n"],
+                         "mae": judged["mae"]})
+        start = stop
+    errors = [day["mae"] for day in days if day["mae"] is not None]
+    if not errors:
+        return None
+    return {"days": days, "mae": float(np.mean(errors)),
+            "spread": float(np.std(errors)),
+            "lowest": float(min(errors)), "highest": float(max(errors))}
+
+
+def _live(conn, plan: dict, observed: pd.DataFrame, at: pd.DatetimeIndex,
+          horizon_s: int) -> scoring.Pairs | None:
+    """The live forecast as it was issued, at the same lead over the same
+    held-back instants, so a candidate is judged against what is published."""
+    if not len(at):
+        return None
+    record = scoring.issued(conn, plan["param"], plan["tx"], plan["rx"],
+                            start=at.min(), end=at.max())
+    record = record[record["horizon_s"] == horizon_s]
+    if record.empty:
+        return None
+    return scoring.pair(pd.Series(record["value"].to_numpy(dtype=float),
+                                  index=record.index), observed)
+
+
 def _already_registered(conn, digest: str) -> bool:
     row = db.one(conn, "SELECT COUNT(*) AS n FROM model_registry WHERE sha256 = ?",
                  (digest,))
     return bool((row or {}).get("n"))
+
+
+def _minute(stamp) -> str:
+    """An instant to the minute, or a dash when it is unknown."""
+    return "--" if stamp is None else f"{pd.Timestamp(stamp):%Y-%m-%d %H:%M}"
+
+
+def _verdict(versus: dict, n: int | None, rival: str) -> str:
+    """The paired comparison with one rival, as a clause.
+
+    "beats" and "loses to" are claims about a difference, so they are only
+    made when the paired interval actually excludes zero. On a one-day
+    holdout it usually does not, and saying so is the honest report -- a
+    tenth of a megahertz on 140 picks is a coin flip with a decimal point.
+
+    Both sides of the comparison come from `versus`, never one from `versus`
+    and the other from the headline. Persistence at a 24 h lead only exists
+    where the archive holds an observation 24 h earlier, so the shared set is
+    routinely a fraction of the holdout -- 126 of 287 on NIC3 -> Yoshkar-Ola
+    -- and the model's MAE over that fraction is its own number (2.02 there,
+    against a 1.64 headline). Printing the headline beside the paired delta
+    invited a subtraction that gave the opposite of the verdict in the same
+    sentence. **[caught 2026-08-28]**
+    """
+    band = f"95% CI {versus['delta_lo']:+.2f}..{versus['delta_hi']:+.2f}"
+    over = f" over {versus['n']} shared" if versus["n"] != n else ""
+    if versus.get("distinguishable"):
+        return (f", {'beats' if versus['delta'] < 0 else 'loses to'} "
+                f"{rival} {versus['mae']:.2f} v {versus['baseline_mae']:.2f}"
+                f"{over} by {abs(versus['delta']):.2f} MHz "
+                f"[{100 * versus['skill']:+.0f}% skill, {band}]")
+    return (f", not distinguishable from {rival} ({versus['mae']:.2f} v "
+            f"{versus['baseline_mae']:.2f}{over}; {versus['delta']:+.2f} MHz, "
+            f"{band})")
 
 
 def describe(result: dict) -> str:
@@ -1080,31 +1191,18 @@ def describe(result: dict) -> str:
     verdict = ""
     versus = result.get("vs_persistence") or {}
     if versus:
-        skill = versus.get("skill")
-        band = (f"95% CI {versus['delta_lo']:+.2f}..{versus['delta_hi']:+.2f}")
-        # Both sides of the comparison come from `versus`, never one from
-        # `versus` and the other from the headline. Persistence at a 24 h lead
-        # only exists where the archive holds an observation 24 h earlier, so
-        # the shared set is routinely a fraction of the holdout -- 126 of 287
-        # on NIC3 -> Yoshkar-Ola -- and the model's MAE over that fraction is
-        # its own number (2.02 there, against a 1.64 headline). Printing the
-        # headline beside the paired delta invited a subtraction that gave the
-        # opposite of the verdict in the same sentence. **[caught 2026-08-28]**
-        over = (f" over {versus['n']} shared"
-                if versus["n"] != holdout.get("n") else "")
-        if versus.get("distinguishable"):
-            verdict = (f", {'beats' if versus['delta'] < 0 else 'loses to'} "
-                       f"persistence {versus['mae']:.2f} v "
-                       f"{versus['baseline_mae']:.2f}{over} by "
-                       f"{abs(versus['delta']):.2f} MHz "
-                       f"[{100 * skill:+.0f}% skill, {band}]")
-        else:
-            verdict = (f", not distinguishable from persistence "
-                       f"({versus['mae']:.2f} v {versus['baseline_mae']:.2f}"
-                       f"{over}; {versus['delta']:+.2f} MHz, {band})")
+        verdict = _verdict(versus, holdout.get("n"), "persistence")
     elif mae is not None and theirs is not None:
         verdict = (f", {'beats' if mae < theirs else 'loses to'} persistence "
                    f"({theirs:.2f})")
+    if result.get("vs_live"):
+        verdict += _verdict(result["vs_live"], holdout.get("n"),
+                            "the live forecast")
+    folds = result.get("folds") or {}
+    steady = (f" Refitted day by day over {len(folds['days'])} days: MAE "
+              f"{folds['mae']:.2f} ± {folds['spread']:.2f} MHz "
+              f"({folds['lowest']:.2f}–{folds['highest']:.2f})."
+              if folds else "")
     committee = ""
     ensemble = result.get("ensemble") or {}
     if ensemble:
@@ -1139,9 +1237,12 @@ def describe(result: dict) -> str:
                        else ", still improving at the last round."))
 
     return (f"#{model['id']} {model['name']}: fitted on {result['n_train']} "
-            f"measured rows, holdout MAE "
+            f"measured rows from {_minute(model.get('trained_from'))} to "
+            f"{_minute(model.get('trained_to'))}, holdout MAE "
             f"{'--' if mae is None else f'{mae:.2f}'} MHz over "
-            f"{holdout.get('n', 0)} pairs{verdict}.{committee}{worst}"
+            f"{holdout.get('n', 0)} pairs from {_minute(result.get('cut'))} to "
+            f"{_minute(result.get('end'))} UTC{verdict}.{steady}{committee}"
+            f"{worst}"
             f"{training} Registered for comparison until somebody activates "
             f"it.")
 
@@ -1175,6 +1276,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--train-days", type=float, default=None,
                         help="fit only this many days before the holdout "
                              "(default: all history)")
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="refit before each held-back day and report the "
+                             "error day by day")
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     parser.add_argument("--name", default=None)
@@ -1194,7 +1298,7 @@ def main(argv: list[str] | None = None) -> int:
         "stats": _split(args.stats), "components": _split(args.components),
         "time": _split(args.time), "raw": not args.no_raw,
         "period": args.period, "holdout_days": args.holdout_days,
-        "train_days": args.train_days,
+        "train_days": args.train_days, "walk_forward": args.walk_forward,
         "start": args.start, "end": args.end,
         "name": args.name, "note": args.note,
     }
