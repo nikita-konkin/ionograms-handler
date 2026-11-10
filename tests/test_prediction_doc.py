@@ -249,8 +249,8 @@ def test_the_documents_agree_that_dvc_was_considered_and_declined(doc,
         "DVC is in the tree now; both documents say it deliberately is not"
 
 
-def test_only_the_two_workers_may_write_the_store(doc):
-    """`models` is read-write in `registrar` and `trainer` and nowhere else.
+def test_only_artifact_writers_may_write_the_store(doc):
+    """Only registration and training services may write model artifacts.
 
     The compose files are the enforcement; this is the check that nobody
     loosened one of them in passing. `infer` runs code out of these files and
@@ -259,11 +259,24 @@ def test_only_the_two_workers_may_write_the_store(doc):
     compose = Path(__file__).resolve().parents[1] / "deploy"
     for name in ("docker-compose.yml", "docker-compose.hub.yml"):
         text = (compose / name).read_text(encoding="utf-8")
-        writable = re.findall(r"^      - models:/models$", text, re.M)
-        readonly = re.findall(r"^      - models:/models:ro$", text, re.M)
-        assert len(writable) == 2, \
-            f"{name}: {len(writable)} services can write the object store, expected 2"
-        assert readonly, f"{name}: nothing mounts the store read-only any more"
+        # Match named service blocks, including volume lines with comments.
+        # A count can miss an accidental permission swap between two services.
+        mounts = {}
+        for service, block in re.findall(
+                r"^  ([\w-]+):[^\n]*\n((?:(?!^  \S|^\S)[\s\S])*)",
+                text, re.M):
+            mount = re.search(r"^      - models:/models(:ro)?\s*(?:#.*)?$",
+                              block, re.M)
+            if mount:
+                mounts[service] = "ro" if mount[1] else "rw"
+        writers = {"registrar", "trainer"}
+        if name == "docker-compose.hub.yml":
+            writers.update({"train", "rolling"})
+        assert {service for service, mode in mounts.items() if mode == "rw"} \
+            == writers, f"{name}: unexpected model-store writers: {mounts}"
+        assert {service for service, mode in mounts.items() if mode == "ro"} \
+            == {"api", "infer", "importer"}, \
+            f"{name}: model-store readers must remain read-only: {mounts}"
 
 
 def test_the_poll_slice_is_quoted_as_the_code_sets_it(doc, architecture):

@@ -131,7 +131,7 @@ def input_window(model: dict) -> int:
 
 def run_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
               method: str = "contour", issued_at: str | None = None,
-              allow_skew: bool = False) -> dict:
+              allow_skew: bool = False, *, valid_after=None) -> dict:
     """Run one model against one circuit and write its forecast rows."""
     issued_at = issued_at or db.utcnow()
 
@@ -142,6 +142,10 @@ def run_model(conn: sqlite3.Connection, model: dict, tx: str, rx: str,
 
     series = dataset.tracked(conn, model["param"], tx, rx, method)
     frame = build_features(series, model)
+    if valid_after is not None:
+        # Rolling fits keep prior versions' forecasts immutable and write
+        # only the new operational horizon, rather than another full backtest.
+        frame = frame[frame.index > pd.Timestamp(valid_after)]
     if frame.empty:
         return {"model": model["name"], "tx": tx, "rx": rx, "written": 0,
                 "detail": "not enough history to build a single feature row"}

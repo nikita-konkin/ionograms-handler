@@ -861,16 +861,24 @@ def _lead_label(seconds: float) -> str:
 # The run
 # --------------------------------------------------------------------------
 
-def run(conn, plan: dict, by: str | None = None) -> dict:
+def run(conn, plan: dict, by: str | None = None, *,
+        training_start=None, validation_start=None,
+        diagnostics: bool = True) -> dict:
     """Fit, evaluate on a held-out tail, store, and register. Never activates."""
     import joblib
 
     parts = assemble(conn, plan)
     frame, y, censored = parts["X"], parts["y"], parts["censored"]
     recipe = parts["recipe"]
+    if training_start is not None:
+        keep = frame.index >= pd.Timestamp(training_start)
+        frame, y, censored = frame[keep], y[keep], censored[keep]
+    if frame.empty:
+        raise TrainError("no paired rows in the requested training window")
     index = pd.DatetimeIndex(frame.index)
 
-    cut = split(index, plan["holdout_days"])
+    cut = (split(index, plan["holdout_days"]) if validation_start is None
+           else pd.Timestamp(validation_start))
     is_train = index < cut
     fit_rows = is_train & ~censored
 
@@ -906,7 +914,7 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
     involves_xgboost = (plan["estimator"] == "xgboost"
                         or "xgboost" in list(plan.get("members") or []))
     curve = (_learning_curve(frame[fit_rows], y[fit_rows])
-             if involves_xgboost else None)
+             if involves_xgboost and diagnostics else None)
 
     estimator.fit(frame[fit_rows], y[fit_rows])
     influence = _influence(estimator, list(recipe.features))
@@ -942,8 +950,9 @@ def run(conn, plan: dict, by: str | None = None) -> dict:
     # observation and shuffling a column to see how far a two-sided error
     # moves would be measuring the bound, not the column.
     scored_rows = (~is_train) & (~censored)
-    permutation = _permutation_importance(estimator, frame[scored_rows],
-                                          y[scored_rows])
+    permutation = (_permutation_importance(estimator, frame[scored_rows],
+                                           y[scored_rows])
+                   if diagnostics else None)
 
     horizon_s = int(plan["lag"] * dataset.DEFAULT_STEP_S)
     baseline_pairs = _persistence(conn, plan, parts["observed"],

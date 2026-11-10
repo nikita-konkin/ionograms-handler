@@ -374,6 +374,32 @@ services:
       - indices:/indices
     restart: unless-stopped
 
+  # Rolling 13-day training + one-day validation. Opt in per circuit.
+  # This writes artifacts and forecasts before atomically activating a model.
+  rolling:
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-train:${IMAGE_TAG:-latest}
+    profiles: ["rolling"]
+    command: >
+      python -m services.prediction.rolling
+      --tx ${ROLLING_TX:-NIC2} --rx ${ROLLING_RX:-yoshkar-ola}
+      --param muf --method contour --lead 24 --interval 300 --activate
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      MODEL_STORE: /models
+      MUF_INDEX_CACHE: /indices
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      - models:/models
+      - indices:/indices
+    restart: unless-stopped
+
   # Separate from the registrar, not folded into it: a fit takes minutes and an
   # upload settles in seconds, and one worker draining both queues would leave
   # an operator watching a spinner for the length of somebody else's training
