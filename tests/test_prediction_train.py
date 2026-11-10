@@ -143,6 +143,29 @@ def test_a_zero_holdout_is_refused():
                    "holdout_days": 0})
 
 
+def test_a_training_window_survives_vetting():
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                         "train_days": 13})
+    assert checked["spec"]["train_days"] == 13, "the window was not kept"
+
+
+def test_no_training_window_means_all_history():
+    checked = train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24})
+    assert checked["spec"]["train_days"] is None, "a window appeared from nowhere"
+
+
+def test_a_zero_training_window_is_refused():
+    with pytest.raises(train.TrainError, match="train_days must be positive"):
+        train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                   "train_days": 0})
+
+
+def test_a_wordy_training_window_is_refused():
+    with pytest.raises(train.TrainError, match="train_days must be a number"):
+        train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
+                   "train_days": "fortnight"})
+
+
 def test_an_unknown_estimator_names_the_ones_there_are():
     with pytest.raises(train.TrainError, match="huber"):
         train.vet({"param": "muf", "tx": TX, "rx": RX, "lead_h": 24,
@@ -240,6 +263,22 @@ def test_the_holdout_is_the_tail_and_never_a_shuffle(conn):
     assert cut == index.max() - pd.Timedelta(days=3)
     # Contiguous on both sides: no training row sits after a holdout row.
     assert index[index < cut].max() < index[index >= cut].min()
+
+
+def test_a_training_window_starts_that_many_days_before_the_holdout(conn):
+    seed(conn, days=12)
+    result = train.run(conn, plan(holdout_days=2, train_days=4))
+    assert (pd.Timestamp(result["model"]["trained_from"]).tz_localize(None)
+            == result["cut"] - pd.Timedelta(days=4)), \
+        "the fit did not start four days before the holdout"
+
+
+def test_a_training_window_leaves_the_holdout_where_it_was(conn):
+    seed(conn, days=12)
+    whole = train.split(pd.DatetimeIndex(
+        train.assemble(conn, plan(holdout_days=2))["X"].index), 2)
+    result = train.run(conn, plan(holdout_days=2, train_days=4))
+    assert result["cut"] == whole, "the window moved the holdout"
 
 
 # --------------------------------------------------------------------------
