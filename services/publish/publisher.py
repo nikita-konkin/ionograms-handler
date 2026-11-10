@@ -273,6 +273,9 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
         return {"path_km": None, "t": [], "muf": [], "lof": [], "limited": [],
                 "loflim": [], "forecast": [], "baselines": []}
     circuit = framed["circuits"][0]
+    circuit["forecast"] = [_as_issued(conn, entry, since)
+                           if entry["param"] == "muf" else entry
+                           for entry in circuit["forecast"]]
     return {
         "baselines": baselines_block(conn, tx, rx, method, circuit["forecast"]),
         "path_km": _number(circuit["path_km"]),
@@ -288,6 +291,42 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
             "sigma": [_number(v) for v in entry["sigma"]],
         } for entry in circuit["forecast"] if not entry.get("comparison")],
     }
+
+
+def _as_issued(conn, entry: dict, since: datetime) -> dict:
+    """The live forecast entry, its curve replaced by the record as issued.
+
+    The active model's latest issue holds no past once rolling training
+    replaces it every few minutes; the record as issued keeps every forecast
+    the live models made in advance, whichever of them made it. A hole wider
+    than a few steps gets a null point, which the page draws as a break.
+    """
+    import pandas as pd
+
+    from services.prediction import dataset, scoring
+
+    if entry.get("comparison"):
+        return entry
+    try:
+        record = scoring.issued(conn, "muf", entry["tx"], entry["rx"],
+                                start=_db_time(since))
+    except sqlite3.Error:
+        return entry
+    if record.empty:
+        return entry
+    record = record.iloc[-MAX_POINTS:]
+    steps = record.index[1:] - record.index[:-1]
+    widest = (series_mod.GAP_STEPS * steps.median() if len(steps)
+              else pd.Timedelta(seconds=dataset.DEFAULT_STEP_S))
+    points = []
+    for previous, (when, row) in zip([None, *record.index[:-1]], record.iterrows()):
+        if previous is not None and when - previous > widest:
+            points.append((previous + (when - previous) / 2, None, None))
+        points.append((when, _number(row["value"]), _number(row["sigma"])))
+    return {**entry,
+            "t": [when.strftime("%Y-%m-%dT%H:%M:%S") for when, _, _ in points],
+            "value": [value for _, value, _ in points],
+            "sigma": [sigma for _, _, sigma in points]}
 
 
 def baselines_block(conn, tx: str, rx: str, method: str,
@@ -387,15 +426,25 @@ def forecast_block(conn, tx: str, rx: str) -> dict:
             "issued_at": _iso(issued),
         },
         "scores": [{
-            "name": entry["name"], "kind": entry["kind"],
+            "name": model["name"] if entry["kind"] == "live" else entry["name"],
+            "kind": "model" if entry["kind"] == "live" else entry["kind"],
             # `skill` is absent from score rows written before it existed.
             "mae": entry["mae"], "r2": entry["r2"],
             "skill": entry.get("skill") or {},
             "n": entry["n"],
-        } for entry in board
-            if entry["kind"] == "baseline" or entry.get("state") == "active"],
+        } for entry in _public(board, model)],
         "horizons": [str(h) for h in scoring.HORIZONS],
     }
+
+
+def _public(board: list[dict], model: dict | None) -> list[dict]:
+    """The baselines and one model row: the record as issued when it has been
+    scored, else the active model's own scores."""
+    if model is None:
+        return [entry for entry in board if entry["kind"] == "baseline"]
+    live = [entry for entry in board if entry["kind"] == "live"]
+    return live + [entry for entry in board if entry["kind"] == "baseline"
+                   or (not live and entry.get("state") == "active")]
 
 
 def pictures(conn, tx: str, rx: str, now: datetime) -> list[dict]:

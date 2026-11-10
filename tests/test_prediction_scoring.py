@@ -707,3 +707,89 @@ def test_a_pass_forgets_baseline_rows_at_horizons_it_no_longer_scores(conn):
     kept = {row["horizon_s"] for row in scoring.scores(conn, "muf", TX, RX)
             if row["subject"] == "baseline:persistence"}
     assert kept == {86400}, f"a pass left baseline rows at {sorted(kept)}"
+
+
+# --------------------------------------------------------------------------
+# The live forecast as it was issued
+# --------------------------------------------------------------------------
+
+def live_model(conn, name):
+    model = add_model(conn, name=name)
+    registry.activate(conn, model, by="test")
+    return model
+
+
+def instants(first: str, count: int) -> pd.DatetimeIndex:
+    return pd.date_range(first, periods=count, freq="5min")
+
+
+def test_the_issued_record_keeps_a_replaced_models_forecasts(conn):
+    first = live_model(conn, "rolling-a")
+    add_forecasts(conn, first, pd.Series(13.7, index=instants(
+        "2026-08-09 01:00", 6)), issued_at="2026-08-09T00:00:00Z")
+    second = live_model(conn, "rolling-b")
+    add_forecasts(conn, second, pd.Series(9.1, index=instants(
+        "2026-08-09 03:00", 6)), issued_at="2026-08-09T02:00:00Z")
+    record = scoring.issued(conn, "muf", TX, RX)
+    assert record["value"].loc[pd.Timestamp("2026-08-09 01:10")] == 13.7, \
+        "the replaced model's forecast vanished from the record"
+
+
+def test_the_issued_record_drops_forecasts_made_after_their_instant(conn):
+    model = live_model(conn, "backtested")
+    add_forecasts(conn, model, pd.Series(21.3, index=instants(
+        "2026-08-09 01:00", 6)), issued_at="2026-08-10T00:00:00Z")
+    assert scoring.issued(conn, "muf", TX, RX).empty, \
+        "a backtest made after the fact entered the record"
+
+
+def test_the_issued_record_takes_the_newest_issue_made_before_the_instant(conn):
+    model = live_model(conn, "reissued")
+    at = instants("2026-08-09 05:00", 3)
+    add_forecasts(conn, model, pd.Series(11.0, index=at),
+                  issued_at="2026-08-09T00:00:00Z")
+    add_forecasts(conn, model, pd.Series(12.4, index=at),
+                  issued_at="2026-08-09T04:00:00Z")
+    assert scoring.issued(conn, "muf", TX, RX)["value"].tolist() == [12.4] * 3, \
+        "an older issue won over a newer one"
+
+
+def test_the_issued_record_ignores_models_never_made_live(conn):
+    model = add_model(conn, name="candidate")
+    add_forecasts(conn, model, pd.Series(17.2, index=instants(
+        "2026-08-09 01:00", 6)), issued_at="2026-08-09T00:00:00Z")
+    assert scoring.issued(conn, "muf", TX, RX).empty, \
+        "a candidate's forecast entered the live record"
+
+
+def test_the_issued_record_is_scored_as_one_subject(conn):
+    index, muf, _ = seed(conn, days=8)
+    for day in range(4, 8):
+        model = live_model(conn, f"rolling-{day}")
+        stamps = index[(index >= START + pd.Timedelta(days=day))
+                       & (index < START + pd.Timedelta(days=day + 1))]
+        add_forecasts(conn, model, muf.loc[stamps] + 0.5,
+                      issued_at=(START + pd.Timedelta(days=day - 1))
+                      .strftime(db.TIME_FORMAT))
+    scoring.run_once(conn, ("muf",), "contour", window_days=8,
+                     now=just_after(index))
+    found = {row["subject"]: row for row in scoring.scores(conn, "muf", TX, RX)}
+    assert found["live:forecast"]["n"] == 4 * 48, \
+        "the live record was not scored across all four fits"
+
+
+def test_the_leaderboard_files_the_live_record_apart_from_models(conn):
+    scoring.store(conn, "live:forecast", "muf", TX, RX, 86400,
+                  {"n": 30, "mae": 1.3}, ("2026-08-01", "2026-08-09"))
+    board = scoring.leaderboard(conn, "muf", TX, RX)
+    assert board[0]["kind"] == "live", "the live record was filed as a model"
+
+
+def test_the_issued_record_includes_a_live_model_without_an_activation_stamp(conn):
+    model = live_model(conn, "stampless")
+    conn.execute("UPDATE model_registry SET activated_at = NULL WHERE id = ?",
+                 (model,))
+    add_forecasts(conn, model, pd.Series(15.5, index=instants(
+        "2026-08-09 01:00", 2)), issued_at="2026-08-09T00:00:00Z")
+    assert len(scoring.issued(conn, "muf", TX, RX)) == 2, \
+        "the live model was left out for lacking a stamp"

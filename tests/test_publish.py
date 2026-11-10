@@ -436,3 +436,38 @@ def test_a_baseline_with_nothing_to_draw_is_left_out(
         encoding="utf-8"))["series"]
     names = [entry["name"] for entry in series["baselines"]]
     assert "recurrence-27d" not in names, f"an empty baseline was published: {names}"
+
+
+def test_a_replaced_models_forecast_stays_on_the_chart(database, archive,
+                                                         tmp_path, drawn):
+    with db.session(database) as conn:
+        old = _model(conn, name="rolling-old", active=0)
+        conn.execute("UPDATE model_registry SET activated_at = ?,"
+                     " target_src = 'measured' WHERE id = ?",
+                     ("2026-08-13T05:00:00Z", old))
+        conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at,"
+                     " valid_at, horizon_s, value) VALUES"
+                     " (?, 'muf', 'NIC', 'DOB', '2026-08-13T05:00:00Z',"
+                     " '2026-08-13T07:00:00Z', 86400, 17.3)", (old,))
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    assert "2026-08-13T07:00:00" in series["forecast"][0]["t"], \
+        "the replaced model's forecast fell off the chart"
+
+
+def test_the_issued_record_scores_stand_for_the_model(database, archive,
+                                                       tmp_path, drawn):
+    with db.session(database) as conn:
+        conn.execute("INSERT INTO score (subject, param, tx, rx, horizon_s,"
+                     " scored_at, n, mae, r2) VALUES ('live:forecast', 'muf',"
+                     " 'NIC', 'DOB', 3600, '2026-08-13T09:00:00Z', 90, 0.7, 0.9)")
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    scores = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["forecast"]["scores"]
+    assert [s["mae"] for s in scores if s["kind"] == "model"] == [{"3600": 0.7}], \
+        "the model row does not carry the issued record's score"
