@@ -1,0 +1,112 @@
+name: Promote ML
+
+# Points the `ml-stable` tag at images CI has already built and pushed. On the
+# hub, `infer` and `rolling` run `ml-stable`, and Watchtower rolls a moved tag
+# out within five minutes. Started by hand on purpose: a new image changes the
+# code behind a published forecast, and that should be somebody's decision --
+# but a decision made with one button, not an SSH session.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to promote; empty promotes the newest commit of the branch this runs on"
+        required: false
+        default: ""
+
+concurrency:
+  group: promote-ml
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # The same namespace rule the build job uses, so the tag moves where the
+      # images were pushed.
+      NAMESPACE: >-
+        ${{ vars.DOCKERHUB_NAMESPACE
+            || secrets.DOCKERHUB_NAMESPACE
+            || secrets.DOCKERHUB_USERNAME
+            || github.repository_owner }}
+      IMAGES: ionograms-infer ionograms-train
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The build job tags every push with the first seven characters of the
+      # commit, so the promoted image is named the same way.
+      - id: pick
+        env:
+          WANTED: ${{ inputs.sha }}
+        run: |
+          full=$(git rev-parse --verify "${WANTED:-HEAD}^{commit}")
+          echo "tag=sha-${full:0:7}" >> "$GITHUB_OUTPUT"
+          echo "commit=${full}" >> "$GITHUB_OUTPUT"
+
+      - id: ghcr
+        run: echo "path=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - id: creds
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Every source is checked before any tag moves, so a commit whose build
+      # never finished leaves `ml-stable` where it was rather than half moved.
+      - name: Check the images exist
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          GHCR: ${{ steps.ghcr.outputs.path }}
+          HUB: ${{ steps.creds.outputs.ready }}
+        run: |
+          for image in $IMAGES; do
+            for repo in "$GHCR/$image" $([ "$HUB" = true ] && echo "$NAMESPACE/$image"); do
+              if ! docker buildx imagetools inspect "$repo:$TAG" > /dev/null; then
+                echo "::error title=Nothing to promote::$repo:$TAG does not exist; wait for that commit's CI build to publish it"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Move ml-stable
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          GHCR: ${{ steps.ghcr.outputs.path }}
+          HUB: ${{ steps.creds.outputs.ready }}
+          COMMIT: ${{ steps.pick.outputs.commit }}
+        run: |
+          for image in $IMAGES; do
+            for repo in "$GHCR/$image" $([ "$HUB" = true ] && echo "$NAMESPACE/$image"); do
+              docker buildx imagetools create -t "$repo:ml-stable" "$repo:$TAG"
+            done
+          done
+          {
+            echo "### ml-stable now points at ${TAG}"
+            echo
+            echo "Commit \`${COMMIT}\`. Watchtower on the hub updates \`infer\` and \`rolling\` within five minutes."
+          } >> "$GITHUB_STEP_SUMMARY"

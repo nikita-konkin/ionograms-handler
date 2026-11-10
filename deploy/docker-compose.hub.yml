@@ -234,7 +234,7 @@ services:
   # No ports -- forecasts reach the world through the api, so nothing needs to
   # reach this container.
   infer:
-    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-infer:${IMAGE_TAG:-latest}
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-infer:${ML_IMAGE_TAG:-ml-stable}
     pull_policy: always
     depends_on:
       api:
@@ -261,9 +261,11 @@ services:
       # solar indices, and `indices.py` fetches them from volunteer-run
       # services. One cache, fetched once.
       - indices:/indices
-    # Deliberately NOT labelled for watchtower. An unattended restart of this
-    # container is harmless, but an unattended *image* change alters the code
-    # behind a published forecast, and that should be someone's decision.
+    # On `ml-stable`, not `latest`: an image change alters the code behind a
+    # published forecast, and that should be someone's decision. The decision
+    # is the "Promote ML" workflow moving the tag; watchtower then rolls it out.
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
   # Fits models and registers them. Started by hand:
@@ -372,12 +374,16 @@ services:
       - model-uploads:/uploads
       - models:/models
       - indices:/indices
+    # On `latest` with the api: a registrar older than the api that queued an
+    # upload is what refuses it.
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
   # Rolling 13-day training + one-day validation. Opt in per circuit.
   # This writes artifacts and forecasts before atomically activating a model.
   rolling:
-    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-train:${IMAGE_TAG:-latest}
+    image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-train:${ML_IMAGE_TAG:-ml-stable}
     profiles: ["rolling"]
     command: >
       python -m services.prediction.rolling
@@ -398,6 +404,9 @@ services:
       - api-data:/data
       - models:/models
       - indices:/indices
+    # Promoted like `infer`: it activates models and writes forecasts.
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
   # Separate from the registrar, not folded into it: a fit takes minutes and an
@@ -422,6 +431,10 @@ services:
       - api-data:/data
       - models:/models
       - indices:/indices
+    # On `latest` with the api: a trainer several builds behind refused a
+    # `voting` job the api had accepted, on 2026-08-26.
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
 volumes:

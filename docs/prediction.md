@@ -759,13 +759,20 @@ rebuild the column.
 before it inserts, so a row in `train_job` was accepted by *some* api. If the
 worker's own `vet` then refuses the same spec, the request was never the
 problem — the two builds disagree, and `trainer.settle` separates that failure
-from a genuine one and names the build that refused it. `api` and `watch` are
-watchtower-labelled and update themselves; `trainer`, `registrar` and `infer`
-are not and stay on whatever image created them, which makes "updated api
-offers a thing, months-old worker rejects it" the normal failure mode of this
-deployment. It happened on 2026-08-26 with `voting`/`stacking` and again on
-2026-08-27 with the cyclical time columns — both times the message described
-the running code perfectly and gave no hint that the running code was stale.
+from a genuine one and names the build that refused it. Until #133, `trainer`,
+`registrar` and `infer` were not watchtower-labelled and stayed on whatever
+image created them, which made "updated api offers a thing, months-old worker
+rejects it" the normal failure mode of this deployment. It happened on
+2026-08-26 with `voting`/`stacking` and again on 2026-08-27 with the cyclical
+time columns — both times the message described the running code perfectly and
+gave no hint that the running code was stale.
+
+Now every worker updates itself, on one of two tags. `trainer` and `registrar`
+follow `latest` with the api. `infer` and `rolling` follow `ml-stable`, because
+their code is behind the published forecast: the **Promote ML** workflow
+(Actions → Promote ML → Run workflow) points `ml-stable` at a commit's built
+images, and watchtower rolls them out within five minutes. Before the first
+promotion the tag does not exist, so run the workflow once before pulling.
 
 Refusals state the arithmetic: how many grid points the circuit has, how many a
 lag-*N* model with a *W*-sample window needs before it can build one row, and
