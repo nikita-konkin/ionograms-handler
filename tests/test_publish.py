@@ -404,8 +404,10 @@ def test_each_baseline_is_published_at_the_instants_of_the_forecast(
     _publish(database, site, archive)
     series = json.loads((site / "data" / "nic-dob.json").read_text(
         encoding="utf-8"))["series"]
-    found = {entry["name"]: entry["value"] for entry in series["baselines"]}
-    assert found["persistence"] == levels, (
+    ahead = series["forecast"][0]["t"]
+    found = {entry["name"]: dict(zip(entry["t"], entry["value"]))
+             for entry in series["baselines"]}
+    assert [found["persistence"].get(t) for t in ahead] == levels, (
         f"persistence was not published six hours behind the forecast: {found}")
 
 
@@ -423,8 +425,10 @@ def test_iri_is_published_ahead_of_now_from_the_model(
     _publish(database, site, archive)
     series = json.loads((site / "data" / "nic-dob.json").read_text(
         encoding="utf-8"))["series"]
-    found = {entry["name"]: entry["value"] for entry in series["baselines"]}
-    assert found["iri"] == [9.5, 10.5, 11.5, 12.5], (
+    ahead = series["forecast"][0]["t"]
+    found = {entry["name"]: dict(zip(entry["t"], entry["value"]))
+             for entry in series["baselines"]}
+    assert [found["iri"].get(t) for t in ahead] == [9.5, 10.5, 11.5, 12.5], (
         f"IRI was not published at the forecast's instants: {found}")
 
 
@@ -471,3 +475,18 @@ def test_the_issued_record_scores_stand_for_the_model(database, archive,
         encoding="utf-8"))["forecast"]["scores"]
     assert [s["mae"] for s in scores if s["kind"] == "model"] == [{"3600": 0.7}], \
         "the model row does not carry the issued record's score"
+
+
+def test_a_baseline_reaches_back_before_the_model_forecast(database, archive,
+                                                           tmp_path, drawn):
+    with db.session(database) as conn:
+        _sounding(conn, archive, "night.h5", "2026-08-13 00:05:00", muf=12.75)
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    found = {entry["name"]: dict(zip(entry["t"], entry["value"]))
+             for entry in series["baselines"]}
+    assert found["persistence"].get("2026-08-13T06:05:00") == 12.75, \
+        "persistence has no history before the model's forecast"
