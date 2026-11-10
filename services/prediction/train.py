@@ -361,6 +361,15 @@ def vet(spec: dict) -> dict:
         raise TrainError(
             "holdout_days must be positive: a model reported on the data it "
             "was fitted to has no reported accuracy at all.")
+    span = spec.get("train_days")
+    try:
+        train_days = None if span in (None, "") else float(span)
+    except (TypeError, ValueError) as exc:
+        raise TrainError("train_days must be a number of days, or absent for "
+                         "all history") from exc
+    if train_days is not None and train_days <= 0:
+        raise TrainError("train_days must be positive: a window of no days "
+                         "has nothing to fit")
 
     normalised = {
         "alias": str(spec.get("alias") or param),
@@ -378,6 +387,7 @@ def vet(spec: dict) -> dict:
         # -- a job refused on the strength of a key this function wrote.
         **({"members": list(members)} if estimator in ENSEMBLES else {}),
         "holdout_days": holdout_days,
+        "train_days": train_days,
         "start": spec.get("start") or None,
         "end": spec.get("end") or None,
         "name": (str(spec["name"]).strip() if spec.get("name") else None),
@@ -870,6 +880,9 @@ def run(conn, plan: dict, by: str | None = None, *,
     parts = assemble(conn, plan)
     frame, y, censored = parts["X"], parts["y"], parts["censored"]
     recipe = parts["recipe"]
+    if training_start is None and plan.get("train_days") and not frame.empty:
+        training_start = (split(pd.DatetimeIndex(frame.index), plan["holdout_days"])
+                          - pd.Timedelta(days=float(plan["train_days"])))
     if training_start is not None:
         keep = frame.index >= pd.Timestamp(training_start)
         frame, y, censored = frame[keep], y[keep], censored[keep]
@@ -893,7 +906,8 @@ def run(conn, plan: dict, by: str | None = None, *,
             f"{MIN_TRAIN_ROWS}). There are {len(frame)} paired rows in total, "
             f"{int(censored.sum())} of them band-edge bounds and "
             f"{int((~is_train).sum())} in the holdout. Shorten the holdout, "
-            f"take a shorter lead, or wait for more archive.")
+            f"widen the training window, take a shorter lead, or wait for "
+            f"more archive.")
     if not (~is_train).any():
         raise TrainError(
             f"the holdout window of {plan['holdout_days']:g} days covers no "
@@ -1158,6 +1172,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--period", type=int,
                         default=legacy_features.DEFAULT_DECOMPOSITION_PERIOD)
     parser.add_argument("--holdout-days", type=float, default=DEFAULT_HOLDOUT_DAYS)
+    parser.add_argument("--train-days", type=float, default=None,
+                        help="fit only this many days before the holdout "
+                             "(default: all history)")
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     parser.add_argument("--name", default=None)
@@ -1177,6 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
         "stats": _split(args.stats), "components": _split(args.components),
         "time": _split(args.time), "raw": not args.no_raw,
         "period": args.period, "holdout_days": args.holdout_days,
+        "train_days": args.train_days,
         "start": args.start, "end": args.end,
         "name": args.name, "note": args.note,
     }
