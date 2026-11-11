@@ -685,7 +685,10 @@ def forecast_page(request: Request, param: str | None = None,
             * dataset.DEFAULT_STEP_S
 
     return templates.TemplateResponse(request, "forecast.html", {
-        "models": models,
+        "models": [row for row in models if not registry.superseded(row)],
+        "registered": len(models),
+        "fits": sorted(filter(registry.superseded, models),
+                       key=lambda row: row["name"], reverse=True),
         "live": live,
         "chosen": chosen,
         "board": board,
