@@ -180,11 +180,10 @@
         <th></th></tr>
     {% for m in models %}{{ model_row(m) }}{% endfor %}
   </table></div>
-  {# A rolling fit is registered every few minutes. Only the fits that can
-     still be rolled back to are offered, folded away, and the rest counted. #}
+  {# Replaced rolling fits, one a month once pruned, folded away. #}
   {% if fits %}
   <details style="margin-top:.5rem"><summary class="note">{{ t('forecast.fits',
-    n=fits|length, older=older) }}</summary>
+    n=fits|length) }}</summary>
   <div class="scroll"><table>
     {% for m in fits %}{{ model_row(m) }}{% endfor %}
   </table></div></details>

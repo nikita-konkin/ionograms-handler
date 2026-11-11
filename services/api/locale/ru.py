@@ -744,9 +744,7 @@ MESSAGES: dict[str, str] = {
     "forecast.train.window.whole": "обучена на всей истории",
     "forecast.train.folds": "переобучать перед каждыми отложенными сутками",
     "forecast.train.by_day": "проверена по суткам",
-    "forecast.fits": "Последние скользящие модели: {n}, их можно включить "
-                     "для отката; ещё {older} старых хранятся только ради "
-                     "их прогнозов",
+    "forecast.fits": "Прежние скользящие модели: {n}",
     "forecast.live_record": "Действующий прогноз, как он был выпущен",
     "forecast.day": "за 24 ч {mae}",
     "forecast.day_title": "MAE только по парам последних 24 часов, МГц",
