@@ -490,3 +490,27 @@ def test_a_baseline_reaches_back_before_the_model_forecast(database, archive,
              for entry in series["baselines"]}
     assert found["persistence"].get("2026-08-13T06:05:00") == 12.75, \
         "persistence has no history before the model's forecast"
+
+
+def test_the_page_offers_a_theme_choice():
+    html = (publisher.SITE_SRC / "index.html").read_text(encoding="utf-8")
+    assert 'id="theme"' in html, "the page has no theme switch"
+
+
+def test_the_page_offers_zoom_buttons_for_the_chart():
+    html = (publisher.SITE_SRC / "index.html").read_text(encoding="utf-8")
+    assert 'id="zoom"' in html, "the chart has no zoom buttons"
+
+
+@pytest.mark.parametrize("lang", ("en", "ru"))
+def test_the_chart_and_theme_controls_are_named_in_each_language(lang):
+    strings = json.loads((publisher.SITE_SRC / "strings.json").read_text(
+        encoding="utf-8"))[lang]
+    wanted = {"zoom_in", "zoom_out", "zoom_reset", "chart_hint",
+              "theme_auto", "theme_light", "theme_dark"}
+    assert wanted <= set(strings), f"{lang} lacks {sorted(wanted - set(strings))}"
+
+
+def test_the_dark_palette_follows_the_theme_switch():
+    css = (publisher.SITE_SRC / "style.css").read_text(encoding="utf-8")
+    assert 'data-theme="dark"' in css, "the dark palette ignores the switch"

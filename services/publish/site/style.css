@@ -1,43 +1,29 @@
 :root {
-  --bg: #f7f8fa;
-  --card: #ffffff;
-  --text: #1b1f24;
-  --muted: #5d6673;
-  --line: #dde1e6;
-  --accent: #1f5fbf;
-  --muf: #1f5fbf;
-  --lof: #c2571a;
-  --forecast: #6250d6;
-  --band: rgba(98, 80, 214, 0.16);
-  --persistence: #1baf7a;
-  --recurrence: #eda100;
+  /* Each colour is light, dark: the browser picks by color-scheme, which
+     follows the system unless the theme switch pins it. */
+  color-scheme: light dark;
+  --bg: light-dark(#f7f8fa, #111418);
+  --card: light-dark(#ffffff, #191d23);
+  --text: light-dark(#1b1f24, #e6e9ed);
+  --muted: light-dark(#5d6673, #9aa3ae);
+  --line: light-dark(#dde1e6, #2c323a);
+  --accent: light-dark(#1f5fbf, #7fb0ff);
+  --muf: light-dark(#1f5fbf, #7fb0ff);
+  --lof: light-dark(#c2571a, #f0a066);
+  --forecast: light-dark(#6250d6, #9085e9);
+  --band: light-dark(rgba(98, 80, 214, 0.16), rgba(144, 133, 233, 0.2));
+  --persistence: light-dark(#1baf7a, #1f9db0);
+  --recurrence: light-dark(#eda100, #c98500);
   --harmonic: #008300;
-  --iri: #e34948;
-  --warn-bg: #fff4d6;
-  --warn-text: #6b4e00;
-  --grid: #eceff2;
+  --iri: light-dark(#e34948, #d55181);
+  --warn-bg: light-dark(#fff4d6, #3a2f10);
+  --warn-text: light-dark(#6b4e00, #f3d68a);
+  --grid: light-dark(#eceff2, #232830);
+  --up: light-dark(#1a7f37, #57c06f);
+  --down: light-dark(#b42318, #ff8a7a);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418;
-    --card: #191d23;
-    --text: #e6e9ed;
-    --muted: #9aa3ae;
-    --line: #2c323a;
-    --accent: #7fb0ff;
-    --muf: #7fb0ff;
-    --lof: #f0a066;
-    --forecast: #9085e9;
-    --band: rgba(144, 133, 233, 0.2);
-    --persistence: #1f9db0;
-    --recurrence: #c98500;
-    --harmonic: #008300;
-    --iri: #d55181;
-    --warn-bg: #3a2f10;
-    --warn-text: #f3d68a;
-    --grid: #232830;
-  }
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -103,8 +89,10 @@ h3 { font-size: 0.9rem; margin: 16px 0 8px; color: var(--muted); font-weight: 60
 .strip img { display: block; width: 128px; height: 56px; object-fit: cover; border-radius: 2px; }
 .strip span { display: block; padding: 2px 0; }
 
-.chart { position: relative; width: 100%; }
-.chart svg { display: block; width: 100%; height: auto; }
+.chart { position: relative; width: 100%; user-select: none; -webkit-user-select: none; }
+.chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; cursor: grab; }
+.chart.dragging svg { cursor: grabbing; }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; }
 .chart .grid { stroke: var(--grid); }
 .chart .axis { fill: var(--muted); font-size: 11px; }
 .chart .muf { fill: var(--muf); }
@@ -179,9 +167,5 @@ thead th { color: var(--muted); font-weight: 600; }
 
 /* the public host's link to the hub */
 .link-state { font-weight: 600; }
-.link-state.up { color: #1a7f37; }
-.link-state.down { color: #b42318; }
-@media (prefers-color-scheme: dark) {
-  .link-state.up { color: #57c06f; }
-  .link-state.down { color: #ff8a7a; }
-}
+.link-state.up { color: var(--up); }
+.link-state.down { color: var(--down); }

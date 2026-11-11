@@ -11,11 +11,17 @@
   var NOW_MS = 10 * 1000;       // now.json: the sounding in progress
   var NOW_STALE_S = 120;        // older than this, the live feed is delayed
   var RANGES = [1, 7, 30];
+  var THEMES = ["auto", "light", "dark"];
+  var MIN_SPAN_MS = 2 * 3600000;  // the closest the chart zooms in
+  var ZOOM_STEP = 1.5;             // one button press, in or out
   var SVG = "http://www.w3.org/2000/svg";
 
   var state = {
     lang: "en", strings: {}, status: null, slug: null, range: 7,
-    data: {}, shown: null, now: null, link: null, hidden: {}
+    data: {}, shown: null, now: null, link: null, hidden: {},
+    // view: the [from, to] a reader scrolled or zoomed to, null for the
+    // chosen range; geo: what the last drawing mapped, for the gestures
+    view: null, geo: null, theme: "auto"
   };
 
   // --- helpers -------------------------------------------------------------
@@ -118,6 +124,15 @@
       node.textContent = t(node.getAttribute("data-t"));
     });
     document.getElementById("lang").textContent = t("lang");
+    applyTheme();
+  }
+
+  // Auto leaves the palette to the system; light and dark pin it.
+  function applyTheme() {
+    var root = document.documentElement;
+    if (state.theme === "auto") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", state.theme);
+    document.getElementById("theme").textContent = t("theme_" + state.theme);
   }
 
   function renderHeader() {
@@ -223,7 +238,7 @@
 
   // --- chart ---------------------------------------------------------------
 
-  var TICKS_H = [1, 3, 6, 12, 24, 48, 96, 168];
+  var TICKS_H = [0.25, 0.5, 1, 3, 6, 12, 24, 48, 96, 168];
 
   function niceMax(v) { return Math.max(5, Math.ceil(v / 5) * 5); }
 
@@ -262,16 +277,26 @@
     if (!d) return;
     var s = d.series;
     var now = parseT(state.status.generated_at);
-    var start = now - state.range * 86400000;
+    var whole = extent(d, now), start, end;
+    if (state.view) {
+      state.view = clampView(state.view, whole);
+      start = state.view[0]; end = state.view[1];
+    } else {
+      start = Math.max(whole[0], now - state.range * 86400000);
+      end = Math.max(now, Math.min(whole[1], now + state.range * 86400000));
+    }
+    // Curves reach a little past each edge so a line runs to the frame
+    // rather than stopping at the last point inside it.
+    var margin = (end - start) / 20;
 
     var muf = [], lof = [];
     for (var i = 0; i < s.t.length; i++) {
       var x = parseT(s.t[i]);
-      if (x < start) continue;
+      if (x < start || x > end) continue;
       if (s.muf[i] != null) muf.push([x, s.muf[i], s.limited[i]]);
       if (s.lof[i] != null) lof.push([x, s.lof[i]]);
     }
-    var all = curves(d, start, now + state.range * 86400000);
+    var all = curves(d, start - margin, end + margin);
     var shown = all.filter(function (c) { return !state.hidden[c.key]; });
     if (!muf.length && !lof.length && !all.length) {
       box.appendChild(el("p", { "class": "muted", text: t("no_data") }));
@@ -279,13 +304,12 @@
       return;
     }
 
-    var end = now, top = 0;
+    var top = 0;
     muf.forEach(function (p) { top = Math.max(top, p[1]); });
     lof.forEach(function (p) { top = Math.max(top, p[1]); });
     shown.forEach(function (c) {
       c.pts.forEach(function (p) {
-        if (p[1] == null) return;
-        if (p[0] > end) end = p[0];
+        if (p[1] == null || p[0] < start || p[0] > end) return;
         top = Math.max(top, p[1] + (p[2] || 0));
       });
     });
@@ -298,6 +322,12 @@
 
     var root = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
                             "aria-label": t("series") });
+    var frame = svg("clipPath", { id: "plot" });
+    frame.appendChild(svg("rect", { x: L, y: T, width: W - L - R, height: H - T - B }));
+    var defs = svg("defs");
+    defs.appendChild(frame);
+    root.appendChild(defs);
+    var plot = svg("g", { "clip-path": "url(#plot)" });
 
     // y grid
     var ystep = top > 30 ? 10 : 5;
@@ -324,9 +354,10 @@
     }
 
     // "now" marks where measurement ends and forecast begins
-    if (end > now) {
+    if (now > start && now < end) {
       root.appendChild(svg("line", { "class": "now", x1: X(now), x2: X(now), y1: T, y2: H - B }));
     }
+    root.appendChild(plot);
 
     // each curve, broken wherever a value is missing; the model also has a band
     shown.slice().reverse().forEach(function (c) {
@@ -342,18 +373,18 @@
           var down = withSigma.slice().reverse().map(function (p) {
             return X(p[0]) + "," + Y(Math.max(0, p[1] - p[2]));
           });
-          root.appendChild(svg("polygon", { "class": "band", points: up.concat(down).join(" ") }));
+          plot.appendChild(svg("polygon", { "class": "band", points: up.concat(down).join(" ") }));
         }
-        root.appendChild(svg("polyline", { "class": "fc c-" + c.key,
+        plot.appendChild(svg("polyline", { "class": "fc c-" + c.key,
           points: r.map(function (p) { return X(p[0]) + "," + Y(p[1]); }).join(" ") }));
       });
     });
 
     lof.forEach(function (p) {
-      root.appendChild(svg("circle", { "class": "lof", cx: X(p[0]), cy: Y(p[1]), r: 2 }));
+      plot.appendChild(svg("circle", { "class": "lof", cx: X(p[0]), cy: Y(p[1]), r: 2 }));
     });
     muf.forEach(function (p) {
-      root.appendChild(svg("circle", { "class": p[2] ? "muf-limited" : "muf",
+      plot.appendChild(svg("circle", { "class": p[2] ? "muf-limited" : "muf",
                                        cx: X(p[0]), cy: Y(p[1]), r: p[2] ? 2.6 : 2.2 }));
     });
 
@@ -366,7 +397,7 @@
     var ahead = {};
     shown.forEach(function (c) {
       c.pts.forEach(function (p) {
-        if (p[1] == null) return;
+        if (p[1] == null || p[0] < start || p[0] > end) return;
         (ahead[p[0]] = ahead[p[0]] || []).push([c.key, p[1]]);
       });
     });
@@ -420,7 +451,117 @@
 
     box.appendChild(root);
     box.appendChild(tip);
+    state.geo = { whole: whole, view: [start, end], W: W, L: L, R: R, root: root };
+    renderZoom();
     renderLegend(all, d);
+  }
+
+  // --- scrolling and zooming ----------------------------------------------
+
+  // The time the loaded series covers: its first sample to the furthest
+  // forecast, and at least a day, so there is always somewhere to scroll.
+  function extent(d, now) {
+    var first = d.series.t.length ? parseT(d.series.t[0]) : now, last = now;
+    curves(d, -Infinity, Infinity).forEach(function (c) {
+      c.pts.forEach(function (p) {
+        first = Math.min(first, p[0]);
+        last = Math.max(last, p[0]);
+      });
+    });
+    return [Math.min(first, last - 86400000), last];
+  }
+
+  // A view inside the series, no narrower than MIN_SPAN_MS.
+  function clampView(view, whole) {
+    var span = Math.min(Math.max(view[1] - view[0], MIN_SPAN_MS), whole[1] - whole[0]);
+    var from = Math.min(Math.max(view[0], whole[0]), whole[1] - span);
+    return [from, from + span];
+  }
+
+  var drawing = 0;
+  function setView(view) {
+    state.view = clampView(view, state.geo.whole);
+    if (!drawing) {
+      drawing = window.requestAnimationFrame(function () { drawing = 0; renderChart(); });
+    }
+  }
+
+  // Zoom by `factor` (below one zooms in) keeping the instant `at` in place.
+  function zoom(at, factor) {
+    var v = state.view || state.geo.view;
+    setView([at - (at - v[0]) * factor, at + (v[1] - at) * factor]);
+  }
+
+  function pan(ms) {
+    var v = state.view || state.geo.view;
+    setView([v[0] + ms, v[1] + ms]);
+  }
+
+  function resetView() {
+    state.view = null;
+    renderChart();
+  }
+
+  function renderZoom() {
+    var seg = document.getElementById("zoom");
+    clear(seg);
+    var v = state.geo.view, middle = (v[0] + v[1]) / 2;
+    [["−", "zoom_out", function () { zoom(middle, ZOOM_STEP); }],
+     ["+", "zoom_in", function () { zoom(middle, 1 / ZOOM_STEP); }],
+     [t("zoom_reset"), "zoom_reset", resetView]].forEach(function (spec) {
+      var b = el("button", { type: "button", text: spec[0], title: t(spec[1]),
+                             "aria-label": t(spec[1]) });
+      if (spec[1] === "zoom_reset" && !state.view) b.disabled = true;
+      b.addEventListener("click", spec[2]);
+      seg.appendChild(b);
+    });
+  }
+
+  // Gestures land on the chart's box, which outlives every redraw, so a drag
+  // keeps its pointer while the SVG under it is replaced.
+  function bindChart(box) {
+    var pointers = {};
+    function ready() { return state.geo && box.contains(state.geo.root); }
+    function msPerPx() {
+      var g = state.geo, wide = g.root.getBoundingClientRect().width;
+      return (g.view[1] - g.view[0]) / ((g.W - g.L - g.R) * wide / g.W);
+    }
+    function msAt(clientX) {
+      var g = state.geo, rect = g.root.getBoundingClientRect();
+      return g.view[0] + (clientX - rect.left - g.L * rect.width / g.W) * msPerPx();
+    }
+    box.addEventListener("wheel", function (evt) {
+      if (!ready()) return;
+      evt.preventDefault();
+      if (Math.abs(evt.deltaX) > Math.abs(evt.deltaY)) pan(evt.deltaX * msPerPx());
+      else if (evt.deltaY) zoom(msAt(evt.clientX), evt.deltaY > 0 ? 1.25 : 0.8);
+    }, { passive: false });
+    box.addEventListener("pointerdown", function (evt) {
+      if (!ready() || evt.button > 0 || !state.geo.root.contains(evt.target)) return;
+      pointers[evt.pointerId] = evt.clientX;
+      box.setPointerCapture(evt.pointerId);
+      box.classList.add("dragging");
+    });
+    box.addEventListener("pointermove", function (evt) {
+      if (!(evt.pointerId in pointers) || !ready()) return;
+      var ids = Object.keys(pointers);
+      if (ids.length === 1) {
+        pan((pointers[evt.pointerId] - evt.clientX) * msPerPx());
+      } else if (ids.length === 2) {
+        var other = pointers[ids[0] === String(evt.pointerId) ? ids[1] : ids[0]];
+        var before = Math.abs(pointers[evt.pointerId] - other);
+        var after = Math.abs(evt.clientX - other);
+        if (before > 10 && after > 10) zoom(msAt((evt.clientX + other) / 2), before / after);
+      }
+      pointers[evt.pointerId] = evt.clientX;
+    });
+    function lift(evt) {
+      delete pointers[evt.pointerId];
+      if (!Object.keys(pointers).length) box.classList.remove("dragging");
+    }
+    box.addEventListener("pointerup", lift);
+    box.addEventListener("pointercancel", lift);
+    box.addEventListener("dblclick", resetView);
   }
 
   function renderLegend(all, d) {
@@ -458,6 +599,7 @@
                              "aria-pressed": String(days === state.range) });
       b.addEventListener("click", function () {
         state.range = days;
+        state.view = null;
         remember("range", String(days));
         renderRanges();
         renderChart();
@@ -622,6 +764,7 @@
 
   function select(slug, force) {
     if (slug === state.slug && !force && state.data[slug]) return;
+    if (slug !== state.slug) state.view = null;
     state.slug = slug;
     if (window.location.hash !== "#" + slug) history.replaceState(null, "", "#" + slug);
     renderTabs();
@@ -658,6 +801,15 @@
     var r = parseInt(recall("range"), 10);
     try { state.hidden = JSON.parse(recall("hidden")) || {}; } catch (e) { state.hidden = {}; }
     if (RANGES.indexOf(r) >= 0) state.range = r;
+    var theme = recall("theme");
+    if (THEMES.indexOf(theme) >= 0) state.theme = theme;
+    applyTheme();
+    bindChart(document.getElementById("chart"));
+    document.getElementById("theme").addEventListener("click", function () {
+      state.theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length];
+      remember("theme", state.theme);
+      applyTheme();
+    });
 
     document.getElementById("lang").addEventListener("click", function () {
       state.lang = state.lang === "ru" ? "en" : "ru";

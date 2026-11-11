@@ -17,6 +17,7 @@
     </div>
     <div class="meta">
       <button type="button" id="lang" class="link"></button>
+      <button type="button" id="theme" class="link"></button>
       <span id="updated" class="muted"></span>
       <span id="link" class="link-state" hidden></span>
     </div>
@@ -49,10 +50,14 @@
     <div class="card">
       <div class="card-head">
         <h2 data-t="series"></h2>
-        <div id="ranges" class="seg" role="group"></div>
+        <div class="controls">
+          <div id="zoom" class="seg" role="group"></div>
+          <div id="ranges" class="seg" role="group"></div>
+        </div>
       </div>
       <div id="chart" class="chart"></div>
       <div id="legend" class="legend"></div>
+      <p class="note" data-t="chart_hint"></p>
     </div>
 
     <div class="card">
