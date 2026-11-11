@@ -54,6 +54,11 @@
       </td>
     </tr>
 {% endmacro %}
+{% macro day_line(entry, h) %}
+  {%- set day = entry.day.get(h|string) -%}
+  {%- if day is not none %}<br><span class="note" title="{{ t('forecast.day_title') }}">{{
+    t('forecast.day', mae='%.2f'|format(day)) }}</span>{% endif -%}
+{% endmacro %}
 
 {# Six bands, in the order the questions get asked: is it running, is it
    wrong, what does it say, what else could be run -- and then, last, the two
@@ -239,7 +244,7 @@
             class="note{% if not entry.sure.get(h|string) %} muted{% endif %}"
             title="{{ t('forecast.skill_title') }}">{{
             '%+.0f%%'|format(skill * 100) }}{% if not entry.sure.get(h|string)
-            %}?{% endif %}</span>{% endif %}
+            %}?{% endif %}</span>{% endif %}{{ day_line(entry, h) }}
         {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
       {% endfor %}
       <td class="muted">{{ entry.n.values()|sum }}</td>
@@ -261,7 +266,7 @@
       {% for h in horizons %}
       <td style="text-align:right; font-variant-numeric:tabular-nums">
         {%- set mae = entry.mae.get(h|string) -%}
-        {% if mae is not none %}{{ '%.2f'|format(mae) }}
+        {% if mae is not none %}{{ '%.2f'|format(mae) }}{{ day_line(entry, h) }}
         {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
       {% endfor %}
       <td class="muted">{{ entry.n.values()|sum }}</td>

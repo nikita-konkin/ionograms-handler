@@ -490,3 +490,19 @@ def test_a_baseline_reaches_back_before_the_model_forecast(database, archive,
              for entry in series["baselines"]}
     assert found["persistence"].get("2026-08-13T06:05:00") == 12.75, \
         "persistence has no history before the model's forecast"
+
+
+def test_the_published_scores_carry_the_last_days_error(database, archive,
+                                                        tmp_path, drawn):
+    with db.session(database) as conn:
+        conn.execute("INSERT INTO score (subject, param, tx, rx, horizon_s,"
+                     " scored_at, n, mae, r2, detail) VALUES ('live:forecast',"
+                     " 'muf', 'NIC', 'DOB', 3600, '2026-08-13T09:00:00Z', 90,"
+                     " 0.7, 0.9, '{\"day\": {\"n\": 12, \"mae\": 1.35}}')")
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    scores = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["forecast"]["scores"]
+    assert [s["day"] for s in scores if s["kind"] == "model"] == [{"3600": 1.35}], \
+        "the published model row does not carry the last day's error"
