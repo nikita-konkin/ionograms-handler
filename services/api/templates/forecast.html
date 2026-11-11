@@ -1,10 +1,64 @@
 {% extends "base.html" %}
 {% block title %}{{ t('forecast.title') }}{% endblock %}
-{% block hint %}{{ t('forecast.hint', models=models|length,
-   model_unit=plural(models|length, 'model'),
+{% block hint %}{{ t('forecast.hint', models=registered,
+   model_unit=plural(registered, 'model'),
    n=live|selectattr('model')|list|length, circuits=live|length,
    circuit_unit=plural(live|length, 'circuit')) }}{% endblock %}
 {% block body %}
+{% macro model_row(m) %}
+    <tr{% if m.target_src != 'measured' %} class="muted"{% endif %}>
+      <td><a href="/ui/model/{{ m.id }}"><b>{{ m.name }}</b></a>
+        <div class="note">{{ m.framework }}{% if m.env and m.env.sklearn %}
+          {{ m.env.sklearn }}{% endif %} &middot; {{ m.capability }}
+          &middot; {{ t('forecast.golden.recorded') if m.golden == 'recorded'
+               else t('forecast.golden.absent') }}</div></td>
+      <td class="muted">{{ m.param|upper }}</td>
+      <td class="muted">{% if m.tx %}{{ m.tx }} &rarr; {{ m.rx }}
+          {%- else %}<span class="note">{{ t('forecast.unbound') }}</span>{% endif %}</td>
+      <td class="muted">{{ m.origin }}</td>
+      {# The alias is the provenance fact worth showing: it is the column name
+         this model's features are built around, and when it is not this
+         instrument's own it says whose ionosphere the model actually learned. #}
+      <td class="muted">{{ m.features|length }}
+        {%- if m.target_alias %} <span class="note">{{ t('forecast.of') }}
+          <code>{{ m.target_alias }}</code></span>{% endif %}</td>
+      <td>
+        {%- if m.state == 'active' %}<span class="pill ok">{{ t('forecast.state.active') }}</span>
+        {%- elif m.state == 'comparison' %}<span class="pill unk">{{ t('forecast.state.comparison') }}</span>
+        {%- else %}<span class="pill">{{ m.state }}</span>{% endif %}</td>
+      <td style="white-space:nowrap">
+        {% if m.target_src != 'measured' %}
+        {# Rendered disabled rather than hidden. An operator should see that
+           these models exist, that they were scored, and exactly why they
+           cannot go live -- a missing button explains nothing. #}
+        <button disabled title="{{ t('forecast.activate.modelled_title') }}">
+          {{ t('forecast.activate') }}</button>
+        {% elif not m.tx %}
+        <button disabled title="{{ t('forecast.activate.unbound_title') }}"
+          >{{ t('forecast.activate') }}</button>
+        {% elif m.active %}
+        <button data-needs="promote" onclick='retire({{ m.id }}, {{ m.name|tojson }})'>{{ t('forecast.retire') }}</button>
+        {% else %}
+        {# Single-quoted: see the note in archives.html. `tojson` does not escape
+           `"`, so a double-quoted handler carrying a model name is truncated to
+           a syntax error and the button silently does nothing. #}
+        <button data-needs="promote" onclick='activate({{ m.id }}, {{ m.name|tojson }},
+          {{ (m.tx ~ " -> " ~ m.rx)|tojson }}, {{ m.param|tojson }})'>{{ t('forecast.activate') }}</button>
+        {% endif %}
+        {# Deleting is the operator's call, so it is offered on every row --
+           including the active one, where the api refuses it and says to
+           retire first. A button that is simply absent teaches nothing; one
+           that explains the order of operations does. #}
+        <button data-needs="model" onclick='removeModel({{ m.id }}, {{ m.name|tojson }})'
+          title="{{ t('forecast.delete_title') }}">{{ t('forecast.delete') }}</button>
+      </td>
+    </tr>
+{% endmacro %}
+{% macro day_line(entry, h) %}
+  {%- set day = entry.day.get(h|string) -%}
+  {%- if day is not none %}<br><span class="note" title="{{ t('forecast.day_title') }}">{{
+    t('forecast.day', mae='%.2f'|format(day)) }}</span>{% endif -%}
+{% endmacro %}
 
 {# Six bands, in the order the questions get asked: is it running, is it
    wrong, what does it say, what else could be run -- and then, last, the two
@@ -124,56 +178,16 @@
         <th>{{ t('forecast.col.circuit') }}</th><th>{{ t('forecast.col.origin') }}</th>
         <th>{{ t('forecast.col.inputs') }}</th><th>{{ t('forecast.col.state') }}</th>
         <th></th></tr>
-    {% for m in models %}
-    <tr{% if m.target_src != 'measured' %} class="muted"{% endif %}>
-      <td><a href="/ui/model/{{ m.id }}"><b>{{ m.name }}</b></a>
-        <div class="note">{{ m.framework }}{% if m.env and m.env.sklearn %}
-          {{ m.env.sklearn }}{% endif %} &middot; {{ m.capability }}
-          &middot; {{ t('forecast.golden.recorded') if m.golden == 'recorded'
-               else t('forecast.golden.absent') }}</div></td>
-      <td class="muted">{{ m.param|upper }}</td>
-      <td class="muted">{% if m.tx %}{{ m.tx }} &rarr; {{ m.rx }}
-          {%- else %}<span class="note">{{ t('forecast.unbound') }}</span>{% endif %}</td>
-      <td class="muted">{{ m.origin }}</td>
-      {# The alias is the provenance fact worth showing: it is the column name
-         this model's features are built around, and when it is not this
-         instrument's own it says whose ionosphere the model actually learned. #}
-      <td class="muted">{{ m.features|length }}
-        {%- if m.target_alias %} <span class="note">{{ t('forecast.of') }}
-          <code>{{ m.target_alias }}</code></span>{% endif %}</td>
-      <td>
-        {%- if m.state == 'active' %}<span class="pill ok">{{ t('forecast.state.active') }}</span>
-        {%- elif m.state == 'comparison' %}<span class="pill unk">{{ t('forecast.state.comparison') }}</span>
-        {%- else %}<span class="pill">{{ m.state }}</span>{% endif %}</td>
-      <td style="white-space:nowrap">
-        {% if m.target_src != 'measured' %}
-        {# Rendered disabled rather than hidden. An operator should see that
-           these models exist, that they were scored, and exactly why they
-           cannot go live -- a missing button explains nothing. #}
-        <button disabled title="{{ t('forecast.activate.modelled_title') }}">
-          {{ t('forecast.activate') }}</button>
-        {% elif not m.tx %}
-        <button disabled title="{{ t('forecast.activate.unbound_title') }}"
-          >{{ t('forecast.activate') }}</button>
-        {% elif m.active %}
-        <button data-needs="promote" onclick='retire({{ m.id }}, {{ m.name|tojson }})'>{{ t('forecast.retire') }}</button>
-        {% else %}
-        {# Single-quoted: see the note in archives.html. `tojson` does not escape
-           `"`, so a double-quoted handler carrying a model name is truncated to
-           a syntax error and the button silently does nothing. #}
-        <button data-needs="promote" onclick='activate({{ m.id }}, {{ m.name|tojson }},
-          {{ (m.tx ~ " -> " ~ m.rx)|tojson }}, {{ m.param|tojson }})'>{{ t('forecast.activate') }}</button>
-        {% endif %}
-        {# Deleting is the operator's call, so it is offered on every row --
-           including the active one, where the api refuses it and says to
-           retire first. A button that is simply absent teaches nothing; one
-           that explains the order of operations does. #}
-        <button data-needs="model" onclick='removeModel({{ m.id }}, {{ m.name|tojson }})'
-          title="{{ t('forecast.delete_title') }}">{{ t('forecast.delete') }}</button>
-      </td>
-    </tr>
-    {% endfor %}
+    {% for m in models %}{{ model_row(m) }}{% endfor %}
   </table></div>
+  {# Replaced rolling fits, one a month once pruned, folded away. #}
+  {% if fits %}
+  <details style="margin-top:.5rem"><summary class="note">{{ t('forecast.fits',
+    n=fits|length) }}</summary>
+  <div class="scroll"><table>
+    {% for m in fits %}{{ model_row(m) }}{% endfor %}
+  </table></div></details>
+  {% endif %}
   {% else %}
   <p class="muted">{{ t('forecast.nothing_registered') }}</p>
   {% endif %}
@@ -210,9 +224,10 @@
       {% for h in horizons %}<th style="text-align:right">{{ h|lead }}</th>{% endfor %}
       <th>{{ t('forecast.col.pairs') }}</th><th>{{ t('forecast.col.state') }}</th></tr>
 
-    {% for entry in board if entry.kind == 'model' %}
+    {% for entry in board if entry.kind in ('live', 'model') %}
     <tr>
-      <td><b>{{ entry.name }}</b></td>
+      <td><b>{{ t('forecast.live_record') if entry.kind == 'live'
+               else entry.name }}</b></td>
       <td class="muted">{{ entry.origin }}</td>
       {# Absolute above, relative below. A live MAE cannot be read across
          weeks on its own -- a quiet week and a disturbed one give different
@@ -229,7 +244,7 @@
             class="note{% if not entry.sure.get(h|string) %} muted{% endif %}"
             title="{{ t('forecast.skill_title') }}">{{
             '%+.0f%%'|format(skill * 100) }}{% if not entry.sure.get(h|string)
-            %}?{% endif %}</span>{% endif %}
+            %}?{% endif %}</span>{% endif %}{{ day_line(entry, h) }}
         {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
       {% endfor %}
       <td class="muted">{{ entry.n.values()|sum }}</td>
@@ -251,7 +266,7 @@
       {% for h in horizons %}
       <td style="text-align:right; font-variant-numeric:tabular-nums">
         {%- set mae = entry.mae.get(h|string) -%}
-        {% if mae is not none %}{{ '%.2f'|format(mae) }}
+        {% if mae is not none %}{{ '%.2f'|format(mae) }}{{ day_line(entry, h) }}
         {%- else %}<span class="muted">&mdash;</span>{% endif %}</td>
       {% endfor %}
       <td class="muted">{{ entry.n.values()|sum }}</td>

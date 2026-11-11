@@ -100,6 +100,10 @@ BASELINES = ("persistence", "recurrence-27d", "iri", "harmonic")
 #: issued each point of it.
 LIVE = "live:forecast"
 
+#: The recent stretch every score also reports on its own: a refit, a
+#: disturbed day or a timing fault shows here before a month averages it away.
+DAY = pd.Timedelta(days=1)
+
 
 class ScoringError(RuntimeError):
     """Something is wrong with the request, not with the forecast."""
@@ -226,6 +230,13 @@ def summarise(pairs: Pairs, param: str) -> dict:
         "mae_censored": (_finite(error[pairs.censored].mean())
                          if pairs.censored.any() else None),
     }
+
+
+def latest(pairs: Pairs, cutoff: pd.Timestamp) -> Pairs:
+    """The pairs judged in the last day before ``cutoff``."""
+    kept = np.asarray(pairs.valid_at > cutoff - DAY)
+    return Pairs(pairs.valid_at[kept], pairs.predicted[kept],
+                 pairs.observed[kept], pairs.censored[kept])
 
 
 def diurnal(pairs: Pairs, param: str) -> list[dict]:
@@ -609,6 +620,9 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
     known = {f"model:{row['id']}": row for row in registry.models(conn, param=param)}
     folded: dict[str, dict] = {}
     for row in scores(conn, param, tx, rx):
+        model = known.get(row["subject"])
+        if model is not None and registry.superseded(model):
+            continue
         entry = folded.setdefault(row["subject"], {
             "subject": row["subject"],
             "kind": ("baseline" if row["subject"].startswith("baseline:")
@@ -622,8 +636,9 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
             # model, and only the ratio to a baseline that saw the same days
             # separates the model from the ionosphere.
             "skill": {}, "sure": {},
+            # The same error over the last day alone, per horizon.
+            "day": {},
         })
-        model = known.get(row["subject"])
         if model is not None:
             entry["name"] = model["name"]
             entry["origin"] = model["origin"]
@@ -634,6 +649,8 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
         entry["n"][str(row["horizon_s"])] = row["n"]
         if row["detail"]:
             entry["detail"][str(row["horizon_s"])] = row["detail"]
+            entry["day"][str(row["horizon_s"])] = (
+                row["detail"].get("day") or {}).get("mae")
             versus = (row["detail"] or {}).get("vs_persistence")
             if versus:
                 entry["skill"][str(row["horizon_s"])] = versus.get("skill")
@@ -768,8 +785,10 @@ def _judge(conn: sqlite3.Connection, subject: str, param: str, tx: str,
                 versus = compare(pairs, pair(reference, observed), param)
         except ScoringError:
             versus = None
+        day = summarise(latest(pairs, _naive(window[1])), param)
         store(conn, subject, param, tx, rx, int(horizon), result, window,
-              detail={"vs_persistence": versus} if versus else None)
+              detail={"day": day,
+                      **({"vs_persistence": versus} if versus else {})})
         by_horizon[str(int(horizon))] = {**result,
                                          **({"vs_persistence": versus}
                                             if versus else {})}
@@ -886,16 +905,17 @@ def score_baselines(conn: sqlite3.Connection, param: str, tx: str, rx: str,
                       {"n": 0}, window, {"unavailable": why})
                 continue
 
-            result = summarise(pair(predicted, observed), param)
-            detail = None
+            pairs = pair(predicted, observed)
+            result = summarise(pairs, param)
+            detail = {"day": summarise(latest(pairs, cutoff), param)}
             if not result["n"] and not result["n_censored"]:
                 # A stored zero with no reason beside it reads as neglect. The
                 # usual cause is simply that the archive does not reach back as
                 # far as this baseline looks -- 27 days, for recurrence -- and
                 # saying so is the difference between a gap and a mystery.
-                detail = {"unavailable": (
+                detail["unavailable"] = (
                     f"{name} found no measurement at the offset it reaches "
-                    f"back to; the history here does not go far enough.")}
+                    f"back to; the history here does not go far enough.")
                 reason = reason or detail["unavailable"]
             store(conn, f"baseline:{name}", param, tx, rx, int(horizon),
                   result, window, detail)
@@ -951,7 +971,7 @@ def run_once(conn: sqlite3.Connection, params: tuple[str, ...] = ("muf",),
             )
             for model_id in sorted({row["model_id"] for row in written}):
                 model = registry.get(conn, model_id)
-                if model is None:            # cascade should prevent this
+                if model is None or registry.superseded(model):
                     continue
                 results.append(score_model(conn, model, circuit["tx"],
                                            circuit["rx"], method, window_days, now))

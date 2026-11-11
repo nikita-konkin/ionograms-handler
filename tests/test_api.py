@@ -4707,3 +4707,33 @@ def test_the_page_says_how_the_rolling_fit_is_scheduled(client, api_db,
     api_db.commit()
     page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
     assert "every 3 days on 9 days" in page, "the page hides the fit's schedule"
+
+
+def test_the_models_table_folds_replaced_rolling_fits(client, api_db,
+                                                     tmp_path):
+    _circuit(api_db)
+    _register(api_db, "rolling-20260204T050000", active=1)
+    for k in range(3):
+        _register(api_db, f"rolling-202601{k + 10}T000000")
+    api_db.commit()
+    assert "Earlier rolling fits: 3" in client.get("/ui/forecast").text, \
+        "the page did not fold the replaced rolling fits"
+
+
+def test_the_leaderboard_shows_the_live_record(client, api_db, tmp_path):
+    from services.prediction import scoring
+    _circuit(api_db)
+    scoring.store(api_db, "live:forecast", "muf", "cyprus1", "rx", 86400,
+                  {"n": 30, "mae": 1.37})
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "Live forecast, as issued" in page, \
+        "the console leaderboard has no row for the live forecast"
+
+
+def test_the_leaderboard_shows_the_last_days_error(client, api_db, tmp_path):
+    from services.prediction import scoring
+    _circuit(api_db)
+    scoring.store(api_db, "live:forecast", "muf", "cyprus1", "rx", 86400,
+                  {"n": 30, "mae": 1.37}, detail={"day": {"n": 9, "mae": 2.61}})
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "last 24 h 2.61" in page, "the console hides the last day's error"
