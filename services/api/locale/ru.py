@@ -748,6 +748,8 @@ MESSAGES: dict[str, str] = {
                      "для отката; ещё {older} старых хранятся только ради "
                      "их прогнозов",
     "forecast.live_record": "Действующий прогноз, как он был выпущен",
+    "forecast.day": "за 24 ч {mae}",
+    "forecast.day_title": "MAE только по парам последних 24 часов, МГц",
     "forecast.rolling": "Скользящее обучение",
     "forecast.rolling.fit": "Последняя модель <b>{name}</b>, зарегистрирована {at}.",
     "forecast.rolling.live": "действует",

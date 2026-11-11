@@ -814,3 +814,27 @@ def test_the_leaderboard_leaves_out_superseded_rolling_fits(conn):
                   {"n": 10, "mae": 0.9})
     assert scoring.leaderboard(conn, "muf", TX, RX) == [], \
         "a superseded rolling fit took a row on the leaderboard"
+
+
+def test_a_score_keeps_the_last_days_error_beside_the_windows(conn):
+    index, muf, _ = seed(conn, days=10)
+    model = add_model(conn)
+    window = index[-48 * 8:]
+    add_forecasts(conn, model, muf.reindex(window)
+                  + np.where(window > index[-1] - pd.Timedelta(days=1), 2.0, 0.5))
+    scoring.run_once(conn, ("muf",), "contour", window_days=8,
+                     now=just_after(index))
+    entry = next(row for row in scoring.leaderboard(conn, "muf", TX, RX)
+                 if row["kind"] == "model")
+    assert entry["day"]["86400"] == 2.0, \
+        "the last day's error was not kept apart from the window's"
+
+
+def test_a_baseline_keeps_the_last_days_error(conn):
+    index, _, _ = seed(conn, days=10)
+    scoring.run_once(conn, ("muf",), "contour", window_days=8,
+                     now=just_after(index))
+    entry = next(row for row in scoring.leaderboard(conn, "muf", TX, RX)
+                 if row["name"] == "persistence")
+    assert entry["day"]["86400"] is not None, \
+        "persistence has no error for the last day"

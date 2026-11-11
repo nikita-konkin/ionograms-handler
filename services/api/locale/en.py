@@ -739,6 +739,9 @@ MESSAGES: dict[str, str] = {
                      "roll back; {older} older fits are kept only for their "
                      "forecasts",
     "forecast.live_record": "Live forecast, as issued",
+    "forecast.day": "last 24 h {mae}",
+    "forecast.day_title": "MAE over the pairs of the last 24 hours alone, "
+                          "in MHz",
     "forecast.rolling": "Rolling training",
     "forecast.rolling.fit": "Newest fit <b>{name}</b>, registered {at}.",
     "forecast.rolling.live": "live",

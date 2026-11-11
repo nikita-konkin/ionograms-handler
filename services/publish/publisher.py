@@ -472,6 +472,7 @@ def forecast_block(conn, tx: str, rx: str) -> dict:
             # `skill` is absent from score rows written before it existed.
             "mae": entry["mae"], "r2": entry["r2"],
             "skill": entry.get("skill") or {},
+            "day": entry.get("day") or {},
             "n": entry["n"],
         } for entry in _public(board, model)],
         "horizons": [str(h) for h in scoring.HORIZONS],

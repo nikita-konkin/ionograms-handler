@@ -4728,3 +4728,12 @@ def test_the_leaderboard_shows_the_live_record(client, api_db, tmp_path):
     page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
     assert "Live forecast, as issued" in page, \
         "the console leaderboard has no row for the live forecast"
+
+
+def test_the_leaderboard_shows_the_last_days_error(client, api_db, tmp_path):
+    from services.prediction import scoring
+    _circuit(api_db)
+    scoring.store(api_db, "live:forecast", "muf", "cyprus1", "rx", 86400,
+                  {"n": 30, "mae": 1.37}, detail={"day": {"n": 9, "mae": 2.61}})
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "last 24 h 2.61" in page, "the console hides the last day's error"
