@@ -66,19 +66,19 @@ as issued over the same validation day. One the test finds worse stays a
 candidate: its state records the reason, the incumbent keeps publishing, and
 the same step is not fitted again.
 
-After each activation the worker deletes the artifacts of older rolling fits,
-keeping the live model and the newest twelve (an hour of fits) to roll back
-to. Registry rows and forecasts stay, because the published record and its
-scores are built from them.
+After each activation the worker deletes superseded rolling fits. It keeps
+the live model and one fit a month, the last that went live in it. A deleted
+fit's forecasts move onto its month's fit first, so the published record and
+its scores lose nothing; a fit that never went live goes with its forecasts.
 
 The loop checks every 300 seconds, skips unchanged data and never queues missed
 steps. OS locks in the shared model store prevent concurrent fits of the same
 recipe. State survives restarts. Data more than 30 minutes old pauses fitting:
 enable direct completed-file ingestion to avoid the archive-copy delay.
 
-Each successful fit registers a distinct artifact so prior forecasts retain
-their model identity. Artifacts and forecast history are retained; monitor
-model-store/database growth. The worker writes only future forecasts, rather
+Each successful fit registers a distinct artifact. Once pruned, its
+forecasts carry the identity of its month's fit; forecast history is
+retained, so monitor database growth. The worker writes only future forecasts, rather
 than duplicating a complete archive backtest every five minutes. The validation
 MAE is recorded in the registry, not presented as a live score.
 
