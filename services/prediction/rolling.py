@@ -25,12 +25,6 @@ from . import dataset, infer, registry, scoring, store, train
 #: archive that stopped arriving is not refitted over and over.
 STALE = pd.Timedelta(minutes=30)
 
-#: Rolling fits that keep their artifacts besides the live one: an hour of
-#: them, enough to roll back to. Older fits keep their registry rows and their
-#: forecasts, which the published record and its scores are built from.
-KEEP = 12
-
-
 def window_plan(
     spec: dict, anchor: pd.Timestamp
 ) -> tuple[dict, pd.Timestamp, pd.Timestamp]:
@@ -186,34 +180,39 @@ def run_once(
         }
 
 
-def prune(conn, param: str, tx: str, rx: str, keep: int = KEEP) -> int:
-    """Delete the artifacts of superseded rolling fits; return how many.
+def prune(conn, param: str, tx: str, rx: str) -> int:
+    """Delete superseded rolling fits; return how many.
 
-    The live model and the newest ``keep`` fits keep theirs. A digest that a
-    kept fit or any model not from rolling also names is left alone. Registry
-    rows and forecasts are never touched.
+    The live model stays, and so does one fit a month: the last that went
+    live in it. A deleted fit's forecasts move onto its month's fit first, so
+    the record as issued, which is built from them, loses nothing. A fit that
+    never went live has no place in that record and goes with its forecasts.
     """
     rows = db.rows(
         conn,
-        "SELECT id, sha256, active FROM model_registry WHERE name LIKE "
-        "'rolling-%' AND param = ? AND tx = ? AND rx = ? ORDER BY id DESC",
+        "SELECT id, name, active, activated_at FROM model_registry WHERE name "
+        "LIKE 'rolling-%' AND param = ? AND tx = ? AND rx = ? "
+        "ORDER BY name DESC",
         (param, tx, rx),
     )
-    kept = {row["sha256"] for row in rows[:keep]} | {
-        row["sha256"] for row in rows if row["active"]
-    }
+    heirs: dict[str, int] = {}
+    for row in rows:
+        if row["active"] or row["activated_at"]:
+            heirs.setdefault(row["name"][8:14], row["id"])
+    kept = set(heirs.values()) | {row["id"] for row in rows if row["active"]}
     removed = 0
-    for row in rows[keep:]:
-        if row["sha256"] in kept:
+    for row in rows:
+        if row["id"] in kept:
             continue
-        shared = db.one(
-            conn,
-            "SELECT COUNT(*) AS n FROM model_registry WHERE sha256 = ? "
-            "AND name NOT LIKE 'rolling-%'",
-            (row["sha256"],),
-        )
-        if not shared["n"] and store.unlink(row["sha256"]):
-            removed += 1
+        if row["activated_at"]:
+            with conn:
+                conn.execute(
+                    "UPDATE OR REPLACE forecast SET model_id = ? "
+                    "WHERE model_id = ?",
+                    (heirs[row["name"][8:14]], row["id"]),
+                )
+        registry.delete(conn, row["id"])
+        removed += 1
     return removed
 
 
