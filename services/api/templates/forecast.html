@@ -439,7 +439,8 @@
     {%- if rolling.live %} <span class="pill ok">{{ t('forecast.rolling.live') }}</span>{% endif %}
     {%- if rolling.mae is not none %} {{ t('forecast.rolling.mae', mae='%.2f'|format(rolling.mae), start=rolling.from|msk, stop=rolling.to|msk) }}{% endif %}
     {%- if rolling.trained_from %} {{ t('forecast.rolling.trained', start=rolling.trained_from|msk, stop=rolling.trained_to|msk) }}{% endif %}
-    {%- if rolling.newest %} {{ t('forecast.rolling.newest', at=rolling.newest|msk, age=rolling.age_min) }}{% endif %}</p>
+    {%- if rolling.newest %} {{ t('forecast.rolling.newest', at=rolling.newest|msk, age=rolling.age_min) }}{% endif %}
+    {%- if rolling.note %}<br>{{ rolling.note }}{% endif %}</p>
   {% if rolling.waiting %}
   <p class="note"><span class="pill warn">{{ t('forecast.rolling.waiting') }}</span>
     {{ t('forecast.rolling.paused', limit=rolling.stale_min) }}</p>

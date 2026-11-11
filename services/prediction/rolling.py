@@ -1,6 +1,6 @@
-"""Serial rolling fits, triggered by completed measurement steps.
+"""Serial rolling fits, triggered by completed measurement steps or by days.
 
-Training targets occupy [anchor-14d, anchor-1d); the final day is held out.
+Training targets occupy [anchor-1d-N, anchor-1d); the final day is held out.
 Earlier measurements are feature context only. No validation row is refitted.
 Run in the training image, with the model store writable, never in the API.
 """
@@ -25,6 +25,9 @@ from . import dataset, infer, registry, scoring, store, train
 #: archive that stopped arriving is not refitted over and over.
 STALE = pd.Timedelta(minutes=30)
 
+#: Calendar days of training targets before the validation day.
+DAYS = 13
+
 #: Rolling fits that keep their artifacts besides the live one: an hour of
 #: them, enough to roll back to. Older fits keep their registry rows and their
 #: forecasts, which the published record and its scores are built from.
@@ -32,12 +35,13 @@ KEEP = 12
 
 
 def window_plan(
-    spec: dict, anchor: pd.Timestamp
+    spec: dict, anchor: pd.Timestamp, days: int = DAYS, note: str | None = None
 ) -> tuple[dict, pd.Timestamp, pd.Timestamp]:
-    """14 calendar days of targets plus sufficient context for feature warmup."""
+    """``days`` calendar days of targets, then one day of validation that
+    ends at ``anchor``, plus sufficient context for feature warmup."""
     plan = train.plan_from_job({**spec, "spec": {**spec, "holdout_days": 1}})
     cut = anchor - pd.Timedelta(days=1)
-    start = cut - pd.Timedelta(days=13)
+    start = cut - pd.Timedelta(days=days)
     warmup = (
         plan["lag"]
         + max(
@@ -50,6 +54,7 @@ def window_plan(
         start=str(start - pd.Timedelta(seconds=warmup * dataset.DEFAULT_STEP_S)),
         end=str(anchor - pd.Timedelta(seconds=dataset.DEFAULT_STEP_S)),
         name="rolling-" + anchor.strftime("%Y%m%dT%H%M%S"),
+        note=note,
     )
     return plan, start, cut
 
@@ -86,10 +91,25 @@ def exclusive(path: Path):
 
 
 def run_once(
-    conn, spec: dict, *, activate: bool = False, now=None, state_dir: Path | None = None
+    conn,
+    spec: dict,
+    *,
+    activate: bool = False,
+    now=None,
+    state_dir: Path | None = None,
+    days: int = DAYS,
+    period: int = 0,
 ) -> dict:
-    """Fit only the newest available step; no catch-up queue after an outage."""
-    key = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:24]
+    """Fit only the newest available step; no catch-up queue after an outage.
+
+    With a ``period`` of days the worker is daily instead: it fits at 00:00
+    UTC once the day before is measured, refits every ``period`` days, and
+    every day issues the 24 hours that follow midnight and nothing beyond.
+    """
+    key = hashlib.sha256(
+        json.dumps({**spec, "days": days, "period": period}, sort_keys=True)
+        .encode()
+    ).hexdigest()[:24]
     directory = Path(state_dir) if state_dir is not None else store.root() / "rolling"
     with exclusive(directory / (key + ".lock")) as locked:
         if not locked:
@@ -107,83 +127,136 @@ def run_once(
             return {"state": "waiting", "detail": "no measurements"}
         newest = pd.Timestamp(observed["datetime"].max())
         anchor = newest.floor("5min") + pd.Timedelta(minutes=5)
-        stamp = str(anchor)
-        if saved.get("anchor") == stamp and (
-            not activate or saved.get("activated") or saved.get("refused")
-        ):
-            return {"state": "unchanged", **saved}
-        # Do not train repeatedly on an old archive while waiting for ingest.
-        if now - newest > STALE:
-            return {
-                "state": "waiting",
-                "detail": "latest measurement is over 30 minutes old",
-            }
-        plan, start, cut = window_plan(spec, anchor)
-        began = time.monotonic()
-        result = train.run(
-            conn, plan, training_start=start, validation_start=cut, diagnostics=False
-        )
-        metrics = result["holdout"]
-        if (
-            metrics["n"] < 60
-            or metrics["mae"] is None
-            or not math.isfinite(metrics["mae"])
-        ):
-            raise train.TrainError(
-                "rolling validation requires 60 uncensored pairs and finite MAE"
-            )
-        model = result["model"]
-        # Validity is not enough to go live: a fit the paired test finds worse
-        # than the live forecast, on the same validation day, stays a
-        # candidate and the incumbent keeps publishing.
-        versus = result.get("vs_live") or {}
-        refused = (
-            activate
-            and bool(versus.get("distinguishable"))
-            and versus.get("delta", 0) > 0
-        )
-        # Write forecasts before promotion, so a failed prediction leaves the
-        # old active model and its public curve intact.
-        forecast = None
-        if activate and not refused:
-            forecast = infer.run_model(
-                conn,
-                model,
-                spec["tx"],
-                spec["rx"],
-                spec["method"],
-                valid_after=now,
-            )
-            if not forecast["written"]:
-                raise train.TrainError("candidate produced no forecast; incumbent kept")
-            registry.activate(conn, model["id"], by="rolling-13d-1d")
-            prune(conn, spec["param"], spec["tx"], spec["rx"])
-        saved = {
-            "anchor": stamp,
-            "model_id": model["id"],
-            "activated": activate and not refused,
-            "refused": (
-                f"worse than the live forecast on the validation day: MAE "
-                f"{versus['mae']:.2f} v {versus['baseline_mae']:.2f} MHz over "
-                f"{versus['n']} pairs"
-                if refused
-                else None
-            ),
-            "vs_live": versus or None,
-            "train_start": str(start),
-            "validation_start": str(cut),
-            "validation_end": stamp,
-            "validation": metrics,
-            "elapsed_s": round(time.monotonic() - began, 3),
-        }
-        temporary = state_file.with_suffix(".tmp")
-        temporary.write_text(json.dumps(saved), encoding="utf-8")
-        temporary.replace(state_file)
+        if period:
+            result = _daily(conn, spec, saved, now, anchor, activate=activate,
+                            days=days, period=period)
+        else:
+            result = _step(conn, spec, saved, now, newest, activate=activate,
+                           days=days)
+        if result["state"] in ("trained", "refused", "issued"):
+            saved = {key: value for key, value in result.items()
+                     if key not in ("state", "forecast")}
+            temporary = state_file.with_suffix(".tmp")
+            temporary.write_text(json.dumps(saved), encoding="utf-8")
+            temporary.replace(state_file)
+        return result
+
+
+def _step(conn, spec, saved, now, newest, *, activate, days) -> dict:
+    """A fit on every new five-minute step, while measurements keep arriving."""
+    anchor = newest.floor("5min") + pd.Timedelta(minutes=5)
+    if saved.get("anchor") == str(anchor) and (
+        not activate or saved.get("activated") or saved.get("refused")
+    ):
+        return {"state": "unchanged", **saved}
+    # Do not train repeatedly on an old archive while waiting for ingest.
+    if now - newest > STALE:
         return {
-            "state": "refused" if refused else "trained",
-            **saved,
-            "forecast": forecast,
+            "state": "waiting",
+            "detail": "latest measurement is over 30 minutes old",
         }
+    return _fit(conn, spec, anchor, now, activate=activate, days=days,
+                by=f"rolling-{days}d-1d",
+                note=f"Refitted on every step on {days} days, validated on "
+                     f"the day after.")
+
+
+def _daily(conn, spec, saved, now, anchor, *, activate, days, period) -> dict:
+    """Fits at midnight every ``period`` days, one issue for each day."""
+    today = now.floor("D")
+    if anchor < today:
+        return {"state": "waiting",
+                "detail": "the day before is not measured to its end yet"}
+    if saved.get("day") == str(today):
+        return {"state": "unchanged", **saved}
+    until = today + pd.Timedelta(days=1)
+    if not saved.get("block") or today >= pd.Timestamp(saved["block"]) \
+            + pd.Timedelta(days=period):
+        result = _fit(conn, spec, today, now, activate=activate, days=days,
+                      by=f"daily-{days}d-every-{period}d", until=until,
+                      note=f"Refitted at 00:00 UTC every {period} days on "
+                           f"{days} days, validated on the day after; each "
+                           f"day issues the next 24 hours.")
+        result["block"] = str(today)
+    else:
+        result = {**saved, "state": "issued", "forecast": None}
+    if activate and result["forecast"] is None:
+        # The incumbent issues the day: either the period's own fit, or the
+        # live model a refused fit left in place.
+        model = registry.active(conn, spec["param"], spec["tx"], spec["rx"])
+        if model is not None:
+            result["forecast"] = infer.run_model(
+                conn, model, spec["tx"], spec["rx"], spec["method"],
+                valid_after=now, valid_before=until)
+    result["day"] = str(today)
+    return result
+
+
+def _fit(conn, spec, anchor, now, *, activate, days, by, note,
+         until=None) -> dict:
+    """Fit the days before ``anchor`` and, unless the gate refuses it, issue
+    its forecast up to ``until`` and put it live."""
+    plan, start, cut = window_plan(spec, anchor, days, note)
+    began = time.monotonic()
+    result = train.run(
+        conn, plan, training_start=start, validation_start=cut, diagnostics=False
+    )
+    metrics = result["holdout"]
+    if (
+        metrics["n"] < 60
+        or metrics["mae"] is None
+        or not math.isfinite(metrics["mae"])
+    ):
+        raise train.TrainError(
+            "rolling validation requires 60 uncensored pairs and finite MAE"
+        )
+    model = result["model"]
+    # Validity is not enough to go live: a fit the paired test finds worse
+    # than the live forecast, on the same validation day, stays a
+    # candidate and the incumbent keeps publishing.
+    versus = result.get("vs_live") or {}
+    refused = (
+        activate
+        and bool(versus.get("distinguishable"))
+        and versus.get("delta", 0) > 0
+    )
+    # Write forecasts before promotion, so a failed prediction leaves the
+    # old active model and its public curve intact.
+    forecast = None
+    if activate and not refused:
+        forecast = infer.run_model(
+            conn,
+            model,
+            spec["tx"],
+            spec["rx"],
+            spec["method"],
+            valid_after=now,
+            valid_before=until,
+        )
+        if not forecast["written"]:
+            raise train.TrainError("candidate produced no forecast; incumbent kept")
+        registry.activate(conn, model["id"], by=by)
+        prune(conn, spec["param"], spec["tx"], spec["rx"])
+    return {
+        "state": "refused" if refused else "trained",
+        "anchor": str(anchor),
+        "model_id": model["id"],
+        "activated": activate and not refused,
+        "refused": (
+            f"worse than the live forecast on the validation day: MAE "
+            f"{versus['mae']:.2f} v {versus['baseline_mae']:.2f} MHz over "
+            f"{versus['n']} pairs"
+            if refused
+            else None
+        ),
+        "vs_live": versus or None,
+        "train_start": str(start),
+        "validation_start": str(cut),
+        "validation_end": str(anchor),
+        "validation": metrics,
+        "elapsed_s": round(time.monotonic() - began, 3),
+        "forecast": forecast,
+    }
 
 
 def prune(conn, param: str, tx: str, rx: str, keep: int = KEEP) -> int:
@@ -239,6 +312,7 @@ def status(conn, param: str, tx: str, rx: str, method: str = "contour",
     newest = newest[newest["value"].notna()]
     at = pd.Timestamp(newest["datetime"].max()) if len(newest) else None
     return {"name": model["name"], "fitted_at": model["imported_at"],
+            "note": model.get("note"),
             "live": bool(model["active"]), "mae": holdout.get("mae"),
             "from": holdout.get("from"), "to": holdout.get("to"),
             "trained_from": model.get("trained_from"),
@@ -258,12 +332,21 @@ def main(argv=None):
     parser.add_argument("--method", default="contour")
     parser.add_argument("--lead", type=float, default=24)
     parser.add_argument("--interval", type=float, default=300)
+    parser.add_argument("--train-days", type=int, default=DAYS)
+    parser.add_argument(
+        "--period-days", type=int, default=0,
+        help="fit at 00:00 UTC every this many days and issue one day at a "
+             "time; 0 refits on every new step")
     parser.add_argument("--activate", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--db", default=None)
     args = parser.parse_args(argv)
     if not math.isfinite(args.interval) or args.interval <= 0:
         parser.error("interval must be positive and finite")
+    if args.train_days < 1:
+        parser.error("train days must be at least one")
+    if args.period_days < 0:
+        parser.error("period days must not be negative")
     spec = {
         "param": args.param,
         "tx": args.tx,
@@ -282,7 +365,9 @@ def main(argv=None):
         began = time.monotonic()
         try:
             with db.session(args.db) as conn:
-                result = run_once(conn, spec, activate=args.activate)
+                result = run_once(conn, spec, activate=args.activate,
+                                  days=args.train_days,
+                                  period=args.period_days)
             print(json.dumps(result), flush=True)
         except Exception as exc:
             print(

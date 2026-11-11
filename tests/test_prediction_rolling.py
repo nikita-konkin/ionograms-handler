@@ -309,3 +309,91 @@ def test_pruning_keeps_the_registry_rows_and_their_forecasts(conn):
     assert conn.execute("SELECT COUNT(*) FROM forecast WHERE model_id = ?",
                         (old["id"],)).fetchone()[0] == 1, \
         "pruning deleted the forecasts the published record is built from"
+
+
+def daily(conn, tmp_path, at, period=2, activate=False):
+    return rolling.run_once(conn, spec(), activate=activate,
+                            now=pd.Timestamp(at), state_dir=tmp_path,
+                            period=period)
+
+
+def test_a_fit_trains_on_the_days_it_is_given():
+    _, start, cut = rolling.window_plan(spec(), pd.Timestamp("2026-08-28"),
+                                        days=6)
+    assert cut - start == pd.Timedelta(days=6), \
+        "the fit did not train on the days it was given"
+
+
+def test_a_daily_fit_is_anchored_at_midnight(conn, tmp_path):
+    seed(conn, days=18)
+    found = daily(conn, tmp_path, "2026-08-28 00:10")
+    assert found["validation_end"] == "2026-08-28 00:00:00", \
+        "a daily fit was not anchored at midnight"
+
+
+def test_a_daily_fit_waits_for_the_previous_day_to_be_measured(conn, tmp_path):
+    seed(conn, days=18)
+    conn.execute("DELETE FROM extraction WHERE sounding_id IN (SELECT id FROM "
+                 "sounding WHERE datetime > '2026-08-27 20:00:00')")
+    conn.commit()
+    assert daily(conn, tmp_path, "2026-08-28 00:10")["state"] == "waiting", \
+        "a daily fit ran on a day that was not measured to its end"
+
+
+def test_a_daily_model_is_not_refitted_before_its_period_ends(conn, tmp_path):
+    seed(conn, days=19)
+    daily(conn, tmp_path, "2026-08-27 00:10")
+    daily(conn, tmp_path, "2026-08-28 00:10")
+    assert len(registry.models(conn)) == 1, \
+        "a daily model was refitted before its period ended"
+
+
+def test_a_daily_model_is_refitted_once_its_period_ends(conn, tmp_path):
+    seed(conn, days=19)
+    for at in ("2026-08-26 00:10", "2026-08-27 00:10", "2026-08-28 00:10"):
+        daily(conn, tmp_path, at)
+    assert len(registry.models(conn)) == 2, \
+        "a daily model was not refitted once its period ended"
+
+
+def test_a_daily_issue_covers_only_the_day_ahead(conn, tmp_path):
+    seed(conn, days=19)
+    daily(conn, tmp_path, "2026-08-28 00:10", activate=True)
+    row = db.one(conn, "SELECT MAX(valid_at) AS last FROM forecast")
+    assert row["last"] == "2026-08-28T23:55:00Z", \
+        "a daily issue reached past the day ahead"
+
+
+def test_a_daily_issue_is_made_once_a_day(conn, tmp_path):
+    seed(conn, days=19)
+    daily(conn, tmp_path, "2026-08-28 00:10", activate=True)
+    again = daily(conn, tmp_path, "2026-08-28 00:20", activate=True)
+    assert again["state"] == "unchanged", "a day was issued twice"
+
+
+def test_the_next_day_is_issued_by_the_same_daily_model(conn, tmp_path):
+    seed(conn, days=19)
+    first = daily(conn, tmp_path, "2026-08-27 00:10", activate=True)
+    second = daily(conn, tmp_path, "2026-08-28 00:10", activate=True)
+    assert (second["state"], second["model_id"], bool(second["forecast"])) \
+        == ("issued", first["model_id"], True), \
+        "the next day was not issued by the model fitted for the period"
+
+
+def test_the_status_carries_the_mode_of_the_fit(conn, tmp_path):
+    seed(conn, days=18)
+    daily(conn, tmp_path, "2026-08-28 00:10")
+    found = rolling.status(conn, "muf", TX, RX,
+                           now=pd.Timestamp("2026-08-28 00:10"))
+    assert "every 2 days" in found["note"], "the status hides the daily mode"
+
+
+def test_a_refused_daily_fit_leaves_the_day_to_the_live_model(conn, tmp_path,
+                                                              monkeypatch):
+    seed(conn, days=19)
+    first = daily(conn, tmp_path, "2026-08-27 00:10", period=1, activate=True)
+    monkeypatch.setattr(train, "run", judged(WORSE))
+    second = daily(conn, tmp_path, "2026-08-28 00:10", period=1, activate=True)
+    assert second["forecast"]["model"] == registry.get(
+        conn, first["model_id"])["name"], \
+        "the live model did not issue the day its successor was refused"

@@ -18,6 +18,25 @@ and would expose the held-out day through the feature construction.
 Validation is a fixed chronological holdout, not a simulated sequence of
 historical deployments; operational forecast scores remain separate.
 
+## Daily mode
+
+`--period-days M` (`ROLLING_PERIOD_DAYS`) turns the step-by-step refits into a
+daily schedule, with `--train-days N` (`ROLLING_TRAIN_DAYS`, 13 by default)
+setting the training span in either mode:
+
+- Once the day before is measured to its last step, the worker fits at
+  00:00 UTC on `[00:00 - 1 day - N days, 00:00 - 1 day)` and validates on the
+  day before midnight, under the same gate as a rolling fit.
+- Each day it issues the 24 hours from 00:00 UTC and nothing beyond: the
+  lagged features see a day ahead, so a day is what one issue can cover.
+- After M days it refits on the window moved forward by M days. Between
+  refits the same model issues each new day; when a refit is refused, the live
+  model issues it.
+
+A late archive delays the fit and the issue rather than shortening the day.
+The instants that pass before the issue is written drop out of the record as
+issued, which only keeps forecasts made in advance.
+
 ## Deployment
 
 Build/pull an `ionograms-train` image containing this module before running it.
