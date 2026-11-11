@@ -4698,6 +4698,17 @@ def test_the_page_says_when_rolling_training_waits(client, api_db, tmp_path):
     assert "Fitting is paused" in page, "a stalled worker looks healthy"
 
 
+def test_the_page_says_how_the_rolling_fit_is_scheduled(client, api_db,
+                                                        tmp_path):
+    _circuit(api_db)
+    model = _register(api_db, "rolling-20260204T000000", active=1)
+    api_db.execute("UPDATE model_registry SET note = ? WHERE id = ?",
+                   ("Refitted at 00:00 UTC every 3 days on 9 days", model))
+    api_db.commit()
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "every 3 days on 9 days" in page, "the page hides the fit's schedule"
+
+
 def test_the_models_table_folds_replaced_rolling_fits(client, api_db,
                                                      tmp_path):
     _circuit(api_db)

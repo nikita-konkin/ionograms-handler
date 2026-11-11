@@ -380,7 +380,9 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
 
-  # Rolling 13-day training + one-day validation. Opt in per circuit.
+  # Rolling training on ROLLING_TRAIN_DAYS days + one-day validation. Opt in
+  # per circuit. A ROLLING_PERIOD_DAYS above 0 makes it daily: it fits at
+  # 00:00 UTC every that many days and issues one day ahead at a time.
   # This writes artifacts and forecasts before atomically activating a model.
   rolling:
     image: ${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE in deploy/.env}/ionograms-train:${ML_IMAGE_TAG:-ml-stable}
@@ -389,6 +391,7 @@ services:
       python -m services.prediction.rolling
       --tx ${ROLLING_TX:-NIC2} --rx ${ROLLING_RX:-yoshkar-ola}
       --param muf --method contour --lead 24 --interval 300 --activate
+      --train-days ${ROLLING_TRAIN_DAYS:-13} --period-days ${ROLLING_PERIOD_DAYS:-0}
     depends_on:
       api:
         condition: service_healthy
