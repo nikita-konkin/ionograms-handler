@@ -176,3 +176,42 @@ def test_one_image_failing_does_not_cancel_the_others():
             assert strategy.get("fail-fast") is False, (
                 f"job {name}: set `fail-fast: false`, or one image's failure "
                 f"cancels the rest and a deploy blocks on an unrelated build.")
+
+
+PROMOTE = ROOT / ".github" / "workflows" / "promote-ml.yml"
+
+#: Services whose image change alters a published forecast, so they run what
+#: somebody promoted rather than whatever merged last.
+PROMOTED = ("infer", "rolling")
+
+
+def labelled(service: str) -> bool:
+    body = compose("docker-compose.hub.yml")["services"][service]
+    return str((body.get("labels") or {}).get(
+        "com.centurylinklabs.watchtower.enable")) == "true"
+
+
+@pytest.mark.parametrize("service", PROMOTED)
+def test_a_forecasting_service_runs_the_promoted_tag(service):
+    image = compose("docker-compose.hub.yml")["services"][service]["image"]
+    assert image.endswith(":${ML_IMAGE_TAG:-ml-stable}"), \
+        f"{service} does not follow the promoted tag"
+
+
+@pytest.mark.parametrize("service", ("infer", "rolling", "trainer", "registrar"))
+def test_a_model_worker_updates_itself(service):
+    assert labelled(service), f"{service} still needs an SSH session to update"
+
+
+def test_promotion_is_started_by_hand():
+    workflow = yaml.safe_load(PROMOTE.read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"workflow_dispatch"}, \
+        "promotion can start without anybody deciding to"
+
+
+def test_promotion_moves_every_image_the_promoted_services_run():
+    images = {pulled("docker-compose.hub.yml")[service] for service in PROMOTED}
+    text = PROMOTE.read_text()
+    assert all(image in text for image in images), \
+        "a promoted service runs an image the workflow does not move"
