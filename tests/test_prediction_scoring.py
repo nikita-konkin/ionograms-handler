@@ -793,3 +793,24 @@ def test_the_issued_record_includes_a_live_model_without_an_activation_stamp(con
         "2026-08-09 01:00", 2)), issued_at="2026-08-09T00:00:00Z")
     assert len(scoring.issued(conn, "muf", TX, RX)) == 2, \
         "the live model was left out for lacking a stamp"
+
+
+def test_a_pass_does_not_score_rolling_fits_that_no_longer_publish(conn):
+    index, muf, _ = seed(conn, days=10)
+    old = live_model(conn, "rolling-20260709T000000")
+    add_forecasts(conn, old, muf.reindex(index[-96:]) + 0.5)
+    live_model(conn, "rolling-20260709T000500")
+    scoring.run_once(conn, ("muf",), "contour", window_days=8,
+                     now=just_after(index))
+    subjects = {row["subject"] for row in scoring.scores(conn, "muf", TX, RX)}
+    assert f"model:{old}" not in subjects, \
+        "a superseded rolling fit was scored on its own"
+
+
+def test_the_leaderboard_leaves_out_superseded_rolling_fits(conn):
+    old = live_model(conn, "rolling-20260709T000000")
+    live_model(conn, "rolling-20260709T000500")
+    scoring.store(conn, f"model:{old}", "muf", TX, RX, 86400,
+                  {"n": 10, "mae": 0.9})
+    assert scoring.leaderboard(conn, "muf", TX, RX) == [], \
+        "a superseded rolling fit took a row on the leaderboard"

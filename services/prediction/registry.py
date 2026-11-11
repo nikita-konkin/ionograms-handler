@@ -29,6 +29,9 @@ REGISTERABLE = (
     "trained_from", "trained_to",
 )
 
+#: What every rolling fit's name starts with, before its anchor stamp.
+ROLLING = "rolling-"
+
 
 class RegistryError(RuntimeError):
     """A registry operation was refused."""
@@ -297,6 +300,16 @@ def _decode(row: dict) -> dict:
                 pass
     out["state"] = state_of(out)
     return out
+
+
+def superseded(row: dict) -> bool:
+    """Whether a row is a rolling fit that a newer fit replaced.
+
+    Such a fit is part of the live record and nothing else: the record is
+    scored and drawn as a whole, so the fit is neither scored nor listed on
+    its own.
+    """
+    return row["name"].startswith(ROLLING) and not row.get("active")
 
 
 def state_of(row: dict) -> str:

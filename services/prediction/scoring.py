@@ -609,6 +609,9 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
     known = {f"model:{row['id']}": row for row in registry.models(conn, param=param)}
     folded: dict[str, dict] = {}
     for row in scores(conn, param, tx, rx):
+        model = known.get(row["subject"])
+        if model is not None and registry.superseded(model):
+            continue
         entry = folded.setdefault(row["subject"], {
             "subject": row["subject"],
             "kind": ("baseline" if row["subject"].startswith("baseline:")
@@ -623,7 +626,6 @@ def leaderboard(conn: sqlite3.Connection, param: str, tx: str, rx: str) -> list[
             # separates the model from the ionosphere.
             "skill": {}, "sure": {},
         })
-        model = known.get(row["subject"])
         if model is not None:
             entry["name"] = model["name"]
             entry["origin"] = model["origin"]
@@ -951,7 +953,7 @@ def run_once(conn: sqlite3.Connection, params: tuple[str, ...] = ("muf",),
             )
             for model_id in sorted({row["model_id"] for row in written}):
                 model = registry.get(conn, model_id)
-                if model is None:            # cascade should prevent this
+                if model is None or registry.superseded(model):
                     continue
                 results.append(score_model(conn, model, circuit["tx"],
                                            circuit["rx"], method, window_days, now))

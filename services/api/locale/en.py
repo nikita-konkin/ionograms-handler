@@ -735,6 +735,10 @@ MESSAGES: dict[str, str] = {
     "forecast.train.window.whole": "trained on all history",
     "forecast.train.folds": "refit before each held-back day",
     "forecast.train.by_day": "checked day by day",
+    "forecast.fits": "{n} recent rolling fits, which can be activated to "
+                     "roll back; {older} older fits are kept only for their "
+                     "forecasts",
+    "forecast.live_record": "Live forecast, as issued",
     "forecast.rolling": "Rolling training",
     "forecast.rolling.fit": "Newest fit <b>{name}</b>, registered {at}.",
     "forecast.rolling.live": "live",

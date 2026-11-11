@@ -4696,3 +4696,35 @@ def test_the_page_says_when_rolling_training_waits(client, api_db, tmp_path):
     api_db.commit()
     page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
     assert "Fitting is paused" in page, "a stalled worker looks healthy"
+
+
+def test_the_models_table_leaves_out_rolling_fits_past_the_rollback_set(
+        client, api_db, tmp_path):
+    _circuit(api_db)
+    _register(api_db, "rolling-20260204T050000", active=1)
+    for k in range(20):
+        _register(api_db, f"rolling-20260203T{k:02d}0000")
+    api_db.commit()
+    assert "rolling-20260203T000000" not in client.get("/ui/forecast").text, \
+        "a rolling fit past the rollback set was listed"
+
+
+def test_the_models_table_counts_the_rolling_fits_it_leaves_out(
+        client, api_db, tmp_path):
+    _circuit(api_db)
+    _register(api_db, "rolling-20260204T050000", active=1)
+    for k in range(20):
+        _register(api_db, f"rolling-20260203T{k:02d}0000")
+    api_db.commit()
+    assert "8 older fits" in client.get("/ui/forecast").text, \
+        "the page did not say how many rolling fits it left out"
+
+
+def test_the_leaderboard_shows_the_live_record(client, api_db, tmp_path):
+    from services.prediction import scoring
+    _circuit(api_db)
+    scoring.store(api_db, "live:forecast", "muf", "cyprus1", "rx", 86400,
+                  {"n": 30, "mae": 1.37})
+    page = client.get("/ui/forecast?param=muf&tx=cyprus1&rx=rx").text
+    assert "Live forecast, as issued" in page, \
+        "the console leaderboard has no row for the live forecast"
