@@ -603,7 +603,15 @@ def forecast_page(request: Request, param: str | None = None,
     is not comparable with MAE on a 700 km one -- so there is no "all circuits"
     view to mistake for one.
     """
-    from ..prediction import dataset, legacy_features, queues, registry, scoring, train
+    from ..prediction import (
+        dataset,
+        legacy_features,
+        queues,
+        registry,
+        rolling,
+        scoring,
+        train,
+    )
 
     conn = request.app.state.db
     models = registry.models(conn)
@@ -693,6 +701,7 @@ def forecast_page(request: Request, param: str | None = None,
         "uploads": [row for row in queues.uploads(conn, limit=25)
                     if row["state"] != queues.REGISTERED],
         "jobs": jobs,
+        "rolling": rolling.status(conn, *chosen) if chosen else None,
         # Only what is still moving or still worth reading. A pass that ran
         # hours ago has already told its story in the Last issue column above.
         "runs": queues.runs(conn, limit=10),

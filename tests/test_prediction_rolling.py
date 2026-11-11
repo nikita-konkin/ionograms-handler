@@ -160,3 +160,35 @@ def test_warmup_must_not_enter_the_fit_even_if_its_values_change(conn):
     )
     assert result["n_train"] == 13 * 288
     assert result["holdout"]["n"] == 288
+
+
+def test_the_status_names_the_newest_rolling_fit(conn, tmp_path):
+    index = seed(conn, days=18)
+    rolling.run_once(conn, spec(), now=index[-1], state_dir=tmp_path)
+    rolling.run_once(conn, spec(), now=index[-1] + pd.Timedelta(minutes=10),
+                     state_dir=tmp_path)
+    found = rolling.status(conn, "muf", TX, RX, now=index[-1])
+    assert found["name"] == registry.models(conn)[0]["name"], \
+        "the status names an older fit"
+
+
+def test_the_status_carries_the_validation_error(conn, tmp_path):
+    index = seed(conn, days=18)
+    trained = rolling.run_once(conn, spec(), now=index[-1], state_dir=tmp_path)
+    found = rolling.status(conn, "muf", TX, RX, now=index[-1])
+    assert found["mae"] == trained["validation"]["mae"], \
+        "the status lost the validation error"
+
+
+def test_the_status_says_the_worker_waits_on_old_data(conn, tmp_path):
+    index = seed(conn, days=18)
+    rolling.run_once(conn, spec(), now=index[-1], state_dir=tmp_path)
+    found = rolling.status(conn, "muf", TX, RX,
+                           now=index[-1] + pd.Timedelta(minutes=47))
+    assert found["waiting"] is True, "a stalled worker was reported as fitting"
+
+
+def test_there_is_no_status_without_a_rolling_fit(conn):
+    seed(conn, days=2)
+    assert rolling.status(conn, "muf", TX, RX) is None, \
+        "a status appeared for a circuit nobody rolls"

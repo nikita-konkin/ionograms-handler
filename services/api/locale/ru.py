@@ -742,6 +742,19 @@ MESSAGES: dict[str, str] = {
     "forecast.train.window.days": "N, сут",
     "forecast.train.window.span": "обучена на последних {days} сут",
     "forecast.train.window.whole": "обучена на всей истории",
+    "forecast.train.folds": "переобучать перед каждыми отложенными сутками",
+    "forecast.train.by_day": "проверена по суткам",
+    "forecast.rolling": "Скользящее обучение",
+    "forecast.rolling.fit": "Последняя модель <b>{name}</b>, зарегистрирована {at}.",
+    "forecast.rolling.live": "действует",
+    "forecast.rolling.mae": "MAE на проверке {mae} МГц, с {start} по {stop}.",
+    "forecast.rolling.trained": "Обучена на данных с {start} по {stop}.",
+    "forecast.rolling.newest": "Последнее измерение {at}, {age} мин назад.",
+    "forecast.rolling.waiting": "Обучение приостановлено",
+    "forecast.rolling.paused":
+        "Скользящее обучение идёт, только пока последнему измерению меньше "
+        "{limit} мин. Оно возобновится само, когда придут свежие данные; если "
+        "пауза затянулась, отстаёт сканирование архива или станция.",
     "forecast.train.holdout": "Отложить для проверки, сут",
     "forecast.train.submit": "Поставить в очередь",
     "forecast.train.jobs": "Запуски обучения",
