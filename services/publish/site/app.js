@@ -621,6 +621,7 @@
       return values.length > 1 ? pick.apply(null, values) : null;
     }
     var leastError = best("mae", Math.min), mostExplained = best("r2", Math.max);
+    var leastToday = best("day", Math.min);
     function number(value, top) {
       return el("td", value != null && value === top ? { "class": "best", text: value.toFixed(2) }
                                                       : { text: value == null ? "—" : value.toFixed(2) });
@@ -640,11 +641,13 @@
           el("b", { text: curveLabel(key, f) }),
           el("small", { text: about })]),
         number(row.mae[h], leastError),
+        number(row.day ? row.day[h] : null, leastToday),
         number(row.r2 ? row.r2[h] : null, mostExplained),
         el("td", { text: row.n && row.n[h] != null ? String(row.n[h]) : "—" })]));
     });
     var head = el("tr", {}, [
       el("th", { text: t("method") }), el("th", { text: t("mae") }),
+      el("th", { text: t("day") }),
       el("th", { text: t("r2") }), el("th", { text: t("pairs") })]);
     return el("div", { "class": "table-wrap" }, [
       el("table", { "class": "scores" }, [
@@ -673,7 +676,7 @@
     if (!tables.length) return;
     box.appendChild(el("p", { "class": "note", text: t("scores_intro") }));
     tables.forEach(function (table) { box.appendChild(table); });
-    box.appendChild(el("ul", { "class": "note how" }, ["mae_about", "r2_about", "pairs_about"]
+    box.appendChild(el("ul", { "class": "note how" }, ["mae_about", "day_about", "r2_about", "pairs_about"]
       .map(function (key) { return el("li", { text: t(key) }); })));
   }
 

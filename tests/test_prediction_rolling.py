@@ -265,47 +265,79 @@ def stored(conn, name: str, active: bool = False) -> dict:
     return registry.get(conn, model)
 
 
-def test_pruning_removes_the_oldest_rolling_artifacts(conn):
-    old = stored(conn, "rolling-20261110T210000")
-    for minute in (5, 10, 15):
-        stored(conn, f"rolling-20261110T21{minute:02d}00")
-    rolling.prune(conn, "muf", TX, RX, keep=2)
-    assert not Path(old["artifact"]).exists(), "an old fit kept its artifact"
+def forecast(conn, model: dict, issued: str) -> None:
+    conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at, "
+                 "valid_at, horizon_s, value) VALUES (?, 'muf', ?, ?, ?, "
+                 "'2026-11-11T21:00:00Z', 86400, 11.0)",
+                 (model["id"], TX, RX, issued))
+    conn.commit()
 
 
-def test_pruning_keeps_the_newest_rolling_artifacts(conn):
-    for minute in (0, 5, 10):
-        newest = stored(conn, f"rolling-20261110T21{minute:02d}00")
-    rolling.prune(conn, "muf", TX, RX, keep=2)
-    assert Path(newest["artifact"]).exists(), "the newest fit lost its artifact"
+def test_pruning_deletes_superseded_refits(conn):
+    old = stored(conn, "rolling-20261110T210000", active=True)
+    stored(conn, "rolling-20261110T210500", active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert registry.get(conn, old["id"]) is None, "a superseded refit was kept"
+
+
+def test_pruning_reaps_the_artifacts_of_deleted_refits(conn):
+    old = stored(conn, "rolling-20261110T210000", active=True)
+    stored(conn, "rolling-20261110T210500", active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert not Path(old["artifact"]).exists(), "a deleted refit kept its file"
 
 
 def test_pruning_keeps_the_live_model(conn):
+    stored(conn, "rolling-20261110T210500", active=True)
     live = stored(conn, "rolling-20261110T200000", active=True)
-    for minute in (0, 5, 10):
-        stored(conn, f"rolling-20261110T21{minute:02d}00")
-    rolling.prune(conn, "muf", TX, RX, keep=1)
-    assert Path(live["artifact"]).exists(), "the live model lost its artifact"
+    rolling.prune(conn, "muf", TX, RX)
+    assert registry.get(conn, live["id"]) is not None, \
+        "the live model was deleted"
+
+
+def test_pruning_keeps_the_last_live_fit_of_a_past_month(conn):
+    stored(conn, "rolling-20261030T120000", active=True)
+    last = stored(conn, "rolling-20261031T235500", active=True)
+    stored(conn, "rolling-20261110T210000", active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert registry.get(conn, last["id"]) is not None, \
+        "the month lost the fit that stands for it"
+
+
+def test_pruning_keeps_one_fit_per_month(conn):
+    for name in ("rolling-20261030T120000", "rolling-20261031T235500",
+                 "rolling-20261110T205500", "rolling-20261110T210000"):
+        stored(conn, name, active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert [model["name"] for model in registry.models(conn)] == [
+        "rolling-20261110T210000", "rolling-20261031T235500"], \
+        "pruning did not leave one fit per month"
+
+
+def test_pruning_moves_a_deleted_fits_forecasts_onto_its_months_model(conn):
+    old = stored(conn, "rolling-20261030T120000", active=True)
+    forecast(conn, old, "2026-10-30T12:00:00Z")
+    last = stored(conn, "rolling-20261031T235500", active=True)
+    stored(conn, "rolling-20261110T210000", active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert conn.execute("SELECT COUNT(*) FROM forecast WHERE model_id = ?",
+                        (last["id"],)).fetchone()[0] == 1, \
+        "a deleted fit's forecasts were not moved onto its month's model"
+
+
+def test_pruning_drops_the_forecasts_of_fits_never_live(conn):
+    candidate = stored(conn, "rolling-20261110T205500")
+    forecast(conn, candidate, "2026-11-10T20:55:00Z")
+    stored(conn, "rolling-20261110T210000", active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert conn.execute("SELECT COUNT(*) FROM forecast").fetchone()[0] == 0, \
+        "a fit that never went live left forecasts behind"
 
 
 def test_pruning_spares_models_trained_by_hand(conn):
     manual = stored(conn, "voting-muf-24h-2026-10-31")
     for minute in (0, 5, 10):
-        stored(conn, f"rolling-20261110T21{minute:02d}00")
-    rolling.prune(conn, "muf", TX, RX, keep=1)
-    assert Path(manual["artifact"]).exists(), "a hand-trained model was pruned"
-
-
-def test_pruning_keeps_the_registry_rows_and_their_forecasts(conn):
-    old = stored(conn, "rolling-20261110T210000")
-    conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at, "
-                 "valid_at, horizon_s, value) VALUES (?, 'muf', ?, ?, "
-                 "'2026-11-10T21:00:00Z', '2026-11-11T21:00:00Z', 86400, 11.0)",
-                 (old["id"], TX, RX))
-    conn.commit()
-    for minute in (5, 10):
-        stored(conn, f"rolling-20261110T21{minute:02d}00")
-    rolling.prune(conn, "muf", TX, RX, keep=1)
-    assert conn.execute("SELECT COUNT(*) FROM forecast WHERE model_id = ?",
-                        (old["id"],)).fetchone()[0] == 1, \
-        "pruning deleted the forecasts the published record is built from"
+        stored(conn, f"rolling-20261110T21{minute:02d}00", active=True)
+    rolling.prune(conn, "muf", TX, RX)
+    assert registry.get(conn, manual["id"]) is not None, \
+        "a hand-trained model was pruned"
