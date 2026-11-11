@@ -148,19 +148,26 @@ def verify(digest: str) -> bool:
 
 
 def unlink(digest: str) -> bool:
-    """Remove an object. For an import that was refused, not for retirement.
+    """Remove an object. For a refused import or a superseded rolling fit.
 
     Retiring a model keeps its artifact: ``registry.retire`` says so, and
-    re-activating it is how a promotion is rolled back. This is only for an
-    object that was stored moments ago and whose registration then failed, so
-    that a rejected artifact leaves nothing behind.
+    re-activating it is how a promotion is rolled back. Two callers remove one
+    anyway: an object stored moments ago whose registration then failed, so a
+    rejected artifact leaves nothing behind, and ``rolling.prune``, which
+    keeps the last hour of fits to roll back to and would otherwise store
+    nearly three hundred artifacts a day.
     """
     target = path_for(digest)
     if not target.exists():
         return False
-    # 0444 means the file is not writable; the *directory* is what permits
-    # unlinking, so no chmod is needed here.
-    target.unlink()
+    # 0444 means the file is not writable; on Linux the *directory* is what
+    # permits unlinking. Windows refuses to delete a read-only file, so the
+    # bit is cleared only when that refusal happens.
+    try:
+        target.unlink()
+    except PermissionError:
+        target.chmod(0o644)
+        target.unlink()
     return True
 
 
