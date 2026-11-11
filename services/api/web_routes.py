@@ -619,11 +619,6 @@ def forecast_page(request: Request, param: str | None = None,
         model.pop("golden_input", None)
         model["golden"] = "recorded" if model.pop("golden_output", None) is not None \
             else "absent"
-    fits: dict = {}
-    for model in sorted(filter(registry.superseded, models),
-                        key=lambda row: row["name"], reverse=True):
-        fits.setdefault((model["param"], model["tx"], model["rx"]),
-                        []).append(model)
 
     # One row per circuit and parameter that has data, whether or not anything
     # is live for it -- "no model" is the answer an operator most needs on a
@@ -692,9 +687,8 @@ def forecast_page(request: Request, param: str | None = None,
     return templates.TemplateResponse(request, "forecast.html", {
         "models": [row for row in models if not registry.superseded(row)],
         "registered": len(models),
-        # The fits still holding artifacts, which a rollback can activate.
-        "fits": [row for group in fits.values() for row in group[:rolling.KEEP]],
-        "older": sum(len(group[rolling.KEEP:]) for group in fits.values()),
+        "fits": sorted(filter(registry.superseded, models),
+                       key=lambda row: row["name"], reverse=True),
         "live": live,
         "chosen": chosen,
         "board": board,
