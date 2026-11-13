@@ -30,6 +30,7 @@ from . import (
     auth,
     build,
     control_routes,
+    conversion_routes,
     db,
     direct,
     i18n,
@@ -174,6 +175,7 @@ app.add_middleware(i18n.LocaleMiddleware)
 
 app.include_router(agent_routes.router)
 app.include_router(archive_routes.router)
+app.include_router(conversion_routes.router)
 app.include_router(control_routes.router)
 app.include_router(live_routes.router)
 app.include_router(read_routes.router)

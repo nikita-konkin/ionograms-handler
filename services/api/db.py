@@ -880,10 +880,13 @@ def archive_orphans(conn: sqlite3.Connection, archive_id: int) -> dict:
     if row is None or not row["format"]:
         return {"total": 0, "by_format": {}}
     prefix = row["relpath"].rstrip("/") + "/"
+    allowed = (("lfs", "echo_window") if row["format"] == "lfs"
+               else (row["format"],))
+    marks = ",".join("?" for _ in allowed)
     counts = {r["format"]: r["n"] for r in rows(
         conn, "SELECT format, COUNT(*) AS n FROM sounding"
-              " WHERE path LIKE ? AND (format IS NULL OR format != ?)"
-              " GROUP BY format", (prefix + "%", row["format"]))}
+              f" WHERE path LIKE ? AND (format IS NULL OR format NOT IN ({marks}))"
+              " GROUP BY format", (prefix + "%", *allowed))}
     return {"total": sum(counts.values()), "by_format": counts}
 
 
@@ -901,10 +904,13 @@ def delete_archive_orphans(conn: sqlite3.Connection, archive_id: int) -> int:
         return 0
     conn.execute("PRAGMA foreign_keys = ON")
     prefix = row["relpath"].rstrip("/") + "/"
+    allowed = (("lfs", "echo_window") if row["format"] == "lfs"
+               else (row["format"],))
+    marks = ",".join("?" for _ in allowed)
     cur = conn.execute(
         "DELETE FROM sounding"
-        " WHERE path LIKE ? AND (format IS NULL OR format != ?)",
-        (prefix + "%", row["format"]))
+        f" WHERE path LIKE ? AND (format IS NULL OR format NOT IN ({marks}))",
+        (prefix + "%", *allowed))
     conn.commit()
     return cur.rowcount
 

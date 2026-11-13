@@ -55,10 +55,12 @@ attributes that describe the capture without the `.lfs`:
 | `tx_name`, `rx_name` | str | as in the header |
 | `tx_latitude` … `rx_longitude` | float | as in the header; omitted if any is unusable |
 
-`muf.loader` reads `*.echo.h5` by name. It deliberately leaves it out of
-`loader.FORMATS`. That tuple drives discovery, the archive scan and
-`--input-format`, and a window is a derivative of a sounding already counted
-under `lfs`, not a sounding of its own.
+`muf.loader` reads and discovers `*.echo.h5` as `echo_window`. Default directory
+scans prefer the original `.lfs` while both exist, avoiding a duplicate sounding.
+After verified replacement, the standalone file is indexed normally. See
+[web archive conversion](archive-conversion.md) for the job queue, deletion
+checks and recovery journal. The `muf echo-window` CLI itself still never
+deletes an `.lfs` source.
 
 ## 3. The group, v1
 

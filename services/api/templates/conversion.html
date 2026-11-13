@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}{{ t('conversion.title') }}{% endblock %}
+{% block hint %}{{ t('conversion.hint') }}{% endblock %}
+{% block body %}
+<section class="panel">
+  <h2>{{ t('conversion.title') }}</h2>
+  <p>{{ t('conversion.description') }}</p>
+  <form id="inspect-form">
+    <label>{{ t('conversion.archive') }}
+      <select id="conversion-archive" required>
+        {% for archive in archives %}
+        <option value="{{ archive.id }}">{{ archive.name }} — {{ archive.relpath }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ t('conversion.subpath') }} <input id="conversion-subpath" value="." required></label>
+    <button type="submit" {% if not archives %}disabled{% endif %}>{{ t('conversion.inspect') }}</button>
+  </form>
+  <p class="note">{{ t('conversion.scope') }}</p>
+  <p id="conversion-message" role="status" aria-live="polite"></p>
+  <p id="conversion-worker" class="note"></p>
+</section>
+<section class="panel">
+  <h2>{{ t('conversion.jobs') }}</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>{{ t('conversion.folder') }}</th><th>{{ t('conversion.state') }}</th>
+      <th>{{ t('conversion.progress') }}</th><th>{{ t('conversion.space') }}</th></tr></thead>
+    <tbody id="conversion-jobs"></tbody>
+  </table></div>
+</section>
+<section class="panel" id="conversion-detail" hidden>
+  <h2 id="conversion-current"></h2>
+  <p id="conversion-summary"></p>
+  <label><input id="conversion-confirm" type="checkbox"> {{ t('conversion.confirm') }}</label>
+  <p><button id="conversion-start">{{ t('conversion.start') }}</button>
+    <button id="conversion-cancel">{{ t('conversion.cancel') }}</button></p>
+  <p class="note">{{ t('conversion.cancel_note') }}</p>
+  <div class="scroll"><table>
+    <thead><tr><th>{{ t('conversion.file') }}</th><th>{{ t('conversion.state') }}</th>
+      <th>{{ t('conversion.detail') }}</th></tr></thead>
+    <tbody id="conversion-files"></tbody>
+  </table></div>
+  <button id="conversion-prev">{{ t('conversion.previous') }}</button>
+  <button id="conversion-next">{{ t('conversion.next') }}</button>
+</section>
+<script>
+(() => {
+  const byId = id => document.getElementById(id);
+  const states = {
+    queued: T('conversion.js.queued'), running: T('conversion.js.running'),
+    ready: T('conversion.js.ready'), completed: T('conversion.js.completed'),
+    cancelled: T('conversion.js.cancelled'), failed: T('conversion.js.failed'),
+    pending: T('conversion.js.pending'), verified: T('conversion.js.verified'),
+    replaced: T('conversion.js.replaced')
+  };
+  let selected = null, offset = 0, refreshing = false, count = 0;
+  const bytes = n => (n / 1e9).toFixed(3) + ' GB';
+  const state = job => (states[job.state] || job.state)
+    + (job.mode === 'survey' ? ' · ' + T('conversion.js.inspection') : '');
+  function cell(row, text) {
+    const el = document.createElement('td'); el.textContent = text; row.appendChild(el);
+    return el;
+  }
+  function message(text) { byId('conversion-message').textContent = text || ''; }
+  async function read(url) {
+    if (!token()) throw new Error(T('conversion.js.auth'));
+    const response = await fetch(url, {headers: {Authorization: 'Bearer ' + token()}});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || response.status);
+    return data;
+  }
+  async function details() {
+    if (selected === null) return;
+    const data = await read('/archive-conversions/' + selected + '?offset=' + offset);
+    const job = data.job;
+    count = job.total;
+    byId('conversion-detail').hidden = false;
+    byId('conversion-current').textContent = '#' + job.id + ' · ' + job.folder;
+    byId('conversion-summary').textContent = state(job) + ' · ' + job.done + '/' + job.total
+      + ' · ' + job.failed + ' ' + T('conversion.js.errors') + ' · ' + (job.detail || '');
+    byId('conversion-start').disabled = !['ready', 'failed', 'cancelled'].includes(job.state)
+      || !byId('conversion-confirm').checked || (job.state === 'ready' && job.total === 0);
+    byId('conversion-cancel').disabled = !['queued', 'running'].includes(job.state)
+      || !!job.cancel_requested;
+    const rows = byId('conversion-files'); rows.replaceChildren();
+    data.files.forEach(file => {
+      const row = document.createElement('tr');
+      cell(row, file.path); cell(row, states[file.state] || file.state);
+      cell(row, file.detail || ''); rows.appendChild(row);
+    });
+    byId('conversion-prev').disabled = offset === 0;
+    byId('conversion-next').disabled = offset + 100 >= count;
+  }
+  async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      const data = await read('/archive-conversions');
+      byId('conversion-worker').textContent = data.worker
+        ? (Date.now() - Date.parse(data.worker.heartbeat) > 120000
+            ? T('conversion.js.worker_stale', {at: data.worker.heartbeat})
+            : T('conversion.js.worker_seen', {at: data.worker.heartbeat}))
+        : T('conversion.js.no_worker');
+      const rows = byId('conversion-jobs'); rows.replaceChildren();
+      data.jobs.forEach(job => {
+        const row = document.createElement('tr');
+        const button = document.createElement('button'); button.type = 'button';
+        button.textContent = '#' + job.id + ' · ' + job.folder;
+        button.onclick = async () => {
+          selected = job.id; offset = 0; byId('conversion-confirm').checked = false;
+          try { await details(); } catch (e) { message(e.message); }
+        };
+        cell(row, '').appendChild(button); cell(row, state(job));
+        cell(row, job.done + '/' + job.total + ' · ' + job.failed + ' ' + T('conversion.js.errors'));
+        cell(row, bytes(job.source_bytes) + ' → ' + bytes(job.output_bytes));
+        rows.appendChild(row);
+      });
+      if (selected === null && data.jobs.length) selected = data.jobs[0].id;
+      await details();
+    } catch (e) { message(e.message); }
+    finally { refreshing = false; }
+  }
+  byId('inspect-form').onsubmit = async event => {
+    event.preventDefault();
+    const result = await control('/archive-conversions', 'POST', {
+      archive_id: Number(byId('conversion-archive').value),
+      subpath: byId('conversion-subpath').value
+    });
+    if (result.ok) {
+      selected = result.body.id; offset = 0; byId('conversion-confirm').checked = false;
+      message(T('conversion.js.queued'));
+    } else message(result.detail);
+    await refresh();
+  };
+  byId('conversion-confirm').onchange = () => details().catch(e => message(e.message));
+  byId('conversion-start').onclick = async () => {
+    if (!byId('conversion-confirm').checked) return;
+    const result = await control('/archive-conversions/' + selected + '/start', 'POST',
+      {confirm_delete: true});
+    message(result.ok ? T('conversion.js.queued') : result.detail);
+    byId('conversion-confirm').checked = false;
+    await refresh();
+  };
+  byId('conversion-cancel').onclick = async () => {
+    const result = await control('/archive-conversions/' + selected + '/cancel', 'POST');
+    message(result.ok ? T('conversion.js.cancelling') : result.detail);
+    await refresh();
+  };
+  byId('conversion-prev').onclick = () => { offset = Math.max(0, offset - 100); refresh(); };
+  byId('conversion-next').onclick = () => { offset += 100; refresh(); };
+  refresh(); setInterval(refresh, 3000);
+})();
+</script>
+{% endblock %}

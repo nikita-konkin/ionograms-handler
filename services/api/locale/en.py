@@ -24,6 +24,66 @@ Those messages must also stay markup-free. They are written into the DOM with
 from __future__ import annotations
 
 MESSAGES: dict[str, str] = {
+    "nav.conversion": "Conversion",
+    "conversion.title": "LFS to echo archive",
+    "conversion.hint":
+        "Inspect a folder, review its files, then start verified "
+        "replacement",
+    "conversion.description":
+        "Each capture is replaced beside itself by <name>.echo.h5. The "
+        "raw .lfs is deleted only after numerical verification and a "
+        "successful read. Files that fail checks retain their raw "
+        "capture.",
+    "conversion.archive": "Registered archive",
+    "conversion.subpath": "Subfolder (a date folder, or . for the whole archive)",
+    "conversion.inspect": "Inspect folder",
+    "conversion.scope":
+        "Archive permission is required. Inspection changes no capture. "
+        "Captures modified within the last minute and linked folders are "
+        "excluded.",
+    "conversion.jobs": "Conversion jobs",
+    "conversion.folder": "Folder",
+    "conversion.state": "State",
+    "conversion.progress": "Replaced / inspected",
+    "conversion.space": "Original size → replacement size",
+    "conversion.confirm":
+        "Replace the inspected files and delete each .lfs after "
+        "verification. Data outside the retained echo band cannot be "
+        "recovered from the replacement.",
+    "conversion.start": "Start or resume replacement",
+    "conversion.cancel": "Cancel job",
+    "conversion.cancel_note":
+        "Cancellation stops before the next file. Completed replacements "
+        "remain; unprocessed captures are kept. A failed or cancelled "
+        "inspection is inspected again on resume.",
+    "conversion.file": "Source file",
+    "conversion.detail": "Details",
+    "conversion.previous": "Previous 100",
+    "conversion.next": "Next 100",
+    "conversion.js.queued": "Queued",
+    "conversion.js.running": "Running",
+    "conversion.js.ready": "Ready for review",
+    "conversion.js.completed": "Completed",
+    "conversion.js.cancelled": "Cancelled",
+    "conversion.js.failed": "Failed",
+    "conversion.js.pending": "Pending",
+    "conversion.js.verified": "Verified; finishing replacement",
+    "conversion.js.replaced": "Replaced",
+    "conversion.js.inspection": "Folder inspection",
+    "conversion.js.auth":
+        "Sign in with archive permission to inspect and convert files.",
+    "conversion.js.errors": "errors",
+    "conversion.js.worker_seen":
+        "Worker last seen: {at}. Progress continues if this tab is "
+        "closed.",
+    "conversion.js.no_worker":
+        "Conversion worker has not connected. Enable the "
+        "archive-conversion service on the archive host before running "
+        "jobs.",
+    "conversion.js.cancelling": "Stopping after the current file",
+    "conversion.js.worker_stale": "Worker has not responded since {at}. "
+        "Queued jobs wait for it.",
+
     "sim_pair.js.title": "Forecast and reception now",
     "sim_pair.js.station": "Receiving station",
     "sim_pair.js.prediction": "Simulated ionogram",

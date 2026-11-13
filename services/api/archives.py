@@ -846,13 +846,9 @@ def survey(path: Path, format: str | None = None) -> dict:
             f"the host and try again.") from None
 
     by_format: dict[str, int] = {}
-    for fmt in (loader.LFS, loader.CHIRP2, loader.DIGISONDE):
-        if format is not None and fmt != format:
-            continue
-        try:
-            by_format[fmt] = len(loader.find_soundings(path, format=fmt))
-        except FileNotFoundError:
-            continue
+    for file in found:
+        fmt = loader.format_of(file)
+        by_format[fmt] = by_format.get(fmt, 0) + 1
     return {"soundings": len(found),
             "by_format": {k: v for k, v in by_format.items() if v}}
 

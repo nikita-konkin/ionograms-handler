@@ -552,6 +552,13 @@ def sim_live_page(request: Request, tx: str | None = None, rx: str | None = None
     })
 
 
+@router.get("/ui/conversion")
+def conversion_page(request: Request):
+    return templates.TemplateResponse(request, "conversion.html", {
+        "archives": db.archives(request.app.state.db),
+    })
+
+
 @router.get("/ui/archives")
 def archives_page(request: Request):
     """The folders this server indexes, and what each pass did.

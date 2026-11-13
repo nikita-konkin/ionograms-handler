@@ -31,6 +31,65 @@ Every key here must exist in `en.py` and vice versa -- see the parity test.
 from __future__ import annotations
 
 MESSAGES: dict[str, str] = {
+    "nav.conversion": "Конвертация",
+    "conversion.title": "Преобразование LFS в эхо-архив",
+    "conversion.hint":
+        "Проверьте папку, просмотрите список и запустите замену с "
+        "проверкой",
+    "conversion.description":
+        "Рядом с каждым исходным файлом создаётся <имя>.echo.h5. Исходный"
+        " .lfs удаляется только после численной проверки и успешного "
+        "чтения. Если проверка не пройдена, исходный файл сохраняется.",
+    "conversion.archive": "Зарегистрированный архив",
+    "conversion.subpath": "Подпапка (дата или . для всего архива)",
+    "conversion.inspect": "Проверить папку",
+    "conversion.scope":
+        "Нужны права управления архивами. Проверка не изменяет записи. "
+        "Файлы, изменённые менее минуты назад, и папки-ссылки не "
+        "включаются.",
+    "conversion.jobs": "Задания конвертации",
+    "conversion.folder": "Папка",
+    "conversion.state": "Состояние",
+    "conversion.progress": "Заменено / проверено",
+    "conversion.space": "Размер исходных файлов → размер замен",
+    "conversion.confirm":
+        "Заменить проверенные файлы и удалить каждый .lfs после проверки."
+        " Данные вне сохранённой полосы эха восстановить из замены "
+        "нельзя.",
+    "conversion.start": "Начать или продолжить замену",
+    "conversion.cancel": "Остановить задание",
+    "conversion.cancel_note":
+        "Остановка происходит перед следующим файлом. Готовые замены "
+        "сохраняются, необработанные записи остаются. Прерванная проверка"
+        " папки повторяется при продолжении.",
+    "conversion.file": "Исходный файл",
+    "conversion.detail": "Подробности",
+    "conversion.previous": "Предыдущие 100",
+    "conversion.next": "Следующие 100",
+    "conversion.js.queued": "В очереди",
+    "conversion.js.running": "Выполняется",
+    "conversion.js.ready": "Готово к просмотру",
+    "conversion.js.completed": "Завершено",
+    "conversion.js.cancelled": "Остановлено",
+    "conversion.js.failed": "Ошибка",
+    "conversion.js.pending": "Ожидание",
+    "conversion.js.verified": "Проверено; завершается замена",
+    "conversion.js.replaced": "Заменено",
+    "conversion.js.inspection": "Проверка папки",
+    "conversion.js.auth":
+        "Войдите с правами управления архивами для проверки и "
+        "конвертации.",
+    "conversion.js.errors": "ошибок",
+    "conversion.js.worker_seen":
+        "Последний ответ обработчика: {at}. Задание продолжается после "
+        "закрытия вкладки.",
+    "conversion.js.no_worker":
+        "Обработчик конвертации ещё не подключался. Включите службу "
+        "archive-conversion на сервере архива перед запуском заданий.",
+    "conversion.js.cancelling": "Остановка после текущего файла",
+    "conversion.js.worker_stale": "Обработчик не отвечает с {at}. "
+        "Задания ожидают его запуска.",
+
     "sim_pair.js.title": "Прогноз и текущий приём",
     "sim_pair.js.station": "Приёмная станция",
     "sim_pair.js.prediction": "Модельная ионограмма",

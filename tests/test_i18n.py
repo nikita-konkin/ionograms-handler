@@ -55,7 +55,7 @@ def client(tmp_path, monkeypatch):
 
 #: Every page a browser can reach that renders without any data.
 PAGES = ["/ui", "/ui/series", "/ui/soundings", "/ui/sources",
-         "/ui/archives", "/ui/forecast"]
+         "/ui/archives", "/ui/conversion", "/ui/forecast"]
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "services/api/templates"
 SCRIPTS = [p for p in (TEMPLATES.parent / "static").glob("*.js")
