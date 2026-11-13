@@ -1,5 +1,8 @@
 # Temporary test rig
 
+For verified `.lfs` replacement from the **Conversion** web tab, see
+[archive conversion](../docs/archive-conversion.md), including its opt-in worker.
+
 `api` + web on one host, plus a simulated station, in Docker Compose. Brings
 `architecture.md` M3 and M4 forward as a throwaway deployment so the agent loop
 can be exercised before either milestone is built properly.

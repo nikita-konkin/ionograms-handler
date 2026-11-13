@@ -48,15 +48,12 @@ CHIRP2 = "chirp2"
 #: which is why extension alone no longer decides. See :func:`format_of`.
 DIGISONDE = "digisonde"
 
-FORMATS = (LFS, CHIRP2, DIGISONDE)
-
 #: A standalone echo window cut from an ``.lfs`` capture, ``<stem>.echo.h5``
-#: (``muf.echo_window``, ``docs/echo-window.md``). Readable here by name, and
-#: deliberately *not* in :data:`FORMATS`: that tuple is what discovery, the
-#: archive scan and ``--input-format`` offer, and a window is a derivative of
-#: a sounding already counted under ``lfs``, not a sounding of its own.
+#: (``muf.echo_window``, ``docs/echo-window.md``). Discoverable when it replaces
+#: its raw capture. While both exist, ordinary discovery prefers the capture.
 ECHO_WINDOW = "echo_window"
 ECHO_WINDOW_SUFFIX = ".echo.h5"
+FORMATS = (LFS, CHIRP2, DIGISONDE, ECHO_WINDOW)
 
 #: The glob each finder uses, by format. Exposed because a caller that only
 #: needs to know *whether* a tree holds soundings should not have to build the
@@ -68,6 +65,7 @@ PATTERNS = {
     LFS: "*.lfs",
     CHIRP2: "lfm_ionogram-*.h5",
     DIGISONDE: f"{io_digisonde.FILE_PREFIX}*.h5",
+    ECHO_WINDOW: "*.echo.h5",
 }
 
 
@@ -92,10 +90,16 @@ def has_soundings(target: str | Path, *, format: str | None = None,
     target = Path(target)
     glob = target.rglob if recursive else target.glob
     for fmt, pattern in PATTERNS.items():
-        if format is not None and fmt != format:
+        if (format is not None and fmt != format
+                and not (format == LFS and fmt == ECHO_WINDOW)):
             continue
         try:
-            if next(glob(pattern), None) is not None:
+            for path in glob(pattern):
+                if path.name.endswith(ECHO_WINDOW_SUFFIX) and fmt != ECHO_WINDOW:
+                    continue
+                if fmt == ECHO_WINDOW and path.with_name(
+                        path.name[:-len(ECHO_WINDOW_SUFFIX)] + ".lfs").exists():
+                    continue
                 return True
         except OSError:
             # A tree that cannot be walked has not been shown to hold
@@ -126,6 +130,8 @@ def format_of(path: str | Path, override: str | None = None) -> str:
         if override not in FORMATS:
             raise FormatError(
                 f"unknown format {override!r}; choose from {', '.join(FORMATS)}")
+        if override == LFS and Path(path).name.lower().endswith(ECHO_WINDOW_SUFFIX):
+            return ECHO_WINDOW
         return override
     name = Path(path).name
     suffix = Path(path).suffix.lower()
@@ -133,10 +139,10 @@ def format_of(path: str | Path, override: str | None = None) -> str:
     # is the writer's own (`receive_digisonde.py` builds it), so this is
     # reading the file's identity rather than guessing at it -- and a
     # mis-dispatch is not subtle: the schemas share no dataset but `t0`.
-    if suffix == ".h5" and name.startswith(io_digisonde.FILE_PREFIX):
-        return DIGISONDE
     if name.lower().endswith(ECHO_WINDOW_SUFFIX):
         return ECHO_WINDOW
+    if suffix == ".h5" and name.startswith(io_digisonde.FILE_PREFIX):
+        return DIGISONDE
     fmt = SUFFIXES.get(suffix)
     if fmt is None:
         raise FormatError(
@@ -145,6 +151,18 @@ def format_of(path: str | Path, override: str | None = None) -> str:
             f"explicit format"
         )
     return fmt
+
+
+def find_echo_windows(target) -> list[Path]:
+    targets = [target] if isinstance(target, (str, Path)) else target
+    found = []
+    for item in targets:
+        item = Path(item)
+        if item.is_file() and item.name.endswith(ECHO_WINDOW_SUFFIX):
+            found.append(item)
+        elif item.is_dir():
+            found.extend(item.rglob(PATTERNS[ECHO_WINDOW]))
+    return dedupe_paths(found)
 
 
 def find_soundings(target, *, format: str | None = None) -> list[Path]:
@@ -162,13 +180,24 @@ def find_soundings(target, *, format: str | None = None) -> list[Path]:
         raise FormatError(
             f"unknown format {format!r}; choose from {', '.join(FORMATS)}")
 
+    targets = [target] if isinstance(target, (str, Path)) else list(target)
+    explicit = {Path(item).absolute() for item in targets if Path(item).is_file()}
     found: list[Path] = []
     for fmt, finder in ((LFS, find_lfs), (CHIRP2, io_chirp.find_h5),
-                        (DIGISONDE, io_digisonde.find_digisonde)):
-        if format is not None and fmt != format:
+                        (DIGISONDE, io_digisonde.find_digisonde),
+                        (ECHO_WINDOW, find_echo_windows)):
+        if (format is not None and fmt != format
+                and not (format == LFS and fmt == ECHO_WINDOW)):
             continue
         try:
-            found.extend(finder(target))
+            for path in finder(targets):
+                if path.name.endswith(ECHO_WINDOW_SUFFIX):
+                    if fmt != ECHO_WINDOW:
+                        continue
+                    raw = path.with_name(path.name[:-len(ECHO_WINDOW_SUFFIX)] + ".lfs")
+                    if path.absolute() not in explicit and raw.exists():
+                        continue
+                found.append(path)
         except FileNotFoundError:
             # One format finding nothing is normal in a single-format tree;
             # only both finding nothing is an error, handled below.

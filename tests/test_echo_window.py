@@ -526,7 +526,7 @@ def test_a_standalone_window_carries_the_lfs_header(make_lfs_iq, tmp_path):
         assert fh.attrs["rate_hz_s"] == RATE
         assert fh.attrs["t0_unix_s"] == original.start_epoch
         assert fh.attrs["sweep_start_hz"] == original.cf - original.sample_rate / 2
-    assert loader.ECHO_WINDOW not in loader.FORMATS
+    assert loader.ECHO_WINDOW in loader.FORMATS
 
 
 def test_into_appends_to_a_product_of_the_same_capture(make_lfs_iq, make_chirp_h5,

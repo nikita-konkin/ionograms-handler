@@ -188,6 +188,16 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
     muted = muted_by_name(conn)
     stored = stored_paths(conn) if archive_root is not None else {}
 
+    # Do not re-index either side while a verified replacement is switching
+    # its DB path. Verified journals also cover recovery after an unlink.
+    replacing = set()
+    for item in db.rows(conn,
+            "SELECT f.path FROM archive_conversion_file f JOIN archive_conversion j"
+            " ON j.id = f.job_id WHERE f.state = 'verified'"
+            " OR (j.state = 'running' AND j.mode = 'convert' AND f.state = 'pending')"):
+        name = Path(item["path"]).name
+        replacing.update((name, name[:-4] + ".echo.h5"))
+
     found, fresh, skewed, silenced, new, moves = 0, 0, 0, 0, [], []
     for target in targets:
         try:
@@ -196,6 +206,8 @@ def find_new(targets, conn, methods, min_age_s: float, now: float | None = None,
             continue                      # nothing this reader recognises
         for path in paths:
             found += 1
+            if path.name in replacing:
+                continue
             if path.name in done:
                 if path.name in stored:
                     here = _relative(path, archive_root)

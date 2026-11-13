@@ -118,6 +118,28 @@ services:
 
   # Inference, built from this checkout. Its own image: the model libraries
   # stay out of the api image and the web stack stays out of this one.
+  archive-conversion:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    profiles: ["archive-conversion"]
+    command: python -m services.archive_converter
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_DB: /data/ionograms.sqlite3
+      ARCHIVE_ROOT: /archive
+      ARCHIVE_ROOTS: "${ARCHIVE_ROOTS:-}"
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/data
+      - "${ARCHIVE_HOST_PATH:-./archive}:/archive"
+      - "${ARCHIVE_HOST_PATH_2:-${ARCHIVE_HOST_PATH:-./archive}}:/archive2"
+      - "${ARCHIVE_HOST_PATH_3:-${ARCHIVE_HOST_PATH:-./archive}}:/archive3"
+    restart: unless-stopped
+
   infer:
     build:
       context: ..

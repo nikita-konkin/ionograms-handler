@@ -12,6 +12,50 @@
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
+-- Reviewed, persistent manifests for replacing raw captures with echo files.
+-- Only one queued/running job, even with multiple browser clients.
+CREATE TABLE IF NOT EXISTS archive_conversion (
+    id INTEGER PRIMARY KEY,
+    archive_id INTEGER REFERENCES archive(id) ON DELETE SET NULL,
+    folder TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'survey',
+    state TEXT NOT NULL DEFAULT 'queued',
+    requested_by TEXT NOT NULL,
+    approved_by TEXT,
+    approved_at TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    heartbeat TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    done INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    source_bytes INTEGER NOT NULL DEFAULT 0,
+    output_bytes INTEGER NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_archive_conversion
+    ON archive_conversion((1)) WHERE state IN ('queued', 'running');
+CREATE TABLE IF NOT EXISTS archive_conversion_file (
+    job_id INTEGER NOT NULL REFERENCES archive_conversion(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    source_bytes INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    source_sha256 TEXT,
+    target_sha256 TEXT,
+    output_bytes INTEGER NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (job_id, path)
+);
+CREATE INDEX IF NOT EXISTS archive_conversion_file_state
+    ON archive_conversion_file(job_id, state, path);
+CREATE TABLE IF NOT EXISTS archive_conversion_worker (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    heartbeat TEXT NOT NULL
+);
+
 
 -- One row per sounding file: acquisition facts and derived calibration.
 CREATE TABLE IF NOT EXISTS sounding (
