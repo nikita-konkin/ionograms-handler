@@ -2239,6 +2239,11 @@ and renamed into place, and each image is named for its sounding's own time
 and never rewritten, which makes an existing file its own render cache and
 lets the web server mark `img/` immutable.
 
+Past soundings are published too, as echo windows under `archive/`, for the
+circuits named in `PUBLISH_ARCHIVE_CIRCUITS` (`services/publish/archive.py`).
+A window is the one file that leaves the server byte for byte, with the
+capture's file name and the station coordinates inside it.
+
 On the work server it is a compose profile (`--profile publish`); the
 folder, the vhost and TLS are `deploy/README.md` §2c. The public host runs
 neither the api nor the publisher: it reaches the hub only through the VPN

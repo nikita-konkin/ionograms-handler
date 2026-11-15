@@ -489,6 +489,27 @@ existing file is its own cache. `.h5` products render in a fraction of a
 second; `.lfs` re-runs the spectrogram, seconds each. The folder holds 24
 images and one JSON per circuit, a few hundred KB each.
 
+### Past soundings
+
+With `PUBLISH_ARCHIVE_CIRCUITS` set, the slow pass also publishes each listed
+circuit's past soundings as echo windows (`docs/echo-window.md`), for a
+reader to download or draw again:
+
+```
+archive/index.json                                circuits and their days
+archive/{slug}/{YYYY}/{MM}/{DD}/index.json        one day's soundings
+archive/{slug}/{YYYY}/{MM}/{DD}/{stamp}.echo.h5   one window, about 1.6 MB
+```
+
+The list is separate from `PUBLISH_CIRCUITS`, so an old circuit does not
+appear on the page as a dead one; a muted circuit is dropped all the same.
+Every sounding the database holds as an echo window is published, so what is
+converted (`docs/archive-conversion.md`) and listed is what appears. A window
+is copied byte for byte: unlike the rest of the page it carries the capture's
+file name, the station coordinates and the writer's commit. A pass copies at
+most 100 new windows and holds the rest for the next, so a whole archive
+arrives over many passes. The folder needs about 0.45 GB a circuit-day.
+
 ### The sounding in progress
 
 A second, fast pass shows the sounding being recorded, a few seconds behind.
