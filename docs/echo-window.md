@@ -364,6 +364,41 @@ without it, k-means found no MUF. A window entirely outside that gate is kept
 whole. v2 has no such step, since `io_chirp.reprocess` gives its whole axis
 too.
 
+### 3.9 Drawing it straight from the samples
+
+Reconstruction costs the source rate again: 80 MB of samples for a cyprus1
+window of 1.6 MB. A reader that only draws — the public page's browser — can
+transform the stored samples as they are. With `L` of §3.3, a row length of
+`M` stored samples and `P ≥ M` transform points:
+
+```
+row i    = z[L + i·M … L + (i+1)·M − 1],      0 ≤ i < ⌊n_src / (M·D)⌋
+S_i[q]   = |Σ_k hann_M[k] · row_i[k] · exp(−j2π · q·k / P)|²
+power    = D² · S_i[q] / floor_i
+range    = range_zero_km + km_per_hz · (q̃ · sr_hz / P + shift_hz)
+sweep_i  = sweep_hz_at_t_first + rate_hz_s · (L + (i + ½)·M) / sr_hz
+```
+
+`hann_M[k] = ½(1 − cos(2πk/M))`, the window `spectro` uses, and `q̃` is `q`
+taken as a signed frequency (`q − P` above `P/2`). Bins outside
+`range_lo_km … range_hi_km` are dropped: the filter kept nothing there.
+
+- **A row is `W = M·D` source samples**, starting at source sample `i·W`. It
+  is the row §3.8 gives at window `W`.
+- **`D²`** puts the power on the source's scale. The filter has unit DC gain
+  (§3.6), so a tone keeps its amplitude, and the Hann window sums to `M/2`
+  over a row here against `W/2` there.
+- **`floor_i`** is §3.5's: `row_noise` interpolated to the row's centre
+  `(i + ½)·W`, times `W / row_noise.attrs["window"]`. It needs `row_noise`,
+  so this path is for `.lfs` windows; a v2 window's floor is in its product.
+- **`P > M` pads each row with zeros.** It interpolates the range grid and
+  resolves nothing new: the resolution stays `|km_per_hz| · sr_hz / M` times
+  the Hann main lobe.
+
+`muf.echo_window.spectrogram` implements this, and
+`services/publish/site/echo.js` is the same transform in the browser, with
+`P` the next power of two. §6.6 measures it against §3.8.
+
 ## 4. Using it
 
 ```bash
@@ -599,6 +634,24 @@ of 4 February with the whole axis:
 |---|---|---|
 | cyprus1, 24 hours | 22 windows 2486–4112 km (D 45), 2 of the whole band (10, 11 UTC: the −57300 km line) | all 24 at 2486–4112 km (D 45); echo at 15–180 sd in 22, none in 2; edges ≤ 2.7 sd, none flagged |
 | October windows of D ≤ 2 (105) | all of the band or most of it | 103 no echo → geometry; 2 echoes near it (2285–2329 km Norilsk, 3955–4008 km Magadan) |
+
+### 6.6 Synthetic: the direct spectrogram against reconstruction (2026-11-15)
+
+A 40 s capture at 40 kHz: unit noise, an echo of amplitude 30 drifting 40 Hz
+near 2900 km and one of amplitude 6 near 3300 km. Its window is 2486–4112 km
+at D 45. Each cell of §3.9 is compared with §3.8 at the same row, both
+evaluated at the same ranges:
+
+| Row, stored (source) samples | Detected cells (≥ 43 dB), worst | All cells, RMS | All cells, worst |
+|---|---|---|---|
+| 364 (16 380) | 0.0001 dB | 0.0003 dB | 0.009 dB |
+| 182 (8190) | 0.0003 dB | 0.002 dB | 0.09 dB |
+| 46 (2070) | 0.002 dB | 0.05 dB | 2.5 dB |
+
+On detected cells the two agree to well under the filter's 0.01 dB ripple.
+The larger differences are all in cells below the detection threshold and
+grow as the row shortens; their cause is not established. Not yet measured on
+a real capture.
 
 ## 7. Decisions and what is left
 

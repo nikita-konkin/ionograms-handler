@@ -1,7 +1,9 @@
 /* The public results page. Reads status.json and data/{circuit}.json written
- * by services/publish/publisher.py; draws everything with plain DOM and SVG so
- * the site carries no third-party code and runs under `default-src 'self'`.
- * All text goes in through textContent, never innerHTML.
+ * by services/publish/publisher.py; draws everything with plain DOM, SVG and
+ * one canvas, so the site runs under `default-src 'self'`. Its only
+ * third-party code is vendor/h5wasm.js, the reader of the archive's files,
+ * fetched when a past sounding is opened. All text goes in through
+ * textContent, never innerHTML.
  */
 (function () {
   "use strict";
@@ -15,13 +17,24 @@
   var MIN_SPAN_MS = 2 * 3600000;  // the closest the chart zooms in
   var ZOOM_STEP = 1.5;             // one button press, in or out
   var SVG = "http://www.w3.org/2000/svg";
+  var ROWS = [2048, 4096, 8192, 16384];   // source samples one row spans
+  var PADS = [0, 1, 3, 7];                // zeros appended, in row lengths
+  var JET = [[0, 0, 128], [0, 0, 205], [0, 8, 255], [0, 76, 255], [0, 144, 255],
+             [0, 212, 255], [41, 255, 206], [96, 255, 151], [151, 255, 96],
+             [206, 255, 41], [255, 230, 0], [255, 167, 0], [255, 104, 0],
+             [255, 41, 0], [205, 0, 0], [128, 0, 0]];
 
   var state = {
     lang: "en", strings: {}, status: null, slug: null, range: 7,
     data: {}, shown: null, now: null, link: null, hidden: {},
     // view: the [from, to] a reader scrolled or zoomed to, null for the
     // chosen range; geo: what the last drawing mapped, for the gestures
-    view: null, geo: null, theme: "auto"
+    view: null, geo: null, theme: "auto",
+    // past: the archive's catalogue, the sounding chosen from it and how the
+    // reader asked for it to be drawn; note is a string key, or empty
+    past: { list: null, slug: null, day: null, index: null, file: null,
+            window: null, reader: null, note: "", step: null,
+            row: 8192, pad: 3, low: 20, high: 75 }
   };
 
   // --- helpers -------------------------------------------------------------
@@ -756,6 +769,241 @@
       .then(renderNow);
   }
 
+  // --- archive ---------------------------------------------------------------
+  // Past soundings, drawn here from their echo windows (echo.js). The reader
+  // of the files is 1 MB on the wire, so it is fetched when one is opened.
+
+  function pastCircuit() {
+    var list = state.past.list || [];
+    for (var i = 0; i < list.length; i++) if (list[i].slug === state.past.slug) return list[i];
+    return null;
+  }
+
+  function pastEntry() {
+    var list = state.past.index || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].file && list[i].file === state.past.file) return list[i];
+    }
+    return null;
+  }
+
+  function pastFolder() {
+    return "archive/" + state.past.slug + "/" + state.past.day.replace(/-/g, "/") + "/";
+  }
+
+  function reader() {
+    if (!state.past.reader) {
+      state.past.reader = new Promise(function (resolve, reject) {
+        var script = el("script", { src: "vendor/h5wasm.js" });
+        script.addEventListener("load", function () {
+          window.h5wasm.ready.then(function () { resolve(window.h5wasm); }, reject);
+        });
+        script.addEventListener("error", function () { reject(new Error("reader")); });
+        document.head.appendChild(script);
+      });
+    }
+    return state.past.reader;
+  }
+
+  function fill(id, options, chosen) {
+    var node = document.getElementById(id);
+    clear(node);
+    options.forEach(function (o) {
+      var item = el("option", { value: String(o[0]), text: o[1] });
+      if (o[2]) item.disabled = true;
+      node.appendChild(item);
+    });
+    node.value = String(chosen);
+  }
+
+  // The hub's colour scale, 256 steps between its 16 stops.
+  var palette = null;
+  function shade(level) {
+    if (!palette) {
+      palette = [];
+      for (var i = 0; i < 256; i++) {
+        var at = i / 255 * (JET.length - 1);
+        var low = Math.min(JET.length - 2, Math.floor(at));
+        palette.push([0, 1, 2].map(function (c) {
+          return Math.round(JET[low][c] + (at - low) * (JET[low + 1][c] - JET[low][c]));
+        }));
+      }
+    }
+    return palette[Math.max(0, Math.min(255, Math.round(level * 255)))];
+  }
+
+  function ticks(lo, hi, wanted) {
+    var rough = (hi - lo) / wanted;
+    var scale = Math.pow(10, Math.floor(Math.log10(rough)));
+    var step = [1, 2, 5, 10].filter(function (m) { return m * scale >= rough; })[0] * scale;
+    var out = [];
+    for (var v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(v);
+    return out;
+  }
+
+  function drawPast() {
+    var p = state.past, canvas = document.getElementById("past-canvas");
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round((canvas.clientWidth || 960) * ratio);
+    canvas.height = Math.round((canvas.clientHeight || 420) * ratio);
+    var ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    p.step = null;
+    if (!p.window) return;
+    var found;
+    try {
+      found = echo.spectrogram(
+        p.window, Math.max(2, Math.round(p.row / p.window.decimation)), p.pad);
+    } catch (e) { found = null; }
+    if (!found || found.bins < 2 || found.rows < 2) { p.note = "archive_failed"; return; }
+
+    var image = el("canvas", { width: found.rows, height: found.bins });
+    var pixels = image.getContext("2d").createImageData(found.rows, found.bins);
+    for (var i = 0; i < found.rows; i++) {
+      for (var j = 0; j < found.bins; j++) {
+        var c = shade((echo.decibels(found.power[i * found.bins + j]) - p.low)
+                      / Math.max(1, p.high - p.low));
+        var at = 4 * ((found.bins - 1 - j) * found.rows + i);
+        pixels.data[at] = c[0]; pixels.data[at + 1] = c[1];
+        pixels.data[at + 2] = c[2]; pixels.data[at + 3] = 255;
+      }
+    }
+    image.getContext("2d").putImageData(pixels, 0, 0);
+
+    var L = 58 * ratio, R = 12 * ratio, T = 10 * ratio, B = 38 * ratio;
+    var W = canvas.width - L - R, H = canvas.height - T - B;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(image, L, T, W, H);
+
+    var df = found.sweep[1] - found.sweep[0], dr = found.ranges[1] - found.ranges[0];
+    var f0 = (found.sweep[0] - df / 2) / 1e6;
+    var f1 = (found.sweep[found.rows - 1] + df / 2) / 1e6;
+    var r0 = found.ranges[0] - dr / 2, r1 = found.ranges[found.bins - 1] + dr / 2;
+    p.step = dr;
+    ctx.fillStyle = ctx.strokeStyle = window.getComputedStyle(canvas).color;
+    ctx.lineWidth = ratio;
+    ctx.font = (11 * ratio) + "px sans-serif";
+    ctx.strokeRect(L, T, W, H);
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ticks(f0, f1, 8).forEach(function (f) {
+      var x = L + (f - f0) / (f1 - f0) * W;
+      ctx.fillRect(x, T + H, ratio, 4 * ratio);
+      ctx.fillText(String(Math.round(f * 100) / 100), x, T + H + 6 * ratio);
+    });
+    ctx.fillText(t("archive_axis_f"), L + W / 2, T + H + 22 * ratio);
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ticks(r0, r1, 6).forEach(function (r) {
+      var y = T + (r1 - r) / (r1 - r0) * H;
+      ctx.fillRect(L - 4 * ratio, y, 4 * ratio, ratio);
+      ctx.fillText(String(Math.round(r)), L - 6 * ratio, y);
+    });
+    ctx.save();
+    ctx.translate(11 * ratio, T + H / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.fillText(t("archive_axis_r"), 0, 0);
+    ctx.restore();
+  }
+
+  function renderPast() {
+    var p = state.past, c = pastCircuit();
+    document.getElementById("archive").hidden = !c;
+    if (!c) return;
+    fill("past-circuit", p.list.map(function (x) {
+      return [x.slug, x.tx_name + " → " + x.rx_name];
+    }), p.slug);
+    fill("past-day", c.days.map(function (d) { return [d.day, d.day]; }), p.day);
+    fill("past-time", (p.index || []).map(function (e) {
+      var time = e.t.slice(11, 19);
+      return e.file ? [e.file, time] : ["", time + " — " + t("archive_none"), true];
+    }), p.file || "");
+    fill("past-row", ROWS.map(function (n) { return [n, String(n)]; }), p.row);
+    fill("past-pad", PADS.map(function (n) { return [n, "×" + (n + 1)]; }), p.pad);
+    document.getElementById("past-low").value = p.low;
+    document.getElementById("past-high").value = p.high;
+    drawPast();
+
+    var entry = pastEntry(), link = document.getElementById("past-file");
+    var note = document.getElementById("past-state");
+    link.hidden = !entry;
+    if (entry) {
+      link.href = pastFolder() + entry.file;
+      link.setAttribute("download", p.slug + "-" + entry.file);
+      link.textContent = t("archive_download", { size: (entry.bytes / 1e6).toFixed(2) });
+    }
+    if (p.note) note.textContent = t(p.note);
+    else if (entry && p.window && p.step) {
+      note.textContent = t("archive_caption", {
+        when: entry.t.slice(0, 10) + " " + entry.t.slice(11, 19),
+        lo: Math.round(entry.range_km[0]), hi: Math.round(entry.range_km[1]),
+        step: p.step.toFixed(2)
+      }) + (entry.trace_at_edge ? " " + t("archive_edge") : "");
+    } else note.textContent = "";
+  }
+
+  function loadPast() {
+    var p = state.past, entry = pastEntry();
+    p.window = null;
+    p.note = entry ? "archive_loading" : "";
+    renderPast();
+    if (!entry) return;
+    Promise.all([reader(), fetch(pastFolder() + entry.file).then(function (r) {
+      if (!r.ok) throw new Error(entry.file + ": " + r.status);
+      return r.arrayBuffer();
+    })]).then(function (got) {
+      if (pastEntry() !== entry) return;
+      p.window = echo.read(got[0], new Uint8Array(got[1]));
+      p.note = "";
+    }).catch(function () {
+      if (pastEntry() === entry) p.note = "archive_failed";
+    }).then(renderPast);
+  }
+
+  function loadDay() {
+    var p = state.past, day = p.day, slug = p.slug;
+    p.index = null; p.file = null; p.window = null; p.note = "";
+    getJSON(pastFolder() + "index.json").then(function (d) { return d.soundings; })
+      .catch(function () { return []; })
+      .then(function (soundings) {
+        if (p.day !== day || p.slug !== slug) return;
+        p.index = soundings;
+        var first = soundings.filter(function (e) { return e.file; })[0];
+        p.file = first ? first.file : null;
+        loadPast();
+      });
+  }
+
+  function refreshPast() {
+    getJSON("archive/index.json").then(function (d) {
+      var c = d.circuits[0];
+      if (!c) return;
+      state.past.list = d.circuits;
+      state.past.slug = c.slug;
+      state.past.day = c.days[c.days.length - 1].day;
+      loadDay();
+    }).catch(function () { /* no archive is published */ });
+  }
+
+  function bindPast() {
+    function on(id, act) {
+      document.getElementById(id).addEventListener("change", function (evt) {
+        act(evt.target.value);
+      });
+    }
+    on("past-circuit", function (v) {
+      state.past.slug = v;
+      var c = pastCircuit();
+      state.past.day = c.days[c.days.length - 1].day;
+      loadDay();
+    });
+    on("past-day", function (v) { state.past.day = v; loadDay(); });
+    on("past-time", function (v) { state.past.file = v; loadPast(); });
+    on("past-row", function (v) { state.past.row = Number(v); renderPast(); });
+    on("past-pad", function (v) { state.past.pad = Number(v); renderPast(); });
+    on("past-low", function (v) { state.past.low = Number(v); renderPast(); });
+    on("past-high", function (v) { state.past.high = Number(v); renderPast(); });
+  }
+
   function renderAll() {
     renderStatic();
     renderHeader();
@@ -763,6 +1011,7 @@
     renderLink();
     renderTabs();
     renderCircuit();
+    renderPast();
   }
 
   function select(slug, force) {
@@ -812,7 +1061,9 @@
       state.theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length];
       remember("theme", state.theme);
       applyTheme();
+      drawPast();
     });
+    bindPast();
 
     document.getElementById("lang").addEventListener("click", function () {
       state.lang = state.lang === "ru" ? "en" : "ru";
@@ -826,13 +1077,14 @@
     var resizeTimer = null;
     window.addEventListener("resize", function () {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(renderChart, 150);
+      resizeTimer = setTimeout(function () { renderChart(); drawPast(); }, 150);
     });
 
     getJSON("strings.json").then(function (s) { state.strings = s; })
       .catch(function () { state.strings = {}; })
       .then(function () { renderStatic(); renderNow(); return refresh(); });
     setInterval(refresh, REFRESH_MS);
+    refreshPast();
     refreshNow();
     refreshLink();
     setInterval(function () { refreshNow(); refreshLink(); }, NOW_MS);

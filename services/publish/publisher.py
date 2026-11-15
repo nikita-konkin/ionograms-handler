@@ -10,7 +10,8 @@ picture while the api, the archive mount or this job is down.
 
 **What it writes**, under the site folder::
 
-    index.html app.js style.css strings.json vendor/   the page, copied as is
+    index.html app.js echo.js style.css strings.json    the page, copied as is
+    vendor/                                             h5wasm, the archive's reader
     status.json                                         circuits, newest pictures
     data/{slug}.json                                    series, forecast, scores
     img/{slug}/{YYYYmmddTHHMMSS}.webp                   one image per sounding

@@ -28,3 +28,6 @@
 # Saved page, not a template: it carries NUL bytes and is binary by content
 # despite the extension, so the blanket `*.html` handling must not reach it.
 docs/references/DIDBase-rules-of-the-road.html binary
+
+# Third-party code, shipped as built: 5.7 MB on one line, never diffed.
+services/publish/site/vendor/*.js -diff linguist-vendored

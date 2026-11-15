@@ -12,6 +12,7 @@ and passes every test that does not ask *where the echo went*.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import random
 import warnings
@@ -825,3 +826,70 @@ def test_the_echo_offset_is_where_the_echo_begins_against_the_ground_line(
 def test_a_sounding_with_no_echo_has_no_echo_offset(make_chirp_h5):
     assert echo_window.echo_offset_s(_ionozond(make_chirp_h5, None)) is None, \
         "a sounding with no echo was given an echo offset"
+
+
+# --------------------------------------------------------------------------
+# The window's own spectrogram, with no reconstruction (section 3.9)
+# --------------------------------------------------------------------------
+
+def _drawn(make_lfs_iq, tmp_path, range_km=2937.0, amplitude=23.0):
+    n = int(20 * SR)
+    lfs = make_lfs_iq(_noise(n, seed=7)
+                      + _tone(n, _lfs_beat(range_km), amplitude))
+    target = echo_window.write(lfs, out_dir=tmp_path).target
+    window = echo_window.read(target)
+    return target, window, round(spectro.DEFAULT_WINDOW / window.decimation)
+
+
+def test_the_direct_spectrogram_carries_the_power_of_the_reference(
+        make_lfs_iq, tmp_path):
+    target, window, length = _drawn(make_lfs_iq, tmp_path)
+    reference = echo_window.reprocess_window(
+        target, window=length * window.decimation)
+    power, _, _ = echo_window.spectrogram(window, length)
+    assert 10 * np.log10(power.sum() / np.asarray(reference.power).sum()) == \
+        pytest.approx(0.0, abs=0.02), \
+        "the direct spectrogram does not carry the power of the reference"
+
+
+def test_the_direct_spectrogram_puts_the_echo_at_its_range(make_lfs_iq, tmp_path):
+    _, window, length = _drawn(make_lfs_iq, tmp_path, range_km=3141.0)
+    power, ranges, _ = echo_window.spectrogram(window, length)
+    assert ranges[int(np.argmax(power.mean(axis=0)))] == \
+        pytest.approx(3141.0, abs=LFS_BIN_KM / 2), \
+        "the direct spectrogram does not put the echo at its range"
+
+
+def test_the_direct_spectrogram_stays_inside_the_window(make_lfs_iq, tmp_path):
+    _, window, length = _drawn(make_lfs_iq, tmp_path)
+    _, ranges, _ = echo_window.spectrogram(window, length, fft=4 * length)
+    assert (window.range_lo_km <= ranges.min()
+            and ranges.max() <= window.range_hi_km
+            and np.all(np.diff(ranges) > 0)), \
+        "the direct spectrogram left the window or lost its order"
+
+
+def test_more_points_only_refine_the_range_grid(make_lfs_iq, tmp_path):
+    _, window, length = _drawn(make_lfs_iq, tmp_path)
+    coarse, _, _ = echo_window.spectrogram(window, length)
+    fine, _, _ = echo_window.spectrogram(window, length, fft=8 * length)
+    gain = 10 * np.log10(fine.max(axis=1) / coarse.max(axis=1))
+    assert gain.min() > -1e-4 and gain.max() < 1.5, (
+        "more points changed the scale instead of refining the grid")
+
+
+def test_each_row_is_labelled_at_its_centre(make_lfs_iq, tmp_path):
+    target, window, length = _drawn(make_lfs_iq, tmp_path)
+    reference = echo_window.reprocess_window(
+        target, window=length * window.decimation)
+    _, _, sweep = echo_window.spectrogram(window, length)
+    assert sweep[:3] / 1e6 == pytest.approx(reference.freq[:3], abs=1e-9), \
+        "a row is not labelled at its centre"
+
+
+def test_a_window_without_its_row_noise_cannot_be_drawn_directly(
+        make_lfs_iq, tmp_path):
+    _, window, length = _drawn(make_lfs_iq, tmp_path)
+    bare = dataclasses.replace(window, row_noise=None)
+    with pytest.raises(ValueError, match="row noise"):
+        echo_window.spectrogram(bare, length)

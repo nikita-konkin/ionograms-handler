@@ -93,6 +93,16 @@ h3 { font-size: 0.9rem; margin: 16px 0 8px; color: var(--muted); font-weight: 60
 .chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; cursor: grab; }
 .chart.dragging svg { cursor: grabbing; }
 .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+.past {
+  display: block; width: 100%; aspect-ratio: 16 / 7; margin: 12px 0 8px;
+  color: var(--text); background: var(--grid); border-radius: 4px;
+}
+.past-controls { align-items: center; font-size: 0.9rem; }
+.past-controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.past-controls select {
+  font: inherit; color: var(--text); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px;
+}
 .chart .grid { stroke: var(--grid); }
 .chart .axis { fill: var(--muted); font-size: 11px; }
 .chart .muf { fill: var(--muf); }
