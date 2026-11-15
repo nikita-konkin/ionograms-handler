@@ -289,9 +289,14 @@ def test_the_page_itself_is_copied(database, archive, tmp_path, drawn):
 
 
 def test_the_page_loads_nothing_from_elsewhere():
-    """The vhost sends `default-src 'self'`; one CDN link breaks the page."""
+    """The vhost sends `default-src 'self'`; one CDN link breaks the page.
+
+    The visit counter's endpoint is the one address named, and the vhost's
+    `connect-src` allows exactly it (#155).
+    """
     for name in ("index.html", "app.js", "style.css"):
-        text = (publisher.SITE_SRC / name).read_text(encoding="utf-8")
+        text = (publisher.SITE_SRC / name).read_text(encoding="utf-8").replace(
+            "https://volgatech-itrc.goatcounter.com/count", "")
         assert "http://" not in text.replace("http://www.w3.org/2000/svg", "")
         assert "https://" not in text
     html = (publisher.SITE_SRC / "index.html").read_text(encoding="utf-8")

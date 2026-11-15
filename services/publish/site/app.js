@@ -1,8 +1,9 @@
 /* The public results page. Reads status.json and data/{circuit}.json written
  * by services/publish/publisher.py; draws everything with plain DOM, SVG and
- * one canvas, so the site runs under `default-src 'self'`. Its only
- * third-party code is vendor/h5wasm.js, the reader of the archive's files,
- * fetched when a past sounding is opened. All text goes in through
+ * one canvas, so the site runs under `default-src 'self'`. Its third-party
+ * code is vendor/h5wasm.js, the reader of the archive's files, fetched when a
+ * past sounding is opened, and vendor/count.js, the visit counter, which
+ * index.html loads itself. All text goes in through
  * textContent, never innerHTML.
  */
 (function () {
