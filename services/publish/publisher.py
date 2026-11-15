@@ -14,11 +14,14 @@ picture while the api, the archive mount or this job is down.
     status.json                                         circuits, newest pictures
     data/{slug}.json                                    series, forecast, scores
     img/{slug}/{YYYYmmddTHHMMSS}.webp                   one image per sounding
+    archive/                                            past soundings (`archive.py`)
 
 **Allow-listed, twice.** Only circuits named in ``--circuits`` appear, and a
 muted one is dropped even then -- muting stops new ingest but leaves the rows
 already held, so it has to be checked here. The JSON fields are allow-listed
-too: no sounding ids, file paths or model internals leave the server.
+too: no sounding ids, file paths or model internals leave the server. The
+one exception is an archived echo window, published byte for byte for the
+circuits in ``--archive-circuits`` (`archive.py`, #151).
 
 **Read-only.** The database is opened with ``mode=ro``. `db.session` and
 `db.init` both write (schema, migrations), and a publisher that can write is a
@@ -552,15 +555,18 @@ def choose(conn, wanted: list[tuple[str, str]]) -> list[dict]:
 
 def build_site(conn, site_dir: Path, *, circuits: list[tuple[str, str]],
                method: str, days: int, archive_root: Path,
-               now: datetime | None = None) -> dict:
+               now: datetime | None = None,
+               archive_circuits: list[tuple[str, str]] = ()) -> dict:
     """One full pass. Returns counts for the log line."""
+    from . import archive as past
+
     now = now or datetime.now(timezone.utc)
     site_dir = Path(site_dir)
     site_dir.mkdir(parents=True, exist_ok=True)
     sweep_temporaries(site_dir)
 
     result = {"circuits": 0, "rendered": 0, "skipped": 0, "pruned": 0,
-              "errors": []}
+              "archived": 0, "held": 0, "errors": []}
     result["site_files"] = copy_site(site_dir)
 
     listed = []
@@ -613,6 +619,11 @@ def build_site(conn, site_dir: Path, *, circuits: list[tuple[str, str]],
             if stale.relative_to(site_dir).as_posix() not in keep:
                 stale.unlink(missing_ok=True)
                 result["pruned"] += 1
+    stored = past.write_archive(conn, site_dir, circuits=list(archive_circuits),
+                                archive_root=archive_root)
+    for count in ("archived", "held", "skipped", "pruned"):
+        result[count] += stored[count]
+    result["errors"] += stored["errors"]
     return result
 
 
@@ -622,6 +633,11 @@ def describe(result: dict) -> str:
             f"{'' if result['circuits'] == 1 else 's'}, "
             f"{result['rendered']} new image"
             f"{'' if result['rendered'] == 1 else 's'}")
+    if result["archived"]:
+        line += (f", {result['archived']} window"
+                 f"{'' if result['archived'] == 1 else 's'} archived")
+    if result["held"]:
+        line += f", {result['held']} held for the next pass"
     if result["skipped"]:
         line += f", {result['skipped']} skipped ({result['errors'][0]})"
     if result["pruned"]:
@@ -642,6 +658,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--circuits", default=os.environ.get("PUBLISH_CIRCUITS", ""),
                         help='allow-list, "TX->RX, TX->RX" '
                              "(default: $PUBLISH_CIRCUITS)")
+    parser.add_argument("--archive-circuits",
+                        default=os.environ.get("PUBLISH_ARCHIVE_CIRCUITS", ""),
+                        help="allow-list of the circuits whose echo windows are "
+                             'published under archive/, "TX->RX, TX->RX"; empty '
+                             "publishes none (default: $PUBLISH_ARCHIVE_CIRCUITS)")
     parser.add_argument("--method", default=os.environ.get("PUBLISH_METHOD", "contour"),
                         help="whose picks to plot (default: $PUBLISH_METHOD or "
                              "%(default)s, the method forecasts are trained on)")
@@ -699,7 +720,9 @@ def _full_pass(args, circuits, archive_root) -> int:
         try:
             result = build_site(conn, args.out, circuits=circuits,
                                 method=args.method, days=args.days,
-                                archive_root=archive_root)
+                                archive_root=archive_root,
+                                archive_circuits=parse_circuits(
+                                    args.archive_circuits))
         finally:
             conn.close()
     except Exception as exc:

@@ -220,6 +220,9 @@ services:
       # published, and a muted circuit is dropped even when listed. Empty
       # refuses to start rather than publishing everything.
       PUBLISH_CIRCUITS: "${PUBLISH_CIRCUITS:-}"
+      # Allow-list of its own for archive/, the echo windows of past
+      # soundings (#151). Empty publishes none.
+      PUBLISH_ARCHIVE_CIRCUITS: "${PUBLISH_ARCHIVE_CIRCUITS:-}"
       PUBLISH_METHOD: "${PUBLISH_METHOD:-contour}"
       PUBLISH_DAYS: "${PUBLISH_DAYS:-30}"
       # The sounding in progress (#105): read from the api inside this network

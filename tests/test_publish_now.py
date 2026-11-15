@@ -159,7 +159,7 @@ def test_one_publisher_run_also_writes_the_live_pass(conn, tmp_path, monkeypatch
 
     monkeypatch.setattr(publisher, "build_site", lambda *a, **k: {
         "circuits": 0, "rendered": 0, "skipped": 0, "pruned": 0, "errors": [],
-        "site_files": 0})
+        "archived": 0, "held": 0, "site_files": 0})
     monkeypatch.setattr(live, "fetcher", lambda api, token="": (
         lambda station: _snapshot(_sounding("NIC", 10))))
     conn.close()
