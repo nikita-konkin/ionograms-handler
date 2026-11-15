@@ -510,6 +510,14 @@ file name, the station coordinates and the writer's commit. A pass copies at
 most 100 new windows and holds the rest for the next, so a whole archive
 arrives over many passes. The folder needs about 0.45 GB a circuit-day.
 
+The page draws a past sounding itself, in the reader's browser, from the
+window's samples (`docs/echo-window.md`, section 3.9), so the reader chooses
+the row length, the range grid and the colour scale. The files are read by
+h5wasm, kept in `vendor/` and fetched only when a sounding is opened. It is
+WebAssembly, which is why the vhost's policy reads
+`script-src 'self' 'wasm-unsafe-eval'`; a vhost copied before this needs the
+same change, or the archive shows "could not be drawn".
+
 ### The sounding in progress
 
 A second, fast pass shows the sounding being recorded, a few seconds behind.

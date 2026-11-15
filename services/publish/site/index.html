@@ -6,6 +6,7 @@
 <title>Oblique ionospheric sounding</title>
 <meta name="description" content="Live oblique ionospheric sounding results: ionograms, maximum usable frequency and forecast.">
 <link rel="stylesheet" href="style.css">
+<script src="echo.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body>
@@ -64,6 +65,25 @@
       <h2 data-t="forecast"></h2>
       <p class="note" data-t="experimental"></p>
       <div id="forecast"></div>
+    </div>
+  </section>
+
+  <section id="archive" class="card" hidden>
+    <h2 data-t="archive"></h2>
+    <p class="note" data-t="archive_hint"></p>
+    <div class="controls past-controls">
+      <label><span data-t="archive_circuit"></span> <select id="past-circuit"></select></label>
+      <label><span data-t="archive_day"></span> <select id="past-day"></select></label>
+      <label><span data-t="archive_time"></span> <select id="past-time"></select></label>
+    </div>
+    <canvas id="past-canvas" class="past" width="960" height="420"></canvas>
+    <p id="past-state" class="muted"></p>
+    <div class="controls past-controls">
+      <label><span data-t="archive_row"></span> <select id="past-row"></select></label>
+      <label><span data-t="archive_pad"></span> <select id="past-pad"></select></label>
+      <label><span data-t="archive_low"></span> <input id="past-low" type="range" min="0" max="50" step="1"></label>
+      <label><span data-t="archive_high"></span> <input id="past-high" type="range" min="45" max="110" step="1"></label>
+      <a id="past-file" class="link" hidden></a>
     </div>
   </section>
 </main>

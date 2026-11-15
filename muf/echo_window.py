@@ -1664,9 +1664,53 @@ def _reprocess_lfs(path, ew, rec, window, gate, stations) -> Ionogram:
                     zero_periods=0)
 
 
+def spectrogram(window: EchoWindow, length: int, fft: int | None = None
+                ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The window's own spectrogram, straight from the stored samples (§3.9).
+
+    Rows of ``length`` stored samples under a Hann window, transformed at
+    ``fft`` points; more points than ``length`` pad each row with zeros, which
+    refines the range grid and resolves nothing new. No reconstruction: a row
+    is ``length * decimation`` source samples, and the result is what
+    :func:`reprocess_window` gives at that window, to the filter's ripple.
+
+    Returns ``(power, range_km, sweep_hz)``: ``power[row, bin]`` on the shared
+    noise scale, the ranges ascending and held to the window, and each row's
+    sweep frequency at its centre. This is the transform a reader without the
+    source rate to spare -- a browser -- is meant to run.
+    """
+    if window.samples is None or window.row_noise is None:
+        raise ValueError(f"{window.path}: a direct spectrogram needs the "
+                         f"samples and the row noise, and this window lacks them")
+    points = length if fft is None else fft
+    span = length * window.decimation
+    count = window.source_samples // span
+    if length < 2 or points < length or count == 0:
+        raise ValueError(f"{window.path}: rows of {length} samples at {points} "
+                         f"points cannot be cut from this window")
+    lead = round(-window.t_first_s * window.sr_hz)
+    ranges = window.range_zero_km + window.km_per_hz * (
+        np.fft.fftfreq(points, d=1.0 / window.sr_hz) + window.shift_hz)
+    keep = np.flatnonzero((ranges >= window.range_lo_km)
+                          & (ranges <= window.range_hi_km))
+    keep = keep[np.argsort(ranges[keep])]
+    centre = (np.arange(count) + 0.5) * span
+    floor = np.interp(
+        centre, (np.arange(len(window.row_noise)) + 0.5) * window.noise_window,
+        window.row_noise) * (_hann_power(span, v2=False)
+                             / _hann_power(window.noise_window, v2=False))
+    rows = window.samples[lead:lead + count * length].reshape(count, length)
+    spectrum = np.abs(np.fft.fft(spectro.hanning(length) * rows, n=points,
+                                 axis=1)[:, keep]) ** 2
+    return ((window.decimation ** 2 * spectrum / floor[:, None]).astype(np.float32),
+            ranges[keep],
+            window.sweep_hz_at_t_first + window.rate_hz_s * (
+                lead + centre / window.decimation) / window.sr_hz)
+
+
 __all__ = [
     "EchoWindow", "NoEchoError", "Plan", "Report", "Selection", "Source",
     "Verification", "VerificationError", "cut", "plan_for", "read",
     "read_header", "reconstruct", "reprocess_window", "select_window",
-    "source_of", "verify_window", "write",
+    "source_of", "spectrogram", "verify_window", "write",
 ]
