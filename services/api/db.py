@@ -143,6 +143,8 @@ ADDED_COLUMNS = (
     ("forecast", "input_measured", "REAL"),
     ("config_epoch", "config_hash", "TEXT"),
     ("score", "r2", "REAL"),
+    ("archive_conversion", "first_folder", "TEXT"),
+    ("archive_conversion", "last_folder", "TEXT"),
 )
 
 

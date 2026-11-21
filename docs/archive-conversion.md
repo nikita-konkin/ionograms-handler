@@ -8,8 +8,16 @@ including file listings, require the same capability.
 ## Operator workflow
 
 1. Register the source archive on **Archives** if it is not listed already.
-2. Open **Conversion**, select the archive and enter a relative subfolder
-   (for example `2026.02.04`, or `.` for the entire archive).
+2. Open **Conversion**, select the archive and enter the relative path of the
+   **First folder** (for example `2026.02.04`). Leave **Last folder** blank to
+   inspect one folder, or enter `.` as the first folder to inspect the entire
+   archive. To inspect a range, enter the relative path of the last folder
+   (for example `2026.02.06`). Both endpoints must be existing, unlinked
+   folders inside the archive with the same parent. The last folder name must
+   sort at or after the first. Inspection includes both endpoints and every
+   sibling folder whose name sorts between them by plain string order, which
+   is chronological for `YYYY.MM.DD` names. Captures directly in the parent
+   folder are excluded.
 3. Click **Inspect folder**. The worker lists eligible captures, their total
    size, and a paginated file manifest. Inspection does not change captures.
    Links and files modified less than a minute ago are excluded.
@@ -82,8 +90,10 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env \
   --profile archive-conversion up -d --build archive-conversion
 ```
 
-Update the API and all archive indexers to the same code version to expose
-the tab, new schema and replacement-aware indexing.
+Update the API, conversion worker and all archive indexers to the same code
+version to expose the tab, new schema and replacement-aware indexing. Update
+the conversion worker before queuing a range. An older worker surveys the
+entire parent folder of a range job.
 After this one-time deployment, inspection, replacement, cancellation and
 resume are all controlled through the web tab. No conversion starts merely
 by enabling the service. A worker heartbeat is shown on the page.

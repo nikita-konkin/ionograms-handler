@@ -30,7 +30,7 @@ def listing(conn):
     return db.rows(conn, "SELECT * FROM archive_conversion ORDER BY id DESC LIMIT 50")
 
 
-def folder_for(conn, archive_id, subpath="."):
+def folder_for(conn, archive_id, subpath=".", *, endpoint=False):
     archive = db.archive(conn, archive_id)
     if archive is None:
         raise ConversionError("archive not found")
@@ -41,21 +41,40 @@ def folder_for(conn, archive_id, subpath="."):
     if sub.is_absolute() or ".." in sub.parts:
         raise ConversionError("choose a folder inside the selected archive")
     folder = base / sub
-    if folder.is_symlink() or not folder.resolve().is_relative_to(base.resolve()):
+    if folder.is_symlink() or not (resolved := folder.resolve()).is_relative_to(base):
         raise ConversionError("linked folders outside the archive are not allowed")
-    stored, folder = archives.resolve(str(folder), archives.roots()[0])
-    return stored, folder
+    if endpoint:
+        if resolved == base:
+            raise ConversionError("the archive itself cannot be a range endpoint")
+        if resolved.parts != folder.parts:
+            raise ConversionError("linked folders are not allowed")
+        if not folder.is_dir():
+            raise ConversionError(
+                f"{subpath} is not a directory that exists in the archive"
+            )
+        return _stored(resolved), resolved
+    return archives.resolve(str(folder), archives.roots()[0])
 
 
-def enqueue(conn, archive_id, subpath, by):
-    folder, _ = folder_for(conn, archive_id, subpath)
+def enqueue(conn, archive_id, subpath, by, last=None):
+    folder, begin = folder_for(conn, archive_id, subpath, endpoint=bool(last))
+    first = final = None
+    if last:
+        _, end = folder_for(conn, archive_id, last, endpoint=True)
+        if begin.parent != end.parent:
+            raise ConversionError("range folders must have the same parent")
+        if end.name < begin.name:
+            raise ConversionError("last folder sorts before the first folder")
+        folder = _stored(begin.parent)
+        first, final = begin.name, end.name
     try:
         with conn:
             cursor = conn.execute(
                 "INSERT INTO archive_conversion"
-                " (archive_id, folder, requested_by, created_at)"
-                " VALUES (?,?,?,?)",
-                (archive_id, folder, by, db.utcnow()),
+                " (archive_id, folder, requested_by, created_at,"
+                " first_folder, last_folder)"
+                " VALUES (?,?,?,?,?,?)",
+                (archive_id, folder, by, db.utcnow(), first, final),
             )
     except sqlite3.IntegrityError as exc:
         raise ConversionError("another conversion job is queued or running") from exc
@@ -160,8 +179,12 @@ def _self_contained(path):
         handle.visititems(check)
 
 
-def _safe(path, folder):
-    if path.is_symlink() or not path.resolve().is_relative_to(folder.resolve()):
+def _safe(path, folder, *, redirects=True):
+    if (
+        path.is_symlink()
+        or not (resolved := path.resolve()).is_relative_to(folder.resolve())
+        or (not redirects and resolved.parts != path.parts)
+    ):
         raise ConversionError(f"{path.name}: linked files are not converted")
     for parent in path.parents:
         if parent == folder:
@@ -204,8 +227,9 @@ def replace_one(conn, job, item, folder):
 
     source = folder / item["path"]
     target = source.with_name(source.stem + ".echo.h5")
-    _safe(source, folder)
-    _safe(target, folder)
+    redirects = job["first_folder"] is None
+    _safe(source, folder, redirects=redirects)
+    _safe(target, folder, redirects=redirects)
     if item["state"] == "verified":
         # Includes recovery after raw unlink but before DB commit.
         if not target.is_file() or digest(target) != item["target_sha256"]:
@@ -265,8 +289,8 @@ def replace_one(conn, job, item, folder):
             )
         # Make sure downstream readers can open it before removing the source.
         loader.load(target)
-        _safe(source, folder)
-        _safe(target, folder)
+        _safe(source, folder, redirects=redirects)
+        _safe(target, folder, redirects=redirects)
         if signature(source) != item["signature"] or digest(source) != source_hash:
             raise ConversionError("source changed during conversion")
         target_hash = digest(target)
@@ -293,8 +317,8 @@ def replace_one(conn, job, item, folder):
     # The journal above is committed independently of this transaction. If
     # unlink succeeds and this transaction rolls back, a restart can relink.
     with conn:
-        _safe(source, folder)
-        _safe(target, folder)
+        _safe(source, folder, redirects=redirects)
+        _safe(target, folder, redirects=redirects)
         if digest(target) != item["target_sha256"]:
             raise ConversionError("replacement changed before deletion")
         if source.exists() and signature(source) != item["signature"]:
@@ -333,8 +357,18 @@ def _survey(conn, job, folder):
     def unreadable(error):
         raise error
 
+    first, last = job["first_folder"], job["last_folder"]
     for current, dirs, files in os.walk(folder, followlinks=False, onerror=unreadable):
-        dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
+        current = Path(current)
+        if first is not None and current == folder:
+            dirs[:] = [name for name in dirs if first <= name <= last]
+            files = []
+        dirs[:] = [
+            path.name
+            for path in (current / name for name in dirs)
+            if not path.is_symlink()
+            and (first is None or path.resolve().parts == path.parts)
+        ]
         if get(conn, job["id"])["cancel_requested"]:
             return False
         with conn:
@@ -343,10 +377,10 @@ def _survey(conn, job, folder):
                 (db.utcnow(),),
             )
             for name in sorted(files):
-                path = Path(current) / name
+                path = current / name
                 if path.suffix.lower() != ".lfs" or path.is_symlink():
                     continue
-                _safe(path, folder)
+                _safe(path, folder, redirects=first is None)
                 if time.time() - path.stat().st_mtime < 60:
                     continue
                 conn.execute(
@@ -393,7 +427,13 @@ def run_next(conn):
     try:
         if job["archive_id"] is None:
             raise ConversionError("archive registration was removed")
-        _, folder = archives.resolve(job["folder"], archives.roots()[0])
+        root = archives.roots()[0]
+        _, folder = archives.resolve(job["folder"], root)
+        if (
+            job["first_folder"] is not None
+            and folder.parts != (root.resolve() / job["folder"]).parts
+        ):
+            raise ConversionError("range parent was redirected")
         _, registered = folder_for(conn, job["archive_id"])
         if not folder.is_relative_to(registered):
             raise ConversionError("archive registration changed")

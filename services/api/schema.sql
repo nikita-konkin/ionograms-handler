@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS archive_conversion (
     id INTEGER PRIMARY KEY,
     archive_id INTEGER REFERENCES archive(id) ON DELETE SET NULL,
     folder TEXT NOT NULL,
+    first_folder TEXT,
+    last_folder TEXT,
     mode TEXT NOT NULL DEFAULT 'survey',
     state TEXT NOT NULL DEFAULT 'queued',
     requested_by TEXT NOT NULL,
