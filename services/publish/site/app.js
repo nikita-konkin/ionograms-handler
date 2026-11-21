@@ -35,7 +35,11 @@
     // reader asked for it to be drawn; note is a string key, or empty
     past: { list: null, slug: null, day: null, index: null, file: null,
             window: null, reader: null, note: "", step: null,
-            row: 8192, pad: 3, low: 20, high: 75 }
+            row: 8192, pad: 3, low: 20, high: 75 },
+    // span: a period of the archive to download, its picked windows, and the
+    // days' indexes already fetched
+    span: { from: null, to: null, step: 900, picked: null, days: {},
+            busy: false, done: 0, note: "" }
   };
 
   // --- helpers -------------------------------------------------------------
@@ -982,6 +986,7 @@
 
   function loadDay() {
     var p = state.past, day = p.day, slug = p.slug;
+    spanDay(day);
     p.index = null; p.file = null; p.window = null; p.note = "";
     getJSON(pastFolder() + "index.json").then(function (d) { return d.soundings; })
       .catch(function () { return []; })
@@ -1025,6 +1030,186 @@
     on("past-high", function (v) { state.past.high = Number(v); renderPast(); });
   }
 
+  // --- archive, a period ------------------------------------------------------
+  // The windows of a period at a chosen step, as one ZIP or as a list of their
+  // addresses (#162). bundle.js picks them and writes the ZIP. A browser that
+  // can save a stream to disk takes a ZIP up to the format's 4 GB; any other
+  // builds it in memory, so it is refused there above IN_MEMORY.
+
+  var STEPS = [0, 900, 1800, 3600, 10800];
+  var IN_MEMORY = 500e6;
+
+  function utc(ms) { return new Date(ms).toISOString().slice(0, 16); }
+
+  function spanName(ext) {
+    var s = state.span, stamp = function (ms) { return utc(ms).replace(/[-:]/g, ""); };
+    return state.past.slug + "_" + stamp(s.from) + "_" + stamp(s.to) +
+      (s.step ? "_" + s.step / 60 + "min" : "") + "." + ext;
+  }
+
+  function spanSize() {
+    return (state.span.picked || []).reduce(function (sum, e) {
+      return sum + e.bytes + 76 + 2 * (state.past.slug.length + 1 + e.file.length);
+    }, 22);
+  }
+
+  function spanStreams() { return typeof window.showSaveFilePicker === "function"; }
+
+  function spanFits() {
+    var picked = state.span.picked || [], size = spanSize();
+    return picked.length <= bundle.MOST && size <= bundle.LARGEST &&
+      (spanStreams() || size <= IN_MEMORY);
+  }
+
+  function dayIndex(day) {
+    var s = state.span, key = state.past.slug + "/" + day.replace(/-/g, "/") + "/";
+    if (!s.days[key]) {
+      s.days[key] = getJSON("archive/" + key + "index.json")
+        .then(function (d) {
+          return d.soundings.map(function (e) {
+            return { t: e.t, file: e.file, bytes: e.bytes, folder: key };
+          });
+        })
+        .catch(function () { delete s.days[key]; return []; });
+    }
+    return s.days[key];
+  }
+
+  function updateSpan() {
+    var s = state.span, c = pastCircuit();
+    var asked = [s.from, s.to, s.step, state.past.slug].join();
+    s.picked = null; s.note = "range_loading";
+    renderSpan();
+    if (!c || !(s.to >= s.from)) { s.picked = []; s.note = ""; renderSpan(); return; }
+    var first = utc(s.from).slice(0, 10), last = utc(s.to).slice(0, 10);
+    var days = c.days.map(function (d) { return d.day; })
+      .filter(function (d) { return d >= first && d <= last; });
+    Promise.all(days.map(dayIndex)).then(function (lists) {
+      if ([s.from, s.to, s.step, state.past.slug].join() !== asked) return;
+      s.picked = bundle.pick([].concat.apply([], lists), s.from, s.to, s.step);
+      s.note = "";
+      renderSpan();
+    });
+  }
+
+  function spanDay(day) {
+    var s = state.span, from = Date.parse(day + "T00:00:00Z");
+    s.from = from; s.to = from + 86400000 - 60000;
+    updateSpan();
+  }
+
+  function renderSpan() {
+    var s = state.span, picked = s.picked || [];
+    if (s.from == null) return;
+    document.getElementById("range-from").value = utc(s.from);
+    document.getElementById("range-to").value = utc(s.to);
+    fill("range-step", STEPS.map(function (n) {
+      return [n, !n ? t("range_all") : n < 3600 ? t("range_min", { n: n / 60 })
+        : t("range_h", { n: n / 3600 })];
+    }), s.step);
+    var line = s.note === "range_progress" ? t(s.note, { done: s.done, n: picked.length })
+      : s.note === "range_done" ? t(s.note, { n: s.done })
+      : s.note ? t(s.note)
+      : !picked.length ? t("range_none")
+      : t("range_count", { n: picked.length, size: (spanSize() / 1e6).toFixed(0) }) +
+        (spanFits() ? "" : " · " + t("range_big"));
+    document.getElementById("range-state").textContent = line;
+    document.getElementById("range-zip").disabled = s.busy || !picked.length || !spanFits();
+    document.getElementById("range-list").disabled = s.busy || !picked.length;
+    var how = document.getElementById("range-how"), file = spanName("txt");
+    clear(how);
+    t("range_how").split(/\{(wget|ps)\}/).forEach(function (part, i) {
+      if (i % 2 === 0) { how.appendChild(document.createTextNode(part)); return; }
+      how.appendChild(el("code", { text: part === "wget" ? "wget -c -i " + file
+        : "Get-Content " + file +
+          " | ForEach-Object { Invoke-WebRequest $_ -OutFile (Split-Path $_ -Leaf) }" }));
+    });
+  }
+
+  function save(name, blob) {
+    var link = el("a", { href: URL.createObjectURL(blob), download: name });
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(link.href); }, 60000);
+  }
+
+  function spanAddress(e) {
+    return new URL("archive/" + e.folder + e.file, document.baseURI).href;
+  }
+
+  function spanList() {
+    var text = state.span.picked.map(spanAddress).join("\n") + "\n";
+    save(spanName("txt"), new Blob([text], { type: "text/plain" }));
+  }
+
+  function spanTarget(name) {
+    if (spanStreams()) {
+      return window.showSaveFilePicker({ suggestedName: name }).then(function (handle) {
+        return handle.createWritable();
+      }).then(function (stream) {
+        return { put: function (bytes) { return stream.write(bytes); },
+                 done: function () { return stream.close(); },
+                 drop: function () { return stream.abort(); } };
+      });
+    }
+    var pieces = [];
+    return Promise.resolve({
+      put: function (bytes) { pieces.push(bytes); },
+      done: function () { save(name, new Blob(pieces, { type: "application/zip" })); },
+      drop: function () { pieces = []; }
+    });
+  }
+
+  function spanZip() {
+    var s = state.span, picked = s.picked.slice(), slug = state.past.slug;
+    spanTarget(spanName("zip")).then(function (target) {
+      s.busy = true; s.done = 0; s.note = "range_progress";
+      renderSpan();
+      var writer = bundle.zip(target.put);
+      function load(e) {
+        return fetch(spanAddress(e)).then(function (r) {
+          if (!r.ok) throw new Error(e.file + ": " + r.status);
+          return r.arrayBuffer();
+        });
+      }
+      var chain = Promise.resolve(), ahead = picked.length ? load(picked[0]) : null;
+      picked.forEach(function (e, i) {
+        chain = chain.then(function () {
+          var got = ahead;
+          ahead = i + 1 < picked.length ? load(picked[i + 1]) : null;
+          return got;
+        }).then(function (bytes) {
+          return writer.add(slug + "/" + e.file, new Uint8Array(bytes), Date.parse(e.t));
+        }).then(function () { s.done += 1; renderSpan(); });
+      });
+      return chain.then(function () { return writer.close(); })
+        .then(function () { return target.done(); })
+        .then(function () { s.note = "range_done"; }, function () {
+          s.note = "range_failed";
+          return target.drop();
+        });
+    }).catch(function (error) {
+      if (!error || error.name !== "AbortError") s.note = "range_failed";
+    }).then(function () { s.busy = false; renderSpan(); });
+  }
+
+  function bindSpan() {
+    function moment(id, key) {
+      document.getElementById(id).addEventListener("change", function (evt) {
+        var at = Date.parse(evt.target.value + ":00Z");
+        if (isFinite(at)) { state.span[key] = at; updateSpan(); }
+      });
+    }
+    moment("range-from", "from");
+    moment("range-to", "to");
+    document.getElementById("range-step").addEventListener("change", function (evt) {
+      state.span.step = Number(evt.target.value); updateSpan();
+    });
+    document.getElementById("range-list").addEventListener("click", spanList);
+    document.getElementById("range-zip").addEventListener("click", spanZip);
+  }
+
   function renderAll() {
     renderStatic();
     renderHeader();
@@ -1033,6 +1218,7 @@
     renderTabs();
     renderCircuit();
     renderPast();
+    renderSpan();
   }
 
   function select(slug, force) {
@@ -1085,6 +1271,7 @@
       drawPast();
     });
     bindPast();
+    bindSpan();
 
     document.getElementById("lang").addEventListener("click", function () {
       state.lang = state.lang === "ru" ? "en" : "ru";
