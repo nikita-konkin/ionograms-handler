@@ -427,7 +427,8 @@ def test_restored_samples_are_published_apart_from_the_measured_ones(
     _publish(database, site, archive)
     series = json.loads((site / "data" / "nic-dob.json").read_text(
         encoding="utf-8"))["series"]
-    assert series["restored"]["t"] and not set(series["restored"]["t"]) & set(series["t"]), (
+    restored = set(series["restored"]["t"])
+    assert restored and not restored & set(series["t"]), (
         f"restored samples were not published apart from the measured ones: {series}")
 
 
