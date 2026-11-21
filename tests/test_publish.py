@@ -608,3 +608,30 @@ def test_the_page_offers_the_predicted_days_chart():
     page = (publisher.SITE_SRC / "index.html").read_text(encoding="utf-8")
     assert all(f'id="{name}"' in page for name in ("days-chart", "days-readout")), (
         "the page offers no chart of predicted days")
+
+
+def test_a_pick_before_midnight_scores_no_forecast_of_the_next_day(
+        database, archive, tmp_path, drawn):
+    rng = np.random.default_rng()
+    with db.session(database) as conn:
+        model = conn.execute("SELECT id FROM model_registry WHERE name = 'live-model'"
+                             ).fetchone()[0]
+        conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at,"
+                     " valid_at, horizon_s, value, sigma) VALUES (?, 'muf', 'NIC',"
+                     " 'DOB', '2026-08-13T09:00:00Z', '2026-08-14T00:00:00Z', 86400,"
+                     " ?, 1.5)", (model, float(rng.uniform(20, 30))))
+        _sounding(conn, archive, "late.h5", "2026-08-13 23:59:00",
+                  muf=float(rng.uniform(10, 15)))
+        conn.commit()
+    assert {"day": "2026-08-14", "mae": None, "n": 0} in _days(
+        database, archive, tmp_path), "a pick of one day scored the next day's forecast"
+
+
+def test_no_day_is_listed_without_a_forecast_curve_to_draw(
+        database, archive, tmp_path, drawn):
+    with db.session(database) as conn:
+        conn.execute("UPDATE model_registry SET active = 0,"
+                     " activated_at = '2026-08-13T08:00:00Z' WHERE name = 'live-model'")
+        conn.commit()
+    assert _days(database, archive, tmp_path) == [], (
+        "a day was listed although the page draws no forecast curve")

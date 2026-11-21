@@ -40,7 +40,10 @@
     // holds the indexes in flight, asked numbers the latest selection, job is
     // the ZIP being written, held the bytes of ZIPs still kept in memory
     span: { from: null, to: null, step: 900, picked: null, days: {},
-            asked: 0, busy: false, job: null, held: 0, note: "" }
+            asked: 0, busy: false, job: null, held: 0, note: "" },
+    // days: where the reader left the chart of predicted days, so a refresh
+    // keeps it; newest follows the latest day
+    days: { slug: null, day: null, into: 0, newest: true }
   };
 
   // --- helpers -------------------------------------------------------------
@@ -651,7 +654,8 @@
   // Each UTC day the forecast as issued reaches, side by side in equal slots,
   // the measured MUF over the forecast and the day's error above it (#167).
   // Days without a forecast are left out. The days scroll sideways under a
-  // fixed axis and open on the newest.
+  // fixed axis, open on the newest and stay where the reader left them; the
+  // pointer, a tap or the arrow keys read out one instant.
 
   var DAY_MS = 86400000, DAY_SLOT_MIN = 110;
 
@@ -660,31 +664,45 @@
     var fc = (s.forecast || []).filter(function (f) { return f.param === "muf"; })[0];
     for (var i = 0; i < s.t.length; i++) {
       var x = parseT(s.t[i]), k = slot[ymd(new Date(x))];
-      if (k != null && s.muf[i] != null) measured.push([x, s.muf[i], s.limited[i], k]);
+      if (k != null && s.muf[i] != null) {
+        measured.push({ at: x, value: s.muf[i], bound: !!s.limited[i], slot: k });
+      }
     }
     (fc ? fc.t : []).forEach(function (when, j) {
       var x = parseT(when), k = slot[ymd(new Date(x))];
-      predicted.push(k == null || fc.value[j] == null ? null : [x, fc.value[j], fc.sigma[j], k]);
+      predicted.push(k == null || fc.value[j] == null ? null
+        : { at: x, value: fc.value[j], sigma: fc.sigma[j], slot: k });
     });
     return { measured: measured, predicted: predicted };
   }
 
-  function dayRuns(predicted) {
+  // Runs of consecutive points, broken wherever `keep` fails or the day
+  // changes.
+  function dayRuns(points, keep) {
     var runs = [], run = [];
-    predicted.forEach(function (p) {
-      if (!p || (run.length && run[run.length - 1][3] !== p[3])) {
+    points.forEach(function (p) {
+      if (!p || !keep(p) || (run.length && run[run.length - 1].slot !== p.slot)) {
         if (run.length) runs.push(run);
         run = [];
       }
-      if (p) run.push(p);
+      if (p && keep(p)) run.push(p);
     });
     if (run.length) runs.push(run);
     return runs;
   }
 
+  function closest(list, ms) {
+    var best = null;
+    list.forEach(function (p) {
+      if (!best || Math.abs(p.at - ms) < Math.abs(best.at - ms)) best = p;
+    });
+    return best;
+  }
+
   function renderDays() {
     var box = document.getElementById("days-chart");
     var readout = document.getElementById("days-readout");
+    if (!box || !readout) return;
     clear(box);
     readout.textContent = "";
     var d = state.data[state.slug];
@@ -695,20 +713,23 @@
     }
     var slot = {};
     days.forEach(function (day, k) { slot[day.day] = k; });
-    var pts = dayPoints(d, slot), runs = dayRuns(pts.predicted);
+    var pts = dayPoints(d, slot);
+    var lines = dayRuns(pts.predicted, function () { return true; });
+    var bands = dayRuns(pts.predicted, function (p) { return p.sigma != null; });
     var top = 0;
-    pts.measured.forEach(function (p) { top = Math.max(top, p[1]); });
-    runs.forEach(function (r) {
-      r.forEach(function (p) { top = Math.max(top, p[1] + (p[2] || 0)); });
+    pts.measured.forEach(function (p) { top = Math.max(top, p.value); });
+    pts.predicted.forEach(function (p) {
+      if (p) top = Math.max(top, p.value + (p.sigma || 0));
     });
     top = niceMax(top * 1.05);
 
-    var outer = Math.max(320, box.clientWidth || 640), L = 36, R = 10, T = 22, B = 26;
+    var outer = box.clientWidth || 640, L = 36, R = 10, T = 22, B = 26;
     var H = outer < 500 ? 220 : 260;
     var width = Math.max(outer - L, days.length * DAY_SLOT_MIN + R);
     var slotW = (width - R) / days.length;
-    function X(ms, k) {
-      return k * slotW + (ms - parseT(days[k].day + "T00:00:00Z")) / DAY_MS * slotW;
+    function X(p) {
+      return p.slot * slotW +
+        (p.at - parseT(days[p.slot].day + "T00:00:00Z")) / DAY_MS * slotW;
     }
     function Y(v) { return T + (1 - Math.min(v, top) / top) * (H - T - B); }
 
@@ -739,69 +760,110 @@
     });
     plot.appendChild(svg("line", { "class": "day-edge", x1: width - R, x2: width - R,
                                    y1: T, y2: H - B }));
-    runs.forEach(function (r) {
-      var withSigma = r.filter(function (p) { return p[2] != null; });
-      if (withSigma.length > 1) {
-        var up = withSigma.map(function (p) { return X(p[0], p[3]) + "," + Y(p[1] + p[2]); });
-        var down = withSigma.slice().reverse().map(function (p) {
-          return X(p[0], p[3]) + "," + Y(Math.max(0, p[1] - p[2]));
-        });
-        plot.appendChild(svg("polygon", { "class": "band", points: up.concat(down).join(" ") }));
+    bands.forEach(function (r) {
+      if (r.length === 1) {
+        plot.appendChild(svg("line", { "class": "band-bar", x1: X(r[0]), x2: X(r[0]),
+          y1: Y(r[0].value + r[0].sigma), y2: Y(Math.max(0, r[0].value - r[0].sigma)) }));
+        return;
+      }
+      var up = r.map(function (p) { return X(p) + "," + Y(p.value + p.sigma); });
+      var down = r.slice().reverse().map(function (p) {
+        return X(p) + "," + Y(Math.max(0, p.value - p.sigma));
+      });
+      plot.appendChild(svg("polygon", { "class": "band", points: up.concat(down).join(" ") }));
+    });
+    lines.forEach(function (r) {
+      if (r.length === 1) {
+        plot.appendChild(svg("circle", { "class": "fc-dot", cx: X(r[0]), cy: Y(r[0].value),
+                                         r: 2.6 }));
+        return;
       }
       plot.appendChild(svg("polyline", { "class": "fc c-model",
-        points: r.map(function (p) { return X(p[0], p[3]) + "," + Y(p[1]); }).join(" ") }));
+        points: r.map(function (p) { return X(p) + "," + Y(p.value); }).join(" ") }));
     });
     pts.measured.forEach(function (p) {
-      plot.appendChild(svg("circle", { "class": p[2] ? "muf-limited" : "muf",
-                                       cx: X(p[0], p[3]), cy: Y(p[1]), r: p[2] ? 2.6 : 2.2 }));
+      plot.appendChild(svg("circle", { "class": p.bound ? "muf-limited" : "muf",
+                                       cx: X(p), cy: Y(p.value), r: p.bound ? 2.6 : 2.2 }));
     });
     var cursor = svg("line", { "class": "cursor", y1: T, y2: H - B, visibility: "hidden" });
     plot.appendChild(cursor);
 
-    var scroller = el("div", { "class": "days-scroll" });
+    var scroller = el("div", { "class": "days-scroll", tabindex: "0",
+                               "aria-label": t("days_keys") });
     scroller.appendChild(plot);
     box.appendChild(el("div", { "class": "days-wrap" }, [axis, scroller]));
-    scroller.scrollLeft = scroller.scrollWidth;
+    var kept = state.days;
+    var at = kept.slug === state.slug
+      ? days.map(function (day) { return day.day; }).indexOf(kept.day) : -1;
+    scroller.scrollLeft = at >= 0 && !kept.newest ? (at + kept.into) * slotW
+      : scroller.scrollWidth;
+    scroller.addEventListener("scroll", function () {
+      var k = Math.min(days.length - 1, Math.floor(scroller.scrollLeft / slotW));
+      state.days = {
+        slug: state.slug, day: days[k].day, into: scroller.scrollLeft / slotW - k,
+        newest: scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 2
+      };
+    });
 
     var predicted = pts.predicted.filter(Boolean);
-    plot.addEventListener("pointermove", function (evt) {
-      var at = evt.clientX - plot.getBoundingClientRect().left;
-      var k = Math.min(days.length - 1, Math.max(0, Math.floor(at / slotW)));
-      var ms = parseT(days[k].day + "T00:00:00Z") + (at - k * slotW) / slotW * DAY_MS;
-      var seen = closest(pts.measured.filter(function (p) { return p[3] === k; }), ms);
-      var told = closest(predicted.filter(function (p) { return p[3] === k; }),
-                         seen ? seen[0] : ms);
-      var hit = seen || told;
-      if (!hit) { cursor.setAttribute("visibility", "hidden"); readout.textContent = ""; return; }
-      cursor.setAttribute("x1", X(hit[0], k));
-      cursor.setAttribute("x2", X(hit[0], k));
+    var every = pts.measured.concat(predicted).sort(function (p, q) { return p.at - q.at; });
+    var shown = null;
+    function near(list, hit) {
+      var p = closest(list.filter(function (q) { return q.slot === hit.slot; }), hit.at);
+      return p && Math.abs(p.at - hit.at) <= 900000 ? p : null;
+    }
+    function show(hit) {
+      shown = hit;
+      if (!hit) {
+        cursor.setAttribute("visibility", "hidden");
+        readout.textContent = "";
+        return;
+      }
+      var seen = "bound" in hit ? hit : near(pts.measured, hit);
+      var told = "sigma" in hit ? hit : near(predicted, hit);
+      cursor.setAttribute("x1", X(hit));
+      cursor.setAttribute("x2", X(hit));
       cursor.setAttribute("visibility", "visible");
-      var parts = [fmtTime(hit[0])];
-      if (seen) parts.push(t("days_measured") + " " + seen[1].toFixed(1));
-      if (told && Math.abs(told[0] - hit[0]) <= 900000) {
-        parts.push(t("days_predicted") + " " + told[1].toFixed(1));
-        if (seen) {
-          var gap = told[1] - seen[1];
-          parts.push((gap >= 0 ? "+" : "−") + Math.abs(gap).toFixed(1) + " " + t("mhz"));
-        }
+      var parts = [fmtTime(hit.at)];
+      if (seen) {
+        parts.push(t("days_measured") + (seen.bound ? " ≥ " : " ") + seen.value.toFixed(1) +
+                   (seen.bound ? " (" + t("limited") + ")" : ""));
+      }
+      if (told) parts.push(t("days_predicted") + " " + told.value.toFixed(1));
+      if (seen && told && !seen.bound) {
+        var gap = told.value - seen.value;
+        parts.push((gap >= 0 ? "+" : "−") + Math.abs(gap).toFixed(1) + " " + t("mhz"));
       }
       readout.textContent = parts.join(" · ");
-    });
+    }
+    function pick(evt) {
+      var x = evt.clientX - plot.getBoundingClientRect().left;
+      var k = Math.min(days.length - 1, Math.max(0, Math.floor(x / slotW)));
+      var ms = parseT(days[k].day + "T00:00:00Z") + (x - k * slotW) / slotW * DAY_MS;
+      show(closest(every.filter(function (p) { return p.slot === k; }), ms));
+    }
+    plot.addEventListener("pointermove", pick);
+    plot.addEventListener("pointerdown", pick);
     plot.addEventListener("pointerleave", function () {
       cursor.setAttribute("visibility", "hidden");
     });
-  }
-
-  function closest(list, ms) {
-    var best = null;
-    list.forEach(function (p) {
-      if (!best || Math.abs(p[0] - ms) < Math.abs(best[0] - ms)) best = p;
+    scroller.addEventListener("keydown", function (evt) {
+      if (evt.key !== "ArrowLeft" && evt.key !== "ArrowRight") return;
+      evt.preventDefault();
+      var step = evt.key === "ArrowLeft" ? -1 : 1;
+      var k = shown ? every.indexOf(shown) : step < 0 ? every.length : -1;
+      var next = every[Math.min(every.length - 1, Math.max(0, k + step))];
+      show(next);
+      if (next && (X(next) < scroller.scrollLeft ||
+                   X(next) > scroller.scrollLeft + scroller.clientWidth)) {
+        scroller.scrollLeft = X(next) - scroller.clientWidth / 2;
+      }
     });
-    return best;
   }
 
   function renderDaysLegend() {
     var legend = document.getElementById("days-legend");
+    if (!legend) return;
     clear(legend);
     function key(cls, label) {
       return el("span", {}, [el("i", { "class": cls }), document.createTextNode(label)]);

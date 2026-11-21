@@ -122,7 +122,8 @@
     "days_none": "No forecast was issued in this period.",
     "days_measured": "measured",
     "days_predicted": "forecast",
-    "days_forecast": "Forecast as issued"
+    "days_forecast": "Forecast as issued",
+    "days_keys": "Forecast against measurement by day; the arrow keys step through instants"
   },
   "ru": {
     "title": "Наклонное зондирование ионосферы",
@@ -247,6 +248,7 @@
     "days_none": "За этот период прогнозов не выпускалось.",
     "days_measured": "измерено",
     "days_predicted": "прогноз",
-    "days_forecast": "Прогноз, выпущенный заранее"
+    "days_forecast": "Прогноз, выпущенный заранее",
+    "days_keys": "Прогноз и измерения по дням; стрелки переходят по моментам"
   }
 }
