@@ -36,10 +36,11 @@
     past: { list: null, slug: null, day: null, index: null, file: null,
             window: null, reader: null, note: "", step: null,
             row: 8192, pad: 3, low: 20, high: 75 },
-    // span: a period of the archive to download, its picked windows, and the
-    // days' indexes already fetched
+    // span: a period of the archive to download and its picked windows; days
+    // holds the indexes in flight, asked numbers the latest selection, job is
+    // the ZIP being written, held the bytes of ZIPs still kept in memory
     span: { from: null, to: null, step: 900, picked: null, days: {},
-            busy: false, done: 0, note: "" }
+            asked: 0, busy: false, job: null, held: 0, note: "" }
   };
 
   // --- helpers -------------------------------------------------------------
@@ -1034,12 +1035,20 @@
   // The windows of a period at a chosen step, as one ZIP or as a list of their
   // addresses (#162). bundle.js picks them and writes the ZIP. A browser that
   // can save a stream to disk takes a ZIP up to the format's 4 GB; any other
-  // builds it in memory, so it is refused there above IN_MEMORY.
+  // builds it in memory, so it is refused there once it and the ZIPs still
+  // held for earlier downloads pass IN_MEMORY. A day whose index cannot be
+  // read leaves the period unavailable rather than quietly shorter, and the
+  // end minute counts to its last second.
 
   var STEPS = [0, 900, 1800, 3600, 10800];
   var IN_MEMORY = 500e6;
 
   function utc(ms) { return new Date(ms).toISOString().slice(0, 16); }
+
+  function spanValid() {
+    var s = state.span;
+    return isFinite(s.from) && isFinite(s.to) && s.to >= s.from;
+  }
 
   function spanName(ext) {
     var s = state.span, stamp = function (ms) { return utc(ms).replace(/[-:]/g, ""); };
@@ -1058,57 +1067,61 @@
   function spanFits() {
     var picked = state.span.picked || [], size = spanSize();
     return picked.length <= bundle.MOST && size <= bundle.LARGEST &&
-      (spanStreams() || size <= IN_MEMORY);
+      (spanStreams() || size + state.span.held <= IN_MEMORY);
   }
 
   function dayIndex(day) {
     var s = state.span, key = state.past.slug + "/" + day.replace(/-/g, "/") + "/";
     if (!s.days[key]) {
-      s.days[key] = getJSON("archive/" + key + "index.json")
-        .then(function (d) {
-          return d.soundings.map(function (e) {
-            return { t: e.t, file: e.file, bytes: e.bytes, folder: key };
-          });
-        })
-        .catch(function () { delete s.days[key]; return []; });
+      s.days[key] = getJSON("archive/" + key + "index.json").then(function (d) {
+        return d.soundings.map(function (e) {
+          return { t: e.t, file: e.file, bytes: e.bytes, folder: key };
+        });
+      });
+      s.days[key].then(function () { delete s.days[key]; }, function () { delete s.days[key]; });
     }
     return s.days[key];
   }
 
   function updateSpan() {
-    var s = state.span, c = pastCircuit();
-    var asked = [s.from, s.to, s.step, state.past.slug].join();
+    var s = state.span, c = pastCircuit(), asked = s.asked += 1;
     s.picked = null; s.note = "range_loading";
     renderSpan();
-    if (!c || !(s.to >= s.from)) { s.picked = []; s.note = ""; renderSpan(); return; }
+    if (!c || !spanValid()) { s.picked = []; s.note = ""; renderSpan(); return; }
     var first = utc(s.from).slice(0, 10), last = utc(s.to).slice(0, 10);
     var days = c.days.map(function (d) { return d.day; })
       .filter(function (d) { return d >= first && d <= last; });
     Promise.all(days.map(dayIndex)).then(function (lists) {
-      if ([s.from, s.to, s.step, state.past.slug].join() !== asked) return;
-      s.picked = bundle.pick([].concat.apply([], lists), s.from, s.to, s.step);
+      if (s.asked !== asked) return;
+      s.picked = bundle.pick([].concat.apply([], lists), s.from, s.to + 59999, s.step);
       s.note = "";
-      renderSpan();
-    });
+    }, function () {
+      if (s.asked !== asked) return;
+      s.picked = []; s.note = "range_unavailable";
+    }).then(function () { if (s.asked === asked) renderSpan(); });
   }
+
+  function spanFresh() { if (!state.span.busy) state.span.job = null; }
 
   function spanDay(day) {
     var s = state.span, from = Date.parse(day + "T00:00:00Z");
     s.from = from; s.to = from + 86400000 - 60000;
+    spanFresh();
     updateSpan();
   }
 
   function renderSpan() {
-    var s = state.span, picked = s.picked || [];
+    var s = state.span, picked = s.picked || [], job = s.job;
     if (s.from == null) return;
-    document.getElementById("range-from").value = utc(s.from);
-    document.getElementById("range-to").value = utc(s.to);
+    if (isFinite(s.from)) document.getElementById("range-from").value = utc(s.from);
+    if (isFinite(s.to)) document.getElementById("range-to").value = utc(s.to);
     fill("range-step", STEPS.map(function (n) {
       return [n, !n ? t("range_all") : n < 3600 ? t("range_min", { n: n / 60 })
         : t("range_h", { n: n / 3600 })];
     }), s.step);
-    var line = s.note === "range_progress" ? t(s.note, { done: s.done, n: picked.length })
-      : s.note === "range_done" ? t(s.note, { n: s.done })
+    var line = job && job.note === "range_progress" ? t(job.note, { done: job.done, n: job.n })
+      : job && job.note === "range_done" ? t(job.note, { n: job.done })
+      : job && job.note ? t(job.note)
       : s.note ? t(s.note)
       : !picked.length ? t("range_none")
       : t("range_count", { n: picked.length, size: (spanSize() / 1e6).toFixed(0) }) +
@@ -1116,8 +1129,10 @@
     document.getElementById("range-state").textContent = line;
     document.getElementById("range-zip").disabled = s.busy || !picked.length || !spanFits();
     document.getElementById("range-list").disabled = s.busy || !picked.length;
-    var how = document.getElementById("range-how"), file = spanName("txt");
+    var how = document.getElementById("range-how");
     clear(how);
+    if (!spanValid()) return;
+    var file = spanName("txt");
     t("range_how").split(/\{(wget|ps)\}/).forEach(function (part, i) {
       if (i % 2 === 0) { how.appendChild(document.createTextNode(part)); return; }
       how.appendChild(el("code", { text: part === "wget" ? "wget -c -i " + file
@@ -1126,12 +1141,17 @@
     });
   }
 
-  function save(name, blob) {
+  function save(name, blob, held) {
     var link = el("a", { href: URL.createObjectURL(blob), download: name });
+    state.span.held += held;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    setTimeout(function () { URL.revokeObjectURL(link.href); }, 60000);
+    setTimeout(function () {
+      URL.revokeObjectURL(link.href);
+      state.span.held -= held;
+      renderSpan();
+    }, 60000);
   }
 
   function spanAddress(e) {
@@ -1140,10 +1160,10 @@
 
   function spanList() {
     var text = state.span.picked.map(spanAddress).join("\n") + "\n";
-    save(spanName("txt"), new Blob([text], { type: "text/plain" }));
+    save(spanName("txt"), new Blob([text], { type: "text/plain" }), 0);
   }
 
-  function spanTarget(name) {
+  function spanTarget(name, size) {
     if (spanStreams()) {
       return window.showSaveFilePicker({ suggestedName: name }).then(function (handle) {
         return handle.createWritable();
@@ -1156,22 +1176,26 @@
     var pieces = [];
     return Promise.resolve({
       put: function (bytes) { pieces.push(bytes); },
-      done: function () { save(name, new Blob(pieces, { type: "application/zip" })); },
+      done: function () { save(name, new Blob(pieces, { type: "application/zip" }), size); },
       drop: function () { pieces = []; }
     });
   }
 
   function spanZip() {
     var s = state.span, picked = s.picked.slice(), slug = state.past.slug;
-    spanTarget(spanName("zip")).then(function (target) {
-      s.busy = true; s.done = 0; s.note = "range_progress";
-      renderSpan();
+    var job = { done: 0, n: picked.length, note: "range_progress" };
+    var stop = new AbortController();
+    s.busy = true; s.job = job;
+    renderSpan();
+    spanTarget(spanName("zip"), spanSize()).then(function (target) {
       var writer = bundle.zip(target.put);
       function load(e) {
-        return fetch(spanAddress(e)).then(function (r) {
+        var got = fetch(spanAddress(e), { signal: stop.signal }).then(function (r) {
           if (!r.ok) throw new Error(e.file + ": " + r.status);
           return r.arrayBuffer();
         });
+        got.catch(function () { /* seen where it is awaited */ });
+        return got;
       }
       var chain = Promise.resolve(), ahead = picked.length ? load(picked[0]) : null;
       picked.forEach(function (e, i) {
@@ -1181,30 +1205,34 @@
           return got;
         }).then(function (bytes) {
           return writer.add(slug + "/" + e.file, new Uint8Array(bytes), Date.parse(e.t));
-        }).then(function () { s.done += 1; renderSpan(); });
+        }).then(function () { job.done += 1; renderSpan(); });
       });
       return chain.then(function () { return writer.close(); })
         .then(function () { return target.done(); })
-        .then(function () { s.note = "range_done"; }, function () {
-          s.note = "range_failed";
+        .then(function () { job.note = "range_done"; }, function () {
+          stop.abort();
+          job.note = "range_failed";
           return target.drop();
         });
     }).catch(function (error) {
-      if (!error || error.name !== "AbortError") s.note = "range_failed";
+      job.note = error && error.name === "AbortError" ? "" : "range_failed";
     }).then(function () { s.busy = false; renderSpan(); });
   }
 
   function bindSpan() {
     function moment(id, key) {
       document.getElementById(id).addEventListener("change", function (evt) {
-        var at = Date.parse(evt.target.value + ":00Z");
-        if (isFinite(at)) { state.span[key] = at; updateSpan(); }
+        state.span[key] = Date.parse(evt.target.value + ":00Z");
+        spanFresh();
+        updateSpan();
       });
     }
     moment("range-from", "from");
     moment("range-to", "to");
     document.getElementById("range-step").addEventListener("change", function (evt) {
-      state.span.step = Number(evt.target.value); updateSpan();
+      state.span.step = Number(evt.target.value);
+      spanFresh();
+      updateSpan();
     });
     document.getElementById("range-list").addEventListener("click", spanList);
     document.getElementById("range-zip").addEventListener("click", spanZip);
