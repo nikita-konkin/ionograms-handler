@@ -7,6 +7,7 @@
 <meta name="description" content="Live oblique ionospheric sounding results: ionograms, maximum usable frequency and forecast.">
 <link rel="stylesheet" href="style.css">
 <script src="echo.js" defer></script>
+<script src="bundle.js" defer></script>
 <script src="app.js" defer></script>
 <script data-goatcounter="https://volgatech-itrc.goatcounter.com/count" async src="vendor/count.js"></script>
 </head>
@@ -86,6 +87,19 @@
       <label><span data-t="archive_high"></span> <input id="past-high" type="range" min="45" max="110" step="1"></label>
       <a id="past-file" class="link" hidden></a>
     </div>
+    <h3 data-t="range"></h3>
+    <p class="note" data-t="range_hint"></p>
+    <div class="controls past-controls">
+      <label><span data-t="range_from"></span> <input id="range-from" type="datetime-local" step="60"></label>
+      <label><span data-t="range_to"></span> <input id="range-to" type="datetime-local" step="60"></label>
+      <label><span data-t="range_step"></span> <select id="range-step"></select></label>
+    </div>
+    <p id="range-state" class="muted"></p>
+    <div class="controls past-controls">
+      <button type="button" id="range-zip" class="act" data-t="range_zip"></button>
+      <button type="button" id="range-list" class="act" data-t="range_list"></button>
+    </div>
+    <p id="range-how" class="note range-how"></p>
   </section>
 </main>
 

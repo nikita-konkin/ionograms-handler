@@ -294,7 +294,7 @@ def test_the_page_loads_nothing_from_elsewhere():
     The visit counter's endpoint is the one address named, and the vhost's
     `connect-src` allows exactly it (#155).
     """
-    for name in ("index.html", "app.js", "style.css"):
+    for name in ("index.html", "app.js", "bundle.js", "style.css"):
         text = (publisher.SITE_SRC / name).read_text(encoding="utf-8").replace(
             "https://volgatech-itrc.goatcounter.com/count", "")
         assert "http://" not in text.replace("http://www.w3.org/2000/svg", "")

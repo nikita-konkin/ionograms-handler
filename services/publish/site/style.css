@@ -100,10 +100,19 @@ h3 { font-size: 0.9rem; margin: 16px 0 8px; color: var(--muted); font-weight: 60
 }
 .past-controls { align-items: center; font-size: 0.9rem; }
 .past-controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.past-controls input[type="datetime-local"],
 .past-controls select {
   font: inherit; color: var(--text); background: var(--card);
   border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px;
 }
+.act {
+  font: inherit; font-size: 0.9rem; color: var(--text); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer;
+}
+.act:disabled { color: var(--muted); cursor: default; opacity: 0.6; }
+.act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.range-how { margin-top: 10px; overflow-wrap: anywhere; }
+.range-how code { font-size: 0.85em; }
 .chart .grid { stroke: var(--grid); }
 .chart .axis { fill: var(--muted); font-size: 11px; }
 .chart .muf { fill: var(--muf); }
