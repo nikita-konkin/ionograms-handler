@@ -551,3 +551,17 @@ def test_the_chart_and_theme_controls_are_named_in_each_language(lang):
 def test_the_dark_palette_follows_the_theme_switch():
     css = (publisher.SITE_SRC / "style.css").read_text(encoding="utf-8")
     assert 'data-theme="dark"' in css, "the dark palette ignores the switch"
+
+
+@pytest.mark.parametrize("name", ["favicon.svg", "favicon.ico", "apple-touch-icon.png"])
+def test_the_page_names_each_of_its_icons(name):
+    page = (publisher.SITE_SRC / "index.html").read_text(encoding="utf-8")
+    assert f'href="{name}"' in page, f"the page does not name its icon {name}"
+
+
+@pytest.mark.parametrize("name", ["favicon.svg", "favicon.ico", "apple-touch-icon.png"])
+def test_each_icon_is_copied_to_the_site(database, archive, tmp_path, drawn, name):
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    assert (site / name).read_bytes() == (publisher.SITE_SRC / name).read_bytes(), (
+        f"the icon {name} did not reach the site")
