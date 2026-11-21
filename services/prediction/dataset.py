@@ -75,6 +75,10 @@ PARAMS = {
 #: every afternoon as if it had gone silent.
 MAX_BRIDGE_HOURS = 6.0
 
+#: How far back a pick's signal level is compared, as a pandas offset: a whole
+#: day, so the reference spans the diurnal swing in signal.
+SIGNAL_WINDOW = "1D"
+
 #: Rows this many samples short of a full decomposition period cannot produce
 #: features, so a window shorter than this is refused rather than returned
 #: empty.
@@ -149,7 +153,9 @@ def measurement_sigma(frame: pd.DataFrame, param: str,
 
     The same weighting ``muf.track.measurement_sigma`` applies to pipeline
     output, reading the database's column names instead of the CSV's
-    per-method suffixes.
+    per-method suffixes, with one difference: a pick's signal is judged
+    against the median over the `SIGNAL_WINDOW` before it, not over the whole
+    window, so its weight never depends on a sounding that came after it.
 
     **LOF is weighted by the same ``snr`` as MUF**, which is not quite right:
     the pipeline computes a separate ``lofsnr`` per pick and the ingest path
@@ -165,12 +171,13 @@ def measurement_sigma(frame: pd.DataFrame, param: str,
     marginal = np.nan_to_num(run < track_mod.MARGINAL_RUN, nan=False).astype(bool)
     sigma[marginal] *= 3.0
 
-    snr = pd.to_numeric(frame.get("snr"), errors="coerce").to_numpy(dtype=float)
-    if np.isfinite(snr).any():
-        reference = float(np.nanmedian(snr))
-        if np.isfinite(reference):
-            deficit = np.clip(reference - snr, 0.0, 40.0)
-            sigma *= 1.0 + np.nan_to_num(deficit, nan=0.0) / 40.0
+    if "snr" in frame:
+        snr = pd.Series(
+            pd.to_numeric(frame["snr"], errors="coerce").to_numpy(dtype=float),
+            index=pd.DatetimeIndex(frame["datetime"]))
+        reference = snr.rolling(SIGNAL_WINDOW).median().to_numpy()
+        deficit = np.clip(reference - snr.to_numpy(), 0.0, 40.0)
+        sigma *= 1.0 + np.nan_to_num(deficit, nan=0.0) / 40.0
 
     return sigma
 
@@ -190,38 +197,11 @@ def tracked(conn: sqlite3.Connection, param: str, tx: str, rx: str,
     honest sigma -- rather than being interpolated afterwards by something that
     does not know how fast a MUF can move.
     """
-    picks = observations(conn, param, tx, rx, method, start=start, end=end)
-    if picks.empty:
-        raise ValueError(f"no {param} rows for {tx}->{rx} [{method}]")
+    picks, usable, censored, spanned, grid, times, values, sigma = _merged(
+        observations(conn, param, tx, rx, method, start=start, end=end),
+        param, tx, rx, method, step_s, drop_censored)
 
-    usable = picks["value"].to_numpy(dtype=float).copy()
-    censored = picks["censored"].to_numpy(dtype=bool)
-    if drop_censored:
-        usable[censored] = np.nan
-
-    if not np.isfinite(usable).any():
-        raise ValueError(
-            f"no usable {param} picks for {tx}->{rx} [{method}]: "
-            f"{int(censored.sum())} of {len(picks)} were at a band edge and the "
-            f"rest had no pick."
-        )
-
-    # Bounded by real picks, not by soundings: a run of soundings with no
-    # pick at either end -- a scheduled transmitter that has gone silent, as
-    # NIC3's 245 s slot did -- would otherwise extend the grid into hours the
-    # tracker can only extrapolate, with a sigma rising without limit.
-    present = picks["value"].notna().to_numpy()
-    spanned = picks["datetime"][present]
-    grid = pd.date_range(spanned.iloc[0].ceil(f"{step_s}s"),
-                         spanned.iloc[-1], freq=f"{step_s}s")
-
-    times = pd.DatetimeIndex(picks["datetime"]).append(grid)
-    values = np.concatenate([usable, np.full(len(grid), np.nan)])
-    sigma = np.concatenate([measurement_sigma(picks, param),
-                            np.full(len(grid), np.nan)])
-    order = np.argsort(times.to_numpy(), kind="stable")
-
-    result = track_mod.track(times[order], values[order], sigma[order],
+    result = track_mod.track(times, values, sigma,
                              process_noise=process_noise, param=param)
 
     smoothed = result.frame.set_index("datetime")
@@ -274,6 +254,88 @@ def tracked(conn: sqlite3.Connection, param: str, tx: str, rx: str,
         n_rejected=result.n_rejected,
         n_censored=int(censored.sum()),
     )
+
+
+def known(conn: sqlite3.Connection, param: str, tx: str, rx: str,
+          method: str, instants, step_s: int = DEFAULT_STEP_S,
+          start: str | None = None, end: str | None = None,
+          drop_censored: bool = True,
+          process_noise: float = track_mod.DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
+          max_bridge_hours: float = MAX_BRIDGE_HOURS,
+          picks: pd.DataFrame | None = None):
+    """The value series :func:`tracked` would have returned at each instant.
+
+    :func:`tracked` smooths backward over the whole window, so every value is
+    adjusted by the soundings after it, and its grid and its holes are judged
+    on all of them. This yields, for each instant, exactly
+    ``tracked(..., end=instant).values`` with the instant as an exact bound:
+    the grid up to the last pick at or before it, filled from the soundings
+    up to it, with the holes those soundings alone leave. The tracker's
+    forward pass depends on nothing after the step it is at once it has
+    `muf.track.SEED` measurements behind it, so one track serves every
+    instant past them (``muf.track.known``). ``picks``, from
+    :func:`observations`, saves reading them again, and keeps a caller that
+    chose its instants from them on the same rows.
+    """
+    instants = [pd.Timestamp(instant) for instant in instants]
+    if picks is None:
+        picks = observations(conn, param, tx, rx, method, start=start, end=end)
+    _picks, _usable, _censored, spanned, grid, times, values, sigma = _merged(
+        picks, param, tx, rx, method, step_s, drop_censored)
+    present = pd.DatetimeIndex(spanned)
+    for instant, smoothed in zip(
+            instants, track_mod.known(times, values, sigma, instants,
+                                      process_noise=process_noise, param=param)):
+        upto = present[present <= instant]
+        if upto.empty:
+            raise ValueError(
+                f"no {param} pick for {tx}->{rx} [{method}] at or before {instant}")
+        on = grid[grid <= upto[-1]]
+        smoothed = smoothed[~smoothed.index.duplicated(keep="first")]
+        series = smoothed.reindex(on).astype(float)
+        series[_in_long_holes(on, upto, pd.Timedelta(hours=max_bridge_hours))] = np.nan
+        series.index.name = "datetime"
+        yield series.rename("value")
+
+
+def _merged(picks, param, tx, rx, method, step_s, drop_censored):
+    """The picks and the grid as one time-ordered sequence for the tracker.
+
+    The grid instants are handed to the filter alongside the sounding
+    instants, with no measurement attached, so a grid point between two
+    soundings is filled by the same mechanism that fills a real gap.
+    """
+    if picks.empty:
+        raise ValueError(f"no {param} rows for {tx}->{rx} [{method}]")
+
+    usable = picks["value"].to_numpy(dtype=float).copy()
+    censored = picks["censored"].to_numpy(dtype=bool)
+    if drop_censored:
+        usable[censored] = np.nan
+
+    if not np.isfinite(usable).any():
+        raise ValueError(
+            f"no usable {param} picks for {tx}->{rx} [{method}]: "
+            f"{int(censored.sum())} of {len(picks)} were at a band edge and the "
+            f"rest had no pick."
+        )
+
+    # Bounded by real picks, not by soundings: a run of soundings with no
+    # pick at either end -- a scheduled transmitter that has gone silent, as
+    # NIC3's 245 s slot did -- would otherwise extend the grid into hours the
+    # tracker can only extrapolate, with a sigma rising without limit.
+    present = picks["value"].notna().to_numpy()
+    spanned = picks["datetime"][present]
+    grid = pd.date_range(spanned.iloc[0].ceil(f"{step_s}s"),
+                         spanned.iloc[-1], freq=f"{step_s}s")
+
+    times = pd.DatetimeIndex(picks["datetime"]).append(grid)
+    values = np.concatenate([usable, np.full(len(grid), np.nan)])
+    sigma = np.concatenate([measurement_sigma(picks, param),
+                            np.full(len(grid), np.nan)])
+    order = np.argsort(times.to_numpy(), kind="stable")
+    return (picks, usable, censored, spanned, grid, times[order],
+            values[order], sigma[order])
 
 
 def circuits(conn: sqlite3.Connection, param: str = "muf",

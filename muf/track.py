@@ -43,6 +43,13 @@ DEFAULT_BASE_SIGMA_MHZ = 0.35
 #: from the prediction. 4 is loose enough to follow real sunrise transitions.
 DEFAULT_GATE_SIGMA = 4.0
 
+#: The filter starts from the median of this many first measurements: enough
+#: to step over an outlier at the very start, and nothing later, so the
+#: forward pass at any step past them depends on nothing after that step.
+#: The median of the whole series, used before, let the last measurement of
+#: a window move the first estimates and the picks the gate let through.
+SEED = 12
+
 #: Below this many consecutive frequency bins a pick is treated as marginal and
 #: its uncertainty inflated rather than being trusted at face value.
 MARGINAL_RUN = 8
@@ -133,93 +140,152 @@ def track(
         gate_sigma: reject measurements beyond this many predicted sigma.
         param: names the value column of the returned frame.
     """
-    index = pd.DatetimeIndex(pd.to_datetime(list(times)))
-    order = np.argsort(index.to_numpy())
-    index = index[order]
-    values = np.asarray(values, dtype=float)[order]
-    sigma = np.asarray(sigma, dtype=float)[order]
-
-    n = len(index)
-    if n == 0:
-        raise ValueError("no timestamps to track")
-    if not np.isfinite(values).any():
-        raise ValueError("no measurements to track")
-
-    hours = np.diff(index.to_numpy().astype("datetime64[s]").astype(float)) / 3600.0
-    hours = np.concatenate([[0.0], np.maximum(hours, 1e-6)])
-
-    # --- forward pass ---
-    state = np.array([np.nanmedian(values), 0.0])
-    covariance = np.diag([25.0, 25.0])          # deliberately vague to start
-
-    predicted_states = np.zeros((n, 2))
-    predicted_covs = np.zeros((n, 2, 2))
-    filtered_states = np.zeros((n, 2))
-    filtered_covs = np.zeros((n, 2, 2))
-    rejected = np.zeros(n, dtype=bool)
-
-    observation = np.array([[1.0, 0.0]])
-
-    for i in range(n):
-        dt = hours[i]
-        transition = np.array([[1.0, dt], [0.0, 1.0]])
-
-        # Continuous white-noise acceleration.
-        q = process_noise ** 2
-        noise = q * np.array([[dt ** 3 / 3.0, dt ** 2 / 2.0],
-                              [dt ** 2 / 2.0, dt]])
-
-        state = transition @ state
-        covariance = transition @ covariance @ transition.T + noise
-        predicted_states[i], predicted_covs[i] = state, covariance
-
-        measurement = values[i]
-        if np.isfinite(measurement):
-            r = max(float(sigma[i]), 1e-3) ** 2
-            innovation = measurement - (observation @ state).item()
-            innovation_var = (observation @ covariance @ observation.T).item() + r
-
-            if abs(innovation) > gate_sigma * np.sqrt(innovation_var):
-                rejected[i] = True          # keep the prediction, ignore the point
-            else:
-                gain = covariance @ observation.T / innovation_var
-                state = state + (gain * innovation).ravel()
-                covariance = (np.eye(2) - gain @ observation) @ covariance
-
-        filtered_states[i], filtered_covs[i] = state, covariance
-
-    # --- RTS backward pass ---
-    smoothed_states = filtered_states.copy()
-    smoothed_covs = filtered_covs.copy()
-    for i in range(n - 2, -1, -1):
-        dt = hours[i + 1]
-        transition = np.array([[1.0, dt], [0.0, 1.0]])
-        try:
-            gain = (filtered_covs[i] @ transition.T
-                    @ np.linalg.inv(predicted_covs[i + 1]))
-        except np.linalg.LinAlgError:        # singular: leave the filtered value
-            continue
-        smoothed_states[i] += gain @ (smoothed_states[i + 1] - predicted_states[i + 1])
-        smoothed_covs[i] += (gain
-                             @ (smoothed_covs[i + 1] - predicted_covs[i + 1])
-                             @ gain.T)
-
-    measured = np.isfinite(values) & ~rejected
+    passes = _Passes(times, values, sigma, process_noise, gate_sigma)
+    measured = np.isfinite(passes.values) & ~passes.rejected
     frame = pd.DataFrame({
-        "datetime": index,
-        param: np.round(smoothed_states[:, 0], 3),
-        "rate_mhz_per_hour": np.round(smoothed_states[:, 1], 3),
-        "sigma": np.round(np.sqrt(np.maximum(smoothed_covs[:, 0, 0], 0.0)), 3),
+        "datetime": passes.index,
+        param: np.round(passes.smoothed[:, 0], 3),
+        "rate_mhz_per_hour": np.round(passes.smoothed[:, 1], 3),
+        "sigma": np.round(np.sqrt(np.maximum(passes.covariance[:, 0, 0], 0.0)), 3),
         "measured": measured,
-        "rejected": rejected,
+        "rejected": passes.rejected,
     })
 
     return Track(
         frame=frame,
         n_measured=int(measured.sum()),
-        n_filled=int((~np.isfinite(values)).sum()),
-        n_rejected=int(rejected.sum()),
+        n_filled=int((~np.isfinite(passes.values)).sum()),
+        n_rejected=int(passes.rejected.sum()),
     )
+
+
+def known(
+    times,
+    values,
+    sigma,
+    instants,
+    process_noise: float = DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
+    gate_sigma: float = DEFAULT_GATE_SIGMA,
+    param: str = "muf",
+):
+    """The tracked value up to each instant, as a track run then would give it.
+
+    :func:`track` smooths backward over everything it is handed, so each value
+    is adjusted by the measurements after it -- right for a picture of the
+    day, wrong for the input of a forecast, which at the moment it is issued
+    has nothing after its newest point. This yields, for each instant, the
+    values at every timestamp up to and including it, exactly as
+    :func:`track` returns them on that data alone.
+
+    The forward pass depends on nothing after the step it is at (see
+    `SEED`), so it is run once and shared; only the backward pass is run
+    again from each instant.
+    """
+    passes = _Passes(times, values, sigma, process_noise, gate_sigma)
+    for instant in pd.DatetimeIndex(pd.to_datetime(list(instants))):
+        end = int(passes.index.searchsorted(instant, side="right")) - 1
+        if end < 0:
+            raise ValueError(f"no timestamp at or before {instant}")
+        yield pd.Series(np.round(passes.smoothed_until(end)[:, 0], 3),
+                        index=passes.index[:end + 1], name=param)
+
+
+class _Passes:
+    """The forward filter and the backward smoother over one series, with
+    what the smoother needs at each step kept so it can start again from any
+    point."""
+
+    def __init__(self, times, values, sigma, process_noise: float,
+                 gate_sigma: float):
+        index = pd.DatetimeIndex(pd.to_datetime(list(times)))
+        order = np.argsort(index.to_numpy(), kind="stable")
+        self.index = index[order]
+        self.values = np.asarray(values, dtype=float)[order]
+        sigma = np.asarray(sigma, dtype=float)[order]
+
+        n = len(self.index)
+        if n == 0:
+            raise ValueError("no timestamps to track")
+        if not np.isfinite(self.values).any():
+            raise ValueError("no measurements to track")
+
+        hours = np.diff(
+            self.index.to_numpy().astype("datetime64[s]").astype(float)) / 3600.0
+        hours = np.concatenate([[0.0], np.maximum(hours, 1e-6)])
+
+        # --- forward pass ---
+        state = np.array([np.median(self.values[np.isfinite(self.values)][:SEED]),
+                          0.0])
+        covariance = np.diag([25.0, 25.0])          # deliberately vague to start
+
+        predicted_states = np.zeros((n, 2))
+        predicted_covs = np.zeros((n, 2, 2))
+        filtered_states = np.zeros((n, 2))
+        filtered_covs = np.zeros((n, 2, 2))
+        self.rejected = np.zeros(n, dtype=bool)
+
+        observation = np.array([[1.0, 0.0]])
+
+        for i in range(n):
+            dt = hours[i]
+            transition = np.array([[1.0, dt], [0.0, 1.0]])
+
+            # Continuous white-noise acceleration.
+            q = process_noise ** 2
+            noise = q * np.array([[dt ** 3 / 3.0, dt ** 2 / 2.0],
+                                  [dt ** 2 / 2.0, dt]])
+
+            state = transition @ state
+            covariance = transition @ covariance @ transition.T + noise
+            predicted_states[i], predicted_covs[i] = state, covariance
+
+            measurement = self.values[i]
+            if np.isfinite(measurement):
+                r = max(float(sigma[i]), 1e-3) ** 2
+                innovation = measurement - (observation @ state).item()
+                innovation_var = (observation @ covariance @ observation.T).item() + r
+
+                if abs(innovation) > gate_sigma * np.sqrt(innovation_var):
+                    self.rejected[i] = True     # keep the prediction, ignore the point
+                else:
+                    gain = covariance @ observation.T / innovation_var
+                    state = state + (gain * innovation).ravel()
+                    covariance = (np.eye(2) - gain @ observation) @ covariance
+
+            filtered_states[i], filtered_covs[i] = state, covariance
+
+        # --- RTS backward pass ---
+        # The gain at a step needs only the forward pass, so it is the same
+        # whichever later point the smoother starts from.
+        self.gains = [None] * n
+        for i in range(n - 1):
+            transition = np.array([[1.0, hours[i + 1]], [0.0, 1.0]])
+            try:
+                self.gains[i] = (filtered_covs[i] @ transition.T
+                                 @ np.linalg.inv(predicted_covs[i + 1]))
+            except np.linalg.LinAlgError:    # singular: leave the filtered value
+                pass
+        self.filtered = filtered_states
+        self.predicted = predicted_states
+        self.smoothed = self.smoothed_until(n - 1)
+        smoothed_covs = filtered_covs.copy()
+        for i in range(n - 2, -1, -1):
+            gain = self.gains[i]
+            if gain is not None:
+                smoothed_covs[i] += (gain
+                                     @ (smoothed_covs[i + 1] - predicted_covs[i + 1])
+                                     @ gain.T)
+        self.covariance = smoothed_covs
+
+    def smoothed_until(self, end: int) -> np.ndarray:
+        """The smoothed states up to ``end``, from a backward pass started
+        there."""
+        states = self.filtered[:end + 1].copy()
+        for i in range(end - 1, -1, -1):
+            gain = self.gains[i]
+            if gain is not None:
+                states[i] += gain @ (states[i + 1] - self.predicted[i + 1])
+        return states
 
 
 def track_results(
