@@ -198,7 +198,8 @@ def tracked(conn: sqlite3.Connection, param: str, tx: str, rx: str,
     does not know how fast a MUF can move.
     """
     picks, usable, censored, spanned, grid, times, values, sigma = _merged(
-        conn, param, tx, rx, method, step_s, start, end, drop_censored)
+        observations(conn, param, tx, rx, method, start=start, end=end),
+        param, tx, rx, method, step_s, drop_censored)
 
     result = track_mod.track(times, values, sigma,
                              process_noise=process_noise, param=param)
@@ -260,21 +261,27 @@ def known(conn: sqlite3.Connection, param: str, tx: str, rx: str,
           start: str | None = None, end: str | None = None,
           drop_censored: bool = True,
           process_noise: float = track_mod.DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
-          max_bridge_hours: float = MAX_BRIDGE_HOURS):
+          max_bridge_hours: float = MAX_BRIDGE_HOURS,
+          picks: pd.DataFrame | None = None):
     """The value series :func:`tracked` would have returned at each instant.
 
     :func:`tracked` smooths backward over the whole window, so every value is
     adjusted by the soundings after it, and its grid and its holes are judged
     on all of them. This yields, for each instant, exactly
-    ``tracked(..., end=instant).values``: the grid up to the last pick at or
-    before the instant, filled from the soundings up to it, with the holes
-    those soundings alone leave. The tracker's forward pass depends on nothing
-    after the step it is at, so one track serves every instant
-    (``muf.track.known``).
+    ``tracked(..., end=instant).values`` with the instant as an exact bound:
+    the grid up to the last pick at or before it, filled from the soundings
+    up to it, with the holes those soundings alone leave. The tracker's
+    forward pass depends on nothing after the step it is at once it has
+    `muf.track.SEED` measurements behind it, so one track serves every
+    instant past them (``muf.track.known``). ``picks``, from
+    :func:`observations`, saves reading them again, and keeps a caller that
+    chose its instants from them on the same rows.
     """
     instants = [pd.Timestamp(instant) for instant in instants]
+    if picks is None:
+        picks = observations(conn, param, tx, rx, method, start=start, end=end)
     _picks, _usable, _censored, spanned, grid, times, values, sigma = _merged(
-        conn, param, tx, rx, method, step_s, start, end, drop_censored)
+        picks, param, tx, rx, method, step_s, drop_censored)
     present = pd.DatetimeIndex(spanned)
     for instant, smoothed in zip(
             instants, track_mod.known(times, values, sigma, instants,
@@ -291,14 +298,13 @@ def known(conn: sqlite3.Connection, param: str, tx: str, rx: str,
         yield series.rename("value")
 
 
-def _merged(conn, param, tx, rx, method, step_s, start, end, drop_censored):
+def _merged(picks, param, tx, rx, method, step_s, drop_censored):
     """The picks and the grid as one time-ordered sequence for the tracker.
 
     The grid instants are handed to the filter alongside the sounding
     instants, with no measurement attached, so a grid point between two
     soundings is filled by the same mechanism that fills a real gap.
     """
-    picks = observations(conn, param, tx, rx, method, start=start, end=end)
     if picks.empty:
         raise ValueError(f"no {param} rows for {tx}->{rx} [{method}]")
 

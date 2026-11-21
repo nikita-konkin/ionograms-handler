@@ -1288,3 +1288,19 @@ def test_a_holdout_no_row_of_which_was_issued_is_refused_with_the_reason(conn):
     seed(conn, days=9, gaps=slice(288 * 7 - 120, 288 * 7))
     with pytest.raises(train.TrainError, match="could have been issued in advance"):
         train.run(conn, plan(lead_h=24, holdout_days=1), diagnostics=False)
+
+
+def test_a_row_the_first_issue_cannot_build_is_taken_from_a_later_one(conn):
+    hole = 288 * 3
+    index = seed(conn, days=9, gaps=slice(hole, hole + 96))
+    p = plan(lead_h=24, holdout_days=4)
+    _parts, _cut, replayed = _replayed(conn, p)
+    row = index[hole + 96 + 676]
+    assert row in replayed.index, (
+        "a row a later issue before its target could build was dropped")
+
+
+def test_a_holdout_too_long_to_train_on_is_refused_before_the_replay(conn):
+    seed(conn, days=6)
+    with pytest.raises(train.TrainError, match="rows fall before"):
+        train.run(conn, plan(lead_h=1, holdout_days=5.9), diagnostics=False)
