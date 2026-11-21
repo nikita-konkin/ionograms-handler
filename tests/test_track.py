@@ -300,7 +300,7 @@ def test_the_value_known_at_an_instant_matches_a_track_of_the_data_up_to_it():
     cut = int(rng.integers(50, len(t) - 1))
     known = next(iter(track.known(t, values, sigma, [t[cut]])))
     whole = track.track(t[:cut + 1], values[:cut + 1], sigma[:cut + 1]).frame["muf"]
-    assert np.abs(known.to_numpy()[36:] - whole.to_numpy()[36:]).max() <= 1e-3 + 1e-9, (
+    assert np.array_equal(known.to_numpy(), whole.to_numpy()), (
         "the value known at an instant differs from a track of the data up to it")
 
 
@@ -321,7 +321,7 @@ def test_what_is_known_at_an_instant_ignores_every_later_measurement():
     later[cut + 1:] += rng.uniform(3, 9)
     first = next(iter(track.known(t, values, sigma, [t[cut]])))
     second = next(iter(track.known(t, later, sigma, [t[cut]])))
-    assert first.iloc[36:].equals(second.iloc[36:]), (
+    assert first.equals(second), (
         "a measurement after the instant changed what was known at it")
 
 
@@ -331,3 +331,17 @@ def test_each_instant_gets_the_values_up_to_it_and_no_further():
     cuts = sorted(int(c) for c in rng.choice(len(t), 5, replace=False))
     ends = [s.index[-1] for s in track.known(t, values, sigma, [t[c] for c in cuts])]
     assert ends == [t[c] for c in cuts], f"the known series ended at {ends}"
+
+
+def test_tied_timestamps_are_tracked_in_the_order_given():
+    rng = np.random.default_rng()
+    t, values, sigma = _wandering(rng, int(rng.integers(200, 400)))
+    cut = int(rng.integers(60, len(t) - 20))
+    t = t.insert(cut, t[cut])
+    values = np.insert(values, cut, values[cut] + rng.uniform(10, 20))
+    sigma = np.insert(sigma, cut, sigma[cut])
+    known = next(iter(track.known(t, values, sigma, [t[cut + 5]])))
+    alone = track.track(t[:cut + 6], values[:cut + 6], sigma[:cut + 6]).frame["muf"]
+    assert np.array_equal(known.to_numpy(), alone.to_numpy()), (
+        "tied timestamps were tracked in a different order once later ones came")
+

@@ -75,6 +75,10 @@ PARAMS = {
 #: every afternoon as if it had gone silent.
 MAX_BRIDGE_HOURS = 6.0
 
+#: How far back a pick's signal level is compared, as a pandas offset: a whole
+#: day, so the reference spans the diurnal swing in signal.
+SIGNAL_WINDOW = "1D"
+
 #: Rows this many samples short of a full decomposition period cannot produce
 #: features, so a window shorter than this is refused rather than returned
 #: empty.
@@ -149,7 +153,9 @@ def measurement_sigma(frame: pd.DataFrame, param: str,
 
     The same weighting ``muf.track.measurement_sigma`` applies to pipeline
     output, reading the database's column names instead of the CSV's
-    per-method suffixes.
+    per-method suffixes, with one difference: a pick's signal is judged
+    against the median over the `SIGNAL_WINDOW` before it, not over the whole
+    window, so its weight never depends on a sounding that came after it.
 
     **LOF is weighted by the same ``snr`` as MUF**, which is not quite right:
     the pipeline computes a separate ``lofsnr`` per pick and the ingest path
@@ -165,12 +171,13 @@ def measurement_sigma(frame: pd.DataFrame, param: str,
     marginal = np.nan_to_num(run < track_mod.MARGINAL_RUN, nan=False).astype(bool)
     sigma[marginal] *= 3.0
 
-    snr = pd.to_numeric(frame.get("snr"), errors="coerce").to_numpy(dtype=float)
-    if np.isfinite(snr).any():
-        reference = float(np.nanmedian(snr))
-        if np.isfinite(reference):
-            deficit = np.clip(reference - snr, 0.0, 40.0)
-            sigma *= 1.0 + np.nan_to_num(deficit, nan=0.0) / 40.0
+    if "snr" in frame:
+        snr = pd.Series(
+            pd.to_numeric(frame["snr"], errors="coerce").to_numpy(dtype=float),
+            index=pd.DatetimeIndex(frame["datetime"]))
+        reference = snr.rolling(SIGNAL_WINDOW).median().to_numpy()
+        deficit = np.clip(reference - snr.to_numpy(), 0.0, 40.0)
+        sigma *= 1.0 + np.nan_to_num(deficit, nan=0.0) / 40.0
 
     return sigma
 
@@ -254,32 +261,32 @@ def known(conn: sqlite3.Connection, param: str, tx: str, rx: str,
           drop_censored: bool = True,
           process_noise: float = track_mod.DEFAULT_PROCESS_NOISE_MHZ_PER_HOUR,
           max_bridge_hours: float = MAX_BRIDGE_HOURS):
-    """The tracked value on the grid up to each instant, as known at it.
+    """The value series :func:`tracked` would have returned at each instant.
 
     :func:`tracked` smooths backward over the whole window, so every value is
-    adjusted by the soundings after it. A forecast issued at an instant has
-    none of those: its newest input is the filter's estimate at that instant,
-    and everything before it is smoothed only up to there. This yields, for
-    each grid instant asked for, the value series as :func:`tracked` would
-    have built it then -- the grid up to and including the instant, from the
-    soundings at or before it (``muf.track.known``).
-
-    The holes left empty are those :func:`tracked` leaves empty over the
-    whole window. That decides only which instants have a value, never what
-    the value is, so a caller keeping the rows :func:`tracked` gave it keeps
-    exactly those.
+    adjusted by the soundings after it, and its grid and its holes are judged
+    on all of them. This yields, for each instant, exactly
+    ``tracked(..., end=instant).values``: the grid up to the last pick at or
+    before the instant, filled from the soundings up to it, with the holes
+    those soundings alone leave. The tracker's forward pass depends on nothing
+    after the step it is at, so one track serves every instant
+    (``muf.track.known``).
     """
+    instants = [pd.Timestamp(instant) for instant in instants]
     _picks, _usable, _censored, spanned, grid, times, values, sigma = _merged(
         conn, param, tx, rx, method, step_s, start, end, drop_censored)
-    stranded = _in_long_holes(grid, pd.DatetimeIndex(spanned),
-                              pd.Timedelta(hours=max_bridge_hours))
+    present = pd.DatetimeIndex(spanned)
     for instant, smoothed in zip(
             instants, track_mod.known(times, values, sigma, instants,
                                       process_noise=process_noise, param=param)):
+        upto = present[present <= instant]
+        if upto.empty:
+            raise ValueError(
+                f"no {param} pick for {tx}->{rx} [{method}] at or before {instant}")
+        on = grid[grid <= upto[-1]]
         smoothed = smoothed[~smoothed.index.duplicated(keep="first")]
-        upto = grid <= pd.Timestamp(instant)
-        series = smoothed.reindex(grid[upto]).astype(float)
-        series[stranded[upto]] = np.nan
+        series = smoothed.reindex(on).astype(float)
+        series[_in_long_holes(on, upto, pd.Timedelta(hours=max_bridge_hours))] = np.nan
         series.index.name = "datetime"
         yield series.rename("value")
 

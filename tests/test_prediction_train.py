@@ -1226,7 +1226,7 @@ def test_a_held_out_row_ignores_soundings_after_its_input_instant(conn):
     conn.commit()
     parts = train.assemble(conn, p)
     second = train.replay(conn, p, parts["recipe"], parts["X"], cut)
-    assert np.allclose(first.loc[row], second.loc[row], rtol=0, atol=1e-9), (
+    assert first.loc[row].equals(second.loc[row]), (
         "a sounding after the input instant changed the held-out row")
 
 
@@ -1257,3 +1257,34 @@ def test_the_holdout_is_scored_on_the_replayed_rows(conn):
                   index=held.index), parts["observed"])
     assert scoring.summarise(pairs, "muf")["mae"] == pytest.approx(
         result["holdout"]["mae"]), "the holdout was not scored on the replayed rows"
+
+
+def test_a_row_with_no_pick_before_its_target_was_never_issued(conn):
+    rng = np.random.default_rng()
+    start = 288 * 5 + int(rng.integers(0, 200))
+    seed(conn, days=6, gaps=slice(start, start + 30))
+    p = plan(lead_h=1, holdout_days=1)
+    _parts, _cut, replayed = _replayed(conn, p)
+    index = pd.date_range("2026-08-10", periods=288 * 6, freq="5min")
+    unissued = index[start + 13:start + 30]
+    assert not replayed.index.isin(unissued).any(), (
+        "a row with no pick between its input instant and its target was scored")
+
+
+def test_a_walk_forward_day_fits_on_the_smoothed_rows(conn):
+    rng = np.random.default_rng()
+    gap = 288 * 6 + 20
+    seed(conn, days=8, gaps=slice(gap, gap + int(rng.integers(20, 60))))
+    p = plan(lead_h=1, holdout_days=2, walk_forward=True)
+    parts = train.assemble(conn, p)
+    result = train.run(conn, p, diagnostics=False)
+    second = result["folds"]["days"][1]
+    rows = parts["X"].index < pd.Timestamp(second["from"]).replace(tzinfo=None)
+    assert second["n_train"] == int((rows & ~parts["censored"]).sum()), (
+        "the second walk-forward day did not fit on the smoothed rows")
+
+
+def test_a_holdout_no_row_of_which_was_issued_is_refused_with_the_reason(conn):
+    seed(conn, days=9, gaps=slice(288 * 7 - 120, 288 * 7))
+    with pytest.raises(train.TrainError, match="could have been issued in advance"):
+        train.run(conn, plan(lead_h=24, holdout_days=1), diagnostics=False)

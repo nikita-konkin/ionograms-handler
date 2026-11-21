@@ -43,6 +43,13 @@ DEFAULT_BASE_SIGMA_MHZ = 0.35
 #: from the prediction. 4 is loose enough to follow real sunrise transitions.
 DEFAULT_GATE_SIGMA = 4.0
 
+#: The filter starts from the median of this many first measurements: enough
+#: to step over an outlier at the very start, and nothing later, so the
+#: forward pass at any step past them depends on nothing after that step.
+#: The median of the whole series, used before, let the last measurement of
+#: a window move the first estimates and the picks the gate let through.
+SEED = 12
+
 #: Below this many consecutive frequency bins a pick is treated as marginal and
 #: its uncertainty inflated rather than being trusted at face value.
 MARGINAL_RUN = 8
@@ -167,45 +174,31 @@ def known(
     is adjusted by the measurements after it -- right for a picture of the
     day, wrong for the input of a forecast, which at the moment it is issued
     has nothing after its newest point. This yields, for each instant, the
-    values at every timestamp up to and including it, as :func:`track` would
-    return them on that data alone.
+    values at every timestamp up to and including it, exactly as
+    :func:`track` returns them on that data alone.
 
-    The forward pass is causal, so it is shared. A backward pass started at an
-    instant differs from the full one by a correction each smoother gain
-    carries one step further back, shrinking as it goes; it stops once the
-    correction is too small to show, so an instant costs only the stretch
-    that its future actually moved.
-
-    One thing is shared that is not causal: the starting state is the median
-    of every measurement handed in, as in :func:`track`. Its weight fades to
-    under a ten-millionth of a megahertz within three hours of the first
-    timestamp and to nothing within six, a day before any instant a forecast
-    is built from.
+    The forward pass depends on nothing after the step it is at (see
+    `SEED`), so it is run once and shared; only the backward pass is run
+    again from each instant.
     """
     passes = _Passes(times, values, sigma, process_noise, gate_sigma)
     for instant in pd.DatetimeIndex(pd.to_datetime(list(instants))):
         end = int(passes.index.searchsorted(instant, side="right")) - 1
         if end < 0:
             raise ValueError(f"no timestamp at or before {instant}")
-        out = passes.smoothed[:end + 1, 0].copy()
-        correction = passes.filtered[end] - passes.smoothed[end]
-        out[end] = passes.filtered[end, 0]
-        for i in range(end - 1, -1, -1):
-            correction = passes.gains[i] @ correction
-            if np.abs(correction).max() < 1e-9:
-                break
-            out[i] += correction[0]
-        yield pd.Series(np.round(out, 3), index=passes.index[:end + 1], name=param)
+        yield pd.Series(np.round(passes.smoothed_until(end)[:, 0], 3),
+                        index=passes.index[:end + 1], name=param)
 
 
 class _Passes:
-    """The forward filter and the backward smoother over one series, with the
-    smoother gain at each step kept so a later pass can start from any point."""
+    """The forward filter and the backward smoother over one series, with
+    what the smoother needs at each step kept so it can start again from any
+    point."""
 
     def __init__(self, times, values, sigma, process_noise: float,
                  gate_sigma: float):
         index = pd.DatetimeIndex(pd.to_datetime(list(times)))
-        order = np.argsort(index.to_numpy())
+        order = np.argsort(index.to_numpy(), kind="stable")
         self.index = index[order]
         self.values = np.asarray(values, dtype=float)[order]
         sigma = np.asarray(sigma, dtype=float)[order]
@@ -221,7 +214,8 @@ class _Passes:
         hours = np.concatenate([[0.0], np.maximum(hours, 1e-6)])
 
         # --- forward pass ---
-        state = np.array([np.nanmedian(self.values), 0.0])
+        state = np.array([np.median(self.values[np.isfinite(self.values)][:SEED]),
+                          0.0])
         covariance = np.diag([25.0, 25.0])          # deliberately vague to start
 
         predicted_states = np.zeros((n, 2))
@@ -261,27 +255,37 @@ class _Passes:
             filtered_states[i], filtered_covs[i] = state, covariance
 
         # --- RTS backward pass ---
-        smoothed_states = filtered_states.copy()
-        smoothed_covs = filtered_covs.copy()
-        self.gains = np.zeros((n, 2, 2))
-        for i in range(n - 2, -1, -1):
-            dt = hours[i + 1]
-            transition = np.array([[1.0, dt], [0.0, 1.0]])
+        # The gain at a step needs only the forward pass, so it is the same
+        # whichever later point the smoother starts from.
+        self.gains = [None] * n
+        for i in range(n - 1):
+            transition = np.array([[1.0, hours[i + 1]], [0.0, 1.0]])
             try:
-                gain = (filtered_covs[i] @ transition.T
-                        @ np.linalg.inv(predicted_covs[i + 1]))
+                self.gains[i] = (filtered_covs[i] @ transition.T
+                                 @ np.linalg.inv(predicted_covs[i + 1]))
             except np.linalg.LinAlgError:    # singular: leave the filtered value
-                continue
-            self.gains[i] = gain
-            smoothed_states[i] += gain @ (smoothed_states[i + 1]
-                                          - predicted_states[i + 1])
-            smoothed_covs[i] += (gain
-                                 @ (smoothed_covs[i + 1] - predicted_covs[i + 1])
-                                 @ gain.T)
-
+                pass
         self.filtered = filtered_states
-        self.smoothed = smoothed_states
+        self.predicted = predicted_states
+        self.smoothed = self.smoothed_until(n - 1)
+        smoothed_covs = filtered_covs.copy()
+        for i in range(n - 2, -1, -1):
+            gain = self.gains[i]
+            if gain is not None:
+                smoothed_covs[i] += (gain
+                                     @ (smoothed_covs[i + 1] - predicted_covs[i + 1])
+                                     @ gain.T)
         self.covariance = smoothed_covs
+
+    def smoothed_until(self, end: int) -> np.ndarray:
+        """The smoothed states up to ``end``, from a backward pass started
+        there."""
+        states = self.filtered[:end + 1].copy()
+        for i in range(end - 1, -1, -1):
+            gain = self.gains[i]
+            if gain is not None:
+                states[i] += gain @ (states[i + 1] - self.predicted[i + 1])
+        return states
 
 
 def track_results(

@@ -495,27 +495,37 @@ def replay(conn, plan: dict, recipe: legacy_features.Recipe,
     ``frame`` comes from :func:`dataset.tracked`, which smooths backward over
     the whole window, so a held-out row's inputs already know the soundings
     between its input instant and the instant it predicts -- the very hour a
-    one-hour forecast is about. A live forecast has none of them. Each row
-    from ``cut`` on is built again from the series as known at its input
-    instant (:func:`dataset.known`), the way an issue then would build it, and
-    the holdout is judged on those. The fit stays on the smoothed rows, which
-    are cleaner and put nothing into the score. A held-out row that cannot be
-    rebuilt is dropped.
+    one-hour forecast is about. A live forecast has none of them.
+
+    Each row from ``cut`` on is built instead as the first live issue that
+    could have built it: the one made on the first pick at or after the row's
+    input instant, since the grid an issue tracks ends at its newest pick. It
+    reads the series as :func:`dataset.tracked` gave it then
+    (:func:`dataset.known`) and builds the whole frame from it, as
+    :mod:`infer` does. A row whose first such pick is its own target, or comes
+    after it, was never issued in advance and is dropped. The fit stays on
+    the smoothed rows, which are cleaner and put nothing into the score.
     """
     held = pd.DatetimeIndex(frame.index[frame.index >= cut])
     lead = pd.Timedelta(seconds=plan["lag"] * dataset.DEFAULT_STEP_S)
+    picks = dataset.observations(conn, plan["param"], plan["tx"], plan["rx"],
+                                 plan["method"], start=plan.get("start"),
+                                 end=plan.get("end"))
+    present = pd.DatetimeIndex(picks["datetime"][picks["value"].notna()])
+    first = present.searchsorted(held - lead)
+    late = held - pd.Timedelta(seconds=dataset.DEFAULT_STEP_S / 2)
+    issue = pd.Series(
+        [present[k] if k < len(present) and present[k] < row else pd.NaT
+         for k, row in zip(first, late)], index=held).dropna()
     rows = [frame[frame.index < cut]]
-    for row, series in zip(held, dataset.known(
+    moments = sorted(set(issue))
+    for moment, series in zip(moments, dataset.known(
             conn, plan["param"], plan["tx"], plan["rx"], plan["method"],
-            held - lead, start=plan.get("start"), end=plan.get("end"))):
-        empty = np.flatnonzero(series.isna().to_numpy())
-        stretch = series.iloc[empty[-1] + 1:] if len(empty) else series
-        if len(stretch) < 2:
-            continue
-        built = legacy_features.build(stretch, recipe, alias=recipe.alias)
-        if row in built.index:
-            rows.append(built.loc[[row]])
-    out = pd.concat(rows)
+            moments, start=plan.get("start"), end=plan.get("end"))):
+        built = legacy_features.build(series, recipe, alias=recipe.alias)
+        wanted = issue.index[issue == moment]
+        rows.append(built.loc[built.index.intersection(wanted)])
+    out = pd.concat(rows).sort_index()
     out.attrs = dict(frame.attrs)
     return out
 
@@ -925,8 +935,17 @@ def run(conn, plan: dict, by: str | None = None, *,
 
     cut = (split(index, plan["holdout_days"]) if validation_start is None
            else pd.Timestamp(validation_start))
+    smoothed = (frame, y, censored)
     replayed = replay(conn, plan, recipe, frame, cut)
     kept = frame.index.isin(replayed.index)
+    if (index >= cut).any() and not (replayed.index >= cut).any():
+        raise TrainError(
+            f"none of the {int((index >= cut).sum())} held-out rows from "
+            f"{cut:%Y-%m-%d %H:%M} could have been issued in advance: each "
+            f"needs a pick between its input instant and the instant it "
+            f"predicts, and enough unbroken history before it to build its "
+            f"features. After a silence longer than "
+            f"{dataset.MAX_BRIDGE_HOURS:.0f} h that history has to grow back.")
     frame, y, censored = replayed, y[kept], censored[kept]
     index = pd.DatetimeIndex(frame.index)
     is_train = index < cut
@@ -1016,7 +1035,7 @@ def run(conn, plan: dict, by: str | None = None, *,
     # service kept reporting "beats"/"loses to" on exactly that.
     versus = (scoring.compare(pairs, baseline_pairs, plan["param"])
               if baseline_pairs is not None else None)
-    folds = (_folds(plan, frame, y, censored, parts["observed"], cut,
+    folds = (_folds(plan, smoothed, frame, parts["observed"], cut,
                     index.max())
              if plan.get("walk_forward") else None)
     live_pairs = _live(conn, plan, parts["observed"],
@@ -1110,8 +1129,8 @@ def _persistence(conn, plan: dict, observed: pd.DataFrame,
     return scoring.pair(series, observed)
 
 
-def _folds(plan: dict, frame: pd.DataFrame, y: pd.Series,
-           censored: np.ndarray, observed: pd.DataFrame, cut: pd.Timestamp,
+def _folds(plan: dict, smoothed: tuple, scored: pd.DataFrame,
+           observed: pd.DataFrame, cut: pd.Timestamp,
            end: pd.Timestamp) -> dict | None:
     """Refit before each held-back day and judge the fit on that day alone.
 
@@ -1119,8 +1138,12 @@ def _folds(plan: dict, frame: pd.DataFrame, y: pd.Series,
     error by half a megahertz with no change in the model. Each day here gets
     a model that saw everything before it, and the training window, if one
     was asked for, slides with it. Days with too few rows to fit are skipped.
+    Each fits on the smoothed rows, ``smoothed`` as ``(frame, y, censored)``,
+    and is judged on the rows as issued, ``scored`` (:func:`replay`).
     """
+    frame, y, censored = smoothed
     index = pd.DatetimeIndex(frame.index)
+    judged_at = pd.DatetimeIndex(scored.index)
     span = plan.get("train_days")
     floor = max(MIN_TRAIN_ROWS, ROWS_PER_FEATURE * frame.shape[1])
     days = []
@@ -1130,8 +1153,8 @@ def _folds(plan: dict, frame: pd.DataFrame, y: pd.Series,
         fit = (index < start) & ~np.asarray(censored, dtype=bool)
         if span:
             fit &= index >= start - pd.Timedelta(days=float(span))
-        tested = (index >= start) & ((index <= end) if stop >= end
-                                     else (index < stop))
+        tested = (judged_at >= start) & ((judged_at <= end) if stop >= end
+                                         else (judged_at < stop))
         if int(fit.sum()) >= floor and tested.any():
             if plan["estimator"] in ENSEMBLES:
                 model, _ = _ensemble(plan["estimator"],
@@ -1141,8 +1164,8 @@ def _folds(plan: dict, frame: pd.DataFrame, y: pd.Series,
                 model = _estimator(plan["estimator"])
             model.fit(frame[fit], y[fit])
             predicted = pd.Series(
-                np.asarray(artifacts.predict(model, frame[tested]), dtype=float),
-                index=frame.index[tested])
+                np.asarray(artifacts.predict(model, scored[tested]), dtype=float),
+                index=scored.index[tested])
             judged = scoring.summarise(scoring.pair(predicted, observed),
                                        plan["param"])
             days.append({"from": start.strftime(db.TIME_FORMAT),
@@ -1166,7 +1189,7 @@ def _live(conn, plan: dict, observed: pd.DataFrame, at: pd.DatetimeIndex,
         return None
     record = scoring.issued(conn, plan["param"], plan["tx"], plan["rx"],
                             start=at.min(), end=at.max())
-    record = record[record["horizon_s"] == horizon_s]
+    record = record[(record["horizon_s"] == horizon_s) & record.index.isin(at)]
     if record.empty:
         return None
     return scoring.pair(pd.Series(record["value"].to_numpy(dtype=float),
