@@ -565,3 +565,73 @@ def test_each_icon_is_copied_to_the_site(database, archive, tmp_path, drawn, nam
     _publish(database, site, archive)
     assert (site / name).read_bytes() == (publisher.SITE_SRC / name).read_bytes(), (
         f"the icon {name} did not reach the site")
+
+
+def _days(database, archive, tmp_path):
+    site = tmp_path / "site"
+    _publish(database, site, archive,
+             now=datetime(2026, 8, 13, 15, tzinfo=timezone.utc))
+    return json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]["predicted_days"]
+
+
+def test_each_predicted_day_carries_its_error_against_the_measured(
+        database, archive, tmp_path, drawn):
+    rng = np.random.default_rng()
+    muf = rng.uniform(10, 30, 4)
+    with db.session(database) as conn:
+        for hour, value in zip(range(10, 14), muf):
+            _sounding(conn, archive, f"day{hour}.h5", f"2026-08-13 {hour}:00:00",
+                      muf=float(value))
+        conn.commit()
+    want = float(np.mean(np.abs(muf - (21.0 + np.arange(10, 14) / 10))))
+    assert _days(database, archive, tmp_path) == [
+        {"day": "2026-08-13", "mae": pytest.approx(want, abs=1e-3), "n": 4}], (
+        "a predicted day does not carry its error against the measured MUF")
+
+
+def test_a_predicted_day_with_nothing_measured_has_no_error(
+        database, archive, tmp_path, drawn):
+    with db.session(database) as conn:
+        model = conn.execute("SELECT id FROM model_registry WHERE name = 'live-model'"
+                             ).fetchone()[0]
+        conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at,"
+                     " valid_at, horizon_s, value, sigma) VALUES (?, 'muf', 'NIC',"
+                     " 'DOB', '2026-08-13T09:00:00Z', '2026-08-14T03:00:00Z', 86400,"
+                     " 19.5, 1.5)", (model,))
+        conn.commit()
+    assert {"day": "2026-08-14", "mae": None, "n": 0} in _days(
+        database, archive, tmp_path), "a day with nothing measured was given an error"
+
+
+def test_the_page_offers_the_predicted_days_chart():
+    page = (publisher.SITE_SRC / "index.html").read_text(encoding="utf-8")
+    assert all(f'id="{name}"' in page for name in ("days-chart", "days-readout")), (
+        "the page offers no chart of predicted days")
+
+
+def test_a_pick_before_midnight_scores_no_forecast_of_the_next_day(
+        database, archive, tmp_path, drawn):
+    rng = np.random.default_rng()
+    with db.session(database) as conn:
+        model = conn.execute("SELECT id FROM model_registry WHERE name = 'live-model'"
+                             ).fetchone()[0]
+        conn.execute("INSERT INTO forecast (model_id, param, tx, rx, issued_at,"
+                     " valid_at, horizon_s, value, sigma) VALUES (?, 'muf', 'NIC',"
+                     " 'DOB', '2026-08-13T09:00:00Z', '2026-08-14T00:00:00Z', 86400,"
+                     " ?, 1.5)", (model, float(rng.uniform(20, 30))))
+        _sounding(conn, archive, "late.h5", "2026-08-13 23:59:00",
+                  muf=float(rng.uniform(10, 15)))
+        conn.commit()
+    assert {"day": "2026-08-14", "mae": None, "n": 0} in _days(
+        database, archive, tmp_path), "a pick of one day scored the next day's forecast"
+
+
+def test_no_day_is_listed_without_a_forecast_curve_to_draw(
+        database, archive, tmp_path, drawn):
+    with db.session(database) as conn:
+        conn.execute("UPDATE model_registry SET active = 0,"
+                     " activated_at = '2026-08-13T08:00:00Z' WHERE name = 'live-model'")
+        conn.commit()
+    assert _days(database, archive, tmp_path) == [], (
+        "a day was listed although the page draws no forecast curve")

@@ -127,6 +127,16 @@ h3 { font-size: 0.9rem; margin: 16px 0 8px; color: var(--muted); font-weight: 60
 .chart .band { fill: var(--band); stroke: none; }
 .chart .now { stroke: var(--muted); stroke-dasharray: 3 3; }
 .chart .cursor { stroke: var(--muted); }
+.days-wrap { display: flex; }
+.days-axis { flex: none; }
+.days-scroll { flex: 1; min-width: 0; overflow-x: auto; }
+.chart.days svg { width: auto; cursor: crosshair; touch-action: pan-x pan-y; }
+.chart .day-edge { stroke: var(--line); }
+.chart .fc-dot { fill: var(--forecast); }
+.chart .band-bar { stroke: var(--band); stroke-width: 4; }
+.days-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chart .day-mae { fill: var(--text); font-size: 11px; font-variant-numeric: tabular-nums; }
+.days-readout { min-height: 1.4em; margin: 6px 0 0; font-size: 0.85rem; color: var(--muted); }
 .tip {
   position: absolute; pointer-events: none; background: var(--card); color: var(--text);
   border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 12px;

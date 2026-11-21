@@ -116,7 +116,14 @@
     "range_zip": "Download ZIP",
     "range_list": "Download the list",
     "range_how": "To fetch the list: {wget}, or in PowerShell: {ps}",
-    "range_unavailable": "The archive could not be read for part of this period. Try again later."
+    "range_unavailable": "The archive could not be read for part of this period. Try again later.",
+    "days": "Forecast against measurement, day by day",
+    "days_hint": "Only days with a forecast are shown, side by side. Each forecast point was issued before its time. The number above a day is its error: the mean absolute difference from the measured MUF, in MHz.",
+    "days_none": "No forecast was issued in this period.",
+    "days_measured": "measured",
+    "days_predicted": "forecast",
+    "days_forecast": "Forecast as issued",
+    "days_keys": "Forecast against measurement by day; the arrow keys step through instants"
   },
   "ru": {
     "title": "Наклонное зондирование ионосферы",
@@ -235,6 +242,13 @@
     "range_zip": "Скачать ZIP",
     "range_list": "Скачать список",
     "range_how": "Как скачать по списку: {wget} или в PowerShell: {ps}",
-    "range_unavailable": "Часть архива за этот период не прочиталась. Попробуйте позже."
+    "range_unavailable": "Часть архива за этот период не прочиталась. Попробуйте позже.",
+    "days": "Прогноз и измерения по дням",
+    "days_hint": "Показаны только дни с прогнозом, один за другим. Каждая точка прогноза выпущена заранее. Число над днём — его ошибка: средняя абсолютная разница с измеренной МНЧ, МГц.",
+    "days_none": "За этот период прогнозов не выпускалось.",
+    "days_measured": "измерено",
+    "days_predicted": "прогноз",
+    "days_forecast": "Прогноз, выпущенный заранее",
+    "days_keys": "Прогноз и измерения по дням; стрелки переходят по моментам"
   }
 }

@@ -282,7 +282,8 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
     if not framed["circuits"]:
         return {"path_km": None, "t": [], "muf": [], "lof": [], "limited": [],
                 "loflim": [], "forecast": [], "baselines": [],
-                "restored": {"t": [], "muf": [], "sigma": []}}
+                "restored": {"t": [], "muf": [], "sigma": []},
+                "predicted_days": []}
     circuit = framed["circuits"][0]
     circuit["forecast"] = [_as_issued(conn, entry, since)
                            if entry["param"] == "muf" else entry
@@ -295,6 +296,10 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
         "muf": circuit["muf"], "lof": circuit["lof"],
         "limited": circuit["limited"], "loflim": circuit["loflim"],
         "restored": Restoration(circuit["t"], circuit["muf"]).block(),
+        "predicted_days": predicted_days(
+            conn, tx, rx, method, since,
+            next((entry for entry in circuit["forecast"] if entry["param"] == "muf"
+                  and not entry.get("comparison")), None)),
         "forecast": [{
             "param": entry["param"], "model": entry["model"],
             "trained_from": entry["trained_from"],
@@ -304,6 +309,44 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
             "sigma": [_number(v) for v in entry["sigma"]],
         } for entry in circuit["forecast"] if not entry.get("comparison")],
     }
+
+
+def predicted_days(conn, tx: str, rx: str, method: str, since: datetime,
+                   curve: dict | None) -> list[dict]:
+    """Each UTC day the published forecast curve reaches, with its error.
+
+    The page lays these days side by side and draws the measured MUF against
+    ``curve`` -- the forecast as issued, as the chart draws it -- on each
+    (#167), so the days are read off that same curve and a day is listed
+    only where it is drawn. The error is its MAE against the measured picks
+    of the same UTC day, paired and counted as the forecast table counts the
+    record (``scoring``); a day with nothing measured yet has none.
+    """
+    import pandas as pd
+
+    from services.prediction import scoring
+
+    if not curve:
+        return []
+    drawn = pd.Series(
+        [value for value in curve["value"] if value is not None],
+        index=pd.DatetimeIndex([when for when, value in zip(curve["t"], curve["value"])
+                                if value is not None]), dtype=float)
+    if drawn.empty:
+        return []
+    try:
+        observed = scoring.truth(conn, "muf", tx, rx, method, start=_db_time(since))
+    except sqlite3.Error:
+        return []
+    days = []
+    for day in sorted(set(drawn.index.normalize())):
+        judged = scoring.summarise(scoring.pair(
+            drawn[drawn.index.normalize() == day],
+            observed[observed.index.normalize() == day]), "muf")
+        days.append({"day": day.strftime("%Y-%m-%d"),
+                     "mae": None if judged["mae"] is None else round(judged["mae"], 3),
+                     "n": judged["n"]})
+    return days
 
 
 def _as_issued(conn, entry: dict, since: datetime) -> dict:
