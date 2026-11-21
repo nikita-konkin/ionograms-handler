@@ -418,6 +418,11 @@ def test_each_baseline_is_published_at_the_instants_of_the_forecast(
 
 def test_restored_samples_are_published_apart_from_the_measured_ones(
         database, archive, tmp_path, drawn):
+    with db.session(database) as conn:
+        for k in range(18):
+            _sounding(conn, archive, f"dense{k}.h5",
+                      f"2026-08-13 0{3 + k // 6}:{k % 6}0:00", muf=12.0 + k / 3)
+        conn.commit()
     site = tmp_path / "site"
     _publish(database, site, archive)
     series = json.loads((site / "data" / "nic-dob.json").read_text(

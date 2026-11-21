@@ -45,9 +45,12 @@ KERNEL = (ConstantKernel(0.824 ** 2, "fixed")
 class Restoration:
     """The restored MUF samples of one measured series.
 
-    A gap is a stretch longer than 25 minutes between two measured values,
-    whether the soundings are missing or carry no MUF. Its samples are spaced
-    as evenly as the ten-minute cadence allows, strictly between its edges.
+    A gap is a stretch between two measured values, whether the soundings
+    are missing or carry no MUF, longer than 25 minutes and than twice the
+    series' usual step: the publisher thins a long series, and a thinned
+    series is not an outage. Its samples are spaced as evenly as the usual
+    step allows, strictly between its edges. An estimate that is not finite
+    leaves its gap empty, and one at or below zero is dropped.
     """
 
     def __init__(self, t: list[str], muf: list):
@@ -62,21 +65,24 @@ class Restoration:
         when = np.array([w.timestamp() for w, _ in seen])
         value = np.array([v for _, v in seen])
         out = {"t": [], "muf": [], "sigma": []}
+        usual = timedelta(seconds=float(np.median(np.diff(when)))) if len(when) > 2 else STEP
         for i in range(len(seen) - 1):
             span = seen[i + 1][0] - seen[i][0]
-            if span <= GAP or span > LONGEST:
+            if span <= max(GAP, 2 * usual) or span > LONGEST:
                 continue
-            count = max(1, round(span / STEP) - 1)
+            count = max(1, round(span / max(STEP, usual)) - 1)
             at = when[i] + np.arange(1, count + 1) * span.total_seconds() / (count + 1)
-            if span <= LINE:
-                guess, sigma = np.interp(at, when, value), [None] * count
-            else:
-                guess, spread = self._process(when, value, when[i], when[i + 1], at)
-                sigma = [round(float(s), 3) for s in spread]
-            out["t"] += [datetime.fromtimestamp(round(a), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                         for a in at]
-            out["muf"] += [round(float(g), 3) for g in guess]
-            out["sigma"] += sigma
+            with np.errstate(all="ignore"):
+                if span <= LINE:
+                    guess, spread = np.interp(at, when, value), None
+                else:
+                    guess, spread = self._process(when, value, when[i], when[i + 1], at)
+            if not np.all(np.isfinite(guess)) or (spread is not None and not np.all(np.isfinite(spread))):
+                continue
+            for k in np.flatnonzero(guess > 0):
+                out["t"].append(datetime.fromtimestamp(round(at[k]), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"))
+                out["muf"].append(round(float(guess[k]), 3))
+                out["sigma"].append(None if spread is None else round(float(spread[k]), 3))
         return out
 
     def _process(self, when, value, left, right, at):

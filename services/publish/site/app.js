@@ -316,7 +316,7 @@
     }
     var all = curves(d, start - margin, end + margin);
     var shown = all.filter(function (c) { return !state.hidden[c.key]; });
-    if (!muf.length && !lof.length && !all.length) {
+    if (!muf.length && !lof.length && !restored.length && !all.length) {
       box.appendChild(el("p", { "class": "muted", text: t("no_data") }));
       renderLegend([], d);
       return;
@@ -424,10 +424,10 @@
       });
     });
     var aheadTimes = Object.keys(ahead).map(Number);
-    function nearest(list, ms, from) {
+    function nearest(list, ms, from, to) {
       var best = -1, gap = Infinity;
       for (var n = 0; n < list.length; n++) {
-        if (list[n] < from) continue;
+        if (list[n] < from || list[n] > to) continue;
         var g = Math.abs(list[n] - ms);
         if (g < gap) { gap = g; best = n; }
       }
@@ -437,10 +437,10 @@
       var rect = root.getBoundingClientRect();
       var px = ((evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left) * (W / rect.width);
       var ms = start + (px - L) / (W - L - R) * (end - start);
-      var seen = nearest(times, ms, start), told = nearest(aheadTimes, ms, start);
-      var guessed = nearest(backTimes, ms, start);
-      var forecast = told[1] < seen[1] && told[1] <= guessed[1];
-      var guess = !forecast && guessed[1] < seen[1];
+      var seen = nearest(times, ms, start, Infinity), told = nearest(aheadTimes, ms, start, Infinity);
+      var guessed = nearest(backTimes, ms, start, end);
+      var forecast = told[1] < seen[1] && told[1] < guessed[1];
+      var guess = !forecast && guessed[1] <= seen[1];
       var hit = forecast ? told : guess ? guessed : seen;
       if (hit[0] < 0 || hit[1] > (end - start) / 40) {
         cursor.setAttribute("visibility", "hidden"); tip.hidden = true; return;
@@ -464,6 +464,9 @@
           document.createTextNode(t("muf") + ", " + t("restored") + " "),
           el("b", { text: mhz(back.muf[hit[0]]) + (spread == null ? "" : " ±" + mhz(spread)) +
             " " + t("mhz") })]));
+        if (seen[0] >= 0 && times[seen[0]] === at && s.lof[seen[0]] != null) {
+          tip.appendChild(el("div", { text: t("lof") + " " + mhz(s.lof[seen[0]]) + " " + t("mhz") }));
+        }
       } else {
         tip.appendChild(el("div", { text: t("muf") + " " + mhz(s.muf[hit[0]]) + " · " +
           t("lof") + " " + mhz(s.lof[hit[0]]) + " " + t("mhz") }));

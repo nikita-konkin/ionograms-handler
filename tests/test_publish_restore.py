@@ -105,3 +105,22 @@ def test_the_restored_samples_are_named_in_each_language():
     strings = json.loads((SITE / "strings.json").read_text(encoding="utf-8"))
     assert all(strings[lang].get("restored") for lang in ("en", "ru")), (
         "restored samples are not named in every language")
+
+
+def test_a_series_thinned_to_half_an_hour_has_nothing_to_restore():
+    rng = np.random.default_rng()
+    t, muf, _ = _day(rng, days=3, step_min=30)
+    assert not Restoration(t, muf).block()["t"], "a thinned series without gaps had samples restored"
+
+
+def test_a_gap_whose_estimate_overflows_is_left_empty():
+    t = ["2026-11-01T00:00:00", "2026-11-01T02:00:00"]
+    assert not Restoration(t, [1e155, -1e155]).block()["t"], "an estimate that overflowed was published"
+
+
+def test_no_restored_sample_is_below_zero():
+    rng = np.random.default_rng()
+    low = rng.uniform(2, 4)
+    t = ["2026-11-01T00:00:00", "2026-11-01T00:10:00", "2026-11-01T02:00:00", "2026-11-01T02:10:00"]
+    muf = Restoration(t, [low, low, low, low + rng.uniform(14, 18)]).block()["muf"]
+    assert all(v > 0 for v in muf), f"a restored sample fell to or below zero: {muf}"
