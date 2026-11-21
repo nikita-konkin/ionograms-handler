@@ -27,11 +27,13 @@ def inspect_folder(
 ):
     try:
         archive_id = int(payload.get("archive_id", 0))
+        last = payload.get("last")
         return conversion.enqueue(
             request.app.state.db,
             archive_id,
             str(payload.get("subpath") or "."),
             who.name,
+            last=str(last) if last is not None else None,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
