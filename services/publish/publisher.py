@@ -282,7 +282,8 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
     if not framed["circuits"]:
         return {"path_km": None, "t": [], "muf": [], "lof": [], "limited": [],
                 "loflim": [], "forecast": [], "baselines": [],
-                "restored": {"t": [], "muf": [], "sigma": []}}
+                "restored": {"t": [], "muf": [], "sigma": []},
+                "predicted_days": []}
     circuit = framed["circuits"][0]
     circuit["forecast"] = [_as_issued(conn, entry, since)
                            if entry["param"] == "muf" else entry
@@ -295,6 +296,7 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
         "muf": circuit["muf"], "lof": circuit["lof"],
         "limited": circuit["limited"], "loflim": circuit["loflim"],
         "restored": Restoration(circuit["t"], circuit["muf"]).block(),
+        "predicted_days": predicted_days(conn, tx, rx, method, since),
         "forecast": [{
             "param": entry["param"], "model": entry["model"],
             "trained_from": entry["trained_from"],
@@ -304,6 +306,37 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
             "sigma": [_number(v) for v in entry["sigma"]],
         } for entry in circuit["forecast"] if not entry.get("comparison")],
     }
+
+
+def predicted_days(conn, tx: str, rx: str, method: str,
+                   since: datetime) -> list[dict]:
+    """Each UTC day the forecast as issued reaches, with its error that day.
+
+    The page lays these days side by side and draws the measured MUF against
+    the forecast on each (#167). The error is the record's MAE against the
+    day's measured picks, paired and counted as the forecast table counts the
+    record (``scoring``); a day with nothing measured yet has none.
+    """
+    from services.prediction import scoring
+
+    try:
+        record = scoring.issued(conn, "muf", tx, rx, start=_db_time(since))
+        observed = scoring.truth(conn, "muf", tx, rx, method,
+                                 start=_db_time(since))
+    except sqlite3.Error:
+        return []
+    record = record.iloc[-MAX_POINTS:]
+    pairs = scoring.pair(record["value"].astype(float), observed)
+    days = []
+    for day in sorted(set(record.index.normalize())):
+        on = pairs.valid_at.normalize() == day
+        judged = scoring.summarise(scoring.Pairs(
+            valid_at=pairs.valid_at[on], predicted=pairs.predicted[on],
+            observed=pairs.observed[on], censored=pairs.censored[on]), "muf")
+        days.append({"day": day.strftime("%Y-%m-%d"),
+                     "mae": None if judged["mae"] is None else round(judged["mae"], 3),
+                     "n": judged["n"]})
+    return days
 
 
 def _as_issued(conn, entry: dict, since: datetime) -> dict:

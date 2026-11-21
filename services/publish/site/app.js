@@ -647,6 +647,170 @@
     });
   }
 
+  // --- predicted days ------------------------------------------------------
+  // Each UTC day the forecast as issued reaches, side by side in equal slots,
+  // the measured MUF over the forecast and the day's error above it (#167).
+  // Days without a forecast are left out. The days scroll sideways under a
+  // fixed axis and open on the newest.
+
+  var DAY_MS = 86400000, DAY_SLOT_MIN = 110;
+
+  function dayPoints(d, slot) {
+    var s = d.series, measured = [], predicted = [];
+    var fc = (s.forecast || []).filter(function (f) { return f.param === "muf"; })[0];
+    for (var i = 0; i < s.t.length; i++) {
+      var x = parseT(s.t[i]), k = slot[ymd(new Date(x))];
+      if (k != null && s.muf[i] != null) measured.push([x, s.muf[i], s.limited[i], k]);
+    }
+    (fc ? fc.t : []).forEach(function (when, j) {
+      var x = parseT(when), k = slot[ymd(new Date(x))];
+      predicted.push(k == null || fc.value[j] == null ? null : [x, fc.value[j], fc.sigma[j], k]);
+    });
+    return { measured: measured, predicted: predicted };
+  }
+
+  function dayRuns(predicted) {
+    var runs = [], run = [];
+    predicted.forEach(function (p) {
+      if (!p || (run.length && run[run.length - 1][3] !== p[3])) {
+        if (run.length) runs.push(run);
+        run = [];
+      }
+      if (p) run.push(p);
+    });
+    if (run.length) runs.push(run);
+    return runs;
+  }
+
+  function renderDays() {
+    var box = document.getElementById("days-chart");
+    var readout = document.getElementById("days-readout");
+    clear(box);
+    readout.textContent = "";
+    var d = state.data[state.slug];
+    var days = (d && d.series.predicted_days) || [];
+    if (!days.length) {
+      box.appendChild(el("p", { "class": "muted", text: t("days_none") }));
+      return;
+    }
+    var slot = {};
+    days.forEach(function (day, k) { slot[day.day] = k; });
+    var pts = dayPoints(d, slot), runs = dayRuns(pts.predicted);
+    var top = 0;
+    pts.measured.forEach(function (p) { top = Math.max(top, p[1]); });
+    runs.forEach(function (r) {
+      r.forEach(function (p) { top = Math.max(top, p[1] + (p[2] || 0)); });
+    });
+    top = niceMax(top * 1.05);
+
+    var outer = Math.max(320, box.clientWidth || 640), L = 36, R = 10, T = 22, B = 26;
+    var H = outer < 500 ? 220 : 260;
+    var width = Math.max(outer - L, days.length * DAY_SLOT_MIN + R);
+    var slotW = (width - R) / days.length;
+    function X(ms, k) {
+      return k * slotW + (ms - parseT(days[k].day + "T00:00:00Z")) / DAY_MS * slotW;
+    }
+    function Y(v) { return T + (1 - Math.min(v, top) / top) * (H - T - B); }
+
+    var axis = svg("svg", { "class": "days-axis", width: L, height: H,
+                            viewBox: "0 0 " + L + " " + H, "aria-hidden": "true" });
+    var plot = svg("svg", { width: width, height: H, viewBox: "0 0 " + width + " " + H,
+                            role: "img", "aria-label": t("days") });
+    var ystep = top > 30 ? 10 : 5;
+    for (var v = 0; v <= top; v += ystep) {
+      plot.appendChild(svg("line", { "class": "grid", x1: 0, x2: width - R, y1: Y(v), y2: Y(v) }));
+      var lab = svg("text", { "class": "axis", x: L - 6, y: Y(v) + 4, "text-anchor": "end" });
+      lab.textContent = String(v);
+      axis.appendChild(lab);
+    }
+    days.forEach(function (day, k) {
+      var x0 = k * slotW;
+      plot.appendChild(svg("line", { "class": "day-edge", x1: x0, x2: x0, y1: T, y2: H - B }));
+      plot.appendChild(svg("line", { "class": "grid", x1: x0 + slotW / 2, x2: x0 + slotW / 2,
+                                     y1: T, y2: H - B }));
+      var name = svg("text", { "class": "axis", x: x0 + slotW / 2, y: H - B + 16,
+                               "text-anchor": "middle" });
+      name.textContent = fmtDay(parseT(day.day + "T00:00:00Z"));
+      plot.appendChild(name);
+      var err = svg("text", { "class": "day-mae", x: x0 + slotW / 2, y: T - 8,
+                              "text-anchor": "middle" });
+      err.textContent = day.mae == null ? "—" : day.mae.toFixed(2);
+      plot.appendChild(err);
+    });
+    plot.appendChild(svg("line", { "class": "day-edge", x1: width - R, x2: width - R,
+                                   y1: T, y2: H - B }));
+    runs.forEach(function (r) {
+      var withSigma = r.filter(function (p) { return p[2] != null; });
+      if (withSigma.length > 1) {
+        var up = withSigma.map(function (p) { return X(p[0], p[3]) + "," + Y(p[1] + p[2]); });
+        var down = withSigma.slice().reverse().map(function (p) {
+          return X(p[0], p[3]) + "," + Y(Math.max(0, p[1] - p[2]));
+        });
+        plot.appendChild(svg("polygon", { "class": "band", points: up.concat(down).join(" ") }));
+      }
+      plot.appendChild(svg("polyline", { "class": "fc c-model",
+        points: r.map(function (p) { return X(p[0], p[3]) + "," + Y(p[1]); }).join(" ") }));
+    });
+    pts.measured.forEach(function (p) {
+      plot.appendChild(svg("circle", { "class": p[2] ? "muf-limited" : "muf",
+                                       cx: X(p[0], p[3]), cy: Y(p[1]), r: p[2] ? 2.6 : 2.2 }));
+    });
+    var cursor = svg("line", { "class": "cursor", y1: T, y2: H - B, visibility: "hidden" });
+    plot.appendChild(cursor);
+
+    var scroller = el("div", { "class": "days-scroll" });
+    scroller.appendChild(plot);
+    box.appendChild(el("div", { "class": "days-wrap" }, [axis, scroller]));
+    scroller.scrollLeft = scroller.scrollWidth;
+
+    var predicted = pts.predicted.filter(Boolean);
+    plot.addEventListener("pointermove", function (evt) {
+      var at = evt.clientX - plot.getBoundingClientRect().left;
+      var k = Math.min(days.length - 1, Math.max(0, Math.floor(at / slotW)));
+      var ms = parseT(days[k].day + "T00:00:00Z") + (at - k * slotW) / slotW * DAY_MS;
+      var seen = closest(pts.measured.filter(function (p) { return p[3] === k; }), ms);
+      var told = closest(predicted.filter(function (p) { return p[3] === k; }),
+                         seen ? seen[0] : ms);
+      var hit = seen || told;
+      if (!hit) { cursor.setAttribute("visibility", "hidden"); readout.textContent = ""; return; }
+      cursor.setAttribute("x1", X(hit[0], k));
+      cursor.setAttribute("x2", X(hit[0], k));
+      cursor.setAttribute("visibility", "visible");
+      var parts = [fmtTime(hit[0])];
+      if (seen) parts.push(t("days_measured") + " " + seen[1].toFixed(1));
+      if (told && Math.abs(told[0] - hit[0]) <= 900000) {
+        parts.push(t("days_predicted") + " " + told[1].toFixed(1));
+        if (seen) {
+          var gap = told[1] - seen[1];
+          parts.push((gap >= 0 ? "+" : "−") + Math.abs(gap).toFixed(1) + " " + t("mhz"));
+        }
+      }
+      readout.textContent = parts.join(" · ");
+    });
+    plot.addEventListener("pointerleave", function () {
+      cursor.setAttribute("visibility", "hidden");
+    });
+  }
+
+  function closest(list, ms) {
+    var best = null;
+    list.forEach(function (p) {
+      if (!best || Math.abs(p[0] - ms) < Math.abs(best[0] - ms)) best = p;
+    });
+    return best;
+  }
+
+  function renderDaysLegend() {
+    var legend = document.getElementById("days-legend");
+    clear(legend);
+    function key(cls, label) {
+      return el("span", {}, [el("i", { "class": cls }), document.createTextNode(label)]);
+    }
+    legend.appendChild(key("k-muf", t("days_measured")));
+    legend.appendChild(key("k-lim", t("muf") + ", " + t("limited")));
+    legend.appendChild(key("swatch c-model", t("days_forecast") + " ±σ"));
+  }
+
   // --- forecast table ------------------------------------------------------
 
   // One table per horizon: a row per method that has a score there, the
@@ -730,6 +894,8 @@
     renderImages(c);
     renderRanges();
     renderChart();
+    renderDays();
+    renderDaysLegend();
     renderForecast();
   }
 
@@ -1313,7 +1479,7 @@
     var resizeTimer = null;
     window.addEventListener("resize", function () {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(function () { renderChart(); drawPast(); }, 150);
+      resizeTimer = setTimeout(function () { renderChart(); renderDays(); drawPast(); }, 150);
     });
 
     getJSON("strings.json").then(function (s) { state.strings = s; })
