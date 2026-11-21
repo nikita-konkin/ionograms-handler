@@ -488,3 +488,268 @@ def test_process_lock_excludes_a_second_worker(tmp_path):
         pytest.fail("second worker acquired the active worker's lock")
     with worker_lock(path):
         pass
+
+
+def copy_capture(source, folder, day):
+    folder.mkdir(parents=True, exist_ok=True)
+    capture = folder / f"synth_{day.replace('.', '')}_000010.lfs"
+    capture.write_bytes(source.read_bytes())
+    os.utime(capture, (time.time() - 120,) * 2)
+    return capture
+
+
+def test_range_inspects_only_captures_in_its_sibling_folders(archive):
+    conn, root, source, archive_id = archive
+    for day in ("2026.02.03", "2026.02.05", "2026.02.06", "2026.02.07"):
+        copy_capture(source, root / day, day)
+    nested = copy_capture(source, root / "2026.02.05" / "nested", "2026.02.05")
+    recent = source.with_name("recent.lfs")
+    recent.write_bytes(source.read_bytes())
+    job = conversion.enqueue(
+        conn, archive_id, source.parent.name, "admin", last="2026.02.06"
+    )
+    conversion.run_next(conn)
+    files = db.rows(
+        conn, "SELECT path FROM archive_conversion_file WHERE job_id = ?", (job["id"],)
+    )
+    expected = {
+        source.relative_to(root).as_posix(),
+        "2026.02.05/synth_20260205_000010.lfs",
+        "2026.02.06/synth_20260206_000010.lfs",
+        nested.relative_to(root).as_posix(),
+    }
+    assert {file["path"] for file in files} == expected, (
+        "Range inspection listed the wrong captures"
+    )
+
+
+def test_range_leaves_out_captures_directly_in_the_parent(archive):
+    conn, root, source, archive_id = archive
+    capture = copy_capture(source, root, "2026.02.01")
+    job = conversion.enqueue(
+        conn, archive_id, source.parent.name, "admin", last=source.parent.name
+    )
+    conversion.run_next(conn)
+    files = db.rows(
+        conn, "SELECT path FROM archive_conversion_file WHERE job_id = ?", (job["id"],)
+    )
+    assert capture.name not in {file["path"] for file in files}, (
+        "Range inspection listed a capture in the parent"
+    )
+
+
+def test_reversed_range_is_refused(archive):
+    conn, root, source, archive_id = archive
+    (root / "2026.02.03").mkdir()
+    with pytest.raises(conversion.ConversionError) as error:
+        conversion.enqueue(
+            conn, archive_id, source.parent.name, "admin", last="2026.02.03"
+        )
+    assert "sorts before" in str(error.value), (
+        "Reversed range refusal omitted the ordering rule"
+    )
+
+
+@pytest.mark.parametrize(
+    "last", ["2026.02.05", "2026.02.04/synth_20260204_000010.lfs"],
+    ids=["missing", "file"],
+)
+def test_last_folder_must_be_an_existing_directory(archive, last):
+    conn, _, source, archive_id = archive
+    with pytest.raises(conversion.ConversionError) as error:
+        conversion.enqueue(conn, archive_id, source.parent.name, "admin", last=last)
+    assert "not a directory" in str(error.value), (
+        "Invalid last folder refusal omitted the directory requirement"
+    )
+
+
+def test_first_folder_must_be_an_existing_directory(archive):
+    conn, _, source, archive_id = archive
+    with pytest.raises(conversion.ConversionError) as error:
+        conversion.enqueue(
+            conn, archive_id, "2026.02.03", "admin", last=source.parent.name
+        )
+    assert "not a directory" in str(error.value), (
+        "Missing first folder refusal omitted the directory requirement"
+    )
+
+
+def test_range_folders_with_different_parents_are_refused(archive):
+    conn, root, source, archive_id = archive
+    folder = root / "nested" / "2026.02.05"
+    folder.mkdir(parents=True)
+    with pytest.raises(conversion.ConversionError) as error:
+        conversion.enqueue(
+            conn, archive_id, source.parent.name, "admin",
+            last=folder.relative_to(root).as_posix(),
+        )
+    assert "same parent" in str(error.value), (
+        "Range refusal omitted the common parent requirement"
+    )
+
+
+@pytest.mark.parametrize("subpath", [".", "./.", ""], ids=["dot", "dots", "empty"])
+def test_the_archive_itself_cannot_start_a_range(archive, subpath):
+    conn, _, source, archive_id = archive
+    with pytest.raises(conversion.ConversionError) as error:
+        conversion.enqueue(conn, archive_id, subpath, "admin", last=source.parent.name)
+    assert "archive itself" in str(error.value), (
+        "Range refusal omitted the archive root restriction"
+    )
+
+
+@pytest.mark.parametrize("endpoint", ["first", "last"])
+def test_a_linked_folder_cannot_be_a_range_endpoint(archive, endpoint):
+    conn, root, source, archive_id = archive
+    link = root / "2026.02.05"
+    try:
+        link.symlink_to(source.parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    first, last = (
+        (link.name, source.parent.name)
+        if endpoint == "first"
+        else (source.parent.name, link.name)
+    )
+    with pytest.raises(conversion.ConversionError) as error:
+        conversion.enqueue(conn, archive_id, first, "admin", last=last)
+    assert "linked folders" in str(error.value), (
+        "Linked range endpoint refusal omitted the link restriction"
+    )
+
+
+def make_junction(link, target):
+    winapi = pytest.importorskip("_winapi")
+    try:
+        winapi.CreateJunction(str(target), str(link))
+    except OSError:
+        pytest.skip("junction creation is unavailable")
+
+
+def test_range_inspection_skips_a_junction_to_an_outside_folder(archive):
+    conn, root, source, archive_id = archive
+    outside = copy_capture(source, root / "2026.02.07", "2026.02.07")
+    (root / "2026.02.06").mkdir()
+    make_junction(root / "2026.02.05", outside.parent)
+    conversion.enqueue(conn, archive_id, source.parent.name, "admin", last="2026.02.06")
+    job = conversion.run_next(conn)
+    assert (job["state"], job["total"]) == ("ready", 1), (
+        "Range inspection followed a junction outside the range"
+    )
+
+
+def test_a_junction_cannot_redirect_an_approved_range(archive):
+    conn, root, source, archive_id = archive
+    job = conversion.enqueue(
+        conn, archive_id, source.parent.name, "admin", last=source.parent.name
+    )
+    conversion.run_next(conn)
+    conversion.start(conn, job["id"], True)
+    outside = source.parent.rename(root / "2026.02.07")
+    make_junction(source.parent, outside)
+    conversion.run_next(conn)
+    assert (outside / source.name).is_file(), (
+        "Range replacement followed a junction outside the approved range"
+    )
+
+
+def test_a_junction_cannot_redirect_the_parent_of_an_approved_range(archive):
+    conn, root, source, archive_id = archive
+    capture = copy_capture(source, root / "batch" / "2026.02.04", "2026.02.04")
+    subpath = capture.parent.relative_to(root).as_posix()
+    job = conversion.enqueue(conn, archive_id, subpath, "admin", last=subpath)
+    conversion.run_next(conn)
+    conversion.start(conn, job["id"], True)
+    outside = (root / "batch").rename(root / "outside")
+    make_junction(root / "batch", outside)
+    conversion.run_next(conn)
+    assert (outside / capture.relative_to(root / "batch")).is_file(), (
+        "Range replacement followed a redirected parent"
+    )
+
+
+def test_an_approved_range_replaces_only_its_reviewed_captures(archive):
+    conn, root, source, archive_id = archive
+    second = copy_capture(source, root / "2026.02.05", "2026.02.05")
+    outside = copy_capture(source, root / "2026.02.06", "2026.02.06")
+    parent = copy_capture(source, root, "2026.02.01")
+    job = conversion.enqueue(
+        conn, archive_id, source.parent.name, "admin", last=second.parent.name
+    )
+    conversion.run_next(conn)
+    conversion.start(conn, job["id"], True)
+    conversion.run_next(conn)
+    files = set(root.rglob("*.lfs")) | set(root.rglob("*.echo.h5"))
+    expected = {
+        outside, parent, source.with_suffix(".echo.h5"), second.with_suffix(".echo.h5"),
+    }
+    assert files == expected, "Range replacement changed the wrong set of captures"
+
+
+def test_the_route_records_the_sibling_range(client, archive):
+    _, root, source, archive_id = archive
+    (root / "2026.02.05").mkdir()
+    response = client.post(
+        "/archive-conversions",
+        headers=AUTH,
+        json={
+            "archive_id": archive_id,
+            "subpath": source.parent.name,
+            "last": "2026.02.05",
+        },
+    )
+    job = response.json()
+    assert (
+        response.status_code,
+        job.get("folder"),
+        job.get("first_folder"),
+        job.get("last_folder"),
+    ) == (202, ".", source.parent.name, "2026.02.05"), (
+        "The route did not record the range on its parent"
+    )
+
+
+@pytest.mark.parametrize("payload", [{}, {"last": None}, {"last": ""}])
+def test_an_unspecified_last_folder_keeps_a_single_folder_job(client, archive, payload):
+    _, _, source, archive_id = archive
+    response = client.post(
+        "/archive-conversions",
+        headers=AUTH,
+        json={"archive_id": archive_id, "subpath": source.parent.name, **payload},
+    )
+    job = response.json()
+    assert (
+        response.status_code,
+        job.get("folder"),
+        job.get("first_folder"),
+        job.get("last_folder"),
+    ) == (202, source.parent.name, None, None), (
+        "An unspecified last folder changed the single folder job"
+    )
+
+
+def test_the_conversion_page_offers_an_optional_last_folder(client):
+    page = client.get("/ui/conversion?lang=en")
+    assert '<input id="conversion-last">' in page.text, (
+        "The page is missing the optional last folder input"
+    )
+
+
+def test_startup_adds_nullable_range_columns_to_existing_jobs(tmp_path):
+    database = tmp_path / "legacy.sqlite3"
+    conn = db.connect(database)
+    try:
+        with conn:
+            conn.execute(
+                "CREATE TABLE archive_conversion"
+                " (id INTEGER PRIMARY KEY, folder TEXT NOT NULL, state TEXT NOT NULL)"
+            )
+            conn.execute("INSERT INTO archive_conversion VALUES (1, '.', 'ready')")
+    finally:
+        conn.close()
+    with db.session(database) as conn:
+        job = conversion.get(conn, 1)
+    assert (job.get("first_folder", "absent"), job.get("last_folder", "absent")) == (
+        None,
+        None,
+    ), "Startup did not add both nullable endpoints to the existing job"

@@ -35,7 +35,8 @@ MESSAGES: dict[str, str] = {
         "successful read. Files that fail checks retain their raw "
         "capture.",
     "conversion.archive": "Registered archive",
-    "conversion.subpath": "Subfolder (a date folder, or . for the whole archive)",
+    "conversion.subpath": "First folder (. for the whole archive)",
+    "conversion.last": "Last folder (optional)",
     "conversion.inspect": "Inspect folder",
     "conversion.scope":
         "Archive permission is required. Inspection changes no capture. "

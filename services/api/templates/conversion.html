@@ -14,6 +14,7 @@
       </select>
     </label>
     <label>{{ t('conversion.subpath') }} <input id="conversion-subpath" value="." required></label>
+    <label>{{ t('conversion.last') }} <input id="conversion-last"></label>
     <button type="submit" {% if not archives %}disabled{% endif %}>{{ t('conversion.inspect') }}</button>
   </form>
   <p class="note">{{ t('conversion.scope') }}</p>
@@ -57,6 +58,8 @@
   const bytes = n => (n / 1e9).toFixed(3) + ' GB';
   const state = job => (states[job.state] || job.state)
     + (job.mode === 'survey' ? ' · ' + T('conversion.js.inspection') : '');
+  const scope = job => job.folder
+    + (job.first_folder ? ' · ' + job.first_folder + ' … ' + job.last_folder : '');
   function cell(row, text) {
     const el = document.createElement('td'); el.textContent = text; row.appendChild(el);
     return el;
@@ -75,7 +78,7 @@
     const job = data.job;
     count = job.total;
     byId('conversion-detail').hidden = false;
-    byId('conversion-current').textContent = '#' + job.id + ' · ' + job.folder;
+    byId('conversion-current').textContent = '#' + job.id + ' · ' + scope(job);
     byId('conversion-summary').textContent = state(job) + ' · ' + job.done + '/' + job.total
       + ' · ' + job.failed + ' ' + T('conversion.js.errors') + ' · ' + (job.detail || '');
     byId('conversion-start').disabled = !['ready', 'failed', 'cancelled'].includes(job.state)
@@ -105,7 +108,7 @@
       data.jobs.forEach(job => {
         const row = document.createElement('tr');
         const button = document.createElement('button'); button.type = 'button';
-        button.textContent = '#' + job.id + ' · ' + job.folder;
+        button.textContent = '#' + job.id + ' · ' + scope(job);
         button.onclick = async () => {
           selected = job.id; offset = 0; byId('conversion-confirm').checked = false;
           try { await details(); } catch (e) { message(e.message); }
@@ -122,10 +125,13 @@
   }
   byId('inspect-form').onsubmit = async event => {
     event.preventDefault();
-    const result = await control('/archive-conversions', 'POST', {
+    const payload = {
       archive_id: Number(byId('conversion-archive').value),
       subpath: byId('conversion-subpath').value
-    });
+    };
+    const last = byId('conversion-last').value;
+    if (last) payload.last = last;
+    const result = await control('/archive-conversions', 'POST', payload);
     if (result.ok) {
       selected = result.body.id; offset = 0; byId('conversion-confirm').checked = false;
       message(T('conversion.js.queued'));
