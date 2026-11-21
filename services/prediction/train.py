@@ -488,6 +488,38 @@ def assemble(conn, plan: dict) -> dict:
     }
 
 
+def replay(conn, plan: dict, recipe: legacy_features.Recipe,
+           frame: pd.DataFrame, cut: pd.Timestamp) -> pd.DataFrame:
+    """The feature rows, with each from ``cut`` on built as it was issued.
+
+    ``frame`` comes from :func:`dataset.tracked`, which smooths backward over
+    the whole window, so a held-out row's inputs already know the soundings
+    between its input instant and the instant it predicts -- the very hour a
+    one-hour forecast is about. A live forecast has none of them. Each row
+    from ``cut`` on is built again from the series as known at its input
+    instant (:func:`dataset.known`), the way an issue then would build it, and
+    the holdout is judged on those. The fit stays on the smoothed rows, which
+    are cleaner and put nothing into the score. A held-out row that cannot be
+    rebuilt is dropped.
+    """
+    held = pd.DatetimeIndex(frame.index[frame.index >= cut])
+    lead = pd.Timedelta(seconds=plan["lag"] * dataset.DEFAULT_STEP_S)
+    rows = [frame[frame.index < cut]]
+    for row, series in zip(held, dataset.known(
+            conn, plan["param"], plan["tx"], plan["rx"], plan["method"],
+            held - lead, start=plan.get("start"), end=plan.get("end"))):
+        empty = np.flatnonzero(series.isna().to_numpy())
+        stretch = series.iloc[empty[-1] + 1:] if len(empty) else series
+        if len(stretch) < 2:
+            continue
+        built = legacy_features.build(stretch, recipe, alias=recipe.alias)
+        if row in built.index:
+            rows.append(built.loc[[row]])
+    out = pd.concat(rows)
+    out.attrs = dict(frame.attrs)
+    return out
+
+
 def split(index: pd.DatetimeIndex, holdout_days: float) -> pd.Timestamp:
     """The instant the holdout begins: the last ``holdout_days`` of the record.
 
@@ -893,6 +925,10 @@ def run(conn, plan: dict, by: str | None = None, *,
 
     cut = (split(index, plan["holdout_days"]) if validation_start is None
            else pd.Timestamp(validation_start))
+    replayed = replay(conn, plan, recipe, frame, cut)
+    kept = frame.index.isin(replayed.index)
+    frame, y, censored = replayed, y[kept], censored[kept]
+    index = pd.DatetimeIndex(frame.index)
     is_train = index < cut
     fit_rows = is_train & ~censored
 

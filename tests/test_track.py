@@ -283,3 +283,51 @@ def test_lof_is_weighted_by_the_signal_at_its_own_end_of_the_band():
 def test_an_unknown_parameter_is_refused():
     with pytest.raises(ValueError, match="unknown parameter"):
         track.track_results(results_table(), method="algo", param="fof2")
+
+
+def _wandering(rng, n):
+    t = pd.date_range("2026-02-04", periods=n, freq="5min") + pd.to_timedelta(
+        rng.integers(0, 40, n), unit="s")
+    values = 15 + 6 * np.sin(np.arange(n) / rng.uniform(20, 60)) + rng.normal(0, 0.3, n)
+    hole = int(rng.integers(n // 4, n // 2))
+    values[hole:hole + int(rng.integers(5, 40))] = np.nan
+    return t, values, rng.uniform(0.2, 0.6, n)
+
+
+def test_the_value_known_at_an_instant_matches_a_track_of_the_data_up_to_it():
+    rng = np.random.default_rng()
+    t, values, sigma = _wandering(rng, int(rng.integers(200, 400)))
+    cut = int(rng.integers(50, len(t) - 1))
+    known = next(iter(track.known(t, values, sigma, [t[cut]])))
+    whole = track.track(t[:cut + 1], values[:cut + 1], sigma[:cut + 1]).frame["muf"]
+    assert np.abs(known.to_numpy()[36:] - whole.to_numpy()[36:]).max() <= 1e-3 + 1e-9, (
+        "the value known at an instant differs from a track of the data up to it")
+
+
+def test_the_value_known_at_the_last_instant_is_the_whole_track():
+    rng = np.random.default_rng()
+    t, values, sigma = _wandering(rng, int(rng.integers(200, 400)))
+    known = next(iter(track.known(t, values, sigma, [t[-1]])))
+    whole = track.track(t, values, sigma).frame["muf"]
+    assert np.array_equal(known.to_numpy(), whole.to_numpy()), (
+        "the value known at the last instant is not the whole track")
+
+
+def test_what_is_known_at_an_instant_ignores_every_later_measurement():
+    rng = np.random.default_rng()
+    t, values, sigma = _wandering(rng, int(rng.integers(200, 400)))
+    cut = int(rng.integers(50, len(t) - 20))
+    later = values.copy()
+    later[cut + 1:] += rng.uniform(3, 9)
+    first = next(iter(track.known(t, values, sigma, [t[cut]])))
+    second = next(iter(track.known(t, later, sigma, [t[cut]])))
+    assert first.iloc[36:].equals(second.iloc[36:]), (
+        "a measurement after the instant changed what was known at it")
+
+
+def test_each_instant_gets_the_values_up_to_it_and_no_further():
+    rng = np.random.default_rng()
+    t, values, sigma = _wandering(rng, int(rng.integers(200, 400)))
+    cuts = sorted(int(c) for c in rng.choice(len(t), 5, replace=False))
+    ends = [s.index[-1] for s in track.known(t, values, sigma, [t[c] for c in cuts])]
+    assert ends == [t[c] for c in cuts], f"the known series ended at {ends}"
