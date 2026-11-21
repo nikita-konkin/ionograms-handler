@@ -416,6 +416,22 @@ def test_each_baseline_is_published_at_the_instants_of_the_forecast(
         f"persistence was not published six hours behind the forecast: {found}")
 
 
+def test_restored_samples_are_published_apart_from_the_measured_ones(
+        database, archive, tmp_path, drawn):
+    with db.session(database) as conn:
+        for k in range(18):
+            _sounding(conn, archive, f"dense{k}.h5",
+                      f"2026-08-13 0{3 + k // 6}:{k % 6}0:00", muf=12.0 + k / 3)
+        conn.commit()
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    restored = set(series["restored"]["t"])
+    assert restored and not restored & set(series["t"]), (
+        f"restored samples were not published apart from the measured ones: {series}")
+
+
 def test_iri_is_published_ahead_of_now_from_the_model(
         database, archive, tmp_path, drawn, monkeypatch):
     from services.prediction import scoring
