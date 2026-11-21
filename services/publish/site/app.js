@@ -303,7 +303,11 @@
     // rather than stopping at the last point inside it.
     var margin = (end - start) / 20;
 
-    var muf = [], lof = [];
+    var muf = [], lof = [], restored = [], back = s.restored || { t: [], muf: [], sigma: [] };
+    for (var j = 0; j < back.t.length; j++) {
+      var rx = parseT(back.t[j]);
+      if (rx >= start && rx <= end) restored.push([rx, back.muf[j]]);
+    }
     for (var i = 0; i < s.t.length; i++) {
       var x = parseT(s.t[i]);
       if (x < start || x > end) continue;
@@ -320,6 +324,7 @@
 
     var top = 0;
     muf.forEach(function (p) { top = Math.max(top, p[1]); });
+    restored.forEach(function (p) { top = Math.max(top, p[1]); });
     lof.forEach(function (p) { top = Math.max(top, p[1]); });
     shown.forEach(function (c) {
       c.pts.forEach(function (p) {
@@ -397,6 +402,9 @@
     lof.forEach(function (p) {
       plot.appendChild(svg("circle", { "class": "lof", cx: X(p[0]), cy: Y(p[1]), r: 2 }));
     });
+    restored.forEach(function (p) {
+      plot.appendChild(svg("circle", { "class": "muf-restored", cx: X(p[0]), cy: Y(p[1]), r: 2.2 }));
+    });
     muf.forEach(function (p) {
       plot.appendChild(svg("circle", { "class": p[2] ? "muf-limited" : "muf",
                                        cx: X(p[0]), cy: Y(p[1]), r: p[2] ? 2.6 : 2.2 }));
@@ -407,7 +415,7 @@
     var cursor = svg("line", { "class": "cursor", x1: 0, x2: 0, y1: T, y2: H - B, visibility: "hidden" });
     root.appendChild(cursor);
     var tip = el("div", { "class": "tip", hidden: "" });
-    var times = s.t.map(parseT);
+    var times = s.t.map(parseT), backTimes = back.t.map(parseT);
     var ahead = {};
     shown.forEach(function (c) {
       c.pts.forEach(function (p) {
@@ -430,12 +438,14 @@
       var px = ((evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left) * (W / rect.width);
       var ms = start + (px - L) / (W - L - R) * (end - start);
       var seen = nearest(times, ms, start), told = nearest(aheadTimes, ms, start);
-      var forecast = told[1] < seen[1];
-      var hit = forecast ? told : seen;
+      var guessed = nearest(backTimes, ms, start);
+      var forecast = told[1] < seen[1] && told[1] <= guessed[1];
+      var guess = !forecast && guessed[1] < seen[1];
+      var hit = forecast ? told : guess ? guessed : seen;
       if (hit[0] < 0 || hit[1] > (end - start) / 40) {
         cursor.setAttribute("visibility", "hidden"); tip.hidden = true; return;
       }
-      var at = forecast ? aheadTimes[hit[0]] : times[hit[0]];
+      var at = forecast ? aheadTimes[hit[0]] : guess ? backTimes[hit[0]] : times[hit[0]];
       var cx = X(at);
       cursor.setAttribute("x1", cx); cursor.setAttribute("x2", cx);
       cursor.setAttribute("visibility", "visible");
@@ -448,6 +458,12 @@
             document.createTextNode(curveLabel(pair[0], d.forecast) + " "),
             el("b", { text: mhz(pair[1]) + " " + t("mhz") })]));
         });
+      } else if (guess) {
+        var spread = back.sigma[hit[0]];
+        tip.appendChild(el("div", {}, [
+          document.createTextNode(t("muf") + ", " + t("restored") + " "),
+          el("b", { text: mhz(back.muf[hit[0]]) + (spread == null ? "" : " ±" + mhz(spread)) +
+            " " + t("mhz") })]));
       } else {
         tip.appendChild(el("div", { text: t("muf") + " " + mhz(s.muf[hit[0]]) + " · " +
           t("lof") + " " + mhz(s.lof[hit[0]]) + " " + t("mhz") }));
@@ -586,6 +602,7 @@
     }
     legend.appendChild(key("k-muf", t("muf")));
     legend.appendChild(key("k-lim", t("muf") + ", " + t("limited")));
+    legend.appendChild(key("k-restored", t("muf") + ", " + t("restored")));
     legend.appendChild(key("k-lof", t("lof")));
     if (!all.length) return;
     var group = el("div", { "class": "curves", role: "group", "aria-label": t("curves") });

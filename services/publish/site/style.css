@@ -10,6 +10,7 @@
   --accent: light-dark(#1f5fbf, #7fb0ff);
   --muf: light-dark(#1f5fbf, #7fb0ff);
   --lof: light-dark(#c2571a, #f0a066);
+  --restored: light-dark(#8c95a1, #8a939e);
   --forecast: light-dark(#6250d6, #9085e9);
   --band: light-dark(rgba(98, 80, 214, 0.16), rgba(144, 133, 233, 0.2));
   --persistence: light-dark(#1baf7a, #1f9db0);
@@ -108,6 +109,7 @@ h3 { font-size: 0.9rem; margin: 16px 0 8px; color: var(--muted); font-weight: 60
 .chart .muf { fill: var(--muf); }
 .chart .muf-limited { fill: none; stroke: var(--muf); stroke-width: 1.2; }
 .chart .lof { fill: var(--lof); }
+.chart .muf-restored { fill: var(--restored); }
 .chart .fc { fill: none; stroke: var(--forecast); stroke-width: 2; stroke-linejoin: round; }
 .chart .c-persistence { stroke: var(--persistence); stroke-dasharray: 7 4; }
 .chart .c-recurrence-27d { stroke: var(--recurrence); stroke-dasharray: 2 3; }
@@ -135,6 +137,7 @@ h3 { font-size: 0.9rem; margin: 16px 0 8px; color: var(--muted); font-weight: 60
 .legend .k-muf { background: var(--muf); }
 .legend .k-lof { background: var(--lof); }
 .legend .k-lim { border: 1.5px solid var(--muf); }
+.legend .k-restored { background: var(--restored); }
 .legend i.swatch { width: 18px; height: 0; border-radius: 0; vertical-align: 3px; }
 .curves { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex-basis: 100%; }
 .curves-title { margin-right: 4px; }

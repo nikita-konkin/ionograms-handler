@@ -57,6 +57,7 @@ from pathlib import Path
 
 from services.api import db
 from services.api import series as series_mod
+from services.publish.restore import Restoration
 
 #: The page itself, copied into the site folder on every pass.
 SITE_SRC = Path(__file__).resolve().parent / "site"
@@ -280,7 +281,8 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
                               forecasts=series_mod.live_forecasts(conn, rows))
     if not framed["circuits"]:
         return {"path_km": None, "t": [], "muf": [], "lof": [], "limited": [],
-                "loflim": [], "forecast": [], "baselines": []}
+                "loflim": [], "forecast": [], "baselines": [],
+                "restored": {"t": [], "muf": [], "sigma": []}}
     circuit = framed["circuits"][0]
     circuit["forecast"] = [_as_issued(conn, entry, since)
                            if entry["param"] == "muf" else entry
@@ -292,6 +294,7 @@ def series_block(conn, tx: str, rx: str, method: str, since: datetime) -> dict:
         "t": circuit["t"],
         "muf": circuit["muf"], "lof": circuit["lof"],
         "limited": circuit["limited"], "loflim": circuit["loflim"],
+        "restored": Restoration(circuit["t"], circuit["muf"]).block(),
         "forecast": [{
             "param": entry["param"], "model": entry["model"],
             "trained_from": entry["trained_from"],

@@ -416,6 +416,16 @@ def test_each_baseline_is_published_at_the_instants_of_the_forecast(
         f"persistence was not published six hours behind the forecast: {found}")
 
 
+def test_restored_samples_are_published_apart_from_the_measured_ones(
+        database, archive, tmp_path, drawn):
+    site = tmp_path / "site"
+    _publish(database, site, archive)
+    series = json.loads((site / "data" / "nic-dob.json").read_text(
+        encoding="utf-8"))["series"]
+    assert series["restored"]["t"] and not set(series["restored"]["t"]) & set(series["t"]), (
+        f"restored samples were not published apart from the measured ones: {series}")
+
+
 def test_iri_is_published_ahead_of_now_from_the_model(
         database, archive, tmp_path, drawn, monkeypatch):
     from services.prediction import scoring
